@@ -1,0 +1,52 @@
+# ── Python / uv ─────────────────────────────────────────────────
+# Bytecode & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.uv/
+
+# ── Test / lint / type-check caches ────────────────────────────
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+htmlcov/
+
+# ── Secrets & local config (gateway credentials never committed) ─
+.env
+.env.*
+!.env.example
+*.local
+*.token
+*.key
+*.pem
+
+# ── Ignition native tools ──────────────────────────────────────
+# Built project ZIPs (packages/ignition-native-tools/dist/) are
+# build artifacts — covered by dist/ above. Never commit the ZIP,
+# only the project/ source that produces it.
+
+# ── Test / runtime artifacts ───────────────────────────────────
+# Project-export ZIP surgery workspace, import backups, test output
+artifacts/
+backup/
+*.log
+
+# ── OS / editor ────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp
