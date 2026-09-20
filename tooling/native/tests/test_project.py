@@ -42,11 +42,11 @@ class RuntimeProjectTest(unittest.TestCase):
     def test_runtime_handlers_have_no_pending_binding_marker(self) -> None:
         files = validate_project(PROJECT)
         handlers = [value for name, value in files.items() if name.endswith("/onToolCalled.py")]
-        self.assertEqual(len(handlers), 13)
+        self.assertEqual(len(handlers), 15)
         for handler in handlers:
             self.assertNotIn(b"NATIVE_BINDING_PENDING", handler)
 
-    def test_phase2_current_runtime_tool_inventory_is_exact(self) -> None:
+    def test_phase2_runtime_read_inventory_is_exact(self) -> None:
         files = validate_project(PROJECT)
         identifiers = []
         titles = []
@@ -62,6 +62,8 @@ class RuntimeProjectTest(unittest.TestCase):
         "alarm_shelved_list",
         "alarm_status",
         "bundle_info",
+        "database_query",
+        "database_query_list",
         "historian_browse",
         "historian_query_aggregate",
         "historian_query_series",

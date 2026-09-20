@@ -31,7 +31,9 @@ CURRENT_RUNTIME_TOOLS = [
     "alarm_shelved_list",
     "historian_browse",
     "historian_query_series",
-    "historian_query_aggregate"
+    "historian_query_aggregate",
+    "database_query_list",
+    "database_query"
 ]
 
 
