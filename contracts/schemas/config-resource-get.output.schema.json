@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:config-resource-get:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resourceType": {
+      "type": "string",
+      "minLength": 3
+    },
+    "resource": {
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "correlationId",
+    "resourceType",
+    "resource"
+  ]
+}
