@@ -21,10 +21,19 @@ from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.models import (
+    AlarmPipelineListResult,
+    AlarmPipelineStatusResult,
+    AuditQueryResult,
     CapabilitiesResource,
+    ConfigResourceDescribeResult,
+    ConfigResourceGetResult,
+    ConfigResourceListResult,
+    ConfigResourceNamesResult,
+    ConfigResourceSearchResult,
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
+    ProjectListResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.observability.metrics import Metrics
@@ -35,6 +44,17 @@ from ignition_rest_mcp.services.gateway import (
     gateway_diagnose as diagnose_service,
     gateway_info as info_service,
     openapi_info_resource,
+)
+from ignition_rest_mcp.services.readonly import (
+    alarm_pipeline_list as alarm_pipeline_list_service,
+    alarm_pipeline_status as alarm_pipeline_status_service,
+    audit_query as audit_query_service,
+    config_resource_describe as config_resource_describe_service,
+    config_resource_get as config_resource_get_service,
+    config_resource_list as config_resource_list_service,
+    config_resource_names as config_resource_names_service,
+    config_resource_search as config_resource_search_service,
+    project_list as project_list_service,
 )
 
 LOGGER = logging.getLogger("ignition_rest_mcp")
@@ -133,6 +153,172 @@ def create_server(settings: Settings) -> FastMCP:
         except (Exception, asyncio.CancelledError) as error:
             _raise_tool_error(error, context, metrics, state.require_registry())
 
+    @mcp.tool(
+        name="project_list",
+        description="List Ignition Projects through the bounded Native REST collection endpoint.",
+        output_schema=ProjectListResult.model_json_schema(),
+        tags={"read", "capability:project_list"},
+    )
+    async def project_list(search: str = "", limit: int = 100, offset: int = 0) -> ProjectListResult:
+        return await _run_read(
+            state, settings, "project_list",
+            lambda context: project_list_service(
+                state.require_client(), state.require_registry(), context,
+                search=search, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="config_resource_search",
+        description="Search OpenAPI-discovered Gateway configuration resource types. No REST path is caller-controlled.",
+        output_schema=ConfigResourceSearchResult.model_json_schema(),
+        tags={"read", "capability:config_resource_search"},
+    )
+    async def config_resource_search(
+        query: str = "", limit: int = 100, offset: int = 0,
+    ) -> ConfigResourceSearchResult:
+        context = OperationContext.read("config_resource_search", operation_actor(settings))
+        metrics = state.require_metrics()
+        try:
+            result = config_resource_search_service(
+                state.require_registry(), context, query=query, limit=limit, offset=offset,
+            )
+            _enforce_output_budget(result, settings.structured_output_limit_bytes)
+            metrics.record_tool("config_resource_search", "success")
+            _log_tool(context, "success")
+            return result
+        except (Exception, asyncio.CancelledError) as error:
+            _raise_tool_error(error, context, metrics, state.require_registry())
+
+    @mcp.tool(
+        name="config_resource_describe",
+        description="Describe one exact OpenAPI-discovered Gateway configuration resource type.",
+        output_schema=ConfigResourceDescribeResult.model_json_schema(),
+        tags={"read", "capability:config_resource_describe"},
+    )
+    async def config_resource_describe(resourceType: str) -> ConfigResourceDescribeResult:
+        return await _run_read(
+            state, settings, "config_resource_describe",
+            lambda context: config_resource_describe_service(
+                state.require_client(), state.require_registry(), context, resource_type=resourceType,
+            ),
+        )
+
+    @mcp.tool(
+        name="config_resource_names",
+        description="List bounded names for a non-singleton OpenAPI-discovered configuration resource type.",
+        output_schema=ConfigResourceNamesResult.model_json_schema(),
+        tags={"read", "capability:config_resource_names"},
+    )
+    async def config_resource_names(
+        resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
+    ) -> ConfigResourceNamesResult:
+        return await _run_read(
+            state, settings, "config_resource_names",
+            lambda context: config_resource_names_service(
+                state.require_client(), state.require_registry(), context,
+                resource_type=resourceType, search=search, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="config_resource_list",
+        description="List bounded, redacted configuration resources for one OpenAPI-discovered non-singleton type.",
+        output_schema=ConfigResourceListResult.model_json_schema(),
+        tags={"read", "capability:config_resource_list"},
+    )
+    async def config_resource_list(
+        resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
+    ) -> ConfigResourceListResult:
+        return await _run_read(
+            state, settings, "config_resource_list",
+            lambda context: config_resource_list_service(
+                state.require_client(), state.require_registry(), context,
+                resource_type=resourceType, search=search, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="config_resource_get",
+        description="Read one exact or singleton configuration resource selected only through the OpenAPI capability catalog.",
+        output_schema=ConfigResourceGetResult.model_json_schema(),
+        tags={"read", "capability:config_resource_get"},
+    )
+    async def config_resource_get(
+        resourceType: str, name: str = "", collection: str = "", defaultIfUndefined: bool = False,
+    ) -> ConfigResourceGetResult:
+        return await _run_read(
+            state, settings, "config_resource_get",
+            lambda context: config_resource_get_service(
+                state.require_client(), state.require_registry(), context,
+                resource_type=resourceType, name=name, collection=collection,
+                default_if_undefined=defaultIfUndefined,
+            ),
+        )
+
+    @mcp.tool(
+        name="audit_query",
+        description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
+        output_schema=AuditQueryResult.model_json_schema(),
+        tags={"read", "capability:audit_query"},
+    )
+    async def audit_query(
+        profile: str,
+        actor: str = "",
+        action: str = "",
+        target: str = "",
+        value: str = "",
+        system: str = "",
+        originatingContext: str = "",
+        startTime: str = "",
+        endTime: str = "",
+        limit: int = 100,
+        offset: int = 0,
+    ) -> AuditQueryResult:
+        return await _run_read(
+            state, settings, "audit_query",
+            lambda context: audit_query_service(
+                state.require_client(), state.require_registry(), context,
+                profile=profile, actor=actor, action=action, target=target, value=value,
+                system=system, originating_context=originatingContext,
+                start_time=startTime, end_time=endTime, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="alarm_pipeline_list",
+        description="List bounded Alarm Notification Pipeline runtime overview records through Native REST.",
+        output_schema=AlarmPipelineListResult.model_json_schema(),
+        tags={"read", "capability:alarm_pipeline_list"},
+    )
+    async def alarm_pipeline_list(
+        search: str = "", limit: int = 100, offset: int = 0,
+    ) -> AlarmPipelineListResult:
+        return await _run_read(
+            state, settings, "alarm_pipeline_list",
+            lambda context: alarm_pipeline_list_service(
+                state.require_client(), state.require_registry(), context,
+                search=search, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="alarm_pipeline_status",
+        description="Read bounded runtime instances for one exact Alarm Notification Pipeline path.",
+        output_schema=AlarmPipelineStatusResult.model_json_schema(),
+        tags={"read", "capability:alarm_pipeline_status"},
+    )
+    async def alarm_pipeline_status(
+        path: str, limit: int = 100, offset: int = 0,
+    ) -> AlarmPipelineStatusResult:
+        return await _run_read(
+            state, settings, "alarm_pipeline_status",
+            lambda context: alarm_pipeline_status_service(
+                state.require_client(), state.require_registry(), context,
+                path=path, limit=limit, offset=offset,
+            ),
+        )
+
     @mcp.resource(
         "ignition://gateway/capabilities",
         name="gateway-capabilities",
@@ -200,10 +386,45 @@ async def _watch_capabilities(mcp: FastMCP, registry: CapabilityRegistry, interv
 
 
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
-    if "gateway_info" in snapshot.semantic_capabilities and snapshot.state in {"READY", "STALE"}:
-        mcp.enable(names={"gateway_info"}, components={"tool"})
-    else:
-        mcp.disable(names={"gateway_info"}, components={"tool"})
+    gated = {
+        "gateway_info": "gateway_info",
+        "project_list": "project_list",
+        "config_resource_search": "config_resource_search",
+        "config_resource_describe": "config_resource_describe",
+        "config_resource_names": "config_resource_names",
+        "config_resource_list": "config_resource_list",
+        "config_resource_get": "config_resource_get",
+        "audit_query": "audit_query",
+        "alarm_pipeline_list": "alarm_pipeline_list",
+        "alarm_pipeline_status": "alarm_pipeline_status",
+    }
+    usable = snapshot.state in {"READY", "STALE"}
+    for tool_name, capability in gated.items():
+        if usable and capability in snapshot.semantic_capabilities:
+            mcp.enable(names={tool_name}, components={"tool"})
+        else:
+            mcp.disable(names={tool_name}, components={"tool"})
+
+
+async def _run_read(
+    state: RuntimeState,
+    settings: Settings,
+    tool: str,
+    operation: object,
+) -> BaseModel:
+    context = OperationContext.read(tool, operation_actor(settings))
+    metrics = state.require_metrics()
+    try:
+        async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
+            result = await operation(context)  # type: ignore[operator]
+        if not isinstance(result, BaseModel):
+            raise GatewayError("internal_error", "Read service returned an invalid result model")
+        _enforce_output_budget(result, settings.structured_output_limit_bytes)
+        metrics.record_tool(tool, "success")
+        _log_tool(context, "success")
+        return result
+    except (Exception, asyncio.CancelledError) as error:
+        _raise_tool_error(error, context, metrics, state.require_registry())
 
 
 def _enforce_output_budget(
