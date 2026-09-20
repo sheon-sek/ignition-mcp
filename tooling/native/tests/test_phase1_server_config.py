@@ -17,3 +17,10 @@ def test_phase1_runtime_server_config_advertises_all_primitive_surfaces() -> Non
     assert payload["tools"] == expected
     assert payload["resources"] == expected
     assert payload["prompts"] == expected
+
+    prompts_root = (
+        ROOT
+        / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/prompts"
+    )
+    if prompts_root.exists():
+        assert not any(prompts_root.rglob("resource.json"))
