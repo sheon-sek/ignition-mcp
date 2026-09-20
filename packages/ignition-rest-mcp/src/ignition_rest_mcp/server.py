@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import logging
-from typing import AsyncIterator, NoReturn
+from typing import AsyncIterator, Awaitable, Callable, NoReturn, TypeVar
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError, ToolError
@@ -410,15 +410,13 @@ async def _run_read(
     state: RuntimeState,
     settings: Settings,
     tool: str,
-    operation: object,
-) -> BaseModel:
+    operation: Callable[[OperationContext], Awaitable[TModel]],
+) -> TModel:
     context = OperationContext.read(tool, operation_actor(settings))
     metrics = state.require_metrics()
     try:
         async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
-            result = await operation(context)  # type: ignore[operator]
-        if not isinstance(result, BaseModel):
-            raise GatewayError("internal_error", "Read service returned an invalid result model")
+            result = await operation(context)
         _enforce_output_budget(result, settings.structured_output_limit_bytes)
         metrics.record_tool(tool, "success")
         _log_tool(context, "success")
