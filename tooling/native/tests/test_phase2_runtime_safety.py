@@ -197,3 +197,12 @@ def test_tag_query_upstream_errors_identify_safe_execution_stage() -> None:
         assert f'stage = "{stage}"' in source
     assert '" stage=" + stage + " exceptionType=" + exceptionType' in source
     assert '"The Tag query operation could not be completed during " + stage' in source
+
+
+def test_tag_query_serializes_only_public_property_allowlist() -> None:
+    source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
+    assert 'values = {"path": pathText}' in source
+    assert 'for propertyName in ("name", "tagType", "dataType", "valueSource", "typeId", "quality")' in source
+    assert 'values[propertyName] = queryPropertyValue(propertyName, rawValues[propertyName])' in source
+    assert 'jsonValue(' not in source
+    assert '"fullPath"' not in source[source.index('values = {"path": pathText}'):source.index('stage = "continuation_read"')]

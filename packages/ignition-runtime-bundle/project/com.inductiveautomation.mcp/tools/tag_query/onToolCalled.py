@@ -1,7 +1,6 @@
 def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSource, includeUdtMembers, returnProperties, maxResults, continuation):
-	from java.lang import Boolean, Number, Exception as JavaException
-	from java.util import UUID, Date, Map, List
-	import math
+	from java.lang import Exception as JavaException
+	from java.util import UUID, Map, List
 	correlationId = unicode(UUID.randomUUID())
 	logger = system.util.getLogger("IgnitionMCP.Runtime.TagQuery")
 
@@ -21,40 +20,25 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 			return [encodeNulls(child) for child in value]
 		return value
 
-	def jsonValue(value):
-		if value is None or isinstance(value, (bool, int, long, basestring)):
-			return value
-		if isinstance(value, Boolean):
-			return value.booleanValue()
-		if isinstance(value, float):
-			if math.isnan(value) or math.isinf(value):
-				return {"type": "non-finite-number", "text": unicode(value)}
-			return value
-		if isinstance(value, Number):
-			typeName = unicode(value.getClass().getName())
-			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
-				return long(unicode(value))
-			if typeName == "java.math.BigDecimal":
-				return {"type": "decimal", "text": unicode(value)}
-			return jsonValue(float(value.doubleValue()))
-		if isinstance(value, Date):
-			return unicode(value.toInstant().toString())
-		if isinstance(value, dict):
-			return dict((unicode(key), jsonValue(child)) for key, child in value.items())
-		if isinstance(value, Map):
-			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
-		if isinstance(value, (list, tuple, List)):
-			return [jsonValue(child) for child in value]
-		if hasattr(value, "getClass") and value.getClass().isArray():
-			return [jsonValue(child) for child in value]
-		return {"type": "native-object", "class": unicode(value.getClass().getName()) if hasattr(value, "getClass") else unicode(type(value)), "text": unicode(value)}
-
 	def nativeItems(value):
 		if isinstance(value, dict):
 			return value.items()
 		if isinstance(value, Map):
 			return [(entry.getKey(), entry.getValue()) for entry in value.entrySet()]
 		return []
+
+	def queryPropertyValue(name, value):
+		if value is None:
+			return None
+		if name == "quality":
+			diagnostic = value.getDiagnosticMessage()
+			return {
+				"name": unicode(value),
+				"code": long(value.getCode()),
+				"good": bool(value.isGood()),
+				"diagnosticMessage": unicode(diagnostic) if diagnostic is not None else None
+			}
+		return unicode(value)
 
 	def optionalText(value, name):
 		if value is None:
@@ -129,10 +113,10 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 				continue
 			if len(items) >= maxResults:
 				return toolError("limit_exceeded", "Tag query exceeded the requested result limit; continue with the returned cursor or narrow the query.")
-			values = dict((key, jsonValue(value)) for key, value in rawValues.items())
-			if "fullPath" in values:
-				del values["fullPath"]
-			values["path"] = pathText
+			values = {"path": pathText}
+			for propertyName in ("name", "tagType", "dataType", "valueSource", "typeId", "quality"):
+				if propertyName in rawValues:
+					values[propertyName] = queryPropertyValue(propertyName, rawValues[propertyName])
 			items.append({"path": pathText, "properties": values})
 		stage = "continuation_read"
 		nextCursor = getattr(result, "continuationPoint", None)
