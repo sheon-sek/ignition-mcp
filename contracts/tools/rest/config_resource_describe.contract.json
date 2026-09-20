@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_describe",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-describe.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/type/<catalog-resourceType>"
+  ],
+  "capabilityId": "config_resource_describe",
+  "callerSuppliedRestPath": false
+}
