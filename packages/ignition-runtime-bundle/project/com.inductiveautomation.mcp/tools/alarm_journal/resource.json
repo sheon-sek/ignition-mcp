@@ -1,0 +1,29 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "alarm_journal",
+    "description": "Query bounded historical Alarm Journal transitions via system.alarm.queryJournal. Default range is 24 hours and hard range is 31 days; over-limit results fail rather than truncate.",
+    "parameters": [
+      {"name": "startTime", "description": "Optional ISO-8601 instant. Defaults to 24 hours before endTime.", "type": "string", "required": false, "default": ""},
+      {"name": "endTime", "description": "Optional ISO-8601 instant. Defaults to now.", "type": "string", "required": false, "default": ""},
+      {"name": "journalName", "description": "Optional Alarm Journal name.", "type": "string", "required": false, "default": ""},
+      {"name": "states", "description": "Optional journal states including ClearUnacked, ClearAcked, ActiveUnacked, ActiveAcked, Enabled, Disabled.", "type": "array", "required": false, "default": []},
+      {"name": "priorities", "description": "Optional priorities: Diagnostic, Low, Medium, High, Critical.", "type": "array", "required": false, "default": []},
+      {"name": "alarmPaths", "description": "Optional Alarm Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "sourcePaths", "description": "Optional Source Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "displayPaths", "description": "Optional Display Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "providers", "description": "Optional Tag Provider names; at most 20.", "type": "array", "required": false, "default": []},
+      {"name": "allProperties", "description": "Up to 20 AND property conditions: {property, operator, value}.", "type": "array", "required": false, "default": []},
+      {"name": "anyProperties", "description": "Up to 20 OR property conditions: {property, operator, value}.", "type": "array", "required": false, "default": []},
+      {"name": "definedProperties", "description": "Property names that must exist; at most 20.", "type": "array", "required": false, "default": []},
+      {"name": "includeData", "description": "Whether journal event data is included natively. Default false; output remains canonical and bounded.", "type": "boolean", "required": false, "default": false},
+      {"name": "includeSystem", "description": "Whether system alarm events are included. Default false.", "type": "boolean", "required": false, "default": false},
+      {"name": "includeShelved", "description": "Whether shelved alarm events are included. Default false.", "type": "boolean", "required": false, "default": false},
+      {"name": "maxResults", "description": "Maximum complete result count, 1..500. Default 100.", "type": "integer", "required": false, "default": 100}
+    ]
+  }
+}

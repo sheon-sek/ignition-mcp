@@ -1,0 +1,14 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "alarm_shelved_list",
+    "description": "List current shelved Alarm Paths with expiration and shelving identity via system.alarm.getShelvedPaths.",
+    "parameters": [
+      {"name": "maxResults", "description": "Maximum shelved paths, 1..500. Default 100; over-limit results fail rather than truncate.", "type": "integer", "required": false, "default": 100}
+    ]
+  }
+}
