@@ -3,9 +3,7 @@ services:
     image: mariadb:11.4.13-noble
     environment:
       MARIADB_DATABASE: ignition_mcp_ci
-      MARIADB_USER: ignition_mcp_ci
-      MARIADB_PASSWORD: "phase2-ci-only-not-a-production-secret"
-      MARIADB_ROOT_PASSWORD: "phase2-ci-only-not-a-production-secret"
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
     healthcheck:
       test: ["CMD", "/usr/local/bin/healthcheck.sh", "--connect", "--innodb_initialized"]
       interval: 2s

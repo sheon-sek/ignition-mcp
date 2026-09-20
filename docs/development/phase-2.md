@@ -98,6 +98,13 @@ The generic Skill still documents `NATIVE_BINDING_PENDING` and a narrower parame
 17. **Domain-negative state is data.** Bad/Uncertain Quality, active alarms, disconnected status and empty searches are not automatically Tool Errors.
 18. **Compatibility claims come from evidence.** G2 evidence may remain `UNTESTED`; never hand-edit a tuple to `SUPPORTED`.
 
+## Phase 2 G2 live-iteration lessons (discovered against real 8.3.8/8.3.9)
+
+1. **A feature-branch workflow file cannot be dispatched.** GitHub's Actions API resolves workflow names against the default branch. Like G0, the pre-merge live matrix must run through the `pull_request` event with the trusted-repo job guard.
+2. **Fixture infrastructure must not assume Gateway bundles.** A fresh 8.3.x standard Gateway has no PostgreSQL JDBC driver; the datasource fixture must enumerate live `ignition/database-driver`/`database-translator` resources and adapt or fail with installed-name diagnostics.
+3. **The committed OpenAPI body schemas are not complete wire truth.** Creating a config resource with a plain-string `password` returns `422 Unable to read required property 'type'`: 8.3 credential properties are typed `{type,data}` objects (`Embedded` requires pre-encrypted material). Provisioning failures must echo the live `resources/type/{...}` describe output into evidence so schema mismatches triage without extra full runs.
+4. **Historian addressing uses the full 8.3 grammar.** `histprov:<name>:/prov:<provider>:/tag:<path>/`, and 8.3's Core Historian supersedes the legacy Internal Historian profile. Browse-derived paths — not constructed ones — feed the series/aggregate smokes.
+
 ## Phase 2 Runtime database registry
 
 D14 requires an explicit approved Named Query registry but does not freeze its storage mechanism. Phase 2 uses a small deployment configuration rather than an arbitrary SQL/path surface or a guessed shared Project Library resource.

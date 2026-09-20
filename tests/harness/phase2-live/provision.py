@@ -32,6 +32,7 @@ def _request(
     content_type: str = "application/json",
     query: dict[str, str] | None = None,
     timeout: float = 20.0,
+    allowed_error_statuses: frozenset[int] = frozenset(),
 ) -> tuple[int, Any]:
     url = base_url.rstrip("/") + path
     if query:
@@ -56,6 +57,12 @@ def _request(
     except HTTPError as error:
         raw = error.read(MAX_RESPONSE_BYTES + 1)
         detail = raw[:2000].decode("utf-8", errors="replace")
+        if error.code in allowed_error_statuses:
+            try:
+                parsed = json.loads(raw) if raw.strip() else None
+            except json.JSONDecodeError:
+                parsed = detail
+            return error.code, parsed
         raise ProvisionError(f"{method} {path} returned HTTP {error.code}: {detail}") from error
     except (URLError, TimeoutError, OSError) as error:
         raise ProvisionError(f"{method} {path} failed: {type(error).__name__}: {error}") from error
@@ -63,13 +70,30 @@ def _request(
 
 def _create_resource(base_url: str, token: str, resource_type: str, resource: dict[str, Any]) -> int:
     body = json.dumps([resource], separators=(",", ":")).encode("utf-8")
-    status, _ = _request(
+    status, payload = _request(
         base_url,
         token,
         "POST",
         "/data/api/v1/resources/" + resource_type,
         body=body,
+        allowed_error_statuses=frozenset({422}),
     )
+    if status == 422:
+        # The committed OpenAPI body schemas are known to omit wire-required
+        # discriminator details (e.g. 8.3 config password is a typed {type,data}
+        # credential object, not a string). Pull the live type description into
+        # the diagnostics so the next triage does not need another full run.
+        try:
+            _, describe = _request(
+                base_url, token, "GET", "/data/api/v1/resources/type/" + resource_type,
+            )
+            describe_text = json.dumps(describe, separators=(",", ":"))[:6000]
+        except ProvisionError as error:
+            describe_text = f"<describe failed: {error}>"
+        raise ProvisionError(
+            f"creating {resource_type} rejected: {json.dumps(payload, separators=(',', ':'))[:2000]} "
+            f"| live type description: {describe_text}"
+        )
     if status not in {200, 201}:
         raise ProvisionError(f"creating {resource_type} returned unexpected HTTP {status}")
     return status
@@ -180,12 +204,15 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
                 "name": "MCP_CI_DB",
                 "enabled": True,
                 "description": "Disposable Phase 2 CI fixture database",
+                # 8.3 wire truth: config `password` is a typed {type,data} credential
+                # object (Embedded requires pre-encrypted material), never a plain
+                # string. The disposable CI database user is created without a
+                # password, so the property is omitted entirely.
                 "config": {
                     "driver": driver,
                     "translator": translator,
                     "connectURL": connect_url,
                     "username": "ignition_mcp_ci",
-                    "password": "phase2-ci-only-not-a-production-secret",
                     "poolMaxActive": 4,
                     "poolMaxIdle": 2,
                     "poolMaxWait": 5000,
