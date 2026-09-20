@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:bundle-info:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "bundleVersion": {"type": "string", "minLength": 1},
+    "gatewayVersion": {"type": "string", "minLength": 1},
+    "mcpModuleVersion": {"type": "string", "minLength": 1},
+    "mcpModuleBuild": {"type": ["string", "null"]},
+    "compatibilityStatus": {"enum": ["SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UNKNOWN"]}
+  },
+  "required": ["bundleVersion", "gatewayVersion", "mcpModuleVersion", "mcpModuleBuild", "compatibilityStatus"]
+}

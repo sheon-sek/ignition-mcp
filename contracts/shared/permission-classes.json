@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "classes": {
+    "READ": {"externalScope": "ignition.read"},
+    "CONFIG": {"externalScope": "ignition.config"},
+    "CONTROL": {"externalScope": "ignition.control"},
+    "ADMIN": {"externalScope": "ignition.admin"}
+  },
+  "implicitHierarchy": false
+}

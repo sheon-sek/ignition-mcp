@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:compatibility:native-binding-evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "gatewayVersion": {"type": "string", "minLength": 1},
+    "gatewayBuild": {"type": "string", "minLength": 1},
+    "mcpModuleVersion": {"type": "string", "minLength": 1},
+    "mcpModuleBuild": {"type": "string", "minLength": 1},
+    "bundleVersion": {"type": "string", "minLength": 1},
+    "bundleSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "openapiSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "initialize": {"type": "boolean"},
+    "toolsList": {"type": "boolean"},
+    "resourcesList": {"type": "boolean"},
+    "resourcesRead": {"type": "boolean"},
+    "promptsList": {"type": "boolean"},
+    "promptsGet": {"type": "boolean"},
+    "outputSchemaPublished": {"type": "boolean"},
+    "successStructuredContent": {"type": "boolean"},
+    "failureIsError": {"type": "boolean"},
+    "nativeResponseBindingStatus": {"enum": ["NATIVE_BINDING_PENDING", "VERIFIED", "FAILED"]}
+  },
+  "required": [
+    "schemaVersion", "gatewayVersion", "gatewayBuild", "mcpModuleVersion", "mcpModuleBuild",
+    "bundleVersion", "bundleSha256", "openapiSha256", "initialize", "toolsList",
+    "resourcesList", "resourcesRead", "promptsList", "promptsGet", "outputSchemaPublished",
+    "successStructuredContent", "failureIsError", "nativeResponseBindingStatus"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "statuses": ["SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UNKNOWN"],
+  "supportedRequiresMachineEvidence": true,
+  "supportedRequiresVerifiedNativeResponseBinding": true
+}

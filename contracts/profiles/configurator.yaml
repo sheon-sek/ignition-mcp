@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "name": "configurator",
+  "permissions": [
+    "READ",
+    "CONFIG"
+  ],
+  "tools": [
+    "bundle_info"
+  ]
+}

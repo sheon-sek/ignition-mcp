@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "codes": [
+    "invalid_argument",
+    "unsupported_capability",
+    "permission_denied",
+    "operation_disabled",
+    "not_found",
+    "conflict",
+    "limit_exceeded",
+    "rate_limited",
+    "timeout",
+    "outcome_unknown",
+    "gateway_unavailable",
+    "upstream_error",
+    "schema_mismatch",
+    "internal_error"
+  ]
+}

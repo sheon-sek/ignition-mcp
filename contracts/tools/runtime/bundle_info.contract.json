@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "name": "bundle_info",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": [],
+  "outputSchema": "contracts/schemas/bundle-info.output.schema.json",
+  "nativeRequirements": [],
+  "nativeResponseBinding": "NATIVE_BINDING_PENDING"
+}

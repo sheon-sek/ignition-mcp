@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:shared:artifact-ref",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+    "mediaType": {"type": "string", "minLength": 1},
+    "sizeBytes": {"type": "integer", "minimum": 0},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "required": ["artifactId", "mediaType", "sizeBytes", "sha256"]
+}

@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static-unit-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+          enable-cache: true
+      - name: Verify lockfile
+        run: uv lock --check
+      - name: Ruff
+        run: uvx --from ruff==0.16.8 ruff check .
+      - name: Mypy
+        run: uvx --from mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
+      - name: Unit and contract tests
+        run: uvx --from pytest==9.1.1 pytest -q tooling
+      - name: Build external Python distribution
+        run: uv build --package ignition-rest-mcp
+      - name: Validate Runtime Designer project
+        run: uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+      - name: Verify pending binding fails production build
+        run: |
+          if uv run --no-sync python -m tooling.native.cli build             --project-dir packages/ignition-runtime-bundle/project             --output dist/ignition-runtime-bundle.zip; then
+            echo "production build unexpectedly succeeded while native binding is pending" >&2
+            exit 1
+          fi
+      - name: Build disabled technical scaffold twice
+        run: |
+          uv run --no-sync python -m tooling.native.cli build             --project-dir packages/ignition-runtime-bundle/project             --output dist/first.zip --allow-unbound-scaffold
+          uv run --no-sync python -m tooling.native.cli build             --project-dir packages/ignition-runtime-bundle/project             --output dist/second.zip --allow-unbound-scaffold
+          cmp dist/first.zip dist/second.zip

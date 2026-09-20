@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "gate": "G0",
+  "requiredChecks": [
+    "initialize",
+    "tools_list_exact_inventory",
+    "tools_list_output_schema",
+    "tools_call_success_structured_content",
+    "tools_call_failure_is_error",
+    "resources_list_and_read_when_present",
+    "prompts_list_and_get_when_present"
+  ],
+  "currentStatus": "NATIVE_BINDING_PENDING"
+}

@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "name": "readonly",
+  "permissions": [
+    "READ"
+  ],
+  "tools": [
+    "bundle_info"
+  ]
+}
