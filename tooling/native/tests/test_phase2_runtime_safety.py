@@ -167,6 +167,28 @@ def test_alarm_journal_rejects_unbounded_associated_data_before_native_call() ->
     assert contract["parameters"]["includeData"]["trueBehavior"] == "unsupported_capability"
 
 
+def test_tag_get_config_normalization_diagnostics_expose_type_not_value() -> None:
+    source = (TOOLS / "tag_get_config/onToolCalled.py").read_text(encoding="utf-8")
+    assert 'normalizationDiagnostic = {"operation": "not_started", "nativeType": "unknown"}' in source
+    assert 'normalizationDiagnostic["nativeType"] = unicode(type(value))' in source
+    for operation in (
+        "scalar_check",
+        "java_boolean_check",
+        "python_float_check",
+        "java_number_check",
+        "java_date_check",
+        "python_dict_check",
+        "jython_map_check",
+        "java_map_check",
+        "sequence_check",
+        "java_array_check",
+        "native_fallback",
+    ):
+        assert f'normalizationDiagnostic["operation"] = "{operation}"' in source
+    assert 'diagnostic = " operation=" + normalizationDiagnostic["operation"] + " nativeType=" + normalizationDiagnostic["nativeType"]' in source
+    assert 'diagnostic + " tag_get_config failed: " + unicode(exc)' in source
+
+
 def test_tag_get_config_normalizes_jython_mapping_wrappers_before_java_fallback() -> None:
     source = (TOOLS / "tag_get_config/onToolCalled.py").read_text(encoding="utf-8")
     python_dict = source.index("if isinstance(value, dict):")

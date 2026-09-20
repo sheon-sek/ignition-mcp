@@ -13,6 +13,7 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 	def encodeNulls(value):
 		if value is None:
 			return {"$ignition": "null"}
+		normalizationDiagnostic["operation"] = "python_dict_check"
 		if isinstance(value, dict):
 			if "$ignition" in value:
 				return {"$ignition": "object", "entries": [[key, encodeNulls(child)] for key, child in sorted(value.items())]}
@@ -21,15 +22,22 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			return [encodeNulls(child) for child in value]
 		return value
 
+	normalizationDiagnostic = {"operation": "not_started", "nativeType": "unknown"}
+
 	def jsonValue(value):
+		normalizationDiagnostic["nativeType"] = unicode(type(value))
+		normalizationDiagnostic["operation"] = "scalar_check"
 		if value is None or isinstance(value, (bool, int, long, basestring)):
 			return value
+		normalizationDiagnostic["operation"] = "java_boolean_check"
 		if isinstance(value, Boolean):
 			return value.booleanValue()
+		normalizationDiagnostic["operation"] = "python_float_check"
 		if isinstance(value, float):
 			if math.isnan(value) or math.isinf(value):
 				return {"type": "non-finite-number", "text": unicode(value)}
 			return value
+		normalizationDiagnostic["operation"] = "java_number_check"
 		if isinstance(value, Number):
 			typeName = unicode(value.getClass().getName())
 			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
@@ -37,18 +45,24 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			if typeName == "java.math.BigDecimal":
 				return {"type": "decimal", "text": unicode(value)}
 			return jsonValue(float(value.doubleValue()))
+		normalizationDiagnostic["operation"] = "java_date_check"
 		if isinstance(value, Date):
 			return unicode(value.toInstant().toString())
 		if isinstance(value, dict):
 			return dict((unicode(key), jsonValue(child)) for key, child in value.items())
+		normalizationDiagnostic["operation"] = "jython_map_check"
 		if hasattr(value, "iteritems"):
 			return dict((unicode(key), jsonValue(child)) for key, child in value.iteritems())
+		normalizationDiagnostic["operation"] = "java_map_check"
 		if isinstance(value, Map):
 			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
+		normalizationDiagnostic["operation"] = "sequence_check"
 		if isinstance(value, (list, tuple, List)):
 			return [jsonValue(child) for child in value]
+		normalizationDiagnostic["operation"] = "java_array_check"
 		if hasattr(value, "getClass") and value.getClass().isArray():
 			return [jsonValue(child) for child in value]
+		normalizationDiagnostic["operation"] = "native_fallback"
 		return {"type": "native-object", "class": unicode(value.getClass().getName()) if hasattr(value, "getClass") else unicode(type(value)), "text": unicode(value)}
 
 	def countNodes(values):
@@ -104,5 +118,11 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		exceptionType = unicode(type(exc))
-		logger.error("correlationId=" + correlationId + " stage=" + stage + " exceptionType=" + exceptionType + " tag_get_config failed: " + unicode(exc))
-		return toolError("upstream_error", "The Tag configuration read could not be completed during " + stage + " (" + exceptionType + ").")
+		diagnostic = ""
+		if stage == "result_normalization":
+			diagnostic = " operation=" + normalizationDiagnostic["operation"] + " nativeType=" + normalizationDiagnostic["nativeType"]
+		logger.error("correlationId=" + correlationId + " stage=" + stage + " exceptionType=" + exceptionType + diagnostic + " tag_get_config failed: " + unicode(exc))
+		message = "The Tag configuration read could not be completed during " + stage + " (" + exceptionType + ")."
+		if diagnostic:
+			message += diagnostic
+		return toolError("upstream_error", message)
