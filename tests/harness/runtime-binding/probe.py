@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import json
 import sys
 import time
@@ -91,10 +92,16 @@ class McpClient:
             ) from error
         except urllib.error.URLError as error:
             raise ProbeError(f"MCP endpoint unavailable: {error}") from error
+        except (OSError, TimeoutError, http.client.HTTPException) as error:
+            raise ProbeError(f"MCP transport unavailable: {type(error).__name__}: {error}") from error
+        try:
+            parsed = _parse_streamable_body(body, headers.get("content-type", ""))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ProbeError(f"MCP response was not parseable yet: {type(error).__name__}: {error}") from error
         session = headers.get("mcp-session-id")
         if session:
             self.session_id = session
-        return status, _parse_streamable_body(body, headers.get("content-type", "")), headers
+        return status, parsed, headers
 
     def call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.request_id += 1
