@@ -60,6 +60,7 @@ from ignition_rest_mcp.services.readonly import (
 LOGGER = logging.getLogger("ignition_rest_mcp")
 HARD_OUTPUT_BYTES = 1_048_576
 TOOL_TIMEOUT_SECONDS = 30
+TModel = TypeVar("TModel", bound=BaseModel)
 
 
 def create_server(settings: Settings) -> FastMCP:
