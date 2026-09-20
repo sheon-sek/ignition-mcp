@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "name": "alarm_pipeline_status",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "offset": {
+      "type": "integer",
+      "required": false,
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  },
+  "outputSchema": "contracts/schemas/alarm-pipeline-status.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/alarm-notification/api/v1/pipeline"
+  ],
+  "capabilityId": "alarm_pipeline_status",
+  "silentTruncation": false
+}
