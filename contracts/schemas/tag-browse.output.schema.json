@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:tag-browse:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {"type": "string", "minLength": 3},
+    "recursive": {"type": "boolean"},
+    "nodes": {"type": "array", "maxItems": 500, "items": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}, "tagType": {"type": "string", "minLength": 1}, "hasChildren": {"type": "boolean"}, "dataType": {"type": "string"}, "valueSource": {"type": "string"}, "typeId": {"type": "string"}}, "required": ["path", "name", "tagType", "hasChildren"]}},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"returned": {"type": "integer", "minimum": 0, "maximum": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["returned", "limit"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  },
+  "required": ["path", "recursive", "nodes", "summary", "meta"]
+}

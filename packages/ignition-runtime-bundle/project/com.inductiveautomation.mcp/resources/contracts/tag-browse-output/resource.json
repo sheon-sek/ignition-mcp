@@ -1,0 +1,16 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": [
+    "data.bin"
+  ],
+  "attributes": {
+    "title": "tag_browse_output",
+    "description": "Semantic output contract for tag_browse. D27 baseline does not publish native Tool outputSchema.",
+    "size": 1197,
+    "dataType": "Text",
+    "mimeType": "application/schema+json"
+  }
+}
