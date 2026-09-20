@@ -16,6 +16,12 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 1_048_576
+# Live G2 evidence: a fresh 8.3.x standard Gateway quarantines every bundled module
+# (Historian Core, Alarm Notification, JDBC drivers, ...) until certificates are
+# accepted; ACCEPT_MODULE_CERTS is documented only for third-party identifiers, so
+# the harness heals the actual Gateway state through the product's own REST flow
+# instead of guessing image-internal module ID lists or wildcard semantics.
+_REQUIRED_MODULE_MARKERS = ("historian", "alarm-notification")
 
 
 class ProvisionError(RuntimeError):
@@ -195,8 +201,92 @@ def _select_database_identity(base_url: str, token: str) -> tuple[str, str, str]
     return driver, translator, connect_url
 
 
+def _select_database_identity_when_ready(
+    base_url: str, token: str, timeout: float = 180.0,
+) -> tuple[str, str, str]:
+    # Bundled JDBC driver modules un-quarantine asynchronously after certificate
+    # acceptance, so discovery is retried under a bounded deadline instead of
+    # assuming a fixed sleep or permanently registered driver resources.
+    deadline = time.monotonic() + timeout
+    while True:
+        try:
+            return _select_database_identity(base_url, token)
+        except ProvisionError as error:
+            if time.monotonic() >= deadline:
+                raise
+            print(f"database identity not ready yet: {error}", flush=True)
+            time.sleep(5.0)
+
+
+def _accept_quarantined_certificates(base_url: str, token: str) -> list[str]:
+    status, payload = _request(
+        base_url, token, "GET", "/data/api/v1/modules/quarantined",
+        query={"limit": "500", "offset": "0"},
+    )
+    if status != 200 or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ProvisionError(f"quarantine discovery returned unexpected HTTP {status}")
+    accepted: list[str] = []
+    for module in payload["items"]:
+        if not isinstance(module, dict) or not isinstance(module.get("id"), str):
+            continue
+        module_id = module["id"]
+        if module.get("certAccepted") is not False:
+            continue
+        code, body = _request(
+            base_url, token, "POST", "/data/api/v1/modules/certificate",
+            query={"moduleId": module_id}, allowed_error_statuses=frozenset({404}),
+        )
+        if code == 404:
+            # Pre-commissioned state races: re-reading the same module's certificate
+            # view on a fresh Gateway can 404 after a concurrent accept.
+            continue
+        if code not in {200, 201, 202, 204}:
+            raise ProvisionError(
+                f"accepting certificate for {module_id} returned HTTP {code}: {str(body)[:400]}"
+            )
+        accepted.append(module_id)
+    return accepted
+
+
+def _await_required_modules(base_url: str, token: str) -> dict[str, str]:
+    deadline = time.monotonic() + 240.0
+    seen: dict[str, str] = {}
+    last_error = ""
+    while time.monotonic() < deadline:
+        try:
+            status, payload = _request(
+                base_url, token, "GET", "/data/api/v1/modules/healthy",
+                query={"limit": "500", "offset": "0"},
+            )
+            items = payload.get("items") if status == 200 and isinstance(payload, dict) else None
+            if isinstance(items, list):
+                seen = {
+                    str(item.get("id")): str(item.get("name"))
+                    for item in items
+                    if isinstance(item, dict) and isinstance(item.get("id"), str)
+                }
+                if all(
+                    any(marker in module_id.lower() for module_id in seen)
+                    for marker in _REQUIRED_MODULE_MARKERS
+                ):
+                    return seen
+            last_error = f"healthy modules so far: {sorted(seen)}"
+        except ProvisionError as error:
+            last_error = str(error)
+        time.sleep(5.0)
+    raise ProvisionError(
+        f"required modules {_REQUIRED_MODULE_MARKERS} never became healthy: {last_error}"
+    )
+
+
 def provision(base_url: str, token: str) -> dict[str, Any]:
-    driver, translator, connect_url = _select_database_identity(base_url, token)
+    # Step 0: the CI Gateway bundles modules whose certificates are not yet accepted,
+    # so they sit in quarantine and expose no REST route (e.g. Historian provider
+    # POST -> 404 "No route match"). Accept certificates through the product REST flow,
+    # then wait for the Phase 2 required modules to become healthy before provisioning.
+    certificates_accepted = _accept_quarantined_certificates(base_url, token)
+    healthy_modules = _await_required_modules(base_url, token)
+    driver, translator, connect_url = _select_database_identity_when_ready(base_url, token)
     resources = [
         (
             "ignition/database-connection",
@@ -246,6 +336,8 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
     # both Tools are deferred per the D12 Phase 2 bounded-execution amendment.
     results: dict[str, Any] = {
         "resources": {},
+        "certificatesAccepted": certificates_accepted,
+        "healthyModuleIds": sorted(healthy_modules),
         "databaseDriver": driver,
         "databaseTranslator": translator,
         "databaseConnectUrl": connect_url,
