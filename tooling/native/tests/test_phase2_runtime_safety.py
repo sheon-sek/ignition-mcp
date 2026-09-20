@@ -176,3 +176,10 @@ def test_tag_query_normalizes_native_full_path_before_json_conversion() -> None:
     canonical = source.index('values["path"] = pathText')
     assert raw_values < full_path < path_text < json_values < canonical
     assert 'del values["fullPath"]' in source
+
+
+def test_tag_query_uses_documented_pywrapper_continuation_property() -> None:
+    source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
+    assert 'getattr(result, "continuationPoint", None)' in source
+    assert 'result.getContinuationPoint()' not in source
+    assert 'nextCursor = unicode(nextCursor)' in source

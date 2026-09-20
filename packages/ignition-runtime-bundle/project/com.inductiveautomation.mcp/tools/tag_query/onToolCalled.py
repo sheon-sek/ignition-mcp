@@ -130,7 +130,9 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 				del values["fullPath"]
 			values["path"] = pathText
 			items.append({"path": pathText, "properties": values})
-		nextCursor = result.getContinuationPoint() if hasattr(result, "getContinuationPoint") else getattr(result, "continuationPoint", None)
+		nextCursor = getattr(result, "continuationPoint", None)
+		if nextCursor is not None:
+			nextCursor = unicode(nextCursor)
 		domain = {"items": items, "continuation": nextCursor, "summary": {"returned": len(items), "limit": int(maxResults), "hasMore": nextCursor is not None}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
 		encoded = system.util.jsonEncode(domain)
