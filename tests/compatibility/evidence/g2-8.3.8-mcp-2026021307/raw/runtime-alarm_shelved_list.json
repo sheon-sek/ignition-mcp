@@ -1,0 +1,23 @@
+{
+  "id": 10,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":100,\"returned\":0},\"meta\":{\"correlationId\":\"e61b8f9f-827d-4bef-9849-49ef2cfc48aa\"},\"items\":[]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "items": [],
+      "meta": {
+        "correlationId": "e61b8f9f-827d-4bef-9849-49ef2cfc48aa"
+      },
+      "summary": {
+        "limit": 100,
+        "returned": 0
+      }
+    }
+  }
+}

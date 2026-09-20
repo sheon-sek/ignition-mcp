@@ -1,22 +1,13 @@
-name: Phase 2 Live Gateway G2
+name: Phase 2 Historical Live Gateway G2
 
-# G2 evidence must be produced and reviewed on trusted runners before Phase 2
-# closes (D23 trusted live CI). Following the G0/G1 pattern, live validation runs
-# on the open Phase 2 PR; after G2 closes, this should be frozen to manual
-# workflow_dispatch like the historical G1 gate.
-# The required row is 8.3.8 with the D27 identity check; 8.3.9 is a compatibility
-# candidate that must be re-characterized and never inherits the D27 exception.
+# G2 is a closed historical gate. Phase 2 evidence was produced and reviewed on
+# trusted PR runners (D23); the 8.3.8 required row is VERIFIED under the exact
+# D27 tuple and the 8.3.9 candidate row records the fail-closed
+# UNVERIFIED_LIMITATION (see tests/compatibility/evidence/g2-*). Replay this
+# snapshot only when explicitly needed; future live gates belong to their own
+# phase workflows.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/phase2-live-g2.yml"
-      - "contracts/**"
-      - "packages/**"
-      - "tooling/**"
-      - "tests/harness/phase2-live/**"
-      - "tests/fixtures/modules/**"
-      - "docs/development/phase-2.md"
 
 permissions:
   contents: read

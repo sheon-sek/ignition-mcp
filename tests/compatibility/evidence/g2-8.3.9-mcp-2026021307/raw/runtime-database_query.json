@@ -1,0 +1,40 @@
+{
+  "id": 15,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"columns\":[\"id\",\"label\"],\"resultMode\":\"dataset\",\"rows\":[[1,\"alpha\"],[2,\"beta\"]],\"meta\":{\"correlationId\":\"dc09fe47-0f4d-434d-90e7-5b93793bd965\"},\"alias\":\"ci_page\",\"page\":{\"offset\":0,\"nextOffset\":2,\"mode\":\"offset\",\"limit\":2}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "alias": "ci_page",
+      "columns": [
+        "id",
+        "label"
+      ],
+      "meta": {
+        "correlationId": "dc09fe47-0f4d-434d-90e7-5b93793bd965"
+      },
+      "page": {
+        "limit": 2,
+        "mode": "offset",
+        "nextOffset": 2,
+        "offset": 0
+      },
+      "resultMode": "dataset",
+      "rows": [
+        [
+          1,
+          "alpha"
+        ],
+        [
+          2,
+          "beta"
+        ]
+      ]
+    }
+  }
+}

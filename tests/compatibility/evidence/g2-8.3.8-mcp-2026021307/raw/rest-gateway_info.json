@@ -1,0 +1,23 @@
+{
+  "id": 3,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"b4605bb9-5ab9-4ae2-a96c-be8efae1ab32\",\"name\":\"ignition-mcp-phase2-ci\",\"edition\":\"standard\",\"ignitionVersion\":\"8.3.8 (b2026071409)\",\"redundancyRole\":\"Independent\",\"deploymentMode\":\"\",\"timeZoneId\":\"Etc/UTC\",\"jvmVersion\":\"17.0.19\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "b4605bb9-5ab9-4ae2-a96c-be8efae1ab32",
+      "deploymentMode": "",
+      "edition": "standard",
+      "ignitionVersion": "8.3.8 (b2026071409)",
+      "jvmVersion": "17.0.19",
+      "name": "ignition-mcp-phase2-ci",
+      "redundancyRole": "Independent",
+      "timeZoneId": "Etc/UTC"
+    }
+  }
+}

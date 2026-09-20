@@ -1,0 +1,24 @@
+{
+  "id": 11,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"7f09d285-8a85-4939-bc0b-c16aad81d19c\",\"profile\":\"MCP_CI_AUDIT\",\"items\":[],\"page\":{\"total\":0,\"matching\":0,\"limit\":100,\"offset\":0}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "7f09d285-8a85-4939-bc0b-c16aad81d19c",
+      "items": [],
+      "page": {
+        "limit": 100,
+        "matching": 0,
+        "offset": 0,
+        "total": 0
+      },
+      "profile": "MCP_CI_AUDIT"
+    }
+  }
+}

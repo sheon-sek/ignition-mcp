@@ -1,0 +1,13 @@
+{
+  "id": 13,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"code\":\"not_found\",\"message\":\"Ignition Gateway resource was not found\",\"correlationId\":\"e7acc20b-f69d-4330-9fa2-d7504d347a3a\"}",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

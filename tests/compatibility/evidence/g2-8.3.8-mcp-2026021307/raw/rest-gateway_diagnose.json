@@ -1,0 +1,24 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"3bbe57eb-6576-4b24-8b77-c440a303a73f\",\"gatewayReachable\":true,\"authenticationOk\":true,\"registryState\":\"READY\",\"registryGeneration\":1,\"openapiSha256\":\"2e1fd9aaad79e8bad1a7578e81efead364e9f392a13fa1872c071edc1c2978fa\",\"gatewayVersion\":\"8.3.8 (b2026071409)\",\"moduleCount\":33,\"message\":\"Gateway REST authentication and low-cost diagnostics succeeded.\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "authenticationOk": true,
+      "correlationId": "3bbe57eb-6576-4b24-8b77-c440a303a73f",
+      "gatewayReachable": true,
+      "gatewayVersion": "8.3.8 (b2026071409)",
+      "message": "Gateway REST authentication and low-cost diagnostics succeeded.",
+      "moduleCount": 33,
+      "openapiSha256": "2e1fd9aaad79e8bad1a7578e81efead364e9f392a13fa1872c071edc1c2978fa",
+      "registryGeneration": 1,
+      "registryState": "READY"
+    }
+  }
+}

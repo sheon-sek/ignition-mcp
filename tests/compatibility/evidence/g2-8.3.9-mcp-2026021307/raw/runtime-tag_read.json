@@ -1,0 +1,40 @@
+{
+  "id": 6,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"failed\":0,\"requested\":1,\"succeeded\":1},\"meta\":{\"correlationId\":\"2300994a-0e11-41a5-af10-24898a67c3f7\"},\"items\":[{\"quality\":{\"code\":192,\"level\":\"Good\",\"good\":true,\"diagnosticMessage\":{\"$ignition\":\"null\"},\"name\":\"Good\"},\"path\":\"[default]_mcp_ci/Value\",\"value\":42,\"status\":\"ok\",\"timestamp\":\"2026-09-20T20:17:49.557Z\"}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "items": [
+        {
+          "path": "[default]_mcp_ci/Value",
+          "quality": {
+            "code": 192,
+            "diagnosticMessage": {
+              "$ignition": "null"
+            },
+            "good": true,
+            "level": "Good",
+            "name": "Good"
+          },
+          "status": "ok",
+          "timestamp": "2026-09-20T20:17:49.557Z",
+          "value": 42
+        }
+      ],
+      "meta": {
+        "correlationId": "2300994a-0e11-41a5-af10-24898a67c3f7"
+      },
+      "summary": {
+        "failed": 0,
+        "requested": 1,
+        "succeeded": 1
+      }
+    }
+  }
+}

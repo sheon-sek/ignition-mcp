@@ -1,0 +1,52 @@
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"156f5545-8d08-4f61-837b-6f31e7724ffd\",\"items\":[{\"name\":\"ignition_mcp_phase2_fixtures\",\"description\":\"Disposable G2 Named Query fixtures only\",\"title\":\"Ignition MCP Phase 2 CI Fixtures\",\"enabled\":true,\"parent\":\"\",\"inheritable\":false,\"invalidParent\":false,\"mutable\":true,\"defaultDb\":\"\",\"tagProvider\":\"\",\"userSource\":\"\",\"identityProvider\":\"\"},{\"name\":\"ignition_runtime\",\"description\":\"Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.\",\"title\":\"Ignition Runtime MCP Bundle\",\"enabled\":true,\"parent\":\"\",\"inheritable\":false,\"invalidParent\":false,\"mutable\":true,\"defaultDb\":\"\",\"tagProvider\":\"\",\"userSource\":\"\",\"identityProvider\":\"\"}],\"page\":{\"total\":2,\"matching\":2,\"limit\":100,\"offset\":0}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "156f5545-8d08-4f61-837b-6f31e7724ffd",
+      "items": [
+        {
+          "defaultDb": "",
+          "description": "Disposable G2 Named Query fixtures only",
+          "enabled": true,
+          "identityProvider": "",
+          "inheritable": false,
+          "invalidParent": false,
+          "mutable": true,
+          "name": "ignition_mcp_phase2_fixtures",
+          "parent": "",
+          "tagProvider": "",
+          "title": "Ignition MCP Phase 2 CI Fixtures",
+          "userSource": ""
+        },
+        {
+          "defaultDb": "",
+          "description": "Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.",
+          "enabled": true,
+          "identityProvider": "",
+          "inheritable": false,
+          "invalidParent": false,
+          "mutable": true,
+          "name": "ignition_runtime",
+          "parent": "",
+          "tagProvider": "",
+          "title": "Ignition Runtime MCP Bundle",
+          "userSource": ""
+        }
+      ],
+      "page": {
+        "limit": 100,
+        "matching": 2,
+        "offset": 0,
+        "total": 2
+      }
+    }
+  }
+}
