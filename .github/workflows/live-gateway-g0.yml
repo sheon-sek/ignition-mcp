@@ -192,6 +192,25 @@ jobs:
             http://127.0.0.1:8088/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci \
             -o "$EVIDENCE_DIR/ci-api-token-resource.json"
 
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/singleton/ignition/security-levels \
+            -o "$EVIDENCE_DIR/security-levels.json"
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/singleton/ignition/security-properties \
+            -o "$EVIDENCE_DIR/security-properties.json"
+
+          write_code="$(curl --silent --output "$RUNNER_TEMP/generated-ci-token.json" --write-out '%{http_code}' \
+            --max-time 15 --request POST \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/api-token/generate || true)"
+          rm -f "$RUNNER_TEMP/generated-ci-token.json"
+          [[ "$write_code" == "200" ]]
+          printf '{"gatewayAccessReadSmoke":true,"gatewayWriteSmoke":true,"writeProbe":"POST /data/api/v1/api-token/generate","writeProbeHttpStatus":200}\n' \
+            > "$EVIDENCE_DIR/ci-rest-auth-smoke.json"
+
       - name: Run real MCP characterization
         id: probe
         shell: bash
