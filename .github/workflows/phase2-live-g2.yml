@@ -251,10 +251,18 @@ jobs:
           docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
           docker compose -f "$COMPOSE_FILE" logs --no-color > "$EVIDENCE_DIR/docker-compose.log" 2>&1 || true
           if [[ -n "$cid" ]]; then
-            # wrapper.log may be a symlink inside the container; cat dereferences it
-            # and the runner writes the copy as its own user (docker cp would ship a
-            # dangling link or root-owned files and fail the upload step).
-            docker exec "$cid" cat /usr/local/bin/ignition/logs/wrapper.log > "$EVIDENCE_DIR/gateway-wrapper.log" 2>/dev/null || true
+            # Every docker call is hard-bounded: an unbounded docker exec hung the
+            # diagnostics step in run 35533572068. cat dereferences the symlinked
+            # wrapper.log; the docker cp fallback prunes symlinks so
+            # actions/upload-artifact never stats a dangling path.
+            timeout 45 docker exec "$cid" cat /usr/local/bin/ignition/logs/wrapper.log > "$EVIDENCE_DIR/gateway-wrapper.log" 2>/dev/null </dev/null || true
+            if [[ ! -s "$EVIDENCE_DIR/gateway-wrapper.log" ]]; then
+              rm -f "$EVIDENCE_DIR/gateway-wrapper.log"
+              mkdir -p "$EVIDENCE_DIR/gateway-logs"
+              timeout 60 docker cp "$cid:/usr/local/bin/ignition/logs/." "$EVIDENCE_DIR/gateway-logs" >/dev/null 2>&1 </dev/null || true
+              find "$EVIDENCE_DIR/gateway-logs" -type l -delete 2>/dev/null || true
+              sudo chown -R "$(id -u):$(id -g)" "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
+            fi
           fi
           curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
 
