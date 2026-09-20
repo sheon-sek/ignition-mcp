@@ -167,6 +167,14 @@ def test_alarm_journal_rejects_unbounded_associated_data_before_native_call() ->
     assert contract["parameters"]["includeData"]["trueBehavior"] == "unsupported_capability"
 
 
+def test_tag_get_config_upstream_errors_identify_safe_execution_stage() -> None:
+    source = (TOOLS / "tag_get_config/onToolCalled.py").read_text(encoding="utf-8")
+    for stage in ("validation", "native_read", "result_normalization", "result_count", "serialization"):
+        assert f'stage = "{stage}"' in source
+    assert '" stage=" + stage + " exceptionType=" + exceptionType' in source
+    assert '"The Tag configuration read could not be completed during " + stage' in source
+
+
 def test_tag_query_normalizes_native_full_path_before_property_allowlist() -> None:
     source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
     raw_values = source.index('rawValues = dict((unicode(key), value) for key, value in nativePairs)')

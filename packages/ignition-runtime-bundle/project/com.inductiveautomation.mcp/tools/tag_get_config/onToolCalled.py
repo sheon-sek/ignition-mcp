@@ -70,6 +70,7 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		body = value[closing + 1:]
 		return "_types_" not in [segment for segment in body.split("/") if segment]
 
+	stage = "validation"
 	try:
 		if not validPath(path):
 			return toolError("invalid_argument", "path must be an absolute provider-qualified Tag path outside the internal UDT definition namespace.")
@@ -84,16 +85,22 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			maxResults = 50
 		if isinstance(maxResults, bool) or not isinstance(maxResults, (int, long)) or maxResults < 1 or maxResults > 200:
 			return toolError("invalid_argument", "maxResults must be an integer from 1 to 200.")
-		configuration = jsonValue(system.tag.getConfiguration(path, bool(recursive), bool(overridesOnly)))
+		stage = "native_read"
+		nativeConfiguration = system.tag.getConfiguration(path, bool(recursive), bool(overridesOnly))
+		stage = "result_normalization"
+		configuration = jsonValue(nativeConfiguration)
+		stage = "result_count"
 		count = countNodes(configuration)
 		if count > maxResults:
 			return toolError("limit_exceeded", "Tag configuration exceeds maxResults; use a narrower path or disable recursive retrieval.")
 		domain = {"path": path, "recursive": bool(recursive), "overridesOnly": bool(overridesOnly), "configuration": configuration, "summary": {"returned": count, "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
+		stage = "serialization"
 		encoded = system.util.jsonEncode(domain)
 		if len(encoded.encode("utf-8")) > 262144:
 			return toolError("limit_exceeded", "Structured output exceeds the 256 KiB default limit; use a narrower path or disable recursive retrieval.")
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
-		logger.error("correlationId=" + correlationId + " tag_get_config failed: " + unicode(exc))
-		return toolError("upstream_error", "The Tag configuration read could not be completed.")
+		exceptionType = unicode(type(exc))
+		logger.error("correlationId=" + correlationId + " stage=" + stage + " exceptionType=" + exceptionType + " tag_get_config failed: " + unicode(exc))
+		return toolError("upstream_error", "The Tag configuration read could not be completed during " + stage + " (" + exceptionType + ").")
