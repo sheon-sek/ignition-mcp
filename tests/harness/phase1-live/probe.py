@@ -348,8 +348,11 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
     bundle_response = client.call("tools/call", {"name": "bundle_info", "arguments": {}})
     _write(raw_dir / "runtime-bundle-info.json", bundle_response)
     bundle = _structured(bundle_response)
-    if bundle.get("gatewayVersion") != "8.3.8":
+    gateway_version = bundle.get("gatewayVersion")
+    if not isinstance(gateway_version, str) or not gateway_version.startswith("8.3.8"):
         raise ProbeError(f"bundle_info Gateway version mismatch: {bundle}")
+    if bundle.get("mcpModuleVersion") != "1.3.5-SNAPSHOT":
+        raise ProbeError(f"bundle_info MCP Module version mismatch: {bundle}")
 
     browse_response = client.call(
         "tools/call",
