@@ -134,6 +134,23 @@ def _call_error(
     return error
 
 
+def _find_config_node(value: object, name: str) -> dict[str, Any] | None:
+    """Recursively search a config/definition tree for the first node named `name`."""
+    if isinstance(value, dict):
+        if value.get("name") == name:
+            return value
+        for child in value.values():
+            found = _find_config_node(child, name)
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found = _find_config_node(child, name)
+            if found is not None:
+                return found
+    return None
+
+
 def _empty_prompts(client: McpClient, initialize: dict[str, Any], raw_dir: Path, plane: str) -> dict[str, Any]:
     capabilities = initialize["result"].get("capabilities")
     if not isinstance(capabilities, dict):
@@ -218,23 +235,59 @@ def probe_runtime(
     smokes["tag_browse"] = _call_success(client, raw_dir, "runtime", "tag_browse", {
         "path": "[default]_mcp_ci", "recursive": False, "maxResults": 100,
     })
-    smokes["tag_query"] = _call_success(client, raw_dir, "runtime", "tag_query", {
+    tag_query_result = _call_success(client, raw_dir, "runtime", "tag_query", {
         "provider": "default", "pathPattern": "_mcp_ci/*", "namePattern": "*",
         "tagType": "", "valueSource": "", "includeUdtMembers": True,
         "returnProperties": ["path", "name", "tagType"], "maxResults": 100, "continuation": "",
     })
+    smokes["tag_query"] = tag_query_result
+    query_paths = {
+        str(item["path"])
+        for item in tag_query_result.get("items", [])
+        if isinstance(item, dict) and "path" in item
+    }
+    if query_paths != {
+        "[default]_mcp_ci/Value",
+        "[default]_mcp_ci/Instance",
+        "[default]_mcp_ci/Instance/Member",
+    }:
+        raise ProbeError("tag_query item path set mismatch: " + repr(sorted(query_paths)))
+    query_summary = tag_query_result.get("summary") or {}
+    if query_summary.get("returned") != 3 or query_summary.get("hasMore") is not False:
+        raise ProbeError("tag_query summary must report returned=3 hasMore=False: " + repr(query_summary))
+    if tag_query_result.get("continuation") != {"$ignition": "null"}:
+        raise ProbeError(
+            "tag_query continuation must be the D28 null marker, got: "
+            + repr(tag_query_result.get("continuation"))
+        )
     smokes["tag_read"] = _call_success(client, raw_dir, "runtime", "tag_read", {
         "tagPaths": ["[default]_mcp_ci/Value"], "timeout": 10000, "timestampFormat": "iso8601",
     })
     smokes["tag_get_config"] = _call_success(client, raw_dir, "runtime", "tag_get_config", {
         "path": "[default]_mcp_ci", "recursive": True, "overridesOnly": False, "maxResults": 50,
     })
+    config_value_node = _find_config_node(smokes["tag_get_config"]["configuration"], "Value")
+    if config_value_node is None:
+        raise ProbeError("tag_get_config configuration tree is missing the fixture node named Value")
+    if config_value_node.get("dataType") != "Int4":
+        raise ProbeError(
+            "tag_get_config did not normalize the enum dataType to Int4: "
+            + repr(config_value_node.get("dataType"))
+        )
     smokes["udt_type_list"] = _call_success(client, raw_dir, "runtime", "udt_type_list", {
         "provider": "default", "maxResults": 100,
     })
     smokes["udt_type_get"] = _call_success(client, raw_dir, "runtime", "udt_type_get", {
         "provider": "default", "typePath": "McpCiType", "maxResults": 200,
     })
+    udt_member_node = _find_config_node(smokes["udt_type_get"]["definition"], "Member")
+    if udt_member_node is None:
+        raise ProbeError("udt_type_get definition tree is missing the fixture child named Member")
+    if udt_member_node.get("dataType") != "Int4":
+        raise ProbeError(
+            "udt_type_get did not normalize the enum dataType to Int4: "
+            + repr(udt_member_node.get("dataType"))
+        )
     now = datetime.now(timezone.utc)
     start = now - timedelta(minutes=15)
     # alarm_status / alarm_journal are deliberately absent: deferred per the D12

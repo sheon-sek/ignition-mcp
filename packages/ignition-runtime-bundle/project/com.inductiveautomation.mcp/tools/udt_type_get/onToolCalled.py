@@ -1,5 +1,5 @@
 def onToolCalled(builder, provider, typePath, maxResults):
-	from java.lang import Boolean, Number, Exception as JavaException
+	from java.lang import Boolean, Number, Enum, Exception as JavaException
 	from java.util import UUID, Date, Map, List
 	import math
 	correlationId = unicode(UUID.randomUUID())
@@ -41,10 +41,14 @@ def onToolCalled(builder, provider, typePath, maxResults):
 			return unicode(value.toInstant().toString())
 		if isinstance(value, dict):
 			return dict((unicode(key), jsonValue(child)) for key, child in value.items())
+		if hasattr(value, "iteritems"):
+			return dict((unicode(key), jsonValue(child)) for key, child in value.iteritems())
 		if isinstance(value, Map):
 			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
 		if isinstance(value, (list, tuple, List)):
 			return [jsonValue(child) for child in value]
+		if isinstance(value, Enum):
+			return unicode(value)
 		if hasattr(value, "getClass") and value.getClass().isArray():
 			return [jsonValue(child) for child in value]
 		return {"type": "native-object", "class": unicode(value.getClass().getName()) if hasattr(value, "getClass") else unicode(type(value)), "text": unicode(value)}

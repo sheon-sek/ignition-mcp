@@ -136,4 +136,4 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 	except (Exception, JavaException) as exc:
 		exceptionType = unicode(type(exc))
 		logger.error("correlationId=" + correlationId + " stage=" + stage + " exceptionType=" + exceptionType + " tag_query failed: " + unicode(exc))
-		return toolError("upstream_error", "The Tag query operation could not be completed during " + stage + " (" + exceptionType + ").")
+		return toolError("upstream_error", "The Tag query operation could not be completed.")
