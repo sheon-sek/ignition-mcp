@@ -139,6 +139,49 @@ def _list(response: dict[str, Any], key: str) -> list[dict[str, Any]]:
     return value
 
 
+def _tools_by_name(tools: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for tool in tools:
+        name = tool.get("name")
+        if not isinstance(name, str) or not name:
+            raise ProbeError("Tool discovery returned an invalid name")
+        if name in result:
+            raise ProbeError(f"duplicate Tool name in discovery: {name}")
+        result[name] = tool
+    return result
+
+
+def _assert_input_schema(
+    tool: dict[str, Any],
+    *,
+    properties: dict[str, str],
+    required: set[str],
+) -> None:
+    name = str(tool.get("name"))
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict) or schema.get("type") != "object":
+        raise ProbeError(f"{name} inputSchema must be an object schema")
+    actual_properties = schema.get("properties")
+    if not isinstance(actual_properties, dict):
+        raise ProbeError(f"{name} inputSchema.properties must be an object")
+    if set(actual_properties) != set(properties):
+        raise ProbeError(
+            f"{name} parameter inventory mismatch: {set(actual_properties)} != {set(properties)}"
+        )
+    for parameter, expected_type in properties.items():
+        descriptor = actual_properties.get(parameter)
+        if not isinstance(descriptor, dict) or descriptor.get("type") != expected_type:
+            raise ProbeError(
+                f"{name}.{parameter} type mismatch: "
+                f"{descriptor.get('type') if isinstance(descriptor, dict) else None} != {expected_type}"
+            )
+    raw_required = schema.get("required", [])
+    if not isinstance(raw_required, list) or not all(isinstance(item, str) for item in raw_required):
+        raise ProbeError(f"{name} inputSchema.required must be a string array")
+    if set(raw_required) != required:
+        raise ProbeError(f"{name} required parameter mismatch: {set(raw_required)} != {required}")
+
+
 def _structured(response: dict[str, Any]) -> dict[str, Any]:
     result = response.get("result")
     value = result.get("structuredContent") if isinstance(result, dict) else None
@@ -175,13 +218,18 @@ def probe_external(base_url: str, raw_dir: Path) -> dict[str, Any]:
     tools_response = client.call("tools/list", {})
     _write(raw_dir / "rest-tools-list.json", tools_response)
     tools = _list(tools_response, "tools")
-    names = {item.get("name") for item in tools}
+    tools_by_name = _tools_by_name(tools)
+    names = set(tools_by_name)
     expected = {"gateway_info", "gateway_diagnose"}
     if names != expected:
         raise ProbeError(f"ignition-rest inventory mismatch: {names}")
-    for tool in tools:
+    for name in sorted(expected):
+        tool = tools_by_name[name]
+        _assert_input_schema(tool, properties={}, required=set())
+        if not isinstance(tool.get("description"), str) or not tool["description"].strip():
+            raise ProbeError(f"ignition-rest {name} missing description")
         if not isinstance(tool.get("outputSchema"), dict):
-            raise ProbeError(f"ignition-rest {tool.get('name')} missing native outputSchema")
+            raise ProbeError(f"ignition-rest {name} missing native outputSchema")
 
     info_response = client.call("tools/call", {"name": "gateway_info", "arguments": {}})
     _write(raw_dir / "rest-gateway-info.json", info_response)
@@ -267,10 +315,26 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
     tools_response = client.call("tools/list", {})
     _write(raw_dir / "runtime-tools-list.json", tools_response)
     tools = _list(tools_response, "tools")
-    names = {item.get("name") for item in tools}
-    expected = {"bundle_info", "tag_browse", "tag_read"}
-    if names != expected:
+    tools_by_name = _tools_by_name(tools)
+    names = set(tools_by_name)
+    expected_schemas = {
+        "bundle_info": ({}, set()),
+        "tag_browse": (
+            {"path": "string", "recursive": "boolean", "maxResults": "integer"},
+            {"path"},
+        ),
+        "tag_read": (
+            {"tagPaths": "array", "timeout": "integer", "timestampFormat": "string"},
+            {"tagPaths"},
+        ),
+    }
+    if names != set(expected_schemas):
         raise ProbeError(f"Runtime Tool inventory mismatch: {names}")
+    for name, (properties, required) in expected_schemas.items():
+        tool = tools_by_name[name]
+        _assert_input_schema(tool, properties=properties, required=required)
+        if not isinstance(tool.get("description"), str) or not tool["description"].strip():
+            raise ProbeError(f"Runtime {name} missing description")
 
     bundle_response = client.call("tools/call", {"name": "bundle_info", "arguments": {}})
     _write(raw_dir / "runtime-bundle-info.json", bundle_response)
