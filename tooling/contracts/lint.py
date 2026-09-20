@@ -1,4 +1,4 @@
-"""Strict Phase 0 contract/profile consistency checks."""
+"""Strict shared-contract and current-phase inventory consistency checks."""
 
 from __future__ import annotations
 
@@ -18,6 +18,7 @@ EXPECTED_PROFILES = {
     "configurator": frozenset({"READ", "CONFIG"}),
     "full": frozenset({"READ", "CONFIG", "CONTROL"}),
 }
+PHASE1_RUNTIME_TOOLS = ["bundle_info", "tag_browse", "tag_read"]
 
 
 class ContractError(ValueError):
@@ -70,8 +71,8 @@ def lint_contracts(root: str | Path) -> None:
         tools = profile.get("tools")
         if not isinstance(tools, list) or len(tools) != len(set(tools)):
             raise ContractError(f"{name}: tools must be an explicit duplicate-free list")
-        if tools != ["bundle_info"]:
-            raise ContractError(f"{name}: Phase 0 must expose only the core bundle_info Tool")
+        if tools != PHASE1_RUNTIME_TOOLS:
+            raise ContractError(f"{name}: Phase 1 Runtime inventory drift")
 
     compatibility = _load(root_path / "shared/compatibility-status.json")
     if compatibility.get("supportedRequiresMachineEvidence") is not True:
@@ -79,11 +80,23 @@ def lint_contracts(root: str | Path) -> None:
     if compatibility.get("supportedRequiresVerifiedNativeResponseBinding") is not True:
         raise ContractError("SUPPORTED compatibility requires verified native response binding")
 
-    tool = _load(root_path / "tools/runtime/bundle_info.contract.json")
-    if tool.get("name") != "bundle_info" or tool.get("nativeResponseBinding") != "VERIFIED_WITH_LIMITATION":
-        raise ContractError("bundle_info Phase 0 binding state drift")
-    if tool.get("nativeOutputSchema") != "UNAVAILABLE_ON_D27_BASELINE":
-        raise ContractError("bundle_info must record the D27 native outputSchema limitation")
+    for tool_name in PHASE1_RUNTIME_TOOLS:
+        tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
+        if tool.get("name") != tool_name:
+            raise ContractError(f"{tool_name}: contract name drift")
+        if tool.get("permissionClass") != "READ" or tool.get("mutationClass") != "NONE":
+            raise ContractError(f"{tool_name}: Phase 1 Runtime read contract drift")
+        if tool.get("nativeResponseBinding") != "VERIFIED_WITH_LIMITATION":
+            raise ContractError(f"{tool_name}: D27 native binding status drift")
+        if tool.get("nativeOutputSchema") != "UNAVAILABLE_ON_D27_BASELINE":
+            raise ContractError(f"{tool_name}: D27 native outputSchema limitation drift")
+
+    for tool_name in ("gateway_info", "gateway_diagnose"):
+        tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
+        if tool.get("name") != tool_name or tool.get("permissionClass") != "READ":
+            raise ContractError(f"{tool_name}: Phase 1 external Tool contract drift")
+        if tool.get("mutationClass") != "NONE":
+            raise ContractError(f"{tool_name}: Phase 1 external Tool must be read-only")
 
 
 def main() -> int:

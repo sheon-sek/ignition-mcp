@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:gateway-info:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "name": {"type": "string", "minLength": 1},
+    "edition": {"type": "string", "minLength": 1},
+    "ignitionVersion": {"type": "string", "minLength": 1},
+    "redundancyRole": {"type": "string", "minLength": 1},
+    "deploymentMode": {"type": "string"},
+    "timeZoneId": {"type": "string", "minLength": 1},
+    "jvmVersion": {"type": "string", "minLength": 1}
+  },
+  "required": ["correlationId", "name", "edition", "ignitionVersion", "redundancyRole", "deploymentMode", "timeZoneId", "jvmVersion"]
+}

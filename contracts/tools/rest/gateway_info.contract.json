@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "gateway_info",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {},
+  "outputSchema": "contracts/schemas/gateway-info.output.schema.json",
+  "nativeRequirements": ["GET /data/api/v1/gateway-info"],
+  "capabilityId": "gateway_info"
+}
