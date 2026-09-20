@@ -14,7 +14,7 @@
     "enabled": true,
     "cacheAmount": 1,
     "cacheEnabled": false,
-    "database": "MCP_CI_POSTGRES",
+    "database": "MCP_CI_DB",
     "fallbackEnabled": false,
     "permissions": [],
     "parameters": [

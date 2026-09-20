@@ -129,19 +129,63 @@ def _import_tags(base_url: str, token: str, value: int) -> int:
     return status
 
 
+def _resource_names(base_url: str, token: str, resource_type: str) -> list[str]:
+    status, payload = _request(
+        base_url, token, "GET", "/data/api/v1/resources/names/" + resource_type,
+    )
+    if status != 200 or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise ProvisionError(f"discovering {resource_type} names returned unexpected HTTP {status}")
+    names: list[str] = []
+    for item in payload["items"]:
+        if isinstance(item, str):
+            names.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("name"), str):
+            names.append(item["name"])
+    return names
+
+
+# D04 principle applied to fixtures: discover what the target Gateway actually bundles
+# instead of hard-coding driver assumptions. A fresh 8.3.x standard Gateway does not
+# include a PostgreSQL JDBC driver; the first live G2 attempt proved this with
+# "422 Invalid reference: 'PostgreSQL'".
+_DB_KEYWORDS = ("mariadb", "mysql")
+_DB_URL_BY_KEYWORD = {
+    "mariadb": "jdbc:mariadb://db:3306/ignition_mcp_ci",
+    "mysql": "jdbc:mysql://db:3306/ignition_mcp_ci",
+}
+
+
+def _select_database_identity(base_url: str, token: str) -> tuple[str, str, str]:
+    drivers = _resource_names(base_url, token, "ignition/database-driver")
+    translators = _resource_names(base_url, token, "ignition/database-translator")
+    driver = next((name for name in drivers if any(k in name.lower() for k in _DB_KEYWORDS)), None)
+    translator = next((name for name in translators if any(k in name.lower() for k in _DB_KEYWORDS)), None)
+    if driver is None or translator is None:
+        raise ProvisionError(
+            "No CI-compatible database driver/translator is installed: "
+            f"drivers={sorted(drivers)} translators={sorted(translators)}"
+        )
+    connect_url = next((url for key, url in _DB_URL_BY_KEYWORD.items() if key in driver.lower()), None)
+    if connect_url is None:
+        raise ProvisionError(f"selected driver {driver!r} has no known CI JDBC URL")
+    return driver, translator, connect_url
+
+
 def provision(base_url: str, token: str) -> dict[str, Any]:
+    driver, translator, connect_url = _select_database_identity(base_url, token)
     resources = [
         (
             "ignition/database-connection",
             {
-                "name": "MCP_CI_POSTGRES",
+                "name": "MCP_CI_DB",
                 "enabled": True,
-                "description": "Disposable Phase 2 CI PostgreSQL",
+                "description": "Disposable Phase 2 CI fixture database",
                 "config": {
-                    "driver": "PostgreSQL",
-                    "translator": "POSTGRESQL",
-                    "connectURL": "jdbc:postgresql://postgres:5432/ignition_mcp_ci",
+                    "driver": driver,
+                    "translator": translator,
+                    "connectURL": connect_url,
                     "username": "ignition_mcp_ci",
+                    "password": "phase2-ci-only-not-a-production-secret",
                     "poolMaxActive": 4,
                     "poolMaxIdle": 2,
                     "poolMaxWait": 5000,
@@ -178,7 +222,12 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
     ]
     # Alarm Journal provisioning and alarm_status/alarm_journal smoke are omitted:
     # both Tools are deferred per the D12 Phase 2 bounded-execution amendment.
-    results: dict[str, Any] = {"resources": {}}
+    results: dict[str, Any] = {
+        "resources": {},
+        "databaseDriver": driver,
+        "databaseTranslator": translator,
+        "databaseConnectUrl": connect_url,
+    }
     for resource_type, resource in resources:
         results["resources"][resource_type] = _create_resource(base_url, token, resource_type, resource)
 

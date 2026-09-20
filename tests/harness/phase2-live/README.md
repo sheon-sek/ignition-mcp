@@ -1,6 +1,6 @@
 # Phase 2 live Gateway harness (G2)
 
-This harness provisions an isolated exact-patch Ignition Gateway, the checksum-pinned official MCP Module, PostgreSQL, the exact built Runtime ZIP, a test-only Named Query project, and bounded Tag/Historian/audit fixtures. It then performs real MCP discovery and calls across both capability planes.
+This harness provisions an isolated exact-patch Ignition Gateway, the checksum-pinned official MCP Module, a disposable MariaDB container, the exact built Runtime ZIP, a test-only Named Query project, and bounded Tag/Historian/audit fixtures. The datasource driver and translator are discovered from the live Gateway's installed resources instead of being assumed (a fresh 8.3.x standard Gateway bundles no PostgreSQL driver; the first G2 attempt proved that assumption wrong with `422 Invalid reference: 'PostgreSQL'`). Provisioning then performs real MCP discovery and calls across both capability planes.
 
 ## Evidence scope
 

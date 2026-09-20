@@ -84,13 +84,13 @@ jobs:
         run: |
           set -euo pipefail
           docker pull "$GATEWAY_IMAGE"
-          docker pull postgres:16.4-alpine3.20
+          docker pull mariadb:11.4.13-noble
           IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
           IMAGE_DIGEST="${IMAGE_REF##*@}"
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
-      - name: Start fresh Gateway and PostgreSQL
+      - name: Start fresh Gateway and fixture database
         run: docker compose -f "$COMPOSE_FILE" up -d --no-build
 
       - name: Wait for initial Gateway commissioning

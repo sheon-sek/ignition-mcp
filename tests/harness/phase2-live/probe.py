@@ -266,6 +266,10 @@ def probe_runtime(
     smokes["database_query"] = _call_success(client, raw_dir, "runtime", "database_query", {
         "alias": "ci_page", "parameters": {}, "pageSize": 2, "offset": 0,
     })
+    # The fixture table has exactly three rows: a full 2-row page must continue at 2.
+    db_page = smokes["database_query"]["page"]
+    if db_page["mode"] != "offset" or db_page["nextOffset"] != 2 or len(smokes["database_query"]["rows"]) != 2:
+        raise ProbeError("database_query bounded pagination continuation mismatch")
 
     errors = {
         "databaseUnapproved": _call_error(
@@ -335,7 +339,7 @@ def probe_external(base_url: str, gateway_version: str, raw_dir: Path) -> dict[s
         "resourceType": "ignition/database-connection", "search": "MCP_CI", "limit": 100, "offset": 0,
     })
     smokes["config_resource_get"] = _call_success(client, raw_dir, "rest", "config_resource_get", {
-        "resourceType": "ignition/database-connection", "name": "MCP_CI_POSTGRES",
+        "resourceType": "ignition/database-connection", "name": "MCP_CI_DB",
         "collection": "", "defaultIfUndefined": False,
     })
     smokes["audit_query"] = _call_success(client, raw_dir, "rest", "audit_query", {
