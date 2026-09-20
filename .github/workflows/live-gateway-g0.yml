@@ -148,6 +148,9 @@ jobs:
           python tests/harness/runtime-binding/probe.py \
             --gateway-build "$GATEWAY_BUILD" \
             --gateway-image-digest "$IMAGE_DIGEST" \
+            --module-version "1.3.5-SNAPSHOT" \
+            --module-artifact-version "1.3.5.2026021307-SNAPSHOT" \
+            --module-build "2026021307" \
             --module-file "$MODULE_FILE" \
             --fixture-zip "$FIXTURE_ZIP" \
             --evidence "$EVIDENCE_DIR/evidence.json" \

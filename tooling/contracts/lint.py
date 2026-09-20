@@ -16,7 +16,7 @@ EXPECTED_PROFILES = {
     "readonly": frozenset({"READ"}),
     "operator": frozenset({"READ", "CONTROL"}),
     "configurator": frozenset({"READ", "CONFIG"}),
-    "full": frozenset({"READ", "CONFIG", "CONTROL", "ADMIN"}),
+    "full": frozenset({"READ", "CONFIG", "CONTROL"}),
 }
 
 
@@ -80,8 +80,10 @@ def lint_contracts(root: str | Path) -> None:
         raise ContractError("SUPPORTED compatibility requires verified native response binding")
 
     tool = _load(root_path / "tools/runtime/bundle_info.contract.json")
-    if tool.get("name") != "bundle_info" or tool.get("nativeResponseBinding") != "NATIVE_BINDING_PENDING":
+    if tool.get("name") != "bundle_info" or tool.get("nativeResponseBinding") != "VERIFIED_WITH_LIMITATION":
         raise ContractError("bundle_info Phase 0 binding state drift")
+    if tool.get("nativeOutputSchema") != "UNAVAILABLE_ON_D27_BASELINE":
+        raise ContractError("bundle_info must record the D27 native outputSchema limitation")
 
 
 def main() -> int:

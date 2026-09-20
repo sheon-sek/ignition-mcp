@@ -6,7 +6,7 @@
   "files": ["onToolCalled.py"],
   "attributes": {
     "title": "bundle_info",
-    "description": "Return Runtime Bundle identity and compatibility information. Disabled until Native MCP response binding is live-verified.",
+    "description": "Return Runtime Bundle identity and current Gateway/MCP Module information.",
     "parameters": []
   }
 }

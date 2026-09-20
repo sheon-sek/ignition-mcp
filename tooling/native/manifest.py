@@ -39,7 +39,7 @@ def base_manifest(project_dir: str | Path, bundle_version: str, source_revision:
         "schemaVersion": 1,
         "bundleVersion": bundle_version,
         "sourceRevision": source_revision,
-        "nativeResponseBindingStatus": "NATIVE_BINDING_PENDING",
+        "nativeResponseBindingStatus": "VERIFIED_WITH_LIMITATION",
         "inventory": source_inventory(project_dir),
         "testedTuples": [],
     }

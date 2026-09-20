@@ -1,6 +1,6 @@
 {
   "title": "Ignition Runtime MCP Bundle",
-  "description": "Disabled Phase 0 scaffold pending real MCP native response binding characterization.",
-  "enabled": false,
+  "description": "Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.",
+  "enabled": true,
   "inheritable": false
 }

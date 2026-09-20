@@ -10,6 +10,7 @@
   "budgetClass": "FAST",
   "parameters": [],
   "outputSchema": "contracts/schemas/bundle-info.output.schema.json",
-  "nativeRequirements": [],
-  "nativeResponseBinding": "NATIVE_BINDING_PENDING"
+  "nativeRequirements": ["system.util.getVersion", "system.util.getModules"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE"
 }

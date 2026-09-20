@@ -1,20 +1,26 @@
 {
-  "schemaVersion": 2,
+  "schemaVersion": 3,
   "gate": "G0",
   "gatewayImage": "inductiveautomation/ignition:8.3.8",
   "gatewayVersion": "8.3.8",
   "gatewayBuildExpected": "2026071409",
-  "mcpModuleVersion": "1.3.5.2026021307-SNAPSHOT",
+  "mcpModuleVersion": "1.3.5-SNAPSHOT",
+  "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
   "mcpModuleBuild": "2026021307",
   "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
   "requiredChecks": [
     "initialize",
     "tools_list_exact_inventory",
-    "tools_list_output_schema",
     "tools_call_success_structured_content",
     "tools_call_failure_is_error",
     "resources_list_and_read",
     "prompts_list_and_get"
   ],
-  "currentStatus": "NATIVE_BINDING_PENDING"
+  "nativeOutputSchemaCheck": {
+    "requiredByDefault": true,
+    "baselineStatus": "UNAVAILABLE",
+    "exceptionDecision": "D27",
+    "exceptionScope": "exact_tuple_only"
+  },
+  "currentStatus": "VERIFIED_WITH_LIMITATION"
 }

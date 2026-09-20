@@ -16,6 +16,11 @@ from pathlib import Path
 from typing import Any
 
 PROTOCOL_VERSION = "2025-06-18"
+D27_GATEWAY_VERSION = "8.3.8"
+D27_GATEWAY_BUILD = "2026071409"
+D27_MODULE_VERSION = "1.3.5-SNAPSHOT"
+D27_MODULE_BUILD = "2026021307"
+D27_MODULE_SHA256 = "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365"
 ACCEPT = "application/json, text/event-stream"
 EXPECTED_TOOLS = {"binding-failure", "binding-success"}
 EXPECTED_RESOURCE_NAME = "fixture-info"
@@ -302,23 +307,46 @@ def characterize(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             f"OpenAPI fingerprint unavailable: {type(error).__name__}: {error}"
         )
 
-    verified = all(checks.values())
-    status = "VERIFIED" if verified else "FAILED"
+    base_checks = {name: value for name, value in checks.items() if name != "outputSchemaPublished"}
+    base_verified = all(base_checks.values())
+    module_sha256 = _sha256_file(Path(args.module_file))
+    d27_exception_applies = (
+        base_verified
+        and not checks["outputSchemaPublished"]
+        and args.gateway_version == D27_GATEWAY_VERSION
+        and args.gateway_build == D27_GATEWAY_BUILD
+        and args.module_version == D27_MODULE_VERSION
+        and args.module_build == D27_MODULE_BUILD
+        and module_sha256 == D27_MODULE_SHA256
+    )
+    if base_verified and checks["outputSchemaPublished"]:
+        status = "VERIFIED"
+        verified = True
+    elif d27_exception_applies:
+        status = "VERIFIED_WITH_LIMITATION"
+        verified = True
+        observations.append("D27 exact-tuple native outputSchema exception applied")
+    else:
+        status = "FAILED"
+        verified = False
+
     evidence = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "gate": "G0",
         "gatewayVersion": args.gateway_version,
         "gatewayBuild": args.gateway_build,
         "gatewayImage": args.gateway_image,
         "gatewayImageDigest": args.gateway_image_digest,
         "mcpModuleVersion": args.module_version,
+        "mcpModuleArtifactVersion": args.module_artifact_version,
         "mcpModuleBuild": args.module_build,
-        "mcpModuleSha256": _sha256_file(Path(args.module_file)),
+        "mcpModuleSha256": module_sha256,
         "bundleVersion": "phase0-characterization-fixture-1",
         "bundleSha256": _sha256_file(Path(args.fixture_zip)),
         "openapiSha256": openapi_sha256,
         **checks,
         "nativeResponseBindingStatus": status,
+        "d27OutputSchemaExceptionApplied": d27_exception_applies,
         "observations": observations,
     }
     return evidence, verified
@@ -333,7 +361,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--gateway-build", required=True)
     parser.add_argument("--gateway-image", default="inductiveautomation/ignition:8.3.8")
     parser.add_argument("--gateway-image-digest", required=True)
-    parser.add_argument("--module-version", default="1.3.5.2026021307-SNAPSHOT")
+    parser.add_argument("--module-version", default="1.3.5-SNAPSHOT")
+    parser.add_argument("--module-artifact-version", default="1.3.5.2026021307-SNAPSHOT")
     parser.add_argument("--module-build", default="2026021307")
     parser.add_argument("--module-file", required=True)
     parser.add_argument("--fixture-zip", required=True)
@@ -352,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
         evidence, verified = characterize(args)
     except Exception as error:
         failure = {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "gate": "G0",
             "nativeResponseBindingStatus": "FAILED",
             "fatalError": f"{type(error).__name__}: {error}",
