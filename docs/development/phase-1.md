@@ -71,4 +71,16 @@ CI uses official ephemeral Ignition 8.3.8 and pinned Module build 2026021307 wit
 
 Local tests prove pure logic/static/build behavior, not Jython/JVM semantics. Live G1 must prove both servers, exact inventories, Resource payload/source equivalence, output schemas, text/structured equivalence, Bad-quality null samples, ordered duplicate reads, ISO/epoch timestamps, and native canonical errors. G0 continues to characterize its separate fixture.
 
-G1 success does not imply `SUPPORTED`, Designer GUI import verification, JWKS rotation integration testing, Phase 2 completion, or full v1. Keep the D27 native-outputSchema and D28 null-encoding limitations visible. Final run URLs and persisted evidence are recorded after live verification completes.
+G1 success does not imply `SUPPORTED`, Designer GUI import verification, JWKS rotation integration testing, Phase 2 completion, or full v1. Keep the D27 native-outputSchema and D28 null-encoding limitations visible.
+
+## Acceptance — COMPLETE
+
+Implementation commit: `7f2b3a1f31fcefddeba7306f93b6867108e8488f`.
+
+- Local L0/L1/L2: **72 tests PASS**, Ruff PASS, mypy PASS (30 source files), lockfile check PASS, external wheel/sdist build PASS, Runtime reproducible ZIP comparison PASS.
+- [GitHub CI 35513611887](https://github.com/sheon-sek/ignition-mcp/actions/runs/35513611887): **PASS**.
+- [G0 35513612004](https://github.com/sheon-sek/ignition-mcp/actions/runs/35513612004): **PASS**.
+- [G1 35513611855](https://github.com/sheon-sek/ignition-mcp/actions/runs/35513611855): **PASS**.
+- [Persisted evidence](../../tests/compatibility/evidence/g1-8.3.8-mcp-2026021307/evidence.json): unchanged workflow JSON, plus raw protocol replies and provenance. Bundle SHA-256 `18a938ff7b8ee799504157274f185df44a4e68d48ed48171bf042d431f20a96b` matches the locally rebuilt artifact.
+
+G1 is closed for this Phase 1 baseline with explicit D27/D28 limitations. Documentation/evidence-only commits after the implementation commit do not change its verified runtime. Stop here; Phase 2 needs a separate user instruction and independent feature branch.

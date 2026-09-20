@@ -1,0 +1,20 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "capabilities": {
+      "resources": {
+        "listChanged": true
+      },
+      "tools": {
+        "listChanged": true
+      }
+    },
+    "protocolVersion": "2025-06-18",
+    "serverInfo": {
+      "name": "phase1-runtime",
+      "title": "Phase 1 Runtime Readonly",
+      "version": "0.1.0"
+    }
+  }
+}

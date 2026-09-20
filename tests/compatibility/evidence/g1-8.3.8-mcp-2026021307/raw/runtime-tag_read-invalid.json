@@ -1,0 +1,13 @@
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"code\":\"invalid_argument\",\"correlationId\":\"9f573d04-bbf5-4ca0-ad7c-bf1e75cb2ccd\",\"message\":\"Unsupported timestampFormat. Supported values: iso8601, epochMillis (case-sensitive).\"}",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

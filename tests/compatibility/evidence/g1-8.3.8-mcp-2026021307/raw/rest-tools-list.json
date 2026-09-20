@@ -1,0 +1,163 @@
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:gateway_info",
+              "read"
+            ]
+          }
+        },
+        "description": "Return a bounded identity summary for the connected Ignition Gateway.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": "gateway_info",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "deploymentMode": {
+              "title": "Deploymentmode",
+              "type": "string"
+            },
+            "edition": {
+              "title": "Edition",
+              "type": "string"
+            },
+            "ignitionVersion": {
+              "title": "Ignitionversion",
+              "type": "string"
+            },
+            "jvmVersion": {
+              "title": "Jvmversion",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "redundancyRole": {
+              "title": "Redundancyrole",
+              "type": "string"
+            },
+            "timeZoneId": {
+              "title": "Timezoneid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "name",
+            "edition",
+            "ignitionVersion",
+            "redundancyRole",
+            "deploymentMode",
+            "timeZoneId",
+            "jvmVersion"
+          ],
+          "title": "GatewayInfoResult",
+          "type": "object"
+        },
+        "title": "Gateway Info"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "diagnostic",
+              "read"
+            ]
+          }
+        },
+        "description": "Run low-cost connectivity, authentication, and capability-registry diagnostics.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": "gateway_diagnose",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "authenticationOk": {
+              "title": "Authenticationok",
+              "type": "boolean"
+            },
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "gatewayReachable": {
+              "title": "Gatewayreachable",
+              "type": "boolean"
+            },
+            "gatewayVersion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gatewayversion"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "moduleCount": {
+              "minimum": 0,
+              "title": "Modulecount",
+              "type": "integer"
+            },
+            "openapiSha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Openapisha256"
+            },
+            "registryGeneration": {
+              "minimum": 0,
+              "title": "Registrygeneration",
+              "type": "integer"
+            },
+            "registryState": {
+              "title": "Registrystate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "gatewayReachable",
+            "authenticationOk",
+            "registryState",
+            "registryGeneration",
+            "openapiSha256",
+            "gatewayVersion",
+            "moduleCount",
+            "message"
+          ],
+          "title": "GatewayDiagnoseResult",
+          "type": "object"
+        },
+        "title": "Gateway Diagnose"
+      }
+    ]
+  }
+}

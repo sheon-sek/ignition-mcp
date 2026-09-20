@@ -1,0 +1,106 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":100,\"returned\":11},\"recursive\":false,\"path\":\"[System]Gateway\",\"nodes\":[{\"hasChildren\":true,\"path\":\"[System]Gateway/Alarming\",\"name\":\"Alarming\",\"tagType\":\"Folder\"},{\"hasChildren\":false,\"dataType\":\"DateTime\",\"path\":\"[System]Gateway/CurrentDateTime\",\"name\":\"CurrentDateTime\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":false,\"dataType\":\"String\",\"path\":\"[System]Gateway/DeploymentMode\",\"name\":\"DeploymentMode\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":false,\"dataType\":\"String\",\"path\":\"[System]Gateway/LicenseState\",\"name\":\"LicenseState\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":true,\"path\":\"[System]Gateway/Performance\",\"name\":\"Performance\",\"tagType\":\"Folder\"},{\"hasChildren\":true,\"path\":\"[System]Gateway/Redundancy\",\"name\":\"Redundancy\",\"tagType\":\"Folder\"},{\"hasChildren\":false,\"dataType\":\"StringArray\",\"path\":\"[System]Gateway/RestartTasks\",\"name\":\"RestartTasks\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":true,\"path\":\"[System]Gateway/Sessions\",\"name\":\"Sessions\",\"tagType\":\"Folder\"},{\"hasChildren\":false,\"dataType\":\"String\",\"path\":\"[System]Gateway/SystemName\",\"name\":\"SystemName\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":false,\"dataType\":\"String\",\"path\":\"[System]Gateway/Timezone\",\"name\":\"Timezone\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"},{\"hasChildren\":false,\"dataType\":\"Int8\",\"path\":\"[System]Gateway/UptimeSeconds\",\"name\":\"UptimeSeconds\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"}],\"meta\":{\"correlationId\":\"afd2bd12-3fa7-492f-a685-7cb2937ba5da\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "meta": {
+        "correlationId": "afd2bd12-3fa7-492f-a685-7cb2937ba5da"
+      },
+      "nodes": [
+        {
+          "hasChildren": true,
+          "name": "Alarming",
+          "path": "[System]Gateway/Alarming",
+          "tagType": "Folder"
+        },
+        {
+          "dataType": "DateTime",
+          "hasChildren": false,
+          "name": "CurrentDateTime",
+          "path": "[System]Gateway/CurrentDateTime",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "dataType": "String",
+          "hasChildren": false,
+          "name": "DeploymentMode",
+          "path": "[System]Gateway/DeploymentMode",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "dataType": "String",
+          "hasChildren": false,
+          "name": "LicenseState",
+          "path": "[System]Gateway/LicenseState",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "hasChildren": true,
+          "name": "Performance",
+          "path": "[System]Gateway/Performance",
+          "tagType": "Folder"
+        },
+        {
+          "hasChildren": true,
+          "name": "Redundancy",
+          "path": "[System]Gateway/Redundancy",
+          "tagType": "Folder"
+        },
+        {
+          "dataType": "StringArray",
+          "hasChildren": false,
+          "name": "RestartTasks",
+          "path": "[System]Gateway/RestartTasks",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "hasChildren": true,
+          "name": "Sessions",
+          "path": "[System]Gateway/Sessions",
+          "tagType": "Folder"
+        },
+        {
+          "dataType": "String",
+          "hasChildren": false,
+          "name": "SystemName",
+          "path": "[System]Gateway/SystemName",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "dataType": "String",
+          "hasChildren": false,
+          "name": "Timezone",
+          "path": "[System]Gateway/Timezone",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        },
+        {
+          "dataType": "Int8",
+          "hasChildren": false,
+          "name": "UptimeSeconds",
+          "path": "[System]Gateway/UptimeSeconds",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        }
+      ],
+      "path": "[System]Gateway",
+      "recursive": false,
+      "summary": {
+        "limit": 100,
+        "returned": 11
+      }
+    }
+  }
+}

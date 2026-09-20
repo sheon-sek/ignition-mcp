@@ -1,0 +1,40 @@
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"failed\":0,\"requested\":1,\"succeeded\":1},\"meta\":{\"correlationId\":\"578ef54a-c022-4d22-b57b-7c30be2bc976\"},\"items\":[{\"quality\":{\"code\":192,\"level\":\"Good\",\"good\":true,\"diagnosticMessage\":{\"$ignition\":\"null\"},\"name\":\"Good\"},\"path\":\"[System]Gateway/SystemName\",\"value\":\"ignition-mcp-phase1-ci\",\"status\":\"ok\",\"timestamp\":\"2026-09-20T13:30:01.181Z\"}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "items": [
+        {
+          "path": "[System]Gateway/SystemName",
+          "quality": {
+            "code": 192,
+            "diagnosticMessage": {
+              "$ignition": "null"
+            },
+            "good": true,
+            "level": "Good",
+            "name": "Good"
+          },
+          "status": "ok",
+          "timestamp": "2026-09-20T13:30:01.181Z",
+          "value": "ignition-mcp-phase1-ci"
+        }
+      ],
+      "meta": {
+        "correlationId": "578ef54a-c022-4d22-b57b-7c30be2bc976"
+      },
+      "summary": {
+        "failed": 0,
+        "requested": 1,
+        "succeeded": 1
+      }
+    }
+  }
+}
