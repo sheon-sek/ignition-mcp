@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:audit-query:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "profile": {
+      "type": "string",
+      "minLength": 1
+    },
+    "items": {
+      "type": "array",
+      "maxItems": 500,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actionTarget": {
+            "type": "string"
+          },
+          "actionValue": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "string"
+          },
+          "actorHost": {
+            "type": "string"
+          },
+          "originatingContext": {
+            "type": "integer"
+          },
+          "originatingSystem": {
+            "type": "string"
+          },
+          "statusCode": {
+            "type": "integer"
+          },
+          "timestamp": {
+            "type": "integer"
+          },
+          "result": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "actionTarget",
+          "actionValue",
+          "actor",
+          "actorHost",
+          "originatingContext",
+          "originatingSystem",
+          "statusCode",
+          "timestamp",
+          "result"
+        ]
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "matching": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "total",
+        "matching",
+        "limit",
+        "offset"
+      ]
+    }
+  },
+  "required": [
+    "correlationId",
+    "profile",
+    "items",
+    "page"
+  ]
+}
