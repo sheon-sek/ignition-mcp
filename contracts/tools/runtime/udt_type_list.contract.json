@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "name": "udt_type_list",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "provider": {"type": "string", "required": true},
+    "maxResults": {"type": "integer", "required": false, "default": 100, "minimum": 1, "maximum": 500}
+  },
+  "outputSchema": "contracts/schemas/udt-type-list.output.schema.json",
+  "nativeRequirements": ["system.tag.browse"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "internalUdtNamespaceExposed": false,
+  "silentTruncation": false
+}

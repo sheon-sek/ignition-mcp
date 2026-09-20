@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_query",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "provider": {"type": "string", "required": false, "requiredWithoutContinuation": true},
+    "pathPattern": {"type": "string", "required": false},
+    "namePattern": {"type": "string", "required": false},
+    "tagType": {"type": "string", "required": false, "enum": ["AtomicTag", "Folder", "UdtInstance"]},
+    "valueSource": {"type": "string", "required": false, "enum": ["memory", "opc", "expr", "db", "reference", "derived"]},
+    "includeUdtMembers": {"type": "boolean", "required": false, "default": true},
+    "returnProperties": {"type": "array", "required": false, "default": ["path", "tagType"], "allowed": ["path", "name", "tagType", "dataType", "valueSource", "typeId", "quality"]},
+    "maxResults": {"type": "integer", "required": false, "default": 100, "minimum": 1, "maximum": 500},
+    "continuation": {"type": "string", "required": false, "opaque": true}
+  },
+  "outputSchema": "contracts/schemas/tag-query.output.schema.json",
+  "nativeRequirements": ["system.tag.query"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "pagination": "native-continuation",
+  "internalUdtNamespaceExposed": false,
+  "silentTruncation": false,
+  "nullEncoding": "ignition-null-v1"
+}

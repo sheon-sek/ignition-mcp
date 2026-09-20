@@ -1,0 +1,22 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "tag_query",
+    "description": "Query a Tag Provider with a bounded semantic subset of system.tag.query. Supports native continuation without exposing the internal UDT definition namespace.",
+    "parameters": [
+      {"name": "provider", "description": "Tag Provider name. Required for a new query; omit or leave empty when continuing with a continuation token.", "type": "string", "required": false, "default": ""},
+      {"name": "pathPattern", "description": "Optional Tag path pattern understood by system.tag.query, for example Area/*.", "type": "string", "required": false, "default": ""},
+      {"name": "namePattern", "description": "Optional Tag name Like-pattern, for example *Pump*.", "type": "string", "required": false, "default": ""},
+      {"name": "tagType", "description": "Optional tag type: AtomicTag, Folder, or UdtInstance. UDT definitions are handled by udt_type_* tools.", "type": "string", "required": false, "default": ""},
+      {"name": "valueSource", "description": "Optional value source: memory, opc, expr, db, reference, or derived.", "type": "string", "required": false, "default": ""},
+      {"name": "includeUdtMembers", "description": "Whether UDT members may appear. Default true.", "type": "boolean", "required": false, "default": true},
+      {"name": "returnProperties", "description": "Properties to return from the allowlist: path, name, tagType, dataType, valueSource, typeId, quality. path is always added internally.", "type": "array", "required": false, "default": ["path", "tagType"]},
+      {"name": "maxResults", "description": "Maximum results in this page, 1..500. Default 100.", "type": "integer", "required": false, "default": 100},
+      {"name": "continuation", "description": "Opaque continuation token returned by a previous tag_query call. When supplied, the Gateway-stored query is continued.", "type": "string", "required": false, "default": ""}
+    ]
+  }
+}

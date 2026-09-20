@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_get_config",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "path": {"type": "string", "required": true, "providerQualified": true, "udtDefinitionNamespace": false},
+    "recursive": {"type": "boolean", "required": false, "default": false},
+    "overridesOnly": {"type": "boolean", "required": false, "default": false, "introducedInIgnition": "8.3.5"},
+    "maxResults": {"type": "integer", "required": false, "default": 50, "minimum": 1, "maximum": 200}
+  },
+  "outputSchema": "contracts/schemas/tag-get-config.output.schema.json",
+  "nativeRequirements": ["system.tag.getConfiguration"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "silentTruncation": false,
+  "nullEncoding": "ignition-null-v1"
+}

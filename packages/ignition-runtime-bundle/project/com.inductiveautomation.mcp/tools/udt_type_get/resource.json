@@ -1,0 +1,16 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "udt_type_get",
+    "description": "Read one bounded UDT type definition by provider-relative type path. Callers never provide the internal _types_ namespace.",
+    "parameters": [
+      {"name": "provider", "description": "Tag Provider name without brackets.", "type": "string", "required": true},
+      {"name": "typePath", "description": "Provider-relative UDT type path such as Motors/VFD. Do not include _types_.", "type": "string", "required": true},
+      {"name": "maxResults", "description": "Maximum definition/member nodes, 1..200. Default 200.", "type": "integer", "required": false, "default": 200}
+    ]
+  }
+}

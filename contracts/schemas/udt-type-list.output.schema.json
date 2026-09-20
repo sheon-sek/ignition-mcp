@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:udt-type-list:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "items": {"type": "array", "maxItems": 500, "items": {"type": "object", "additionalProperties": false, "properties": {"provider": {"type": "string", "minLength": 1}, "typePath": {"type": "string", "minLength": 1}, "name": {"type": "string", "minLength": 1}}, "required": ["provider", "typePath", "name"]}},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"returned": {"type": "integer", "minimum": 0, "maximum": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}}, "required": ["returned", "limit"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  },
+  "required": ["items", "summary", "meta"]
+}
