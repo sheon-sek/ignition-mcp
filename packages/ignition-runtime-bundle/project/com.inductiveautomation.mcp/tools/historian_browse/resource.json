@@ -1,0 +1,18 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "historian_browse",
+    "description": "Browse historical paths with native bounded continuation. Patch-specific/ignored Historian parameters are intentionally not exposed.",
+    "parameters": [
+      {"name": "rootPath", "description": "Historical browse root such as a histprov-qualified path.", "type": "string", "required": true},
+      {"name": "nameFilters", "description": "Optional native name filters; at most 20 non-empty strings.", "type": "array", "required": false, "default": []},
+      {"name": "recursive", "description": "Whether to browse recursively. Default false.", "type": "boolean", "required": false, "default": false},
+      {"name": "maxResults", "description": "Maximum results in one page, 1..500. Default 100.", "type": "integer", "required": false, "default": 100},
+      {"name": "continuation", "description": "Opaque continuation token returned by a previous historian_browse call.", "type": "string", "required": false, "default": ""}
+    ]
+  }
+}

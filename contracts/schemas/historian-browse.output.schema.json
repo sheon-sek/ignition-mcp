@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:historian-browse:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "rootPath": {"type": "string", "minLength": 1},
+    "recursive": {"type": "boolean"},
+    "items": {"type": "array", "maxItems": 500, "items": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "type": {"type": "string", "minLength": 1}, "hasChildren": {"type": "boolean"}}, "required": ["path", "type", "hasChildren"]}},
+    "continuation": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/null"}]},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"returned": {"type": "integer", "minimum": 0, "maximum": 500}, "limit": {"type": "integer", "minimum": 1, "maximum": 500}, "hasMore": {"type": "boolean"}}, "required": ["returned", "limit", "hasMore"]},
+    "meta": {"$ref": "#/$defs/meta"}
+  },
+  "required": ["rootPath", "recursive", "items", "continuation", "summary", "meta"],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  }
+}

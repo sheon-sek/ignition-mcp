@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:historian-query-aggregate:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "startTime": {"type": "string", "minLength": 1},
+    "endTime": {"type": "string", "minLength": 1},
+    "requestedAggregates": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+    "items": {"type": "array", "maxItems": 100, "items": {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "calculations": {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}}}, "required": ["path", "calculations"]}},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"paths": {"type": "integer", "minimum": 1, "maximum": 100}, "returned": {"type": "integer", "minimum": 0, "maximum": 100}, "calculationBudget": {"type": "integer", "minimum": 1, "maximum": 25000}}, "required": ["paths", "returned", "calculationBudget"]},
+    "meta": {"$ref": "#/$defs/meta"}
+  },
+  "required": ["startTime", "endTime", "requestedAggregates", "items", "summary", "meta"],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "value": {"oneOf": [{"type": ["string", "number", "boolean"]}, {"$ref": "#/$defs/null"}, {"type": "object", "properties": {"type": {"const": "decimal"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false}, {"type": "object", "properties": {"type": {"const": "non-finite-number"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false}]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  }
+}
