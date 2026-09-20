@@ -11,6 +11,7 @@ from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.services.readonly import (
+    alarm_pipeline_list,
     config_resource_get,
     config_resource_search,
     project_list,
@@ -190,6 +191,147 @@ def test_collection_budget_rejects_out_of_range(limit: int, offset: int) -> None
             context = OperationContext.read("project_list", "test")
             with pytest.raises(GatewayError, match="invalid_argument"):
                 await project_list(client, registry, context, search="", limit=limit, offset=offset)
+        finally:
+            await registry.aclose()
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def _collection_transport(
+    operation_path: str, payload: dict[str, object], state: dict[str, int],
+) -> httpx.MockTransport:
+    paths = {
+        "/data/api/v1/gateway-info": {"get": {}},
+        operation_path: {"get": {}},
+    }
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/data/api/v1/gateway-info":
+            return httpx.Response(200, json={"ignitionVersion": "8.3.8"}, request=request)
+        if request.url.path == "/data/api/v1/modules/healthy":
+            return httpx.Response(200, json={"items": []}, request=request)
+        if request.url.path == "/openapi.json":
+            state["refreshes"] += 1
+            return httpx.Response(200, content=json.dumps({"paths": paths}).encode(), request=request)
+        if request.url.path == operation_path:
+            state["operations"] += 1
+            return httpx.Response(200, json=payload, request=request)
+        raise AssertionError(str(request.url))
+
+    return httpx.MockTransport(handler)
+
+
+def _project(name: str) -> dict[str, object]:
+    return {
+        "name": name,
+        "description": "",
+        "title": name,
+        "enabled": True,
+        "parent": "",
+        "inheritable": False,
+        "invalidParent": False,
+        "mutable": True,
+        "defaultDb": "",
+        "tagProvider": "default",
+        "userSource": "",
+        "identityProvider": "",
+    }
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "items": [_project("one"), _project("two")],
+            "metadata": {"total": 2, "matching": 2, "limit": 1, "offset": 0},
+        },
+        {
+            "items": [],
+            "metadata": {"total": 1, "matching": 1, "limit": 1, "offset": 0},
+        },
+        {
+            "items": [_project("one")],
+            "metadata": {"total": 1, "matching": 1, "limit": 2, "offset": 0},
+        },
+        {
+            "items": [_project("one")],
+            "metadata": {"total": 1, "matching": 1, "limit": 1, "offset": 1},
+        },
+        {
+            "items": [_project("one")],
+            "metadata": {"total": 0, "matching": 1, "limit": 1, "offset": 0},
+        },
+    ],
+    ids=["over-return", "under-return", "limit", "offset", "counts"],
+)
+def test_collection_response_mismatch_marks_registry_stale_without_replay(
+    payload: dict[str, object],
+) -> None:
+    async def scenario() -> None:
+        state = {"refreshes": 0, "operations": 0}
+        client = GatewayClient(
+            base_url="http://gateway",
+            api_token="ci:key",
+            timeout_seconds=10,
+            transport=_collection_transport("/data/api/v1/projects/list", payload, state),
+        )
+        registry = CapabilityRegistry(client)
+        try:
+            assert (await registry.refresh()).state == "READY"
+            with pytest.raises(GatewayError) as captured:
+                await project_list(
+                    client,
+                    registry,
+                    OperationContext.read("project_list", "test"),
+                    search="",
+                    limit=1,
+                    offset=0,
+                )
+            assert captured.value.code == "schema_mismatch"
+            assert registry.snapshot.state == "STALE"
+            assert state == {"refreshes": 2, "operations": 1}
+        finally:
+            await registry.aclose()
+            await client.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_pydantic_response_validation_is_schema_mismatch_and_reconciles_once() -> None:
+    async def scenario() -> None:
+        payload: dict[str, object] = {
+            "items": [{
+                "path": "project:/pipeline",
+                "projectName": "project",
+                "pipelineName": "pipeline",
+                "itemCount": -1,
+                "active": True,
+            }],
+            "metadata": {"total": 1, "matching": 1, "limit": 1, "offset": 0},
+        }
+        state = {"refreshes": 0, "operations": 0}
+        client = GatewayClient(
+            base_url="http://gateway",
+            api_token="ci:key",
+            timeout_seconds=10,
+            transport=_collection_transport("/data/alarm-notification/api/v1/pipelines", payload, state),
+        )
+        registry = CapabilityRegistry(client)
+        try:
+            assert (await registry.refresh()).state == "READY"
+            with pytest.raises(GatewayError) as captured:
+                await alarm_pipeline_list(
+                    client,
+                    registry,
+                    OperationContext.read("alarm_pipeline_list", "test"),
+                    search="",
+                    limit=1,
+                    offset=0,
+                )
+            assert captured.value.code == "schema_mismatch"
+            assert registry.snapshot.state == "STALE"
+            assert state == {"refreshes": 2, "operations": 1}
         finally:
             await registry.aclose()
             await client.aclose()

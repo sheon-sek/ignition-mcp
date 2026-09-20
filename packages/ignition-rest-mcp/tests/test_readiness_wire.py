@@ -7,10 +7,12 @@ import logging
 import httpx
 import pytest
 from fastmcp import Client
+from pydantic import ValidationError
 
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
+from ignition_rest_mcp.models import PageMetadata
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.server import create_server
 from ignition_rest_mcp.services.gateway import gateway_info
@@ -102,6 +104,41 @@ def test_canonical_errors_and_telemetry(monkeypatch, caplog, gateway, tool, fail
             assert logs[0].correlationId == error["correlationId"]
             assert logs[0].errorCode == code
             assert logs[0].durationMs >= 0
+    asyncio.run(scenario())
+
+
+def test_pydantic_validation_error_is_canonical_and_degrades_readiness(gateway, monkeypatch):
+    with pytest.raises(ValidationError) as captured:
+        PageMetadata(total=-1, matching=0, limit=1, offset=0)
+    failure = captured.value
+    calls = 0
+
+    async def service(*args):
+        nonlocal calls
+        calls += 1
+        raise failure
+
+    monkeypatch.setattr("ignition_rest_mcp.server.info_service", service)
+
+    async def scenario():
+        server = create_server(_settings())
+        async with Client(server) as client:
+            result = await client.call_tool("gateway_info", {}, raise_on_error=False)
+            assert result.is_error
+            error = json.loads(result.content[0].text)
+            assert error["code"] == "schema_mismatch"
+            assert set(error) == {"code", "message", "correlationId"}
+            resource = await client.read_resource("ignition://gateway/capabilities")
+            assert json.loads(resource[0].text)["state"] == "STALE"
+            async with httpx.AsyncClient(
+                transport=httpx.ASGITransport(app=server.http_app()), base_url="http://test",
+            ) as health:
+                response = await health.get("/health/ready")
+                assert response.status_code == 503
+                assert response.json() == {"ready": False, "registryState": "STALE"}
+            assert calls == 1
+            assert gateway["refresh"] == 2
+
     asyncio.run(scenario())
 
 

@@ -11,7 +11,7 @@ from typing import AsyncIterator, Awaitable, Callable, NoReturn, TypeVar
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError, ToolError
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
@@ -132,7 +132,7 @@ def create_server(settings: Settings) -> FastMCP:
             _log_tool(context, "success")
             return result
         except (Exception, asyncio.CancelledError) as error:
-            _raise_tool_error(error, context, metrics, state.require_registry())
+            await _raise_tool_error(error, context, metrics, state.require_registry())
 
     @mcp.tool(
         name="gateway_diagnose",
@@ -152,7 +152,7 @@ def create_server(settings: Settings) -> FastMCP:
             _log_tool(context, outcome)
             return result
         except (Exception, asyncio.CancelledError) as error:
-            _raise_tool_error(error, context, metrics, state.require_registry())
+            await _raise_tool_error(error, context, metrics, state.require_registry())
 
     @mcp.tool(
         name="project_list",
@@ -189,7 +189,7 @@ def create_server(settings: Settings) -> FastMCP:
             _log_tool(context, "success")
             return result
         except (Exception, asyncio.CancelledError) as error:
-            _raise_tool_error(error, context, metrics, state.require_registry())
+            await _raise_tool_error(error, context, metrics, state.require_registry())
 
     @mcp.tool(
         name="config_resource_describe",
@@ -423,7 +423,7 @@ async def _run_read(
         _log_tool(context, "success")
         return result
     except (Exception, asyncio.CancelledError) as error:
-        _raise_tool_error(error, context, metrics, state.require_registry())
+        await _raise_tool_error(error, context, metrics, state.require_registry())
 
 
 def _enforce_output_budget(
@@ -446,7 +446,7 @@ def _enforce_output_budget(
         )
 
 
-def _raise_tool_error(
+async def _raise_tool_error(
     error: BaseException, context: OperationContext, metrics: Metrics, registry: CapabilityRegistry,
 ) -> NoReturn:
     if isinstance(error, asyncio.CancelledError):
@@ -456,6 +456,9 @@ def _raise_tool_error(
     if isinstance(error, TimeoutError):
         registry.mark_stale()
         safe = GatewayError("timeout", "MCP tool execution timed out")
+    elif isinstance(error, ValidationError):
+        safe = GatewayError("schema_mismatch", "Ignition Gateway returned an unexpected response")
+        await registry.observe_failure(safe)
     elif isinstance(error, GatewayError):
         safe = error
     else:

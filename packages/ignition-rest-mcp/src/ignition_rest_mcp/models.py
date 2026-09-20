@@ -58,7 +58,7 @@ class ProjectSummary(StrictModel):
 
 class ProjectListResult(StrictModel):
     correlationId: str
-    items: list[ProjectSummary]
+    items: list[ProjectSummary] = Field(max_length=500)
     page: PageMetadata
 
 
@@ -74,7 +74,7 @@ class ConfigResourceTypeSummary(StrictModel):
 
 class ConfigResourceSearchResult(StrictModel):
     correlationId: str
-    items: list[ConfigResourceTypeSummary]
+    items: list[ConfigResourceTypeSummary] = Field(max_length=500)
     page: PageMetadata
 
 
@@ -92,14 +92,14 @@ class ConfigResourceName(StrictModel):
 class ConfigResourceNamesResult(StrictModel):
     correlationId: str
     resourceType: str
-    items: list[ConfigResourceName]
+    items: list[ConfigResourceName] = Field(max_length=500)
     page: PageMetadata
 
 
 class ConfigResourceListResult(StrictModel):
     correlationId: str
     resourceType: str
-    items: list[dict[str, Any]]
+    items: list[dict[str, Any]] = Field(max_length=500)
     page: PageMetadata
 
 
@@ -125,7 +125,7 @@ class AuditRecord(StrictModel):
 class AuditQueryResult(StrictModel):
     correlationId: str
     profile: str
-    items: list[AuditRecord]
+    items: list[AuditRecord] = Field(max_length=500)
     page: PageMetadata
 
 
@@ -139,7 +139,7 @@ class AlarmPipelineSummary(StrictModel):
 
 class AlarmPipelineListResult(StrictModel):
     correlationId: str
-    items: list[AlarmPipelineSummary]
+    items: list[AlarmPipelineSummary] = Field(max_length=500)
     page: PageMetadata
 
 
@@ -156,7 +156,7 @@ class AlarmPipelineInstance(StrictModel):
 class AlarmPipelineStatusResult(StrictModel):
     correlationId: str
     path: str
-    items: list[AlarmPipelineInstance]
+    items: list[AlarmPipelineInstance] = Field(max_length=500)
     page: PageMetadata
 
 

@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+from functools import wraps
+from typing import Any, Awaitable, Callable, Concatenate, ParamSpec, TypeVar, cast
 from urllib.parse import quote
+
+from pydantic import ValidationError
 
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, ConfigResourceCapability
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -51,6 +54,35 @@ _SECRET_KEYS = {
 }
 
 
+P = ParamSpec("P")
+TResult = TypeVar("TResult")
+
+
+def _guard_upstream_response(
+    operation: Callable[Concatenate[GatewayClient, CapabilityRegistry, P], Awaitable[TResult]],
+) -> Callable[Concatenate[GatewayClient, CapabilityRegistry, P], Awaitable[TResult]]:
+    """Classify response validation failures and reconcile metadata once."""
+
+    @wraps(operation)
+    async def guarded(
+        client: GatewayClient, registry: CapabilityRegistry, *args: P.args, **kwargs: P.kwargs,
+    ) -> TResult:
+        try:
+            return await operation(client, registry, *args, **kwargs)
+        except ValidationError as error:
+            mismatch = GatewayError("schema_mismatch", "Ignition Gateway returned an unexpected response")
+            await registry.observe_failure(mismatch)
+            raise mismatch from error
+        except GatewayError as error:
+            await registry.observe_failure(error)
+            raise
+
+    return cast(
+        Callable[Concatenate[GatewayClient, CapabilityRegistry, P], Awaitable[TResult]], guarded,
+    )
+
+
+@_guard_upstream_response
 async def project_list(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -63,8 +95,8 @@ async def project_list(
     _require(registry, "project_list")
     limit, offset = _page_request(limit, offset)
     params = _collection_params(search, limit, offset)
-    payload = await _get(client, registry, "/data/api/v1/projects/list", context, params=params)
-    items = _list_of_objects(payload, "items")
+    payload = await _get(client, "/data/api/v1/projects/list", context, params=params)
+    items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
     return ProjectListResult(
         correlationId=context.correlation_id,
         items=[
@@ -84,7 +116,7 @@ async def project_list(
             )
             for item in items
         ],
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
@@ -125,6 +157,7 @@ def config_resource_search(
     )
 
 
+@_guard_upstream_response
 async def config_resource_describe(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -134,7 +167,7 @@ async def config_resource_describe(
 ) -> ConfigResourceDescribeResult:
     _require(registry, "config_resource_describe")
     capability = _resource_type(registry, resource_type)
-    payload = await _get(client, registry, capability.describe_path, context)
+    payload = await _get(client, capability.describe_path, context)
     return ConfigResourceDescribeResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
@@ -142,6 +175,7 @@ async def config_resource_describe(
     )
 
 
+@_guard_upstream_response
 async def config_resource_names(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -159,20 +193,20 @@ async def config_resource_names(
     limit, offset = _page_request(limit, offset)
     payload = await _get(
         client,
-        registry,
         capability.names_path,
         context,
         params=_collection_params(search, limit, offset),
     )
-    items = _list_of_objects(payload, "items")
+    items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
     return ConfigResourceNamesResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
         items=[ConfigResourceName(name=_text(item, "name"), enabled=_bool(item, "enabled")) for item in items],
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
+@_guard_upstream_response
 async def config_resource_list(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -190,20 +224,21 @@ async def config_resource_list(
     limit, offset = _page_request(limit, offset)
     payload = await _get(
         client,
-        registry,
         capability.list_path,
         context,
         params=_collection_params(search, limit, offset),
     )
-    items = [_redact(item) for item in _list_of_objects(payload, "items")]
+    raw_items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
+    items = [_redact(item) for item in raw_items]
     return ConfigResourceListResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
         items=items,
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
+@_guard_upstream_response
 async def config_resource_get(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -234,7 +269,7 @@ async def config_resource_get(
         if capability.find_path_template is None:
             raise GatewayError("unsupported_capability", "This resourceType does not expose exact resource lookup")
         path = capability.find_path_template.replace("{name}", quote(name, safe=""))
-    payload = await _get(client, registry, path, context, params=params or None)
+    payload = await _get(client, path, context, params=params or None)
     return ConfigResourceGetResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
@@ -242,6 +277,7 @@ async def config_resource_get(
     )
 
 
+@_guard_upstream_response
 async def audit_query(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -279,12 +315,11 @@ async def audit_query(
             params[key] = value_text
     payload = await _get(
         client,
-        registry,
         "/data/api/v1/audit/log/" + quote(profile, safe=""),
         context,
         params=params,
     )
-    items = _list_of_objects(payload, "items")
+    items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
     return AuditQueryResult(
         correlationId=context.correlation_id,
         profile=profile,
@@ -303,10 +338,11 @@ async def audit_query(
             )
             for item in items
         ],
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
+@_guard_upstream_response
 async def alarm_pipeline_list(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -320,12 +356,11 @@ async def alarm_pipeline_list(
     limit, offset = _page_request(limit, offset)
     payload = await _get(
         client,
-        registry,
         "/data/alarm-notification/api/v1/pipelines",
         context,
         params=_collection_params(search, limit, offset),
     )
-    items = _list_of_objects(payload, "items")
+    items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
     return AlarmPipelineListResult(
         correlationId=context.correlation_id,
         items=[
@@ -338,10 +373,11 @@ async def alarm_pipeline_list(
             )
             for item in items
         ],
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
+@_guard_upstream_response
 async def alarm_pipeline_status(
     client: GatewayClient,
     registry: CapabilityRegistry,
@@ -356,12 +392,11 @@ async def alarm_pipeline_status(
     limit, offset = _page_request(limit, offset)
     payload = await _get(
         client,
-        registry,
         "/data/alarm-notification/api/v1/pipeline",
         context,
         params={"path": path, "limit": limit, "offset": offset},
     )
-    items = _list_of_objects(payload, "items")
+    items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
     return AlarmPipelineStatusResult(
         correlationId=context.correlation_id,
         path=path,
@@ -377,23 +412,18 @@ async def alarm_pipeline_status(
             )
             for item in items
         ],
-        page=_page_metadata(payload),
+        page=page,
     )
 
 
 async def _get(
     client: GatewayClient,
-    registry: CapabilityRegistry,
     path: str,
     context: OperationContext,
     *,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    try:
-        return await client.get_json(path, params=params, context=context)
-    except GatewayError as error:
-        await registry.observe_failure(error)
-        raise
+    return await client.get_json(path, params=params, context=context)
 
 
 def _require(registry: CapabilityRegistry, capability: str) -> None:
@@ -427,16 +457,33 @@ def _collection_params(search: str, limit: int, offset: int) -> dict[str, Any]:
     return params
 
 
-def _page_metadata(payload: dict[str, Any]) -> PageMetadata:
+def _collection_response(
+    payload: dict[str, Any], *, requested_limit: int, requested_offset: int,
+) -> tuple[list[dict[str, Any]], PageMetadata]:
+    items = _list_of_objects(payload, "items")
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
         raise GatewayError("schema_mismatch", "Gateway collection response is missing metadata")
-    return PageMetadata(
+    page = PageMetadata(
         total=_integer(metadata, "total"),
         matching=_integer(metadata, "matching"),
         limit=_integer(metadata, "limit"),
         offset=_integer(metadata, "offset"),
     )
+    if page.limit != requested_limit or page.offset != requested_offset:
+        raise GatewayError(
+            "schema_mismatch",
+            "Gateway collection metadata does not match the requested limit and offset",
+        )
+    if page.matching > page.total:
+        raise GatewayError("schema_mismatch", "Gateway collection metadata counts are inconsistent")
+    expected_count = min(requested_limit, max(page.matching - requested_offset, 0))
+    if len(items) != expected_count:
+        raise GatewayError(
+            "schema_mismatch",
+            "Gateway collection item count is inconsistent with its metadata and requested page",
+        )
+    return items, page
 
 
 def _list_of_objects(payload: dict[str, Any], key: str) -> list[dict[str, Any]]:

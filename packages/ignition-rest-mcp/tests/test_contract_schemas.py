@@ -49,3 +49,19 @@ def test_external_models_match_contract_top_level_shapes() -> None:
     )
     for model, schema_name in cases:
         _assert_shape_matches(model.model_json_schema(), _contract_schema(schema_name))
+
+
+def test_public_collection_models_preserve_contract_item_caps() -> None:
+    cases = (
+        (ProjectListResult, "project-list.output.schema.json"),
+        (ConfigResourceSearchResult, "config-resource-search.output.schema.json"),
+        (ConfigResourceNamesResult, "config-resource-names.output.schema.json"),
+        (ConfigResourceListResult, "config-resource-list.output.schema.json"),
+        (AuditQueryResult, "audit-query.output.schema.json"),
+        (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
+        (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
+    )
+    for model, schema_name in cases:
+        model_items = model.model_json_schema()["properties"]["items"]
+        contract_items = _contract_schema(schema_name)["properties"]["items"]  # type: ignore[index]
+        assert model_items["maxItems"] == contract_items["maxItems"] == 500  # type: ignore[index]
