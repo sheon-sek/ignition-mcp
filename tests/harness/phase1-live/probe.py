@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import time
@@ -193,6 +194,14 @@ def _structured(response: dict[str, Any]) -> dict[str, Any]:
 def _write(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _http_json(url: str, *, token: str | None = None) -> tuple[int, Any]:
@@ -410,6 +419,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--external-base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--runtime-url", default="http://127.0.0.1:8088/data/mcp/phase1-runtime")
     parser.add_argument("--runtime-api-token", required=True)
+    parser.add_argument("--gateway-version", default="8.3.8")
+    parser.add_argument("--gateway-build", required=True)
+    parser.add_argument("--gateway-image", default="inductiveautomation/ignition:8.3.8")
+    parser.add_argument("--gateway-image-digest", required=True)
+    parser.add_argument("--module-version", default="1.3.5-SNAPSHOT")
+    parser.add_argument("--module-artifact-version", default="1.3.5.2026021307-SNAPSHOT")
+    parser.add_argument("--module-build", default="2026021307")
+    parser.add_argument("--module-file", required=True, type=Path)
+    parser.add_argument("--bundle-file", required=True, type=Path)
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--raw-dir", required=True, type=Path)
     return parser.parse_args()
@@ -420,10 +438,26 @@ def main() -> int:
     try:
         external = probe_external(args.external_base_url, args.raw_dir)
         runtime = probe_runtime(args.runtime_url, args.runtime_api_token, args.raw_dir)
+        bundle_version = runtime["bundleInfo"].get("bundleVersion")
+        openapi_sha256 = external["diagnose"].get("openapiSha256")
+        if not isinstance(bundle_version, str) or not bundle_version:
+            raise ProbeError("bundle_info did not return bundleVersion")
+        if not isinstance(openapi_sha256, str) or len(openapi_sha256) != 64:
+            raise ProbeError("gateway_diagnose did not return a valid OpenAPI SHA-256")
         evidence = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "gate": "G1",
-            "gatewayVersion": "8.3.8",
+            "gatewayVersion": args.gateway_version,
+            "gatewayBuild": args.gateway_build,
+            "gatewayImage": args.gateway_image,
+            "gatewayImageDigest": args.gateway_image_digest,
+            "mcpModuleVersion": args.module_version,
+            "mcpModuleArtifactVersion": args.module_artifact_version,
+            "mcpModuleBuild": args.module_build,
+            "mcpModuleSha256": _sha256_file(args.module_file),
+            "bundleVersion": bundle_version,
+            "bundleSha256": _sha256_file(args.bundle_file),
+            "openapiSha256": openapi_sha256,
             "external": external,
             "runtime": runtime,
             "status": "VERIFIED",
@@ -435,7 +469,7 @@ def main() -> int:
         _write(
             args.evidence,
             {
-                "schemaVersion": 1,
+                "schemaVersion": 2,
                 "gate": "G1",
                 "status": "FAILED",
                 "fatalError": f"{type(error).__name__}: {error}",

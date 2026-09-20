@@ -33,6 +33,10 @@ jobs:
       GATEWAY_IMAGE: inductiveautomation/ignition:8.3.8
       GATEWAY_BUILD: "2026071409"
       MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
+      RUNTIME_BUNDLE_FILE: dist/ignition-runtime-bundle.zip
       EVIDENCE_DIR: artifacts/g1
     steps:
       - name: Checkout
@@ -51,6 +55,10 @@ jobs:
           uv lock --check
           (cd tests/fixtures/modules && sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256)
           uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+          mkdir -p dist
+          uv run --no-sync python -m tooling.native.cli build \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --output "$RUNTIME_BUNDLE_FILE"
 
       - name: Pull exact Gateway image
         shell: bash
@@ -184,6 +192,15 @@ jobs:
           mkdir -p "$EVIDENCE_DIR/raw"
           uv run --locked --package ignition-rest-mcp python tests/harness/phase1-live/probe.py \
             --runtime-api-token "$CI_API_TOKEN" \
+            --gateway-version 8.3.8 \
+            --gateway-build "$GATEWAY_BUILD" \
+            --gateway-image "$GATEWAY_IMAGE" \
+            --gateway-image-digest "$IMAGE_DIGEST" \
+            --module-version "$MCP_MODULE_VERSION" \
+            --module-artifact-version "$MCP_MODULE_ARTIFACT_VERSION" \
+            --module-build "$MCP_MODULE_BUILD" \
+            --module-file "$MODULE_FILE" \
+            --bundle-file "$RUNTIME_BUNDLE_FILE" \
             --evidence "$EVIDENCE_DIR/evidence.json" \
             --raw-dir "$EVIDENCE_DIR/raw"
           rc=$?
