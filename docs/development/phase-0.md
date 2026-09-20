@@ -1,6 +1,6 @@
 # Phase 0 — Repository foundation + Native binding proof
 
-Status: **IN PROGRESS — G0 evidence is produced by CI-owned ephemeral Gateway tests**.
+Status: **G0 LIVE EVIDENCE OBTAINED — D27 exact-tuple limitation resolution in progress**.
 
 ## Implemented in this phase branch
 
@@ -16,8 +16,8 @@ Status: **IN PROGRESS — G0 evidence is produced by CI-owned ephemeral Gateway 
 - Phase 0 policy: the real Gateway is provisioned by GitHub Actions from the pinned official Ignition Docker image; a user-supplied or long-lived Gateway is not a prerequisite.
 - The project owner has authorized the official MCP Module artifact used for baseline characterization to be committed as a checksum-pinned CI fixture.
 
-## G0 remains open
+## G0 live result
 
-GitHub Actions must provision a fresh `inductiveautomation/ignition:8.3.8` Gateway, install the checksum-pinned exact MCP Module build, and prove Tool output binding (`outputSchema`, success `structuredContent`, failure `isError`) through the real MCP transport. Static validation, direct handler calls, or a readable Text Resource are insufficient. Do not ask the user to provide a separate real Gateway for this gate.
+GitHub Actions run `35505312397` provisioned a fresh `inductiveautomation/ignition:8.3.8` Gateway and the checksum-pinned official MCP Module, then exercised the real MCP transport. `initialize`, exact Tool inventory/input schema, success `structuredContent`, failure `isError=true`, Resources and Prompts passed. Native `tools/list.outputSchema` was absent.
 
-Phase 1 must not be merged as production-compatible Runtime work until that evidence exists or a new Decision explicitly changes D06/D26.
+D27 explicitly resolves that exact official Module limitation without a text-only fallback: repo-owned output schemas remain mandatory semantic contracts, while the exact baseline tuple may be `VERIFIED_WITH_LIMITATION`. Future tuples must re-characterize and do not inherit the exception.

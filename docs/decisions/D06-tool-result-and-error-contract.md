@@ -91,3 +91,8 @@ correlation_id_required: true
 
 ## Pre-D26 consistency amendment
 Added the “Scope” section so that D06's result/error/outputSchema rules are explicitly Tool rules. Text Resources and Prompts keep their native MCP semantics. No Tool contract behavior was changed.
+
+
+## D27 amendment — Runtime native outputSchema discovery
+
+D27 records live evidence that the pinned official Runtime MCP Module build exposes real `structuredContent` and `isError` but does not publish Tool `outputSchema`. For the exact D27 tuple only, the repo-owned JSON Schema remains the mandatory semantic Tool output contract while native `tools/list.outputSchema` may be absent. No text-only fallback is permitted. Future Module/Gateway tuples must be re-characterized.

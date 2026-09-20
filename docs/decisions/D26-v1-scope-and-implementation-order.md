@@ -284,7 +284,7 @@ Security Level provisioning、Runtime API token creation、local .modl install �
    - failure isError；
    - resources/list + resources/read；
    - prompts/list + prompts/get（fixture 发布 Prompt 时）。
-6. 把真实 Native response binding 固化为 adapter / contract tests，并只有在证据成立后移除 NATIVE_BINDING_PENDING。
+6. 把真实 Native response binding 固化为 adapter / contract tests，并只有在证据成立后移除 NATIVE_BINDING_PENDING。D27 已对 baseline tuple 的 native `outputSchema` 缺失建立精确、fail-closed 的例外；该 tuple 可使用 `VERIFIED_WITH_LIMITATION` 关闭 G0，但不能据此获得 D21 `SUPPORTED`。
 
 ### Hard gate G0
 
@@ -634,3 +634,8 @@ Read-only milestones 可以提前用于 development / internal evaluation，但�
 - initial candidate Gateways: 8.3.8 and 8.3.9
 - Phase 0 real Gateway source: CI-owned ephemeral official Docker image; user-supplied Gateway is not required
 - SUPPORTED status comes from machine evidence only
+
+
+## D27 amendment — Phase 0 G0 resolution rule
+
+D27 fulfils this Decision's requirement to open a new Decision when the target official MCP Module cannot satisfy D06's stricter native `outputSchema` requirement. For the exact D27 tuple, G0 accepts `VERIFIED_WITH_LIMITATION` only if native `structuredContent`, `isError`, discovery, Resources and Prompts all pass and only native `outputSchema` is absent. Future tuples do not inherit the exception.

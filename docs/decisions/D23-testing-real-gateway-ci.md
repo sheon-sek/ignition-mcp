@@ -286,7 +286,7 @@ Gateway
 - Prompt 发布与实例化
 - module behavior
 
-Text Resource 可读只能证明 Resource 发布成功，**不能**证明 `tools/list` 已有 `outputSchema`、成功返回 `structuredContent` 或失败返回 `isError`。该绑定仍是 `NATIVE_BINDING_PENDING`，必须单独验证并记录状态。
+Text Resource 可读只能证明 Resource 发布成功，**不能**证明 `tools/list` 已有 `outputSchema`、成功返回 `structuredContent` 或失败返回 `isError`。这些绑定必须分别真实验证并记录。D27 已记录 baseline Module build 的 `structuredContent` / `isError` 成功与 native `outputSchema` 缺失；只有精确 D27 identity 可据此产生 `VERIFIED_WITH_LIMITATION`。
 
 ## No LLM in CI
 
@@ -761,3 +761,8 @@ Runtime MCP primitives — L0/L2/L4 now cover Text Resources and Prompts as well
 ## D23 Amendment — CI-owned Gateway and repo-pinned MCP Module fixture
 
 Phase 0 clarification: real Gateway evidence is produced by CI-owned ephemeral official Docker containers; a user-supplied Gateway is not a prerequisite. The project owner has explicitly authorized the official MCP Module artifact supplied for Phase 0 to be committed as a checksum-pinned test fixture. This amendment replaces the earlier blanket `stored_in_repo: false` rule while preserving exact-version, provenance, checksum, trust-boundary, cleanup, and no-automatic-latest requirements.
+
+
+## D27 amendment — G0 limitation evidence
+
+G0 live CI may pass with native response-binding status `VERIFIED_WITH_LIMITATION` only when all non-outputSchema checks pass and the exact D27 Gateway/Module/artifact identity matches. Any other tuple missing native `outputSchema` remains a G0 failure.
