@@ -247,8 +247,13 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$EVIDENCE_DIR"
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
           docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
           docker compose -f "$COMPOSE_FILE" logs --no-color > "$EVIDENCE_DIR/docker-compose.log" 2>&1 || true
+          if [[ -n "$cid" ]]; then
+            mkdir -p "$EVIDENCE_DIR/gateway-logs"
+            docker cp "$cid:/usr/local/bin/ignition/logs/." "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
+          fi
           curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
 
       - name: Upload G2 evidence
