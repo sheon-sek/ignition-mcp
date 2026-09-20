@@ -230,6 +230,21 @@ def probe_empty_prompts(client: McpClient, init: dict[str, Any], raw_dir: Path, 
     return observation
 
 
+def validate_runtime_resource(resource: dict[str, Any], contents: list[dict[str, Any]]) -> None:
+    name = str(resource["title"]).replace("_", "-").removesuffix("-output")
+    source = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/resources/contracts"
+    metadata = json.loads((source / f"{name}-output/resource.json").read_text())["attributes"]
+    schema = json.loads((ROOT / f"contracts/schemas/{name}.output.schema.json").read_text())
+    if (len(contents) != 1 or resource.get("mimeType") != metadata["mimeType"]
+            or contents[0].get("mimeType") != metadata["mimeType"]
+            or resource.get("size") != metadata["size"]
+            or contents[0].get("uri") != resource.get("uri")):
+        raise ProbeError("Runtime schema Resource metadata mismatch")
+    text = contents[0].get("text", "")
+    if len(text.encode("utf-8")) != metadata["size"] or json.loads(text) != schema:
+        raise ProbeError("Runtime schema Resource differs from source contract")
+
+
 def _write(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -381,6 +396,8 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
         _assert_input_schema(tool, properties=properties, required=required)
         if not isinstance(tool.get("description"), str) or not tool["description"].strip():
             raise ProbeError(f"Runtime {name} missing description")
+        if "outputSchema" in tool:
+            raise ProbeError("Native outputSchema behavior changed; re-characterize D27 identity")
 
     bundle_response = client.call("tools/call", {"name": "bundle_info", "arguments": {}})
     _write(raw_dir / "runtime-bundle-info.json", bundle_response)
@@ -465,7 +482,12 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
     resources = _list(resources_response, "resources")
     titles = {item.get("title") for item in resources}
     expected_titles = {"bundle_info_output", "tag_browse_output", "tag_read_output"}
-    if len(resources) != len(expected_titles) or titles != expected_titles:
+    profile = json.loads((ROOT / "contracts/profiles/readonly.yaml").read_text())
+    if profile["prompts"] != [] or set(profile["tools"]) != names:
+        raise ProbeError("Phase 1 readonly manifest inventory mismatch")
+    expected_uris = set(profile["resources"])
+    if (len(resources) != len(expected_titles) or titles != expected_titles
+            or {item.get("uri") for item in resources} != expected_uris):
         raise ProbeError(f"Runtime Resource inventory mismatch: {titles}")
     for index, resource in enumerate(resources):
         uri = resource.get("uri")
@@ -474,12 +496,7 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
         response = client.call("resources/read", {"uri": uri})
         _write(raw_dir / f"runtime-resource-{index}.json", response)
         contents = _list(response, "contents")
-        schema_name = str(resource["title"]).replace("_", "-").removesuffix("-output")
-        schema = json.loads((ROOT / f"contracts/schemas/{schema_name}.output.schema.json").read_text())
-        if len(contents) != 1 or contents[0].get("mimeType") != "application/json":
-            raise ProbeError("Runtime schema Resource metadata mismatch")
-        if json.loads(contents[0].get("text", "")) != schema:
-            raise ProbeError("Runtime schema Resource differs from source contract")
+        validate_runtime_resource(resource, contents)
 
     prompts = probe_empty_prompts(client, init, raw_dir, "runtime")
 
@@ -491,6 +508,12 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
         "bundleInfo": bundle,
         "tagBrowseReturned": len(browse["nodes"]),
         "tagReadSystemName": items[0].get("value"),
+        "outputSchemaPublished": False,
+        "successStructuredContent": True,
+        "failureIsError": True,
+        "outputSchemasValidated": True,
+        "badQualityNullAndDuplicateRead": "PASS",
+        "resourceUris": sorted(expected_uris),
     }
 
 

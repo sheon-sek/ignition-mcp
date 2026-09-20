@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import json
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, NoReturn
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError, ToolError
@@ -39,6 +39,7 @@ from ignition_rest_mcp.services.gateway import (
 
 LOGGER = logging.getLogger("ignition_rest_mcp")
 HARD_OUTPUT_BYTES = 1_048_576
+TOOL_TIMEOUT_SECONDS = 30
 
 
 def create_server(settings: Settings) -> FastMCP:
@@ -57,30 +58,33 @@ def create_server(settings: Settings) -> FastMCP:
         state.client = client
         state.registry = registry
         state.metrics = metrics
-        await registry.refresh()
-        _apply_visibility(mcp, registry.snapshot)
-        LOGGER.info(
-            "Capability registry initialized",
-            extra={
-                "event": "capability_registry",
-                "registryState": registry.snapshot.state,
-                "registryGeneration": registry.snapshot.generation,
-            },
-        )
-        watcher = asyncio.create_task(_watch_capabilities(mcp, registry, settings.watcher_interval_seconds))
+        watcher: asyncio.Task[None] | None = None
         try:
+            await registry.refresh()
+            _apply_visibility(mcp, registry.snapshot)
+            LOGGER.info(
+                "Capability registry initialized",
+                extra={
+                    "event": "capability_registry",
+                    "registryState": registry.snapshot.state,
+                    "registryGeneration": registry.snapshot.generation,
+                },
+            )
+            watcher = asyncio.create_task(_watch_capabilities(mcp, registry, settings.watcher_interval_seconds))
             yield
         finally:
-            watcher.cancel()
             try:
-                await watcher
-            except asyncio.CancelledError:
-                pass
-            await registry.aclose()
-            await client.aclose()
-            state.client = None
-            state.registry = None
-            state.metrics = None
+                if watcher is not None:
+                    watcher.cancel()
+                    await asyncio.gather(watcher, return_exceptions=True)
+                await registry.aclose()
+            finally:
+                try:
+                    await client.aclose()
+                finally:
+                    state.client = None
+                    state.registry = None
+                    state.metrics = None
 
     mcp = FastMCP(
         name="ignition-rest",
@@ -95,43 +99,39 @@ def create_server(settings: Settings) -> FastMCP:
         description="Return a bounded identity summary for the connected Ignition Gateway.",
         output_schema=GatewayInfoResult.model_json_schema(),
         tags={"read", "capability:gateway_info"},
-        timeout=30,
     )
     async def gateway_info() -> GatewayInfoResult:
         context = OperationContext.read("gateway_info", operation_actor(settings))
         metrics = state.require_metrics()
         try:
-            result = await info_service(state.require_client(), state.require_registry(), context)
+            async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
+                result = await info_service(state.require_client(), state.require_registry(), context)
             _enforce_output_budget(result, settings.structured_output_limit_bytes)
             metrics.record_tool("gateway_info", "success")
             _log_tool(context, "success")
             return result
-        except GatewayError as error:
-            metrics.record_tool("gateway_info", error.code)
-            _log_tool(context, "error", error.code)
-            raise ToolError(f"{error.code}: {error.message}; correlationId={context.correlation_id}") from error
+        except (Exception, asyncio.CancelledError) as error:
+            _raise_tool_error(error, context, metrics, state.require_registry())
 
     @mcp.tool(
         name="gateway_diagnose",
         description="Run low-cost connectivity, authentication, and capability-registry diagnostics.",
         output_schema=GatewayDiagnoseResult.model_json_schema(),
         tags={"read", "diagnostic"},
-        timeout=30,
     )
     async def gateway_diagnose() -> GatewayDiagnoseResult:
         context = OperationContext.read("gateway_diagnose", operation_actor(settings))
         metrics = state.require_metrics()
         try:
-            result = await diagnose_service(state.require_client(), state.require_registry(), context)
+            async with asyncio.timeout(TOOL_TIMEOUT_SECONDS):
+                result = await diagnose_service(state.require_client(), state.require_registry(), context)
             _enforce_output_budget(result, settings.structured_output_limit_bytes)
             outcome = "success" if result.gatewayReachable and result.authenticationOk else "degraded"
             metrics.record_tool("gateway_diagnose", outcome)
             _log_tool(context, outcome)
             return result
-        except GatewayError as error:
-            metrics.record_tool("gateway_diagnose", error.code)
-            _log_tool(context, "error", error.code)
-            raise ToolError(f"{error.code}: {error.message}; correlationId={context.correlation_id}") from error
+        except (Exception, asyncio.CancelledError) as error:
+            _raise_tool_error(error, context, metrics, state.require_registry())
 
     @mcp.resource(
         "ignition://gateway/capabilities",
@@ -224,6 +224,27 @@ def _enforce_output_budget(
             f"Structured output requires {size} bytes; configured limit is {limit} bytes. "
             "Reduce requested data or raise the deployment limit within the hard ceiling.",
         )
+
+
+def _raise_tool_error(
+    error: BaseException, context: OperationContext, metrics: Metrics, registry: CapabilityRegistry,
+) -> NoReturn:
+    if isinstance(error, asyncio.CancelledError):
+        metrics.record_tool(context.tool, "cancelled")
+        _log_tool(context, "cancelled", "cancelled")
+        raise error
+    if isinstance(error, TimeoutError):
+        registry.mark_stale()
+        safe = GatewayError("timeout", "MCP tool execution timed out")
+    elif isinstance(error, GatewayError):
+        safe = error
+    else:
+        safe = GatewayError("internal_error", "Unexpected external server error")
+    metrics.record_tool(context.tool, safe.code)
+    _log_tool(context, "error", safe.code)
+    raise ToolError(json.dumps({
+        "code": safe.code, "message": safe.message, "correlationId": context.correlation_id,
+    }, separators=(",", ":"))) from error
 
 
 def _log_tool(context: OperationContext, outcome: str, error_code: str | None = None) -> None:

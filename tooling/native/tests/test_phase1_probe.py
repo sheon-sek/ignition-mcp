@@ -64,6 +64,20 @@ def test_structured_checker_rejects_error_and_text_divergence():
         probe._structured({"result": {"structuredContent": {}, "content": [{"type": "text", "text": '{"x":null}'}]}})
 
 
+@pytest.mark.parametrize("name", ["bundle-info", "tag-read", "tag-browse"])
+def test_resource_validation_uses_declared_mime_size_and_payload(name):
+    directory = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/resources/contracts" / (name + "-output")
+    metadata = json.loads((directory / "resource.json").read_text())["attributes"]
+    resource = {"title": metadata["title"], "mimeType": metadata["mimeType"],
+                "size": metadata["size"], "uri": "ignition://test"}
+    contents = [{"text": (directory / "data.bin").read_text(), "mimeType": metadata["mimeType"],
+                 "uri": resource["uri"]}]
+    probe.validate_runtime_resource(resource, contents)
+    contents[0]["mimeType"] = "text/plain"
+    with pytest.raises(probe.ProbeError, match="metadata"):
+        probe.validate_runtime_resource(resource, contents)
+
+
 def native_null_encoder():
     # Extract only a pure helper from the actual handler, no Java/native emulation.
     path = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/tools/tag_read/onToolCalled.py"

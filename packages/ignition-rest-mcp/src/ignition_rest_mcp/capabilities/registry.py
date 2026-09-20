@@ -60,6 +60,27 @@ class CapabilityRegistry:
             self._refresh_task = asyncio.create_task(self._refresh())
         return await asyncio.shield(self._refresh_task)
 
+    def mark_stale(self) -> None:
+        if self._snapshot.generation > 0:
+            self._snapshot = replace(self._snapshot, state="STALE")
+        else:
+            self._snapshot = CapabilitySnapshot.unavailable()
+
+    async def observe_failure(self, error: GatewayError) -> None:
+        if error.code not in {
+            "gateway_unavailable", "timeout", "upstream_error", "permission_denied",
+            "schema_mismatch", "not_found", "unsupported_capability",
+        }:
+            return
+        self.mark_stale()
+        if error.code in {"schema_mismatch", "not_found", "unsupported_capability"}:
+            try:
+                # Reconcile metadata only; never replay the failed operation.
+                await self.refresh()
+            finally:
+                # A metadata refresh cannot validate the failed tool's response schema.
+                self.mark_stale()
+
     async def aclose(self) -> None:
         if self._refresh_task is not None:
             self._refresh_task.cancel()
@@ -68,7 +89,7 @@ class CapabilityRegistry:
     async def _refresh(self) -> CapabilitySnapshot:
         async with self._refresh_lock:
             try:
-                gateway_info, modules, openapi_bytes = await asyncio.gather(
+                gateway_info, modules, openapi_bytes = await _gather_requests(
                     self._client.gateway_info(),
                     self._client.healthy_modules(),
                     self._client.openapi(),
@@ -102,7 +123,7 @@ class CapabilityRegistry:
 
     async def fingerprint_changed(self) -> bool:
         try:
-            gateway_info, modules = await asyncio.gather(
+            gateway_info, modules = await _gather_requests(
                 self._client.gateway_info(),
                 self._client.healthy_modules(),
             )
@@ -117,6 +138,18 @@ class CapabilityRegistry:
 
     def supports(self, capability: str) -> bool:
         return capability in self._snapshot.semantic_capabilities and self._snapshot.state in {"READY", "STALE"}
+
+
+async def _gather_requests(*requests: Any) -> list[Any]:
+    tasks = [asyncio.create_task(request) for request in requests]
+    try:
+        return await asyncio.gather(*tasks)
+    finally:
+        # gather does not cancel siblings when one request fails.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 def _endpoint_inventory(paths: dict[str, Any]) -> set[tuple[str, str]]:

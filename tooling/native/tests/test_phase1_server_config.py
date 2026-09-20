@@ -24,3 +24,10 @@ def test_phase1_runtime_server_config_selectors_and_empty_prompt_sources() -> No
     )
     if prompts_root.exists():
         assert not any(prompts_root.rglob("resource.json"))
+    profile = json.loads((ROOT / "contracts/profiles/readonly.yaml").read_text())
+    assert profile["prompts"] == []
+    assert profile["resources"] == [
+        "ignition://?contracts/bundle-info-output",
+        "ignition://?contracts/tag-browse-output",
+        "ignition://?contracts/tag-read-output",
+    ]

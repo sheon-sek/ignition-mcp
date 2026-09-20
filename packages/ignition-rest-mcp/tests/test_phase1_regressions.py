@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import replace
 
 import httpx
@@ -209,7 +210,7 @@ def test_tool_and_resources_budget_errors_are_canonical(monkeypatch: pytest.Monk
             result = await client.call_tool("gateway_diagnose", {}, raise_on_error=False)
             assert result.is_error
             assert "limit_exceeded" in str(result.content)
-            assert "correlationId=" in str(result.content)
+            assert json.loads(result.content[0].text)["correlationId"]
             assert recorded == [("gateway_diagnose", "limit_exceeded")]
             for uri in ["ignition://gateway/capabilities", "ignition://gateway/openapi-info"]:
                 with pytest.raises(Exception, match="limit_exceeded"):

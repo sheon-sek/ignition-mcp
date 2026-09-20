@@ -18,19 +18,23 @@ from ignition_rest_mcp.operation import OperationContext
 
 
 async def gateway_info(client: GatewayClient, registry: CapabilityRegistry, context: OperationContext) -> GatewayInfoResult:
-    if not registry.supports("gateway_info"):
-        raise GatewayError("unsupported_capability", "gateway_info is not present in the current capability snapshot")
-    payload = await client.gateway_info(context)
-    return GatewayInfoResult(
-        correlationId=context.correlation_id,
-        name=_string(payload, "name"),
-        edition=_string(payload, "edition"),
-        ignitionVersion=_string(payload, "ignitionVersion"),
-        redundancyRole=_string(payload, "redundancyRole"),
-        deploymentMode=_optional_string(payload, "deploymentMode"),
-        timeZoneId=_string(payload, "timeZoneId"),
-        jvmVersion=_string(payload, "jvmVersion"),
-    )
+    try:
+        if not registry.supports("gateway_info"):
+            raise GatewayError("unsupported_capability", "gateway_info is not present in the current capability snapshot")
+        payload = await client.gateway_info(context)
+        return GatewayInfoResult(
+            correlationId=context.correlation_id,
+            name=_string(payload, "name"),
+            edition=_string(payload, "edition"),
+            ignitionVersion=_string(payload, "ignitionVersion"),
+            redundancyRole=_string(payload, "redundancyRole"),
+            deploymentMode=_optional_string(payload, "deploymentMode"),
+            timeZoneId=_string(payload, "timeZoneId"),
+            jvmVersion=_string(payload, "jvmVersion"),
+        )
+    except GatewayError as error:
+        await registry.observe_failure(error)
+        raise
 
 
 async def gateway_diagnose(
@@ -59,6 +63,8 @@ async def gateway_diagnose(
             message="Gateway REST authentication and low-cost diagnostics succeeded.",
         )
     except GatewayError as error:
+        await registry.observe_failure(error)
+        snapshot = registry.snapshot
         if error.code == "limit_exceeded":
             raise
         return GatewayDiagnoseResult(
