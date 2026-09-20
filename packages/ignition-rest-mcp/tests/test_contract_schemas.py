@@ -3,7 +3,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ignition_rest_mcp.models import GatewayDiagnoseResult, GatewayInfoResult
+from ignition_rest_mcp.models import (
+    AlarmPipelineListResult,
+    AlarmPipelineStatusResult,
+    AuditQueryResult,
+    ConfigResourceDescribeResult,
+    ConfigResourceGetResult,
+    ConfigResourceListResult,
+    ConfigResourceNamesResult,
+    ConfigResourceSearchResult,
+    GatewayDiagnoseResult,
+    GatewayInfoResult,
+    ProjectListResult,
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -21,15 +33,19 @@ def _assert_shape_matches(model_schema: dict[str, object], contract_schema: dict
     assert set(model_schema["required"]) == set(contract_schema["required"])  # type: ignore[arg-type]
 
 
-def test_gateway_info_model_matches_contract_shape() -> None:
-    _assert_shape_matches(
-        GatewayInfoResult.model_json_schema(),
-        _contract_schema("gateway-info.output.schema.json"),
+def test_external_models_match_contract_top_level_shapes() -> None:
+    cases = (
+        (GatewayInfoResult, "gateway-info.output.schema.json"),
+        (GatewayDiagnoseResult, "gateway-diagnose.output.schema.json"),
+        (ProjectListResult, "project-list.output.schema.json"),
+        (ConfigResourceSearchResult, "config-resource-search.output.schema.json"),
+        (ConfigResourceDescribeResult, "config-resource-describe.output.schema.json"),
+        (ConfigResourceNamesResult, "config-resource-names.output.schema.json"),
+        (ConfigResourceListResult, "config-resource-list.output.schema.json"),
+        (ConfigResourceGetResult, "config-resource-get.output.schema.json"),
+        (AuditQueryResult, "audit-query.output.schema.json"),
+        (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
+        (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
     )
-
-
-def test_gateway_diagnose_model_matches_contract_shape() -> None:
-    _assert_shape_matches(
-        GatewayDiagnoseResult.model_json_schema(),
-        _contract_schema("gateway-diagnose.output.schema.json"),
-    )
+    for model, schema_name in cases:
+        _assert_shape_matches(model.model_json_schema(), _contract_schema(schema_name))
