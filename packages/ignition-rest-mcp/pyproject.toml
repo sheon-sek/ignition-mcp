@@ -10,4 +10,11 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "GPL-3.0-only"
 authors = [{ name = "Ignition MCP contributors" }]
-dependencies = []
+dependencies = [
+  "fastmcp==4.0.5",
+  "httpx==0.28.1",
+  "pydantic>=2.11,<3",
+]
+
+[project.scripts]
+ignition-rest-mcp = "ignition_rest_mcp.server:main"

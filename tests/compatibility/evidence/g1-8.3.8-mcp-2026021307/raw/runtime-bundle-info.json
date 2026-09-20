@@ -1,0 +1,22 @@
+{
+  "id": 3,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"mcpModuleBuild\":{\"$ignition\":\"null\"},\"mcpModuleVersion\":\"1.3.5-SNAPSHOT\",\"bundleVersion\":\"0.1.0\",\"compatibilityStatus\":\"UNKNOWN\",\"gatewayVersion\":\"8.3.8 (b2026071409)\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "bundleVersion": "0.1.0",
+      "compatibilityStatus": "UNKNOWN",
+      "gatewayVersion": "8.3.8 (b2026071409)",
+      "mcpModuleBuild": {
+        "$ignition": "null"
+      },
+      "mcpModuleVersion": "1.3.5-SNAPSHOT"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": 10,
+  "jsonrpc": "2.0",
+  "result": {
+    "contents": [
+      {
+        "mimeType": "application/schema+json",
+        "text": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"$id\": \"urn:ignition-mcp:runtime:bundle-info:output\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"bundleVersion\": {\"type\": \"string\", \"minLength\": 1},\n    \"gatewayVersion\": {\"type\": \"string\", \"minLength\": 1},\n    \"mcpModuleVersion\": {\"type\": \"string\", \"minLength\": 1},\n    \"mcpModuleBuild\": {\"oneOf\": [{\"type\": \"string\"}, {\"type\": \"object\", \"properties\": {\"$ignition\": {\"const\": \"null\"}}, \"required\": [\"$ignition\"], \"additionalProperties\": false}]},\n    \"compatibilityStatus\": {\"enum\": [\"SUPPORTED\", \"UNTESTED\", \"INCOMPATIBLE\", \"UNKNOWN\"]}\n  },\n  \"required\": [\"bundleVersion\", \"gatewayVersion\", \"mcpModuleVersion\", \"mcpModuleBuild\", \"compatibilityStatus\"]\n}\n",
+        "uri": "ignition://?contracts/bundle-info-output"
+      }
+    ]
+  }
+}

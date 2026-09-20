@@ -1,0 +1,13 @@
+{
+  "id": 6,
+  "jsonrpc": "2.0",
+  "result": {
+    "contents": [
+      {
+        "mimeType": "application/json",
+        "text": "{\"state\":\"READY\",\"generation\":1,\"fetchedAt\":\"2026-09-20T13:30:07.165256+00:00\",\"gatewayVersion\":\"8.3.8 (b2026071409)\",\"openapiSha256\":\"0bd39be6c3de6c696045461d6b330274fce4dd930b85f72a9f67c3b8eb56063b\",\"supportedCapabilities\":[\"gateway_info\"],\"endpointCount\":421,\"moduleVersions\":{\"com.inductiveautomation.mcp\":\"1.3.5-SNAPSHOT (b2026021307)\"}}",
+        "uri": "ignition://gateway/capabilities"
+      }
+    ]
+  }
+}

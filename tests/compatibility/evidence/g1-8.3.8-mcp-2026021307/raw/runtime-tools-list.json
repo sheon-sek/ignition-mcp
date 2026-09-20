@@ -1,0 +1,76 @@
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "annotations": {
+          "title": "tag_read"
+        },
+        "description": "Read current Tag values via system.tag.readBlocking. Bad/Uncertain quality remains domain data, not Tool failure. Tag property/document sub-paths are rejected. Preserves request order and duplicate paths. D28 ignition-null-v1 encodes logical null as {\"$ignition\":\"null\"}; documents containing $ignition are escaped as {\"$ignition\":\"object\",\"entries\":[[key,encodedValue],...]}. Arrays and objects recurse; see tag_read_output Resource schema. Example: {\"tagPaths\":[\"[System]Gateway/SystemName\"]}.",
+        "inputSchema": {
+          "properties": {
+            "tagPaths": {
+              "description": "1..500 absolute provider-qualified current Tag paths.",
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Timeout in milliseconds, 0..30000. Default 10000.",
+              "type": "integer"
+            },
+            "timestampFormat": {
+              "description": "iso8601 or epochMillis. Default iso8601.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tagPaths"
+          ],
+          "type": "object"
+        },
+        "name": "tag_read",
+        "title": "tag_read"
+      },
+      {
+        "annotations": {
+          "title": "tag_browse"
+        },
+        "description": "Browse a bounded Tag hierarchy using system.tag.browse. UDT definition namespace _types_ is excluded. Results are never silently truncated: a partial bounded browse returns limit_exceeded.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum returned nodes, 1..500. Default 100.",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Absolute provider-qualified Tag path such as [default]Folder or [System]Gateway.",
+              "type": "string"
+            },
+            "recursive": {
+              "description": "Whether to recursively browse descendants. Default false.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "tag_browse",
+        "title": "tag_browse"
+      },
+      {
+        "annotations": {
+          "title": "bundle_info"
+        },
+        "description": "Return Runtime Bundle identity and current Gateway/MCP Module information.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "bundle_info",
+        "title": "bundle_info"
+      }
+    ]
+  }
+}

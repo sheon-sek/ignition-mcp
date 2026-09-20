@@ -1,6 +1,14 @@
 {
   "schemaVersion": 1,
   "name": "full",
-  "permissions": ["READ", "CONFIG", "CONTROL"],
-  "tools": ["bundle_info"]
+  "permissions": [
+    "READ",
+    "CONFIG",
+    "CONTROL"
+  ],
+  "tools": [
+    "bundle_info",
+    "tag_browse",
+    "tag_read"
+  ]
 }

@@ -6,6 +6,8 @@
     "CONTROL"
   ],
   "tools": [
-    "bundle_info"
+    "bundle_info",
+    "tag_browse",
+    "tag_read"
   ]
 }

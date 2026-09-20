@@ -5,6 +5,14 @@
     "READ"
   ],
   "tools": [
-    "bundle_info"
-  ]
+    "bundle_info",
+    "tag_browse",
+    "tag_read"
+  ],
+  "resources": [
+    "ignition://?contracts/bundle-info-output",
+    "ignition://?contracts/tag-browse-output",
+    "ignition://?contracts/tag-read-output"
+  ],
+  "prompts": []
 }

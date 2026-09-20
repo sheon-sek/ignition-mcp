@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_read",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {"tagPaths": {"type": "array", "required": true, "minItems": 1, "maxItems": 500, "providerQualified": true, "currentValueOnly": true}, "timeout": {"type": "integer", "default": 10000, "minimum": 0, "maximum": 30000}, "timestampFormat": {"type": "string", "default": "iso8601", "enum": ["iso8601", "epochMillis"]}},
+  "outputSchema": "contracts/schemas/tag-read.output.schema.json",
+  "nativeRequirements": ["system.tag.readBlocking"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "badQualityIsToolError": false,
+  "nullEncoding": "ignition-null-v1",
+  "nullEncodingDecision": "D28"
+}

@@ -1,0 +1,13 @@
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "contents": [
+      {
+        "mimeType": "application/json",
+        "text": "{\"state\":\"READY\",\"generation\":1,\"fetchedAt\":\"2026-09-20T13:30:07.165256+00:00\",\"ageSeconds\":0.635914,\"gatewayVersion\":\"8.3.8 (b2026071409)\",\"environmentFingerprint\":\"6bd84f5a2e5fb1b881a2dd5c2d9d10ad1caa3ca4606e49552177bd5febc4f4d4\",\"openapiSha256\":\"0bd39be6c3de6c696045461d6b330274fce4dd930b85f72a9f67c3b8eb56063b\"}",
+        "uri": "ignition://gateway/openapi-info"
+      }
+    ]
+  }
+}

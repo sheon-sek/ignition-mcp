@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "uri": "ignition://gateway/capabilities",
+  "server": "ignition-rest",
+  "kind": "text_resource",
+  "mimeType": "application/json",
+  "bounded": true,
+  "description": "Current immutable capability-registry metadata; no full OpenAPI document."
+}

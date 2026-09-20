@@ -159,6 +159,9 @@ def prepare(root: Path, evidence: Path | None, github_env: Path | None) -> None:
             },
         )
     if github_env is not None:
+        # Even disposable fixture credentials must not be echoed in later step environments.
+        print(f"::add-mask::{TOKEN_NAME}:{TOKEN_KEY}")
+        print(f"::add-mask::{TOKEN_KEY}")
         with github_env.open("a", encoding="utf-8") as handle:
             handle.write(f"CI_API_TOKEN={TOKEN_NAME}:{TOKEN_KEY}\n")
 

@@ -1,0 +1,1 @@
+"""OpenAPI-backed capability registry."""

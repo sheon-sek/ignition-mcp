@@ -1,0 +1,85 @@
+{
+  "id": 6,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"failed\":0,\"requested\":4,\"succeeded\":4},\"meta\":{\"correlationId\":\"98e86a94-b081-40c0-b6e9-a23ccc0b51e0\"},\"items\":[{\"quality\":{\"code\":-2147483129,\"level\":\"Bad\",\"good\":false,\"diagnosticMessage\":\"Path '[System]Gateway/__mcp_ci_missing_tag__' not found.\",\"name\":\"Bad_NotFound\"},\"path\":\"[System]Gateway/__mcp_ci_missing_tag__\",\"value\":{\"$ignition\":\"null\"},\"status\":\"ok\",\"timestamp\":1789910995373},{\"quality\":{\"code\":192,\"level\":\"Good\",\"good\":true,\"diagnosticMessage\":{\"$ignition\":\"null\"},\"name\":\"Good\"},\"path\":\"[System]Gateway/SystemName\",\"value\":\"ignition-mcp-phase1-ci\",\"status\":\"ok\",\"timestamp\":1789911001181},{\"quality\":{\"code\":-2147483129,\"level\":\"Bad\",\"good\":false,\"diagnosticMessage\":\"Path '[System]Gateway/__mcp_ci_missing_tag__' not found.\",\"name\":\"Bad_NotFound\"},\"path\":\"[System]Gateway/__mcp_ci_missing_tag__\",\"value\":{\"$ignition\":\"null\"},\"status\":\"ok\",\"timestamp\":1789910995373},{\"quality\":{\"code\":192,\"level\":\"Good\",\"good\":true,\"diagnosticMessage\":{\"$ignition\":\"null\"},\"name\":\"Good\"},\"path\":\"[System]Gateway/SystemName\",\"value\":\"ignition-mcp-phase1-ci\",\"status\":\"ok\",\"timestamp\":1789911001181}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "items": [
+        {
+          "path": "[System]Gateway/__mcp_ci_missing_tag__",
+          "quality": {
+            "code": -2147483129,
+            "diagnosticMessage": "Path '[System]Gateway/__mcp_ci_missing_tag__' not found.",
+            "good": false,
+            "level": "Bad",
+            "name": "Bad_NotFound"
+          },
+          "status": "ok",
+          "timestamp": 1789910995373,
+          "value": {
+            "$ignition": "null"
+          }
+        },
+        {
+          "path": "[System]Gateway/SystemName",
+          "quality": {
+            "code": 192,
+            "diagnosticMessage": {
+              "$ignition": "null"
+            },
+            "good": true,
+            "level": "Good",
+            "name": "Good"
+          },
+          "status": "ok",
+          "timestamp": 1789911001181,
+          "value": "ignition-mcp-phase1-ci"
+        },
+        {
+          "path": "[System]Gateway/__mcp_ci_missing_tag__",
+          "quality": {
+            "code": -2147483129,
+            "diagnosticMessage": "Path '[System]Gateway/__mcp_ci_missing_tag__' not found.",
+            "good": false,
+            "level": "Bad",
+            "name": "Bad_NotFound"
+          },
+          "status": "ok",
+          "timestamp": 1789910995373,
+          "value": {
+            "$ignition": "null"
+          }
+        },
+        {
+          "path": "[System]Gateway/SystemName",
+          "quality": {
+            "code": 192,
+            "diagnosticMessage": {
+              "$ignition": "null"
+            },
+            "good": true,
+            "level": "Good",
+            "name": "Good"
+          },
+          "status": "ok",
+          "timestamp": 1789911001181,
+          "value": "ignition-mcp-phase1-ci"
+        }
+      ],
+      "meta": {
+        "correlationId": "98e86a94-b081-40c0-b6e9-a23ccc0b51e0"
+      },
+      "summary": {
+        "failed": 0,
+        "requested": 4,
+        "succeeded": 4
+      }
+    }
+  }
+}

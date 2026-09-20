@@ -1,10 +1,10 @@
-# Ignition MCP Architecture Decisions — D01–D27
+# Ignition MCP Architecture Decisions — D01–D28
 
 **Status:** DECIDED
 
 **Canonical location:** `docs/decisions/` (see D25). This single index replaces the three per-batch index files, which are kept unchanged in `docs/_archive/`.
 
-D01–D27 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
+D01–D28 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
 
 ## Decision index
 
@@ -37,6 +37,7 @@ D01–D27 are binding unless explicitly reopened through a new decision or amend
 | D25 | DECIDED | Final Monorepo / Package Layout | second product is `ignition-runtime-bundle` |
 | D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
+| D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 
 ## Cross-decision amendment
 
@@ -106,7 +107,7 @@ Two capabilities are independent and must not be conflated:
 - publishing a JSON-schema **Text Resource** with `resources/list` + `resources/read`;
 - registering Tool `outputSchema`, returning `structuredContent`, and signalling `isError`.
 
-The Tool native response binding is currently `NATIVE_BINDING_PENDING`. A readable schema Resource does not satisfy D06 and cannot be used to claim production `SUPPORTED` (D21); it must be proven by D23 live verification.
+The exact baseline Tool native response binding is `VERIFIED_WITH_LIMITATION` under D27; D28 records the explicitly approved lossless null encoding. Other tuples require re-characterization. A readable schema Resource alone does not satisfy D06 and cannot be used to claim production `SUPPORTED` (D21); binding must be proven by D23 live verification.
 
 The canonical MCP server name remains `ignition-runtime`, provided by the official Module. `ignition-runtime-bundle` is a product/artifact name, not a third MCP Server.
 
@@ -195,6 +196,6 @@ Unchanged: D01, D03, D04, D08, D11–D17, and every architectural principle they
 
 The original D01–D26 architecture / implementation decision backlog is now complete.
 
-Implementation begins at **D26 Phase 0**. The first hard gate is **G0 Native Tool response binding verification**; in parallel, the repository skeleton, contracts/tooling/CI foundation and ignition-rest foundation may be implemented.
+**D26 Phase 0 / G0 is closed** on the exact D27 baseline. Current work is **Phase 1 / G1**; see the [Phase 1 runbook](../development/phase-1.md) for evidence and scope. Do not begin Phase 2 without a separate user-directed feature branch.
 
-Treat D01–D27 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
+Treat D01–D28 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

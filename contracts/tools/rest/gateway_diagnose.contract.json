@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "name": "gateway_diagnose",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {},
+  "outputSchema": "contracts/schemas/gateway-diagnose.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/gateway-info",
+    "GET /data/api/v1/modules/healthy"
+  ],
+  "alwaysVisibleWhenRegistryUnavailable": true,
+  "heavyDiagnostics": false
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:gateway-diagnose:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "gatewayReachable": {"type": "boolean"},
+    "authenticationOk": {"type": "boolean"},
+    "registryState": {"enum": ["READY", "STALE", "UNAVAILABLE"]},
+    "registryGeneration": {"type": "integer", "minimum": 0},
+    "openapiSha256": {"type": ["string", "null"]},
+    "gatewayVersion": {"type": ["string", "null"]},
+    "moduleCount": {"type": "integer", "minimum": 0},
+    "message": {"type": "string", "minLength": 1}
+  },
+  "required": ["correlationId", "gatewayReachable", "authenticationOk", "registryState", "registryGeneration", "openapiSha256", "gatewayVersion", "moduleCount", "message"]
+}

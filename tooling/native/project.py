@@ -6,7 +6,8 @@ from pathlib import Path
 from typing import Any, cast
 
 from .constants import (
-    HANDLER, IDENTIFIER, PARAMETER_KEYS, PARAMETER_TYPES, PRIMITIVE_FILES, PROMPT_ARGUMENT_KEYS,
+    HANDLER, IDENTIFIER, PARAMETER_ALLOWED_KEYS, PARAMETER_REQUIRED_KEYS, PARAMETER_TYPES,
+    PRIMITIVE_FILES, PROMPT_ARGUMENT_KEYS,
     PROMPT_HANDLER, PROMPTS_DIR, PYTHON2_KEYWORDS, RESOURCES_DIR, TOOLS_DIR,
 )
 from .jsonio import load_json_object
@@ -54,6 +55,18 @@ def _metadata(data: bytes, location: str, payload_name: str) -> dict[str, Any]:
     return attributes
 
 
+def _validate_parameter_default(parameter_type: str, value: Any, location: str) -> None:
+    valid = {
+        "string": isinstance(value, str),
+        "object": type(value) is dict,
+        "array": type(value) is list,
+        "number": type(value) in {int, float},
+        "integer": type(value) is int,
+        "boolean": type(value) is bool,
+    }
+    require(valid.get(parameter_type, False), location, "default value must match parameter type")
+
+
 def _tool_parameters(data: bytes, location: str) -> list[str]:
     attributes = _metadata(data, location, HANDLER)
     raw_parameters = attributes.get("parameters")
@@ -63,13 +76,16 @@ def _tool_parameters(data: bytes, location: str) -> list[str]:
     for index, parameter in enumerate(parameters):
         field = f"{location}: parameters[{index}]"
         require(type(parameter) is dict, field, "parameter must be an object")
-        require(set(parameter) == PARAMETER_KEYS, field, "parameter keys must be exactly name, description, type, required")
+        keys = set(parameter)
+        require(PARAMETER_REQUIRED_KEYS <= keys <= PARAMETER_ALLOWED_KEYS, field, "parameter keys must include name, description, type, required and may include default")
         name = parameter["name"]
         require(isinstance(name, str) and IDENTIFIER.fullmatch(name) is not None and name not in PYTHON2_KEYWORDS and name != "builder", field, "name must be a non-reserved Jython 2 identifier other than builder")
         require(name not in names, field, "parameter names must be unique")
         require(_nonempty_string(parameter["description"]), field, "description must be a nonempty string")
         require(parameter["type"] in PARAMETER_TYPES, field, "unsupported parameter type")
         require(type(parameter["required"]) is bool, field, "required must be boolean")
+        if "default" in parameter:
+            _validate_parameter_default(parameter["type"], parameter["default"], field)
         names.append(name)
     return names
 

@@ -1,0 +1,1 @@
+"""Ignition Gateway transport boundary."""

@@ -20,10 +20,17 @@ class ValidationFailureTest(unittest.TestCase):
     def test_rejects_extra_parameter_schema_fields(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self._copy(temporary)
-            resource = project / "com.inductiveautomation.mcp/tools/bundle-info/resource.json"
+            resource = project / "com.inductiveautomation.mcp/tools/bundle_info/resource.json"
             data = json.loads(resource.read_text(encoding="utf-8"))
             data["attributes"]["parameters"] = [
-                {"name": "x", "description": "x", "type": "string", "required": False, "default": ""}
+                {
+                    "name": "x",
+                    "description": "x",
+                    "type": "string",
+                    "required": False,
+                    "default": "",
+                    "unexpected": True
+                }
             ]
             resource.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "parameter keys"):
@@ -32,7 +39,7 @@ class ValidationFailureTest(unittest.TestCase):
     def test_rejects_code_before_handler(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self._copy(temporary)
-            handler = project / "com.inductiveautomation.mcp/tools/bundle-info/onToolCalled.py"
+            handler = project / "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
             handler.write_text("# comment\n" + handler.read_text(encoding="utf-8"), encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "first line"):
                 validate_project(project)
@@ -40,7 +47,7 @@ class ValidationFailureTest(unittest.TestCase):
     def test_rejects_space_indentation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self._copy(temporary)
-            handler = project / "com.inductiveautomation.mcp/tools/bundle-info/onToolCalled.py"
+            handler = project / "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
             handler.write_text('def onToolCalled(builder):\n    return builder.text("x")\n', encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "Tabs only"):
                 validate_project(project)

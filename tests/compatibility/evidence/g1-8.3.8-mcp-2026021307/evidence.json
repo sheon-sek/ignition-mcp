@@ -1,0 +1,100 @@
+{
+  "bundleSha256": "18a938ff7b8ee799504157274f185df44a4e68d48ed48171bf042d431f20a96b",
+  "bundleVersion": "0.1.0",
+  "compatibilityStatus": "UNTESTED",
+  "decisions": [
+    "D27",
+    "D28"
+  ],
+  "external": {
+    "diagnose": {
+      "authenticationOk": true,
+      "correlationId": "e92f5a25-7d3e-4b0c-a473-25e377f8f8c2",
+      "gatewayReachable": true,
+      "gatewayVersion": "8.3.8 (b2026071409)",
+      "message": "Gateway REST authentication and low-cost diagnostics succeeded.",
+      "moduleCount": 1,
+      "openapiSha256": "0bd39be6c3de6c696045461d6b330274fce4dd930b85f72a9f67c3b8eb56063b",
+      "registryGeneration": 1,
+      "registryState": "READY"
+    },
+    "gatewayInfo": {
+      "correlationId": "986958e7-4545-47aa-8131-3a3d6db3a53a",
+      "deploymentMode": "",
+      "edition": "standard",
+      "ignitionVersion": "8.3.8 (b2026071409)",
+      "jvmVersion": "17.0.19",
+      "name": "ignition-mcp-phase1-ci",
+      "redundancyRole": "Independent",
+      "timeZoneId": "Etc/UTC"
+    },
+    "healthLive": 200,
+    "healthReady": 200,
+    "prompts": {
+      "capabilityAdvertised": true,
+      "inventory": [],
+      "listStatus": "PASS"
+    },
+    "resources": [
+      "ignition://gateway/capabilities",
+      "ignition://gateway/openapi-info"
+    ],
+    "tools": [
+      "gateway_diagnose",
+      "gateway_info"
+    ]
+  },
+  "gate": "G1",
+  "gatewayBuild": "2026071409",
+  "gatewayImage": "inductiveautomation/ignition:8.3.8",
+  "gatewayImageDigest": "sha256:560d0c069911476ff65aa7fd0fefab0530897e81c2a6cc5ea1410026126ed8ce",
+  "gatewayVersion": "8.3.8",
+  "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+  "mcpModuleBuild": "2026021307",
+  "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+  "mcpModuleVersion": "1.3.5-SNAPSHOT",
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "openapiSha256": "0bd39be6c3de6c696045461d6b330274fce4dd930b85f72a9f67c3b8eb56063b",
+  "runtime": {
+    "badQualityNullAndDuplicateRead": "PASS",
+    "bundleInfo": {
+      "bundleVersion": "0.1.0",
+      "compatibilityStatus": "UNKNOWN",
+      "gatewayVersion": "8.3.8 (b2026071409)",
+      "mcpModuleBuild": {
+        "$ignition": "null"
+      },
+      "mcpModuleVersion": "1.3.5-SNAPSHOT"
+    },
+    "failureIsError": true,
+    "outputSchemaPublished": false,
+    "outputSchemasValidated": true,
+    "prompts": {
+      "capabilityAdvertised": false,
+      "inventory": [],
+      "listStatus": "NOT_APPLICABLE"
+    },
+    "resourceTitles": [
+      "bundle_info_output",
+      "tag_browse_output",
+      "tag_read_output"
+    ],
+    "resourceUris": [
+      "ignition://?contracts/bundle-info-output",
+      "ignition://?contracts/tag-browse-output",
+      "ignition://?contracts/tag-read-output"
+    ],
+    "successStructuredContent": true,
+    "tagBrowseReturned": 11,
+    "tagReadSystemName": "ignition-mcp-phase1-ci",
+    "tools": [
+      "bundle_info",
+      "tag_browse",
+      "tag_read"
+    ],
+    "unauthenticatedInitializeHttpStatus": 403
+  },
+  "runtimeNullEncoding": "ignition-null-v1",
+  "schemaVersion": 2,
+  "status": "VERIFIED"
+}

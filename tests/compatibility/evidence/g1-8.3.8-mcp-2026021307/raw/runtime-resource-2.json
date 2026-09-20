@@ -1,0 +1,13 @@
+{
+  "id": 12,
+  "jsonrpc": "2.0",
+  "result": {
+    "contents": [
+      {
+        "mimeType": "application/schema+json",
+        "text": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"$id\": \"urn:ignition-mcp:runtime:tag-browse:output\",\n  \"type\": \"object\",\n  \"additionalProperties\": false,\n  \"properties\": {\n    \"path\": {\"type\": \"string\", \"minLength\": 3},\n    \"recursive\": {\"type\": \"boolean\"},\n    \"nodes\": {\"type\": \"array\", \"maxItems\": 500, \"items\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"path\": {\"type\": \"string\", \"minLength\": 1}, \"name\": {\"type\": \"string\", \"minLength\": 1}, \"tagType\": {\"type\": \"string\", \"minLength\": 1}, \"hasChildren\": {\"type\": \"boolean\"}, \"dataType\": {\"type\": \"string\"}, \"valueSource\": {\"type\": \"string\"}, \"typeId\": {\"type\": \"string\"}}, \"required\": [\"path\", \"name\", \"tagType\", \"hasChildren\"]}},\n    \"summary\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"returned\": {\"type\": \"integer\", \"minimum\": 0, \"maximum\": 500}, \"limit\": {\"type\": \"integer\", \"minimum\": 1, \"maximum\": 500}}, \"required\": [\"returned\", \"limit\"]},\n    \"meta\": {\"type\": \"object\", \"additionalProperties\": false, \"properties\": {\"correlationId\": {\"type\": \"string\", \"minLength\": 1}}, \"required\": [\"correlationId\"]}\n  },\n  \"required\": [\"path\", \"recursive\", \"nodes\", \"summary\", \"meta\"]\n}\n",
+        "uri": "ignition://?contracts/tag-browse-output"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "id": 8,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"code\":\"invalid_argument\",\"correlationId\":\"520556b9-834c-447d-8572-3ed0adae8fb3\",\"message\":\"path must be an absolute provider-qualified Tag path.\"}",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}
