@@ -64,6 +64,7 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 		value = value.strip()
 		return value if value else None
 
+	stage = "validation"
 	try:
 		if maxResults is None:
 			maxResults = 100
@@ -71,6 +72,7 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 			return toolError("invalid_argument", "maxResults must be an integer from 1 to 500.")
 		continuation = optionalText(continuation, "continuation")
 		if continuation is not None:
+			stage = "native_query_continuation"
 			result = system.tag.query(limit=int(maxResults), continuation=continuation)
 		else:
 			provider = optionalText(provider, "provider")
@@ -110,7 +112,9 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 				query["condition"]["valueSource"] = valueSource
 			if namePattern is not None:
 				query["condition"]["properties"] = {"op": "And", "conditions": [{"prop": "name", "comp": "Like", "value": namePattern}]}
+			stage = "native_query_initial"
 			result = system.tag.query(provider, query, int(maxResults))
+		stage = "result_normalization"
 		items = []
 		for native in result:
 			nativePairs = nativeItems(native)
@@ -130,9 +134,11 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 				del values["fullPath"]
 			values["path"] = pathText
 			items.append({"path": pathText, "properties": values})
+		stage = "continuation_read"
 		nextCursor = getattr(result, "continuationPoint", None)
 		if nextCursor is not None:
 			nextCursor = unicode(nextCursor)
+		stage = "serialization"
 		domain = {"items": items, "continuation": nextCursor, "summary": {"returned": len(items), "limit": int(maxResults), "hasMore": nextCursor is not None}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
 		encoded = system.util.jsonEncode(domain)
@@ -142,5 +148,6 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 	except ValueError as exc:
 		return toolError("invalid_argument", unicode(exc))
 	except (Exception, JavaException) as exc:
-		logger.error("correlationId=" + correlationId + " tag_query failed: " + unicode(exc))
-		return toolError("upstream_error", "The Tag query operation could not be completed.")
+		exceptionType = unicode(type(exc))
+		logger.error("correlationId=" + correlationId + " stage=" + stage + " exceptionType=" + exceptionType + " tag_query failed: " + unicode(exc))
+		return toolError("upstream_error", "The Tag query operation could not be completed during " + stage + " (" + exceptionType + ").")

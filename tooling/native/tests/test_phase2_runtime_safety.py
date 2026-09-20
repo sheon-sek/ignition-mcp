@@ -183,3 +183,17 @@ def test_tag_query_uses_documented_pywrapper_continuation_property() -> None:
     assert 'getattr(result, "continuationPoint", None)' in source
     assert 'result.getContinuationPoint()' not in source
     assert 'nextCursor = unicode(nextCursor)' in source
+
+
+def test_tag_query_upstream_errors_identify_safe_execution_stage() -> None:
+    source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
+    for stage in (
+        "native_query_continuation",
+        "native_query_initial",
+        "result_normalization",
+        "continuation_read",
+        "serialization",
+    ):
+        assert f'stage = "{stage}"' in source
+    assert '" stage=" + stage + " exceptionType=" + exceptionType' in source
+    assert '"The Tag query operation could not be completed during " + stage' in source
