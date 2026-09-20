@@ -167,6 +167,16 @@ def test_alarm_journal_rejects_unbounded_associated_data_before_native_call() ->
     assert contract["parameters"]["includeData"]["trueBehavior"] == "unsupported_capability"
 
 
+def test_tag_get_config_normalizes_jython_mapping_wrappers_before_java_fallback() -> None:
+    source = (TOOLS / "tag_get_config/onToolCalled.py").read_text(encoding="utf-8")
+    python_dict = source.index("if isinstance(value, dict):")
+    jython_map = source.index('if hasattr(value, "iteritems"):')
+    iter_items = source.index("for key, child in value.iteritems()")
+    java_map = source.index("if isinstance(value, Map):")
+    native_fallback = source.index('return {"type": "native-object"')
+    assert python_dict < jython_map < iter_items < java_map < native_fallback
+
+
 def test_tag_get_config_upstream_errors_identify_safe_execution_stage() -> None:
     source = (TOOLS / "tag_get_config/onToolCalled.py").read_text(encoding="utf-8")
     for stage in ("validation", "native_read", "result_normalization", "result_count", "serialization"):

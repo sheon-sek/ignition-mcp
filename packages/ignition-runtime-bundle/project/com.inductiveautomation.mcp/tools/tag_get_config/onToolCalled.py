@@ -41,6 +41,8 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			return unicode(value.toInstant().toString())
 		if isinstance(value, dict):
 			return dict((unicode(key), jsonValue(child)) for key, child in value.items())
+		if hasattr(value, "iteritems"):
+			return dict((unicode(key), jsonValue(child)) for key, child in value.iteritems())
 		if isinstance(value, Map):
 			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
 		if isinstance(value, (list, tuple, List)):
