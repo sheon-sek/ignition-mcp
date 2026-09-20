@@ -71,7 +71,10 @@ def onToolCalled(builder, paths, startTime, endTime, sampleCount):
 		for path in paths:
 			if not isinstance(path, basestring) or not path.strip():
 				return toolError("invalid_argument", "Every historical path must be a non-empty string.")
-			normalizedPaths.append(path.strip())
+			path = path.strip()
+			if len(path) > 2048:
+				return toolError("limit_exceeded", "Historical paths must not exceed 2048 characters each.")
+			normalizedPaths.append(path)
 		if sampleCount is None:
 			sampleCount = 100
 		if isinstance(sampleCount, bool) or not isinstance(sampleCount, (int, long)) or sampleCount < 1:

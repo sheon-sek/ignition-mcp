@@ -13,11 +13,19 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 		logger.warn("correlationId=" + correlationId + " code=" + code + " " + message)
 		return {"content": builder.text(system.util.jsonEncode(error)), "isError": True}
 
+	class EncodedNumber(object):
+		def __init__(self, kind, text):
+			self.kind = kind
+			self.text = text
+
 	def encodeNulls(value):
 		if value is None:
 			return {"$ignition": "null"}
+		if isinstance(value, EncodedNumber):
+			return {"type": value.kind, "text": value.text}
 		if isinstance(value, dict):
-			if "$ignition" in value:
+			reservedNumberShape = value.get("type") in ("decimal", "non-finite-number") and "text" in value
+			if "$ignition" in value or reservedNumberShape:
 				return {"$ignition": "object", "entries": [[key, encodeNulls(child)] for key, child in sorted(value.items())]}
 			return dict((key, encodeNulls(child)) for key, child in value.items())
 		if isinstance(value, (list, tuple)):
@@ -102,9 +110,15 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 				raise ValueError("Database query description must be a non-empty string up to 512 characters.")
 			project = rawEntry["project"]
 			path = rawEntry["path"]
-			if not isinstance(project, basestring) or not project.strip() or len(project) > 128:
+			if not isinstance(project, basestring):
 				raise ValueError("Database query project must be a non-empty fixed project name.")
-			if not isinstance(path, basestring) or not path.strip() or len(path) > 512 or path.startswith("/") or ".." in path.split("/"):
+			project = project.strip()
+			if not project or len(project) > 128:
+				raise ValueError("Database query project must be a non-empty fixed project name.")
+			if not isinstance(path, basestring):
+				raise ValueError("Database query path must be a fixed project-relative Named Query path.")
+			path = path.strip()
+			if not path or len(path) > 512 or path.startswith("/") or ".." in path.split("/"):
 				raise ValueError("Database query path must be a fixed project-relative Named Query path.")
 			resultMode = rawEntry["resultMode"]
 			if resultMode not in ("dataset", "scalar"):
@@ -129,8 +143,10 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 					raise ValueError("Offset pagination policy keys do not match the approved schema.")
 				limitParameter = pagination["limitParameter"]
 				offsetParameter = pagination["offsetParameter"]
-				if not isinstance(limitParameter, basestring) or not isinstance(offsetParameter, basestring) or limitParameter == offsetParameter:
-					raise ValueError("Offset pagination requires distinct native limit/offset parameter names.")
+				if (not isinstance(limitParameter, basestring) or not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,63}$", limitParameter)
+						or not isinstance(offsetParameter, basestring) or not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,63}$", offsetParameter)
+						or limitParameter == offsetParameter):
+					raise ValueError("Offset pagination requires distinct simple native limit/offset parameter names up to 64 characters.")
 				if limitParameter in parameterSpecs or offsetParameter in parameterSpecs:
 					raise ValueError("Caller parameters cannot override handler-owned pagination parameters.")
 				normalizedPagination = {
@@ -207,14 +223,14 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 			return value.booleanValue()
 		if isinstance(value, float):
 			if math.isnan(value) or math.isinf(value):
-				return {"type": "non-finite-number", "text": unicode(value)}
+				return EncodedNumber("non-finite-number", unicode(value))
 			return value
 		if isinstance(value, Number):
 			typeName = unicode(value.getClass().getName())
 			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
 				return long(unicode(value))
 			if typeName == "java.math.BigDecimal":
-				return {"type": "decimal", "text": unicode(value)}
+				return EncodedNumber("decimal", unicode(value))
 			return jsonValue(float(value.doubleValue()))
 		if isinstance(value, Date):
 			return unicode(value.toInstant().toString())
@@ -235,7 +251,10 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 		if not isinstance(alias, basestring) or not alias.strip():
 			return toolError("invalid_argument", "alias must be a non-empty approved database query alias.")
 		alias = alias.strip()
-		registry = loadRegistry()
+		try:
+			registry = loadRegistry()
+		except ValueError as exc:
+			return toolError("schema_mismatch", unicode(exc))
 		entry = registry.get(alias)
 		if entry is None:
 			return toolError("not_found", "The database query alias is not approved in this deployment.")
@@ -272,6 +291,8 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 				effectivePageSize = pagination["defaultPageSize"] if pageSize == 0 else int(pageSize)
 				if effectivePageSize < 1 or effectivePageSize > pagination["hardPageSize"]:
 					return toolError("limit_exceeded", "pageSize exceeds the approved maximum for this alias.")
+				if int(offset) + effectivePageSize - 1 > pagination["maxOffset"]:
+					return toolError("limit_exceeded", "The requested page extends beyond the approved maximum offset for this alias.")
 				nativeParameters[pagination["limitParameter"]] = effectivePageSize
 				nativeParameters[pagination["offsetParameter"]] = int(offset)
 				rowLimit = effectivePageSize
@@ -290,7 +311,12 @@ def onToolCalled(builder, alias, parameters, pageSize, offset):
 			for row in range(data.getRowCount()):
 				rows.append([jsonValue(data.getValueAt(row, column)) for column in range(data.getColumnCount())])
 			if pagination["mode"] == "offset":
-				nextOffset = int(offset) + len(rows) if len(rows) == effectivePageSize else None
+				nextOffset = None
+				if len(rows) == effectivePageSize:
+					candidateOffset = int(offset) + len(rows)
+					if candidateOffset > pagination["maxOffset"]:
+						return toolError("limit_exceeded", "The result reaches the approved maximum offset; use a more selective approved query.")
+					nextOffset = candidateOffset
 				page = {"mode": "offset", "offset": int(offset), "limit": effectivePageSize, "nextOffset": nextOffset}
 			else:
 				page = {"mode": "fixed", "offset": 0, "limit": rowLimit, "nextOffset": None}

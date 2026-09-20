@@ -24,6 +24,8 @@ def onToolCalled(builder, rootPath, nameFilters, recursive, maxResults, continua
 		if not isinstance(rootPath, basestring) or not rootPath.strip():
 			return toolError("invalid_argument", "rootPath must be a non-empty historical browse path.")
 		rootPath = rootPath.strip()
+		if len(rootPath) > 2048:
+			return toolError("limit_exceeded", "rootPath must not exceed 2048 characters.")
 		if nameFilters is None:
 			nameFilters = []
 		if not isinstance(nameFilters, (list, tuple, List)) or len(nameFilters) > 20:
@@ -32,7 +34,10 @@ def onToolCalled(builder, rootPath, nameFilters, recursive, maxResults, continua
 		for value in nameFilters:
 			if not isinstance(value, basestring) or not value.strip():
 				return toolError("invalid_argument", "nameFilters must contain non-empty strings.")
-			filters.append(value.strip())
+			value = value.strip()
+			if len(value) > 256:
+				return toolError("limit_exceeded", "nameFilters must not exceed 256 characters each.")
+			filters.append(value)
 		if recursive is None:
 			recursive = False
 		if not isinstance(recursive, bool):
@@ -44,6 +49,8 @@ def onToolCalled(builder, rootPath, nameFilters, recursive, maxResults, continua
 		if continuation is not None and not isinstance(continuation, basestring):
 			return toolError("invalid_argument", "continuation must be a string when provided.")
 		continuation = continuation.strip() if isinstance(continuation, basestring) else ""
+		if len(continuation) > 8192:
+			return toolError("limit_exceeded", "continuation must not exceed 8192 characters.")
 		kwargs = {"rootPath": rootPath, "maxSize": int(maxResults), "recursive": bool(recursive)}
 		if filters:
 			kwargs["nameFilters"] = filters

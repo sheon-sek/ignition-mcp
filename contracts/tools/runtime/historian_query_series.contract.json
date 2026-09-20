@@ -9,7 +9,7 @@
   "mutationClass": "NONE",
   "budgetClass": "QUERY",
   "parameters": {
-    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 50},
+    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 50, "itemMaxLength": 2048},
     "startTime": {"type": "string", "required": false, "defaultRangeHours": 24},
     "endTime": {"type": "string", "required": false},
     "sampleCount": {"type": "integer", "required": false, "default": 100, "minimum": 1}

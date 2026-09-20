@@ -105,6 +105,14 @@ Public Tool contracts must not leak unstable/native patch-specific parameters su
 
 The Runtime adapter may vary its `system.historian.*` invocation by target Ignition patch/version capability while keeping the semantic MCP contract stable.
 
+## Phase 2 fill-mode amendment
+
+**Approved by the project owner during the Phase 2 pre-G2 audit.**
+
+The earlier requirement to expose a validated set of aggregate fill modes is withdrawn for the v1 public contract. Ignition 8.3.9 removed `fillModes` from the public `system.historian.queryAggregatedPoints` parameter table (while retaining unspecified runtime backward compatibility). Publishing it would leak a patch-specific legacy knob and conflict with this decision's stable semantic contract requirement.
+
+`historian_query_aggregate` therefore exposes validated whole-range aggregate names only and uses the target Gateway's native default fill behavior. It does not accept `fillModes`, `includeBounds`, or `excludeObservations`. Adding an explicit semantic fill policy later requires a new versioned contract and real compatibility evidence rather than passing an undocumented native parameter through.
+
 ## Permission summary
 | Tool | Server | Class |
 |---|---|---|
@@ -121,4 +129,6 @@ public_annotation_surface_v1: false
 historian_write_v1: false
 series_requires_finite_positive_sample_count: true
 aggregate_is_whole_range_calculation: true
+aggregate_fill_modes_public_v1: false
+patch_specific_legacy_fill_parameters_public: false
 ```

@@ -9,10 +9,10 @@
   "mutationClass": "NONE",
   "budgetClass": "QUERY",
   "parameters": {
-    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 100},
+    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 100, "itemMaxLength": 2048},
     "startTime": {"type": "string", "required": false, "defaultRangeDays": 7},
     "endTime": {"type": "string", "required": false},
-    "aggregates": {"type": "array", "required": false, "default": ["Average"], "enumItems": ["Average", "SimpleAverage", "Sum", "Minimum", "Maximum", "MinMax", "LastValue", "Range", "Count", "CountOn", "CountOff", "DurationOn", "DurationOff", "Variance", "StdDev", "PctGood", "PctBad"]}
+    "aggregates": {"type": "array", "required": false, "default": ["Average"], "maxItems": 18, "enumItems": ["Average", "SimpleAverage", "Sum", "Minimum", "Maximum", "MinMax", "LastValue", "Range", "Count", "CountOn", "CountOff", "DurationOn", "DurationOff", "Variance", "StdDev", "PctGood", "PctBad"]}
   },
   "hardRangeDays": 366,
   "hardCalculationBudget": 25000,

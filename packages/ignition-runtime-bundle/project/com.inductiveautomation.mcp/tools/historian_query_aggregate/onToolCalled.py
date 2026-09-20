@@ -61,12 +61,17 @@ def onToolCalled(builder, paths, startTime, endTime, aggregates):
 		for path in paths:
 			if not isinstance(path, basestring) or not path.strip():
 				return toolError("invalid_argument", "Every historical path must be a non-empty string.")
-			normalizedPaths.append(path.strip())
+			path = path.strip()
+			if len(path) > 2048:
+				return toolError("limit_exceeded", "Historical paths must not exceed 2048 characters each.")
+			normalizedPaths.append(path)
 		allowed = ("Average", "SimpleAverage", "Sum", "Minimum", "Maximum", "MinMax", "LastValue", "Range", "Count", "CountOn", "CountOff", "DurationOn", "DurationOff", "Variance", "StdDev", "PctGood", "PctBad")
 		if aggregates is None:
 			aggregates = ["Average"]
 		if not isinstance(aggregates, (list, tuple, List)) or len(aggregates) == 0:
 			return toolError("invalid_argument", "aggregates must be a non-empty array.")
+		if len(aggregates) > len(allowed):
+			return toolError("limit_exceeded", "aggregates must contain at most " + unicode(len(allowed)) + " items before duplicate removal.")
 		normalizedAggregates = []
 		for aggregate in aggregates:
 			if not isinstance(aggregate, basestring) or aggregate not in allowed:

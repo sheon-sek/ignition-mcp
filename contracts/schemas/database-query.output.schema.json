@@ -12,7 +12,7 @@
         {"type": ["string", "number", "boolean"]},
         {"$ref": "#/$defs/null"},
         {"type": "array", "items": {"$ref": "#/$defs/value"}},
-        {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}},
+        {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "not": {"anyOf": [{"properties": {"type": {"const": "decimal"}}, "required": ["type", "text"]}, {"properties": {"type": {"const": "non-finite-number"}}, "required": ["type", "text"]}]}, "additionalProperties": {"$ref": "#/$defs/value"}},
         {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false},
         {"type": "object", "properties": {"type": {"const": "decimal"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false},
         {"type": "object", "properties": {"type": {"const": "non-finite-number"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false}

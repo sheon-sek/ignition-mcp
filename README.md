@@ -24,4 +24,6 @@ The Runtime native binding status for this exact tuple is `VERIFIED_WITH_LIMITAT
 
 The readonly slice exposes external `gateway_info` / `gateway_diagnose`, Runtime `bundle_info` / `tag_browse` / `tag_read`, five Text Resources across both servers, and no Prompts. [D28](docs/decisions/D28-runtime-null-wire-encoding.md) documents the owner-approved lossless Runtime null encoding required by the pinned Module. G1 is not production `SUPPORTED` certification or complete v1.
 
-See the [Phase 1 analysis and runbook](docs/development/phase-1.md), [persisted G1 evidence](tests/compatibility/evidence/g1-8.3.8-mcp-2026021307/evidence.json), and [Phase 0 record](docs/development/phase-0.md). **Phase 2 has not started** and requires a separate feature branch and user instruction.
+See the [Phase 1 analysis and runbook](docs/development/phase-1.md), [persisted G1 evidence](tests/compatibility/evidence/g1-8.3.8-mcp-2026021307/evidence.json), and [Phase 0 record](docs/development/phase-0.md).
+
+**Phase 2 / G2 is in progress** on `feature/phase-2-complete-readonly-surface`. The 13-Tool Runtime readonly inventory (per the [D12 pre-G2 amendment](docs/decisions/D12-alarm-tool-surface.md), `alarm_status`/`alarm_journal` are deferred until a native pre-execution bound exists) and the capability-gated external readonly implementation exist, and the [Phase 2 runbook](docs/development/phase-2.md) is authoritative for current progress. The G2 harness is built; real-Gateway evidence for 8.3.8/8.3.9 is NOT RUN, so Phase 2 is not closed.

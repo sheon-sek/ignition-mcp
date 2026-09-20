@@ -20,7 +20,7 @@
       {"name": "allProperties", "description": "Up to 20 AND property conditions: {property, operator, value}.", "type": "array", "required": false, "default": []},
       {"name": "anyProperties", "description": "Up to 20 OR property conditions: {property, operator, value}.", "type": "array", "required": false, "default": []},
       {"name": "definedProperties", "description": "Property names that must exist; at most 20.", "type": "array", "required": false, "default": []},
-      {"name": "includeData", "description": "Whether journal event data is included natively. Default false; output remains canonical and bounded.", "type": "boolean", "required": false, "default": false},
+      {"name": "includeData", "description": "Reserved for a future bounded associated-data contract. Must be false; true returns unsupported_capability before the native query.", "type": "boolean", "required": false, "default": false},
       {"name": "includeSystem", "description": "Whether system alarm events are included. Default false.", "type": "boolean", "required": false, "default": false},
       {"name": "includeShelved", "description": "Whether shelved alarm events are included. Default false.", "type": "boolean", "required": false, "default": false},
       {"name": "maxResults", "description": "Maximum complete result count, 1..500. Default 100.", "type": "integer", "required": false, "default": 100}

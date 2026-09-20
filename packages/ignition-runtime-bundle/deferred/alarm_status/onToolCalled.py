@@ -29,7 +29,7 @@ def onToolCalled(builder, states, priorities, alarmPaths, sourcePaths, displayPa
 			return unicode(value.toInstant().toString())
 		return unicode(value)
 
-	def listOfText(value, name, allowed, maximum):
+	def listOfText(value, name, allowed, maximum, maxLength):
 		if value is None:
 			return []
 		if not isinstance(value, (list, tuple, List)) or len(value) > maximum:
@@ -39,6 +39,8 @@ def onToolCalled(builder, states, priorities, alarmPaths, sourcePaths, displayPa
 			if not isinstance(item, basestring) or not item.strip():
 				raise ValueError(name + " must contain non-empty strings.")
 			item = item.strip()
+			if len(item) > maxLength:
+				raise ValueError(name + " items must not exceed " + unicode(maxLength) + " characters.")
 			if allowed is not None and item not in allowed:
 				raise ValueError(name + " contains an unsupported value: " + item)
 			if item not in result:
@@ -65,27 +67,28 @@ def onToolCalled(builder, states, priorities, alarmPaths, sourcePaths, displayPa
 			prop = item["property"]
 			op = item["operator"]
 			conditionValue = item["value"]
-			if not isinstance(prop, basestring) or not prop.strip() or op not in ("=", "!=", "<", "<=", ">", ">="):
-				raise ValueError(name + " contains an invalid property/operator.")
+			if not isinstance(prop, basestring) or not prop.strip() or len(prop.strip()) > 128 or op not in ("=", "!=", "<", "<=", ">", ">="):
+				raise ValueError(name + " contains an invalid property/operator; property names are limited to 128 characters.")
 			if not isinstance(conditionValue, (basestring, bool, int, long, float, Number)):
 				raise ValueError(name + " condition values must be scalar.")
+			if isinstance(conditionValue, basestring) and len(conditionValue) > 4096:
+				raise ValueError(name + " string condition values must not exceed 4096 characters.")
 			result.append((prop.strip(), op, conditionValue))
 		return result
 
 	def eventValue(event, key):
-		try:
+		if event.contains(key):
 			return event.get(key)
-		except Exception:
-			return None
+		return None
 
 	try:
-		states = listOfText(states, "states", ("ClearUnacked", "ClearAcked", "ActiveUnacked", "ActiveAcked"), 4)
-		priorities = listOfText(priorities, "priorities", ("Diagnostic", "Low", "Medium", "High", "Critical"), 5)
-		alarmPaths = listOfText(alarmPaths, "alarmPaths", None, 50)
-		sourcePaths = listOfText(sourcePaths, "sourcePaths", None, 50)
-		displayPaths = listOfText(displayPaths, "displayPaths", None, 50)
-		providers = listOfText(providers, "providers", None, 20)
-		definedProperties = listOfText(definedProperties, "definedProperties", None, 20)
+		states = listOfText(states, "states", ("ClearUnacked", "ClearAcked", "ActiveUnacked", "ActiveAcked"), 4, 32)
+		priorities = listOfText(priorities, "priorities", ("Diagnostic", "Low", "Medium", "High", "Critical"), 5, 32)
+		alarmPaths = listOfText(alarmPaths, "alarmPaths", None, 50, 2048)
+		sourcePaths = listOfText(sourcePaths, "sourcePaths", None, 50, 2048)
+		displayPaths = listOfText(displayPaths, "displayPaths", None, 50, 2048)
+		providers = listOfText(providers, "providers", None, 20, 128)
+		definedProperties = listOfText(definedProperties, "definedProperties", None, 20, 128)
 		allProperties = propertyConditions(allProperties, "allProperties")
 		anyProperties = propertyConditions(anyProperties, "anyProperties")
 		if includeShelved is None:

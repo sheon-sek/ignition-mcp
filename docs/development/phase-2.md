@@ -22,14 +22,18 @@ This phase implements only D26 Phase 2 / G2. It must not absorb Phase 3+ work.
 - `tag_get_config`
 - `udt_type_list`
 - `udt_type_get`
-- `alarm_status`
-- `alarm_journal`
 - `alarm_shelved_list`
 - `historian_browse`
 - `historian_query_series`
 - `historian_query_aggregate`
 - `database_query_list`
 - `database_query`
+
+### Runtime READ deferred during the pre-G2 audit
+
+- `alarm_status` and `alarm_journal` are **disabled and excluded from every profile** per the [D12 Phase 2 bounded-execution amendment](../decisions/D12-alarm-tool-surface.md#phase-2-bounded-execution-amendment). The native 8.3 alarm queries expose no row limit, reliable continuation, or interruptible timeout, so the handler-side `maxResults` check after materialization cannot satisfy D10/D12. Their contract JSON, output schemas, and G2-ready handler code are preserved under `packages/ignition-runtime-bundle/deferred/`; re-enabling them requires a verified pre/during-execution bound plus fresh live evidence, not a code-only claim.
+
+The frozen Phase 2 Runtime readonly inventory is therefore **13 Tools** (3 Phase 1 + 10 additions).
 
 ### External REST READ additions
 
@@ -116,13 +120,26 @@ Rules:
 
 The two Runtime database Tools remain self-contained and independently validate the same deployment registry. This deliberately avoids introducing an unverified shared Jython Project Library during Phase 2. The G2 harness will configure a test-only approved alias and a separate PostgreSQL-backed fixture project without modifying the exact Runtime Bundle ZIP under test.
 
+## Pre-G2 audit outcome and current implementation status
+
+The pre-G2 audit closed the two open design questions with explicit owner-approved amendments and hardened the shipped code without regressing Phase 1 infrastructure:
+
+1. **D12 amendment:** `alarm_status`/`alarm_journal` deferred as described above. `alarm_shelved_list` remains public because it reads finite current shelving state.
+2. **D13 fill-mode amendment:** `historian_query_aggregate` intentionally does not expose `fillModes`/`includeBounds`/`excludeObservations`; 8.3.9 removed them from the public native signature and the stable semantic contract must not leak patch-specific legacy knobs.
+3. **Runtime bounded input hardening:** every accepted string filter/path now has an explicit length ceiling before any native call; the aggregate array is capped before deduplication; `alarm_journal`'s no-op `includeData=True` now fails `unsupported_capability` before the native call instead of silently making the upstream query heavier.
+4. **Named Query registry correctness:** project/path/pagination-parameter values are normalized before validation (closing a leading-whitespace `../` bypass); malformed deployment registry now maps to `schema_mismatch` in `database_query` (matching `database_query_list`) instead of masquerading as caller `invalid_argument`; offset continuation can no longer emit a `nextOffset` beyond the approved maximum; the decimal/non-finite Runtime marker encoding is collision-escaped through the `$ignition` reserved shape instead of a `oneOf`-ambiguous `{type,text}` object.
+5. **External REST page integrity:** every upstream collection response is now reconciled against the requested page (metadata limit/offset equality, count consistency, exact item count versus `min(limit, matching - offset)`); public collection models carry the D10 500-item hard bound; Pydantic response validation failures are classified as `schema_mismatch`, degrade readiness, and trigger metadata-only reconciliation without replaying the operation.
+6. **G2 harness (built, not yet executed):** `tests/harness/phase2-live/` provisions an exact-patch Gateway plus PostgreSQL, a test-only Named Query project, historical Tag/UDT fixtures, and the CI-only `MCP_CI_AUDIT` profile through Native REST; `probe.py` performs exact 13-Tool Runtime discovery, per-Tool real smoke calls, canonical-error checks, D27/D28-aware binding classification, and exact external capability verification; `.github/workflows/phase2-live-g2.yml` runs the 8.3.8 required + 8.3.9 compatibility matrix manually (per D23 trusted live CI) and always uploads machine-readable evidence. `alarm_pipeline_status` smoke adapts between a live pipeline and the canonical `not_found` negative without fabricating success.
+
+**No G2 evidence exists yet.** The real-Gateway rows, native binding re-characterization on 8.3.9, and all L3/L4 results remain NOT RUN until the workflow is executed on trusted CI. Phase 2 stays open.
+
 ## Implementation order
 
 Use dependency-first slices rather than adding the whole catalog at once.
 
 1. Freeze contracts, output schemas, budgets and readonly profile inventory.
 2. Runtime Tags: `tag_query`, `tag_get_config`, `udt_type_list`, `udt_type_get`.
-3. Runtime Alarms: `alarm_status`, `alarm_journal`, `alarm_shelved_list`.
+3. Runtime Alarms: `alarm_status`, `alarm_journal`, `alarm_shelved_list` (the first two were later deferred by the D12 pre-G2 amendment; only `alarm_shelved_list` ships).
 4. Runtime Historian: browse, bounded finite series, whole-range aggregate.
 5. Runtime Database: approved Named Query registry only.
 6. External REST readonly surface: projects, generic config-resource reads, capability-gated audit, Alarm Notification pipeline reads.

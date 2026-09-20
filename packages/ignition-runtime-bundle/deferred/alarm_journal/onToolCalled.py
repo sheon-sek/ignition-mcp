@@ -40,7 +40,7 @@ def onToolCalled(builder, startTime, endTime, journalName, states, priorities, a
 		except Exception:
 			raise ValueError(name + " must be an ISO-8601 instant such as 2026-09-20T12:00:00Z.")
 
-	def listOfText(value, name, allowed, maximum):
+	def listOfText(value, name, allowed, maximum, maxLength):
 		if value is None:
 			return []
 		if not isinstance(value, (list, tuple, List)) or len(value) > maximum:
@@ -50,6 +50,8 @@ def onToolCalled(builder, startTime, endTime, journalName, states, priorities, a
 			if not isinstance(item, basestring) or not item.strip():
 				raise ValueError(name + " must contain non-empty strings.")
 			item = item.strip()
+			if len(item) > maxLength:
+				raise ValueError(name + " items must not exceed " + unicode(maxLength) + " characters.")
 			if allowed is not None and item not in allowed:
 				raise ValueError(name + " contains an unsupported value: " + item)
 			if item not in result:
@@ -71,16 +73,19 @@ def onToolCalled(builder, startTime, endTime, journalName, states, priorities, a
 			if set(item.keys()) != set(("property", "operator", "value")):
 				raise ValueError(name + " conditions require property, operator, and value.")
 			prop, op, conditionValue = item["property"], item["operator"], item["value"]
-			if not isinstance(prop, basestring) or not prop.strip() or op not in ("=", "!=", "<", "<=", ">", ">="):
-				raise ValueError(name + " contains an invalid property/operator.")
+			if not isinstance(prop, basestring) or not prop.strip() or len(prop.strip()) > 128 or op not in ("=", "!=", "<", "<=", ">", ">="):
+				raise ValueError(name + " contains an invalid property/operator; property names are limited to 128 characters.")
 			if not isinstance(conditionValue, (basestring, bool, int, long, float, Number)):
 				raise ValueError(name + " condition values must be scalar.")
+			if isinstance(conditionValue, basestring) and len(conditionValue) > 4096:
+				raise ValueError(name + " string condition values must not exceed 4096 characters.")
 			result.append((prop.strip(), op, conditionValue))
 		return result
 
 	def eventValue(event, key):
-		try: return event.get(key)
-		except Exception: return None
+		if event.contains(key):
+			return event.get(key)
+		return None
 
 	try:
 		now = Date()
@@ -90,19 +95,28 @@ def onToolCalled(builder, startTime, endTime, journalName, states, priorities, a
 			return toolError("invalid_argument", "startTime must be before or equal to endTime.")
 		if end.getTime() - start.getTime() > 2678400000:
 			return toolError("limit_exceeded", "Alarm journal range exceeds the 31-day hard limit; split the query into smaller windows.")
-		journalName = journalName.strip() if isinstance(journalName, basestring) else ""
-		states = listOfText(states, "states", ("ClearUnacked", "ClearAcked", "ActiveUnacked", "ActiveAcked", "Enabled", "Disabled"), 6)
-		priorities = listOfText(priorities, "priorities", ("Diagnostic", "Low", "Medium", "High", "Critical"), 5)
-		alarmPaths = listOfText(alarmPaths, "alarmPaths", None, 50)
-		sourcePaths = listOfText(sourcePaths, "sourcePaths", None, 50)
-		displayPaths = listOfText(displayPaths, "displayPaths", None, 50)
-		providers = listOfText(providers, "providers", None, 20)
-		definedProperties = listOfText(definedProperties, "definedProperties", None, 20)
+		if journalName is None:
+			journalName = ""
+		elif not isinstance(journalName, basestring):
+			return toolError("invalid_argument", "journalName must be a string when provided.")
+		else:
+			journalName = journalName.strip()
+			if len(journalName) > 256:
+				return toolError("invalid_argument", "journalName must not exceed 256 characters.")
+		states = listOfText(states, "states", ("ClearUnacked", "ClearAcked", "ActiveUnacked", "ActiveAcked", "Enabled", "Disabled"), 6, 32)
+		priorities = listOfText(priorities, "priorities", ("Diagnostic", "Low", "Medium", "High", "Critical"), 5, 32)
+		alarmPaths = listOfText(alarmPaths, "alarmPaths", None, 50, 2048)
+		sourcePaths = listOfText(sourcePaths, "sourcePaths", None, 50, 2048)
+		displayPaths = listOfText(displayPaths, "displayPaths", None, 50, 2048)
+		providers = listOfText(providers, "providers", None, 20, 128)
+		definedProperties = listOfText(definedProperties, "definedProperties", None, 20, 128)
 		allProperties = propertyConditions(allProperties, "allProperties")
 		anyProperties = propertyConditions(anyProperties, "anyProperties")
 		for flagName, flagValue in (("includeData", includeData), ("includeSystem", includeSystem), ("includeShelved", includeShelved)):
 			if flagValue is not None and not isinstance(flagValue, bool):
 				return toolError("invalid_argument", flagName + " must be boolean.")
+		if includeData:
+			return toolError("unsupported_capability", "includeData is not available because the bounded public output does not expose associated event data.")
 		if maxResults is None: maxResults = 100
 		if isinstance(maxResults, bool) or not isinstance(maxResults, (int, long)) or maxResults < 1 or maxResults > 500:
 			return toolError("invalid_argument", "maxResults must be an integer from 1 to 500.")

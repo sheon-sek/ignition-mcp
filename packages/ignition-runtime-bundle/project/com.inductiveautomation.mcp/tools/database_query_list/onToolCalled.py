@@ -84,9 +84,15 @@ def onToolCalled(builder):
 			path = rawEntry["path"]
 			if not isinstance(description, basestring) or not description.strip() or len(description) > 512:
 				raise ValueError("Database query description must be a non-empty string up to 512 characters.")
-			if not isinstance(project, basestring) or not project.strip() or len(project) > 128:
+			if not isinstance(project, basestring):
 				raise ValueError("Database query project must be a non-empty fixed project name.")
-			if not isinstance(path, basestring) or not path.strip() or len(path) > 512 or path.startswith("/") or ".." in path.split("/"):
+			project = project.strip()
+			if not project or len(project) > 128:
+				raise ValueError("Database query project must be a non-empty fixed project name.")
+			if not isinstance(path, basestring):
+				raise ValueError("Database query path must be a fixed project-relative Named Query path.")
+			path = path.strip()
+			if not path or len(path) > 512 or path.startswith("/") or ".." in path.split("/"):
 				raise ValueError("Database query path must be a fixed project-relative Named Query path.")
 			if rawEntry["resultMode"] not in ("dataset", "scalar"):
 				raise ValueError("Database query resultMode must be dataset or scalar.")
@@ -110,8 +116,10 @@ def onToolCalled(builder):
 					raise ValueError("Offset pagination policy keys do not match the approved schema.")
 				limitParameter = pagination["limitParameter"]
 				offsetParameter = pagination["offsetParameter"]
-				if not isinstance(limitParameter, basestring) or not isinstance(offsetParameter, basestring) or limitParameter == offsetParameter:
-					raise ValueError("Offset pagination requires distinct native limit/offset parameter names.")
+				if (not isinstance(limitParameter, basestring) or not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,63}$", limitParameter)
+						or not isinstance(offsetParameter, basestring) or not re.match(r"^[A-Za-z][A-Za-z0-9_]{0,63}$", offsetParameter)
+						or limitParameter == offsetParameter):
+					raise ValueError("Offset pagination requires distinct simple native limit/offset parameter names up to 64 characters.")
 				if limitParameter in rawEntry["parameters"] or offsetParameter in rawEntry["parameters"]:
 					raise ValueError("Caller parameters cannot override handler-owned pagination parameters.")
 				defaultPageSize = integer(pagination["defaultPageSize"], "defaultPageSize", 1, 200)

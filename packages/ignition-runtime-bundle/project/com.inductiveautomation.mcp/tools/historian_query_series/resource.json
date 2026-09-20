@@ -8,7 +8,7 @@
     "title": "historian_query_series",
     "description": "Query a finite bounded historical time series using system.historian.queryRawPoints. sampleCount must be positive; Natural/On-Change unbounded-style modes are forbidden.",
     "parameters": [
-      {"name": "paths", "description": "Historical paths. Hard maximum 50.", "type": "array", "required": true},
+      {"name": "paths", "description": "Historical paths. Hard maximum 50; each path is limited to 2048 characters.", "type": "array", "required": true},
       {"name": "startTime", "description": "Optional ISO-8601 instant. Defaults to 24 hours before endTime.", "type": "string", "required": false, "default": ""},
       {"name": "endTime", "description": "Optional ISO-8601 instant. Defaults to now.", "type": "string", "required": false, "default": ""},
       {"name": "sampleCount", "description": "Finite positive sample count. Default 100. paths x sampleCount may not exceed 25,000.", "type": "integer", "required": false, "default": 100}
