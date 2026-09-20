@@ -1,0 +1,33 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": true,
+  "files": [
+    "onToolCalled.py"
+  ],
+  "attributes": {
+    "title": "tag-read",
+    "description": "Native scaffold: transport binding pending; not a deployable native MCP result implementation. Reads via system.tag.readBlocking without changing Tag values. Output contract documentation is the tag-read-output JSON Resource; discover its URI via resources/list. This Resource does not register Tool outputSchema. Intended domain output: items in requested order, each with path and status. An ok item contains value, quality and timestamp; an error item contains a canonical code/message/correlationId error. summary contains requested, succeeded and failed; meta contains correlationId only. Bad quality remains an ok data item. Missing or unrepresentable items are schema_mismatch item errors; a completed batch may contain only item errors. Supports timestampFormat iso8601 or epochMillis (case-sensitive). Example arguments: {\"tagPaths\":[\"[provider]Folder/Tag\"],\"timeout\":5000,\"timestampFormat\":\"iso8601\"}",
+    "parameters": [
+      {
+        "name": "tagPaths",
+        "description": "Required non-empty array of non-empty Tag path strings, in requested result order.",
+        "type": "array",
+        "required": true
+      },
+      {
+        "name": "timeout",
+        "description": "Optional integer milliseconds from 0 to 2147483647. Default when omitted: 5000; zero is valid.",
+        "type": "integer",
+        "required": false
+      },
+      {
+        "name": "timestampFormat",
+        "description": "Optional timestamp format. Supported values: iso8601, epochMillis (case-sensitive). Default when omitted: iso8601. iso8601 returns UTC ISO-8601 text; epochMillis returns integer Unix epoch milliseconds. Applies to timestamps and nested Date values.",
+        "type": "string",
+        "required": false
+      }
+    ]
+  }
+}

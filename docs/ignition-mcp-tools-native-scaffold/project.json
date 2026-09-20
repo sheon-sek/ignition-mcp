@@ -1,0 +1,6 @@
+{
+  "title": "Ignition MCP Tools",
+  "description": "Native MCP scaffold; response transport binding requires verified Module APIs.",
+  "enabled": false,
+  "inheritable": false
+}

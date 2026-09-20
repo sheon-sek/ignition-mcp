@@ -1,0 +1,320 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$ref": "#/$defs/schema0",
+  "$defs": {
+    "schema0": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Tag read direct domain output",
+      "description": "Completed batch, including all-item-error batches. No ok/result/nativeFunctions envelope.",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "const": "ok"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/schema1"
+                  },
+                  "quality": {
+                    "$ref": "#/$defs/schema0/$defs/quality"
+                  },
+                  "timestamp": {
+                    "$ref": "#/$defs/schema0/$defs/timestamp"
+                  }
+                },
+                "required": [
+                  "path",
+                  "status",
+                  "value",
+                  "quality",
+                  "timestamp"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "status": {
+                    "const": "error"
+                  },
+                  "error": {
+                    "$ref": "#/$defs/schema2"
+                  },
+                  "quality": {
+                    "$ref": "#/$defs/schema0/$defs/quality"
+                  },
+                  "timestamp": {
+                    "$ref": "#/$defs/schema0/$defs/timestamp"
+                  }
+                },
+                "required": [
+                  "path",
+                  "status",
+                  "error"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/schema4/$defs/summary"
+        },
+        "meta": {
+          "$ref": "#/$defs/schema5"
+        }
+      },
+      "required": [
+        "items",
+        "summary",
+        "meta"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "quality": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "integer"
+            },
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "level": {
+              "type": "string",
+              "minLength": 1
+            },
+            "good": {
+              "type": "boolean"
+            },
+            "diagnosticMessage": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          "required": [
+            "code",
+            "name",
+            "level",
+            "good",
+            "diagnosticMessage"
+          ],
+          "additionalProperties": false
+        },
+        "timestamp": {
+          "oneOf": [
+            {
+              "type": "string",
+              "format": "date-time",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?(?:Z|[+-]\\d{2}:\\d{2})$"
+            },
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    },
+    "schema1": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Recursive JSON value",
+      "description": "Only JSON values, never Java objects, NaN or Infinity. Objects remain open.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "number"
+        },
+        {
+          "type": "string"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/schema1"
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "$ref": "#/$defs/schema1"
+          }
+        }
+      ]
+    },
+    "schema2": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Canonical tool error",
+      "type": "object",
+      "properties": {
+        "code": {
+          "$ref": "#/$defs/schema3"
+        },
+        "message": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correlationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "code",
+        "message",
+        "correlationId"
+      ],
+      "additionalProperties": false
+    },
+    "schema3": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Stable tool error codes",
+      "type": "string",
+      "enum": [
+        "invalid_argument",
+        "unsupported_capability",
+        "permission_denied",
+        "operation_disabled",
+        "not_found",
+        "conflict",
+        "limit_exceeded",
+        "rate_limited",
+        "timeout",
+        "outcome_unknown",
+        "gateway_unavailable",
+        "upstream_error",
+        "schema_mismatch",
+        "internal_error"
+      ]
+    },
+    "schema4": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Reusable batch pattern, not a universal tool envelope",
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "ok"
+                  },
+                  "value": {
+                    "$ref": "#/$defs/schema1"
+                  }
+                },
+                "required": [
+                  "status",
+                  "value"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "const": "error"
+                  },
+                  "error": {
+                    "$ref": "#/$defs/schema2"
+                  }
+                },
+                "required": [
+                  "status",
+                  "error"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        },
+        "summary": {
+          "$ref": "#/$defs/schema4/$defs/summary"
+        },
+        "meta": {
+          "$ref": "#/$defs/schema5"
+        }
+      },
+      "required": [
+        "items",
+        "summary",
+        "meta"
+      ],
+      "additionalProperties": false,
+      "$defs": {
+        "summary": {
+          "type": "object",
+          "properties": {
+            "requested": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "succeeded": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "failed": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "requested",
+            "succeeded",
+            "failed"
+          ],
+          "additionalProperties": false
+        }
+      }
+    },
+    "schema5": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "title": "Lightweight response metadata",
+      "type": "object",
+      "properties": {
+        "correlationId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "truncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "correlationId"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

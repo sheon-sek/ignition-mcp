@@ -1,0 +1,16 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": true,
+  "files": [
+    "data.bin"
+  ],
+  "attributes": {
+    "size": 8076,
+    "dataType": "Text",
+    "description": "Output contract documentation; not Tool outputSchema registration.",
+    "mimeType": "application/json",
+    "title": "tag-read-output"
+  }
+}
