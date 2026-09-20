@@ -5,12 +5,11 @@ on:
     branches:
       - feature/phase-1-readonly-vertical-slice
     paths:
-      - "packages/ignition-rest-mcp/pyproject.toml"
       - ".github/workflows/phase1-refresh-lock.yml"
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   lock:
@@ -18,15 +17,19 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: feature/phase-1-readonly-vertical-slice
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           version: "0.12.17"
-      - name: Generate lock
-        run: uv lock
-      - name: Upload lock
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: phase1-uv-lock
-          path: uv.lock
-          if-no-files-found: error
-          retention-days: 1
+      - name: Generate and commit lock
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock
+          rm .github/workflows/phase1-refresh-lock.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add uv.lock .github/workflows/phase1-refresh-lock.yml
+          git commit -m "build: lock Phase 1 FastMCP dependencies"
+          git push origin HEAD:feature/phase-1-readonly-vertical-slice
