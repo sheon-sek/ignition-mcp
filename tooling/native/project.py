@@ -46,17 +46,19 @@ def _metadata(data: bytes, location: str, payload_name: str) -> dict[str, Any]:
     for key in ("restricted", "overridable"):
         require(type(resource.get(key)) is bool, location, f"{key} must be boolean")
     require(resource.get("files") == [payload_name], location, f"files must be exactly [{payload_name}]")
-    attributes = resource.get("attributes")
-    require(type(attributes) is dict, location, "attributes must be an object")
+    raw_attributes = resource.get("attributes")
+    require(type(raw_attributes) is dict, location, "attributes must be an object")
+    attributes = cast(dict[str, Any], raw_attributes)
     require(_single_segment(attributes.get("title")), location, "attributes.title must be a nonempty single path segment")
     require(_nonempty_string(attributes.get("description")), location, "attributes.description must be a nonempty string")
-    return cast(dict[str, Any], attributes)
+    return attributes
 
 
 def _tool_parameters(data: bytes, location: str) -> list[str]:
     attributes = _metadata(data, location, HANDLER)
-    parameters = attributes.get("parameters")
-    require(type(parameters) is list, location, "parameters must be an ordered list")
+    raw_parameters = attributes.get("parameters")
+    require(type(raw_parameters) is list, location, "parameters must be an ordered list")
+    parameters = cast(list[Any], raw_parameters)
     names: list[str] = []
     for index, parameter in enumerate(parameters):
         field = f"{location}: parameters[{index}]"
@@ -87,8 +89,9 @@ def _text_resource(data: bytes, payload: bytes, location: str) -> None:
 
 def _prompt(data: bytes, location: str) -> None:
     attributes = _metadata(data, location, PROMPT_HANDLER)
-    arguments = attributes.get("arguments")
-    require(type(arguments) is list, location, "arguments must be an ordered list")
+    raw_arguments = attributes.get("arguments")
+    require(type(raw_arguments) is list, location, "arguments must be an ordered list")
+    arguments = cast(list[Any], raw_arguments)
     names: set[str] = set()
     for index, argument in enumerate(arguments):
         field = f"{location}: arguments[{index}]"

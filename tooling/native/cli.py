@@ -8,7 +8,8 @@ import sys
 import zipfile
 
 from .archive import build_project, pending_native_bindings
-from .project import ValidationError, validate_project
+from .project import validate_project
+from .validation import ValidationError
 
 
 def main(argv: list[str] | None = None) -> int:
