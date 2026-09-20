@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:shared:operation-record",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"$ref": "correlation.schema.json"},
+    "tool": {"type": "string", "minLength": 1},
+    "outcome": {"enum": ["succeeded", "failed", "outcome_unknown", "cancelled"]},
+    "errorCode": {"type": ["string", "null"]}
+  },
+  "required": ["correlationId", "tool", "outcome", "errorCode"]
+}

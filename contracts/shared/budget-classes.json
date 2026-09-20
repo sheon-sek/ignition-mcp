@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "structuredOutputBytes": {"default": 262144, "hard": 1048576},
+  "timeoutsSeconds": {
+    "FAST": {"default": 10, "hard": 30},
+    "QUERY": {"default": 30, "hard": 120},
+    "ARTIFACT": {"default": 120, "hard": 300}
+  },
+  "collections": {"defaultPageSize": 100, "hardPageSize": 500},
+  "tagRead": {"defaultPaths": 100, "hardPaths": 500, "defaultTimeoutSeconds": 10, "hardTimeoutSeconds": 30},
+  "tagWrite": {"defaultWrites": 20, "hardWrites": 100, "defaultTimeoutSeconds": 10, "hardTimeoutSeconds": 30},
+  "historianSeries": {"defaultPaths": 10, "hardPaths": 50, "defaultRangeHours": 24, "hardRangeHours": 168, "defaultPoints": 5000, "hardPoints": 25000},
+  "historianAggregate": {"defaultPaths": 20, "hardPaths": 100, "defaultRangeDays": 7, "hardRangeDays": 366, "budgetModel": "paths_x_requested_aggregate_calculations_plus_bounded_range"},
+  "databaseRead": {"defaultRows": 200, "hardRows": 2000},
+  "silentTruncation": false,
+  "inlineBinaryBase64": false
+}

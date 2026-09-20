@@ -1,0 +1,1 @@
+{"id":12,"jsonrpc":"2.0","result":{"content":[{"text":"{\"schemaVersion\":1,\"kind\":\"phase0-binding\",\"message\":\"phase0\"}","type":"text"}],"isError":false,"structuredContent":{"kind":"phase0-binding","message":"phase0","schemaVersion":1}}}

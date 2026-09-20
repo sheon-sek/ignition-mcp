@@ -1,0 +1,13 @@
+[build-system]
+requires = ["uv_build==0.12.17"]
+build-backend = "uv_build"
+
+[project]
+name = "ignition-rest-mcp"
+version = "0.1.0a0"
+description = "External FastMCP server for curated Ignition Native REST capabilities"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+authors = [{ name = "Ignition MCP contributors" }]
+dependencies = []

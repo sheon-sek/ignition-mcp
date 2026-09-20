@@ -1,0 +1,1 @@
+{"id":6,"jsonrpc":"2.0","result":{"capabilities":{"prompts":{"listChanged":true},"resources":{"listChanged":true},"tools":{"listChanged":true}},"protocolVersion":"2025-06-18","serverInfo":{"name":"phase0","title":"Phase 0 Native Binding Characterization","version":"1.0.0"}}}

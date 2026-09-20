@@ -1,0 +1,19 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "binding_success",
+    "description": "Phase 0 characterization Tool. Returns deterministic structured content without touching Gateway state.",
+    "parameters": [
+      {
+        "name": "message",
+        "description": "Deterministic probe message echoed in structured content.",
+        "type": "string",
+        "required": true
+      }
+    ]
+  }
+}

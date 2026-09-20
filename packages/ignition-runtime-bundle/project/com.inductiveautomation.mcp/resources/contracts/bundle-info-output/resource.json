@@ -1,0 +1,16 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": [
+    "data.bin"
+  ],
+  "attributes": {
+    "title": "bundle_info_output",
+    "description": "JSON Schema for the bundle_info Tool output contract.",
+    "dataType": "Text",
+    "mimeType": "application/schema+json",
+    "size": 625
+  }
+}

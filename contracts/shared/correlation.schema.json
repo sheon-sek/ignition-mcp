@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:shared:correlation",
+  "type": "string",
+  "minLength": 16,
+  "maxLength": 128,
+  "pattern": "^[A-Za-z0-9._:-]+$"
+}

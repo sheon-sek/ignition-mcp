@@ -1,10 +1,10 @@
-# Ignition MCP Architecture Decisions — D01–D26
+# Ignition MCP Architecture Decisions — D01–D27
 
 **Status:** DECIDED
 
 **Canonical location:** `docs/decisions/` (see D25). This single index replaces the three per-batch index files, which are kept unchanged in `docs/_archive/`.
 
-D01–D26 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
+D01–D27 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
 
 ## Decision index
 
@@ -36,6 +36,7 @@ D01–D26 are binding unless explicitly reopened through a new decision or amend
 | D24 | DECIDED | Canonical Dual-Server Architecture and Optional Unified Facade | future federation must cover Prompts |
 | D25 | DECIDED | Final Monorepo / Package Layout | second product is `ignition-runtime-bundle` |
 | D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
+| D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 
 ## Cross-decision amendment
 
@@ -196,4 +197,4 @@ The original D01–D26 architecture / implementation decision backlog is now com
 
 Implementation begins at **D26 Phase 0**. The first hard gate is **G0 Native Tool response binding verification**; in parallel, the repository skeleton, contracts/tooling/CI foundation and ignition-rest foundation may be implemented.
 
-Treat D01–D26 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
+Treat D01–D27 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

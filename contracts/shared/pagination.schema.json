@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:shared:pagination",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "nextCursor": {"type": ["string", "null"]},
+    "hasMore": {"type": "boolean"}
+  },
+  "required": ["nextCursor", "hasMore"]
+}

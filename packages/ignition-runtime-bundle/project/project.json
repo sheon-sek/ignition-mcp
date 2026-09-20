@@ -1,0 +1,6 @@
+{
+  "title": "Ignition Runtime MCP Bundle",
+  "description": "Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.",
+  "enabled": true,
+  "inheritable": false
+}

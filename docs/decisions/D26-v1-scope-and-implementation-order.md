@@ -276,7 +276,7 @@ Security Level provisioning、Runtime API token creation、local .modl install �
 2. 建立 root Python / uv workspace、基础 lint / type / test 流程与 GPL-3.0 release metadata。
 3. 把 verified Ignition MCP Tool skill 已证明的 Designer resource validation / build rules 转化为 repo-owned tooling/native + tests；生产 build 不依赖外部 skill path。
 4. 建立 D06 / D08 / D10 / D18 / D22 的最小 shared contracts：error taxonomy、permission / mutation / budget classes、pagination / batch / artifact semantics、profiles。
-5. 建立 Runtime MCP protocol characterization fixture，在真实 Gateway + exact MCP Module build 上验证：
+5. 建立 Runtime MCP protocol characterization fixture，由 GitHub CI 从官方 exact-patch Docker image 创建和销毁真实 Gateway（Phase 0 baseline 为 `inductiveautomation/ignition:8.3.8`），再配合 exact MCP Module build 验证；不得把用户提供现成 Gateway 当作 G0 前置条件：
    - Tool discovery；
    - input parameter mapping；
    - outputSchema registration；
@@ -284,7 +284,7 @@ Security Level provisioning、Runtime API token creation、local .modl install �
    - failure isError；
    - resources/list + resources/read；
    - prompts/list + prompts/get（fixture 发布 Prompt 时）。
-6. 把真实 Native response binding 固化为 adapter / contract tests，并只有在证据成立后移除 NATIVE_BINDING_PENDING。
+6. 把真实 Native response binding 固化为 adapter / contract tests，并只有在证据成立后移除 NATIVE_BINDING_PENDING。D27 已对 baseline tuple 的 native `outputSchema` 缺失建立精确、fail-closed 的例外；该 tuple 可使用 `VERIFIED_WITH_LIMITATION` 关闭 G0，但不能据此获得 D21 `SUPPORTED`。
 
 ### Hard gate G0
 
@@ -574,7 +574,7 @@ Phase 0 推荐并行：
 
 - Workstream A：contracts / tooling / CI；
 - Workstream B：ignition-rest foundation；
-- Workstream C：Native MCP binding characterization。
+- Workstream C：Native MCP binding characterization（CI-owned ephemeral real Gateway）。
 
 G0 / G1 之后可以并行：
 
@@ -632,4 +632,10 @@ Read-only milestones 可以提前用于 development / internal evaluation，但�
 - text-only Runtime fallback without a new Decision is forbidden
 - production SUPPORTED while Native binding is pending is forbidden
 - initial candidate Gateways: 8.3.8 and 8.3.9
+- Phase 0 real Gateway source: CI-owned ephemeral official Docker image; user-supplied Gateway is not required
 - SUPPORTED status comes from machine evidence only
+
+
+## D27 amendment — Phase 0 G0 resolution rule
+
+D27 fulfils this Decision's requirement to open a new Decision when the target official MCP Module cannot satisfy D06's stricter native `outputSchema` requirement. For the exact D27 tuple, G0 accepts `VERIFIED_WITH_LIMITATION` only if native `structuredContent`, `isError`, discovery, Resources and Prompts all pass and only native `outputSchema` is absent. Future tuples do not inherit the exception.

@@ -1,0 +1,6 @@
+{
+  "title": "MCP Native Binding Characterization",
+  "description": "Disposable Phase 0 fixture for real Gateway MCP protocol characterization.",
+  "enabled": true,
+  "inheritable": false
+}

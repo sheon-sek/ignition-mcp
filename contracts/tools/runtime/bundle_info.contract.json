@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "name": "bundle_info",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": [],
+  "outputSchema": "contracts/schemas/bundle-info.output.schema.json",
+  "nativeRequirements": ["system.util.getVersion", "system.util.getModules"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE"
+}

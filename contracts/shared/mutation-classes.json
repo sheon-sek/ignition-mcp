@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "classes": {
+    "NONE": {"mutation": false, "enabledByDefault": true},
+    "CONFIG_MUTATION": {"mutation": true, "enabledByDefault": false},
+    "CONTROL_MUTATION": {"mutation": true, "enabledByDefault": false},
+    "ADMIN_MUTATION": {"mutation": true, "enabledByDefault": false}
+  },
+  "automaticRetryAfterAmbiguousOutcome": false
+}

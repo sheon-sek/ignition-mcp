@@ -1,0 +1,19 @@
+version = 1
+revision = 3
+requires-python = ">=3.11"
+
+[manifest]
+members = [
+    "ignition-mcp-workspace",
+    "ignition-rest-mcp",
+]
+
+[[package]]
+name = "ignition-mcp-workspace"
+version = "0.0.0"
+source = { virtual = "." }
+
+[[package]]
+name = "ignition-rest-mcp"
+version = "0.1.0a0"
+source = { editable = "packages/ignition-rest-mcp" }

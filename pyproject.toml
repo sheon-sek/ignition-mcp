@@ -1,0 +1,36 @@
+[project]
+name = "ignition-mcp-workspace"
+version = "0.0.0"
+description = "Development workspace for the Ignition MCP dual-server ecosystem"
+requires-python = ">=3.11"
+license = "GPL-3.0-only"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/ignition-rest-mcp"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+exclude = [
+  "packages/ignition-runtime-bundle/project",
+  "tests/harness/runtime-binding/project",
+  "docs/ignition-mcp-tools-designer",
+  "docs/ignition-mcp-tools-native-scaffold",
+]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_unused_configs = true
+exclude = [
+  "packages/ignition-runtime-bundle/project/",
+  "tests/harness/runtime-binding/project/",
+  "tooling/.*/tests/",
+]

@@ -1,5 +1,4 @@
 # ── Python / uv ─────────────────────────────────────────────────
-# Bytecode & build artifacts
 __pycache__/
 *.py[cod]
 *$py.class
@@ -8,7 +7,6 @@ __pycache__/
 build/
 dist/
 
-# Virtual environments
 .venv/
 venv/
 env/
@@ -23,7 +21,7 @@ env/
 .coverage.*
 htmlcov/
 
-# ── Secrets & local config (gateway credentials never committed) ─
+# ── Secrets & local config ─────────────────────────────────────
 .env
 .env.*
 !.env.example
@@ -32,13 +30,11 @@ htmlcov/
 *.key
 *.pem
 
-# ── Ignition native tools ──────────────────────────────────────
-# Built project ZIPs (packages/ignition-native-tools/dist/) are
-# build artifacts — covered by dist/ above. Never commit the ZIP,
-# only the project/ source that produces it.
+# ── Runtime Bundle build products ──────────────────────────────
+# Runtime Designer ZIPs/manifests/checksums are derived release artifacts.
+# Commit project source, contracts, tests and build logic; do not commit dist/.
 
 # ── Test / runtime artifacts ───────────────────────────────────
-# Project-export ZIP surgery workspace, import backups, test output
 artifacts/
 backup/
 *.log

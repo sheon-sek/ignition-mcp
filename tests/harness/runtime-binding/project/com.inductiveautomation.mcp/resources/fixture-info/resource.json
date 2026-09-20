@@ -1,0 +1,14 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["data.bin"],
+  "attributes": {
+    "title": "fixture_info",
+    "description": "Deterministic Text Resource used only by the Phase 0 MCP protocol fixture.",
+    "size": 43,
+    "dataType": "Text",
+    "mimeType": "text/plain"
+  }
+}

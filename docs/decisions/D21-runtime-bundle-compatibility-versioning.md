@@ -129,7 +129,7 @@ UNKNOWN
 
 精确 tuple 经真实 Gateway release integration suite 验证通过。
 
-生产 `SUPPORTED` 还要求：当前 `NATIVE_BINDING_PENDING` 的 Tool 原生响应绑定（`outputSchema` / `structuredContent` / `isError`）已通过 D23 真机验证。Text Resource 可读、JSON schema Resource 可发布，都不等于 D06 的 Tool 输出契约已满足，也不得据此标记 `SUPPORTED`。
+生产 `SUPPORTED` 还要求 Tool 原生响应绑定通过 D23 真机验证。`structuredContent` 与 `isError` 始终是硬要求；native `outputSchema` 默认也是硬要求。D27 对精确的 baseline Runtime tuple 记录了一个 fail-closed 例外：Module 不发布 `outputSchema` 时，repo-owned JSON Schema 继续作为强制 semantic contract，且该 tuple 必须明确标记 native binding limitation。Text Resource 可读本身仍不能证明 Tool 输出契约。
 
 ### `UNTESTED`
 
@@ -484,3 +484,8 @@ testing:
 
 ## Pre-D26 consistency amendment
 Renamed the decision from “Built-in Tool Bundle” to **Runtime MCP Bundle** and broadened its compatibility/versioning scope to all three MCP primitives. SemVer MINOR/MAJOR rules now cover added/removed/renamed Resources and Prompts and breaking Resource payload / Prompt argument changes; requirements are per-primitive; the manifest carries Tool, Text Resource and Prompt inventories plus the native response binding status; distribution artifacts are renamed `ignition-runtime-bundle-x.y.z.*`; and production `SUPPORTED` now explicitly requires the pending Tool response binding to have passed D23 live verification. The per-tool requirement example now uses the canonical `tag_read` name from D05 instead of the Skill's `tag-read` folder/title sample. Compatibility philosophy, 0.x policy, deployment policy, reproducibility, and upgrade/downgrade rules are otherwise unchanged.
+
+
+## D27 amendment
+
+Native response-binding evidence now also allows `VERIFIED_WITH_LIMITATION` for the exact D27 tuple. This is not a deployment compatibility status and does not itself grant `SUPPORTED`.

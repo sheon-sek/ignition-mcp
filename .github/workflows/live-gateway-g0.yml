@@ -1,0 +1,275 @@
+name: Phase 0 Live Gateway G0
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+  pull_request:
+    paths:
+      - ".github/workflows/live-gateway-g0.yml"
+      - "tests/harness/runtime-binding/**"
+      - "tests/fixtures/modules/**"
+      - "tooling/native/**"
+      - "docs/decisions/D06-tool-result-and-error-contract.md"
+      - "docs/decisions/D23-testing-real-gateway-ci.md"
+      - "docs/decisions/D26-v1-scope-and-implementation-order.md"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase0-g0-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-gateway-g0:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_FILE: tests/harness/runtime-binding/docker-compose.yml
+      GATEWAY_IMAGE: inductiveautomation/ignition:8.3.8
+      GATEWAY_BUILD: "2026071409"
+      MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      FIXTURE_ZIP: dist/phase0-characterization.zip
+      EVIDENCE_DIR: artifacts/g0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify pinned MCP Module artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd tests/fixtures/modules
+          sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256
+          python - <<'PY'
+          import json, zipfile
+          from pathlib import Path
+          artifact = Path("MCP-module-1.3.5.2026021307-SNAPSHOT.modl")
+          provenance = json.loads(Path("MCP-module-1.3.5.2026021307-SNAPSHOT.provenance.json").read_text())
+          if artifact.stat().st_size != provenance["sizeBytes"]:
+              raise SystemExit("module size does not match provenance")
+          with zipfile.ZipFile(artifact) as archive:
+              module_xml = archive.read("module.xml").decode("utf-8")
+          for expected in (
+              "<id>com.inductiveautomation.mcp</id>",
+              "<version>1.3.5.2026021307-SNAPSHOT</version>",
+              "<requiredIgnitionVersion>8.3.5</requiredIgnitionVersion>",
+          ):
+              if expected not in module_xml:
+                  raise SystemExit(f"module.xml identity mismatch: {expected}")
+          PY
+
+      - name: Validate and build characterization fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m tooling.native.cli validate --project-dir tests/harness/runtime-binding/project
+          python tests/harness/runtime-binding/build_fixture.py "$FIXTURE_ZIP"
+
+      - name: Pull exact Gateway image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$GATEWAY_IMAGE"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Start fresh Gateway
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE_FILE" up -d --no-build
+
+      - name: Wait for initial Gateway commissioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$EVIDENCE_DIR"
+          deadline=$((SECONDS + 300))
+          gateway_seen=0
+          while (( SECONDS < deadline )); do
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            if grep -Fq "Starting Ignition 8.3.8 (b${GATEWAY_BUILD})" "$EVIDENCE_DIR/gateway.log"; then
+              gateway_seen=1
+            fi
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              echo "Gateway faulted during initial commissioning" >&2
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
+            fi
+            if (( gateway_seen == 1 )) \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
+              && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8088/StatusPing >/dev/null; then
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Initial Gateway did not reach ContextState=RUNNING before deadline" >&2
+          tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+          exit 1
+
+      - name: Prepare CI API token security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          test -n "$cid"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install Phase 0 project, MCP config, and CI security
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          test -n "$cid"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          test -n "$data_owner"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
+
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+
+          docker cp tests/harness/runtime-binding/project "$cid:/usr/local/bin/ignition/data/projects/mcp_characterization"
+          docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker run --rm \
+            --volumes-from "$cid" \
+            --entrypoint /bin/sh \
+            --user 0:0 \
+            "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/projects/mcp_characterization \
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Verify authenticated Native REST/OpenAPI access
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 240))
+          while (( SECONDS < deadline )); do
+            code="$(curl --silent --output "$EVIDENCE_DIR/gateway-info.json.tmp" --write-out '%{http_code}' \
+              --max-time 5 \
+              -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              http://127.0.0.1:8088/data/api/v1/gateway-info || true)"
+            if [[ "$code" == "200" ]]; then
+              mv "$EVIDENCE_DIR/gateway-info.json.tmp" "$EVIDENCE_DIR/gateway-info.json"
+              break
+            fi
+            sleep 3
+          done
+          test -f "$EVIDENCE_DIR/gateway-info.json"
+
+          unauth_code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --max-time 5 http://127.0.0.1:8088/openapi.json || true)"
+          [[ "$unauth_code" == "403" ]]
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/openapi.json \
+            -o "$EVIDENCE_DIR/openapi-authenticated.json"
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci \
+            -o "$EVIDENCE_DIR/ci-api-token-resource.json"
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/singleton/ignition/security-levels \
+            -o "$EVIDENCE_DIR/security-levels.json"
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/singleton/ignition/security-properties \
+            -o "$EVIDENCE_DIR/security-properties.json"
+
+          write_code="$(curl --silent --output "$RUNNER_TEMP/generated-ci-token.json" --write-out '%{http_code}' \
+            --max-time 15 --request POST \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/api-token/generate || true)"
+          rm -f "$RUNNER_TEMP/generated-ci-token.json"
+          [[ "$write_code" == "200" ]]
+          printf '{"gatewayAccessReadSmoke":true,"gatewayWriteSmoke":true,"writeProbe":"POST /data/api/v1/api-token/generate","writeProbeHttpStatus":200}\n' \
+            > "$EVIDENCE_DIR/ci-rest-auth-smoke.json"
+
+      - name: Run real MCP characterization
+        id: probe
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p "$EVIDENCE_DIR/raw"
+          set +e
+          python tests/harness/runtime-binding/probe.py \
+            --gateway-build "$GATEWAY_BUILD" \
+            --gateway-image-digest "$IMAGE_DIGEST" \
+            --module-version "1.3.5-SNAPSHOT" \
+            --module-artifact-version "1.3.5.2026021307-SNAPSHOT" \
+            --module-build "2026021307" \
+            --module-file "$MODULE_FILE" \
+            --fixture-zip "$FIXTURE_ZIP" \
+            --rest-api-token "$CI_API_TOKEN" \
+            --evidence "$EVIDENCE_DIR/evidence.json" \
+            --raw-dir "$EVIDENCE_DIR/raw" \
+            --startup-timeout 240
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+          docker image inspect "$GATEWAY_IMAGE" > "$EVIDENCE_DIR/gateway-image-inspect.json" 2>&1 || true
+          sha256sum "$MODULE_FILE" > "$EVIDENCE_DIR/mcp-module.sha256" 2>&1 || true
+          sha256sum "$FIXTURE_ZIP" > "$EVIDENCE_DIR/fixture.sha256" 2>&1 || true
+
+      - name: Upload G0 evidence and diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: phase0-g0-${{ github.run_id }}
+          path: artifacts/g0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Destroy disposable Gateway
+        if: always()
+        shell: bash
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+
+      - name: Enforce G0 hard gate
+        if: always()
+        shell: bash
+        run: |
+          rc="${{ steps.probe.outputs.exit_code }}"
+          if [[ -z "$rc" ]]; then
+            echo "G0 probe did not produce an exit code" >&2
+            exit 1
+          fi
+          if [[ "$rc" != "0" ]]; then
+            echo "G0 native binding is not VERIFIED (probe exit $rc)" >&2
+            exit "$rc"
+          fi
