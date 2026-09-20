@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import httpx
-import pytest
 
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -27,34 +27,63 @@ def _transport(openapi_status: int = 200) -> httpx.MockTransport:
     return httpx.MockTransport(handler)
 
 
-@pytest.mark.asyncio
-async def test_refresh_builds_immutable_ready_snapshot() -> None:
-    client = GatewayClient(base_url="http://gateway", api_token="ci:key", timeout_seconds=10, transport=_transport())
-    registry = CapabilityRegistry(client)
-    try:
-        snapshot = await registry.refresh()
-        assert snapshot.state == "READY"
-        assert snapshot.generation == 1
-        assert snapshot.semantic_capabilities == frozenset({"gateway_info"})
-        assert snapshot.openapi_sha256 is not None
-        with pytest.raises(TypeError):
-            snapshot.module_versions["x"] = "y"  # type: ignore[index]
-    finally:
-        await client.aclose()
+def test_refresh_builds_immutable_ready_snapshot() -> None:
+    async def scenario() -> None:
+        client = GatewayClient(
+            base_url="http://gateway",
+            api_token="ci:key",
+            timeout_seconds=10,
+            transport=_transport(),
+        )
+        registry = CapabilityRegistry(client)
+        try:
+            snapshot = await registry.refresh()
+            assert snapshot.state == "READY"
+            assert snapshot.generation == 1
+            assert snapshot.semantic_capabilities == frozenset({"gateway_info"})
+            assert snapshot.openapi_sha256 is not None
+            try:
+                snapshot.module_versions["x"] = "y"  # type: ignore[index]
+            except TypeError:
+                pass
+            else:
+                raise AssertionError("module_versions must be immutable")
+        finally:
+            await client.aclose()
+
+    asyncio.run(scenario())
 
 
-@pytest.mark.asyncio
-async def test_failed_refresh_preserves_last_snapshot_as_stale() -> None:
-    client = GatewayClient(base_url="http://gateway", api_token="ci:key", timeout_seconds=10, transport=_transport())
-    registry = CapabilityRegistry(client)
-    try:
-        first = await registry.refresh()
-        assert first.state == "READY"
-        client._client._transport = _transport(openapi_status=503)  # type: ignore[attr-defined]
-        second = await registry.refresh()
-        assert second.state == "STALE"
-        assert second.generation == 1
-        assert second.openapi_sha256 == first.openapi_sha256
-        assert second.semantic_capabilities == first.semantic_capabilities
-    finally:
-        await client.aclose()
+def test_failed_refresh_preserves_last_snapshot_as_stale() -> None:
+    async def scenario() -> None:
+        client = GatewayClient(
+            base_url="http://gateway",
+            api_token="ci:key",
+            timeout_seconds=10,
+            transport=_transport(),
+        )
+        registry = CapabilityRegistry(client)
+        try:
+            first = await registry.refresh()
+            assert first.state == "READY"
+            await client.aclose()
+
+            failed = GatewayClient(
+                base_url="http://gateway",
+                api_token="ci:key",
+                timeout_seconds=10,
+                transport=_transport(openapi_status=503),
+            )
+            registry._client = failed  # type: ignore[attr-defined]
+            try:
+                second = await registry.refresh()
+                assert second.state == "STALE"
+                assert second.generation == 1
+                assert second.openapi_sha256 == first.openapi_sha256
+                assert second.semantic_capabilities == first.semantic_capabilities
+            finally:
+                await failed.aclose()
+        finally:
+            pass
+
+    asyncio.run(scenario())

@@ -101,7 +101,7 @@ class CapabilityRegistry:
             else:
                 self._snapshot = CapabilitySnapshot.unavailable()
             return False
-        return current != self._snapshot.environment_fingerprint
+        return self._snapshot.state != "READY" or current != self._snapshot.environment_fingerprint
 
     def supports(self, capability: str) -> bool:
         return capability in self._snapshot.semantic_capabilities and self._snapshot.state in {"READY", "STALE"}
