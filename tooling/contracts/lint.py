@@ -18,6 +18,20 @@ EXPECTED_PROFILES = {
     "configurator": frozenset({"READ", "CONFIG"}),
     "full": frozenset({"READ", "CONFIG", "CONTROL"}),
 }
+CURRENT_REST_READ_TOOLS = [
+    "gateway_info",
+    "gateway_diagnose",
+    "project_list",
+    "config_resource_search",
+    "config_resource_describe",
+    "config_resource_names",
+    "config_resource_list",
+    "config_resource_get",
+    "audit_query",
+    "alarm_pipeline_list",
+    "alarm_pipeline_status",
+]
+
 CURRENT_RUNTIME_TOOLS = [
     "bundle_info",
     "tag_browse",
@@ -111,12 +125,15 @@ def lint_contracts(root: str | Path) -> None:
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
 
-    for tool_name in ("gateway_info", "gateway_diagnose"):
+    for tool_name in CURRENT_REST_READ_TOOLS:
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
         if tool.get("name") != tool_name or tool.get("permissionClass") != "READ":
-            raise ContractError(f"{tool_name}: Phase 1 external Tool contract drift")
+            raise ContractError(f"{tool_name}: external READ contract drift")
         if tool.get("mutationClass") != "NONE":
-            raise ContractError(f"{tool_name}: Phase 1 external Tool must be read-only")
+            raise ContractError(f"{tool_name}: external READ Tool must be read-only")
+        output_schema = tool.get("outputSchema")
+        if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
+            raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
 
 
 def main() -> int:
