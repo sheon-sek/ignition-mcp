@@ -57,15 +57,21 @@ class RuntimeProjectTest(unittest.TestCase):
 
     def test_phase1_runtime_tool_inventory_is_exact(self) -> None:
         files = validate_project(PROJECT)
+        identifiers = []
         titles = []
+        prefix = "com.inductiveautomation.mcp/tools/"
         for path, payload in files.items():
-            if path.startswith("com.inductiveautomation.mcp/tools/") and path.endswith("/resource.json"):
+            if path.startswith(prefix) and path.endswith("/resource.json"):
+                relative = path[len(prefix):]
+                identifiers.append(relative.rsplit("/", 1)[0])
                 resource = json.loads(payload)
                 titles.append(resource["attributes"]["title"])
-        self.assertEqual(sorted(titles), ["bundle_info", "tag_browse", "tag_read"])
+        expected = ["bundle_info", "tag_browse", "tag_read"]
+        self.assertEqual(sorted(identifiers), expected)
+        self.assertEqual(sorted(titles), expected)
 
     def test_parameter_default_is_allowed_but_unknown_key_is_rejected(self) -> None:
-        source = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/tools/tag-browse/resource.json"
+        source = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/tools/tag_browse/resource.json"
         payload = json.loads(source.read_text(encoding="utf-8"))
         self.assertEqual(payload["attributes"]["parameters"][1]["default"], False)
         payload["attributes"]["parameters"][1]["unexpected"] = True
@@ -80,7 +86,7 @@ class RuntimeProjectTest(unittest.TestCase):
                 else:
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_bytes(path.read_bytes())
-            target = project / "com.inductiveautomation.mcp/tools/tag-browse/resource.json"
+            target = project / "com.inductiveautomation.mcp/tools/tag_browse/resource.json"
             target.write_text(json.dumps(payload), encoding="utf-8")
             with self.assertRaises(ValidationError):
                 validate_project(project)
