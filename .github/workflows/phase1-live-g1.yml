@@ -1,20 +1,9 @@
-name: Phase 1 Live Gateway G1
+name: Phase 1 Historical Live Gateway G1
 
+# G1 is a closed historical gate. Phase 2+ changes intentionally expand the
+# exact Runtime inventory, so replay this snapshot only when explicitly needed.
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/phase1-live-g1.yml"
-      - "packages/ignition-rest-mcp/**"
-      - "packages/ignition-runtime-bundle/**"
-      - "contracts/**"
-      - "tests/harness/phase1-live/**"
-      - "tests/harness/runtime-binding/prepare_ci_security.py"
-      - "tests/fixtures/modules/**"
-      - "tooling/**"
-      - "uv.lock"
-  push:
-    branches: [main]
 
 permissions:
   contents: read
