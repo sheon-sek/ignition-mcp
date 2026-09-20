@@ -103,12 +103,13 @@ jobs:
               exit 1
             fi
             if (( gateway_seen == 1 )) \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
               && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8088/StatusPing >/dev/null; then
               exit 0
             fi
             sleep 3
           done
-          echo "Initial Gateway commissioning deadline exceeded" >&2
+          echo "Initial Gateway did not reach ContextState=RUNNING before deadline" >&2
           tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
           exit 1
 
@@ -118,10 +119,10 @@ jobs:
           set -euo pipefail
           cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
           test -n "$cid"
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
           target="/usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp/server-config"
-          docker exec "$cid" mkdir -p "$target"
           docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp/server-config/. "$cid:$target/"
-          docker compose -f "$COMPOSE_FILE" restart gateway
+          docker compose -f "$COMPOSE_FILE" start gateway
 
       - name: Run real MCP characterization
         id: probe
@@ -129,6 +130,7 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "$EVIDENCE_DIR/raw"
+          set +e
           python tests/harness/runtime-binding/probe.py \
             --gateway-build "$GATEWAY_BUILD" \
             --gateway-image-digest "$IMAGE_DIGEST" \
@@ -138,6 +140,7 @@ jobs:
             --raw-dir "$EVIDENCE_DIR/raw" \
             --startup-timeout 240
           rc=$?
+          set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
