@@ -159,7 +159,8 @@ jobs:
           IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest.log" 2>&1 &
-          echo "REST_PID=$!" >> "$GITHUB_ENV"
+          REST_PID=$!
+          echo "REST_PID=$REST_PID" >> "$GITHUB_ENV"
 
           deadline=$((SECONDS + 120))
           while (( SECONDS < deadline )); do
