@@ -1,0 +1,25 @@
+{
+  "scope": "DG",
+  "version": 2,
+  "restricted": false,
+  "overridable": true,
+  "files": ["query.sql"],
+  "attributes": {
+    "useMaxReturnSize": true,
+    "autoBatchEnabled": false,
+    "fallbackValue": "",
+    "maxReturnSize": 101,
+    "cacheUnit": "SEC",
+    "type": "Query",
+    "enabled": true,
+    "cacheAmount": 1,
+    "cacheEnabled": false,
+    "database": "MCP_CI_POSTGRES",
+    "fallbackEnabled": false,
+    "permissions": [],
+    "parameters": [
+      {"type": "Parameter", "identifier": "limit", "sqlType": 4},
+      {"type": "Parameter", "identifier": "offset", "sqlType": 4}
+    ]
+  }
+}

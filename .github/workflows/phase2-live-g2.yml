@@ -1,0 +1,267 @@
+name: Phase 2 Live Gateway G2
+
+# G2 evidence must be produced and reviewed from a trusted runner before Phase 2
+# closes (D23 trusted live CI). The required row is 8.3.8; 8.3.9 is a compatibility
+# candidate that must be re-characterized and never inherits the D27 exception.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase2-g2-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-gateway-g2:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    continue-on-error: ${{ !matrix.required }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gateway_version: "8.3.8"
+            gateway_image: inductiveautomation/ignition:8.3.8
+            expected_build: "2026071409"
+            required: true
+          - gateway_version: "8.3.9"
+            gateway_image: inductiveautomation/ignition:8.3.9
+            expected_build: ""
+            required: false
+    env:
+      COMPOSE_FILE: tests/harness/phase2-live/docker-compose.yml
+      GATEWAY_IMAGE: ${{ matrix.gateway_image }}
+      GATEWAY_VERSION: ${{ matrix.gateway_version }}
+      EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
+      MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
+      RUNTIME_BUNDLE_FILE: dist/ignition-runtime-bundle.zip
+      EVIDENCE_DIR: artifacts/g2-${{ matrix.gateway_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.17"
+          enable-cache: true
+
+      - name: Verify inputs and build exact Runtime artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock --check
+          echo 'b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365  tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl' | sha256sum -c -
+          (cd tests/fixtures/modules && sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256)
+          uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+          uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+          mkdir -p dist "$EVIDENCE_DIR"
+          uv run --no-sync python -m tooling.native.cli build \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --output "$RUNTIME_BUNDLE_FILE"
+          sha256sum "$RUNTIME_BUNDLE_FILE" > "$EVIDENCE_DIR/runtime-bundle.sha256"
+
+      - name: Pull exact service images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$GATEWAY_IMAGE"
+          docker pull postgres:16.4-alpine3.20
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Start fresh Gateway and PostgreSQL
+        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+
+      - name: Wait for initial Gateway commissioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 360))
+          while (( SECONDS < deadline )); do
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
+            fi
+            if grep -Eq "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
+              && curl --fail --silent --max-time 3 http://127.0.0.1:8088/StatusPing >/dev/null; then
+              GATEWAY_BUILD="$(grep -Eo "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" | tail -1 | sed -E 's/.*\(b([0-9]+)\)/\1/')"
+              [[ "$GATEWAY_BUILD" =~ ^[0-9]+$ ]]
+              if [[ -n "$EXPECTED_GATEWAY_BUILD" && "$GATEWAY_BUILD" != "$EXPECTED_GATEWAY_BUILD" ]]; then
+                echo "Unexpected Gateway build: $GATEWAY_BUILD != $EXPECTED_GATEWAY_BUILD" >&2
+                exit 1
+              fi
+              echo "GATEWAY_BUILD=$GATEWAY_BUILD" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Gateway commissioning deadline exceeded" >&2
+          exit 1
+
+      - name: Prepare CI security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          uv run --no-sync python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install exact Runtime Bundle, Server Config, and fixture project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+
+          rm -rf artifacts/runtime-install
+          mkdir -p artifacts/runtime-install
+          uv run --no-sync python -m zipfile -e "$RUNTIME_BUNDLE_FILE" artifacts/runtime-install
+          docker cp artifacts/runtime-install "$cid:/usr/local/bin/ignition/data/projects/ignition_runtime"
+          docker cp tests/harness/phase2-live/fixture-project "$cid:/usr/local/bin/ignition/data/projects/ignition_mcp_phase2_fixtures"
+          docker cp tests/harness/phase2-live/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker run --rm --volumes-from "$cid" --entrypoint /bin/sh --user 0:0 "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/projects/ignition_runtime \
+              /usr/local/bin/ignition/data/projects/ignition_mcp_phase2_fixtures \
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+          docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Wait for authenticated Native REST
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          while (( SECONDS < deadline )); do
+            code="$(curl --silent --output "$EVIDENCE_DIR/gateway-info.json.tmp" --write-out '%{http_code}' \
+              --max-time 5 -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              http://127.0.0.1:8088/data/api/v1/gateway-info || true)"
+            if [[ "$code" == "200" ]]; then
+              mv "$EVIDENCE_DIR/gateway-info.json.tmp" "$EVIDENCE_DIR/gateway-info.json"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Authenticated Gateway REST did not become ready" >&2
+          exit 1
+
+      - name: Provision bounded Phase 2 fixtures
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --locked --package ignition-rest-mcp python tests/harness/phase2-live/provision.py \
+            --api-token "$CI_API_TOKEN" \
+            --evidence "$EVIDENCE_DIR/provision.json"
+
+      - name: Start ignition-rest
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv sync --locked --package ignition-rest-mcp
+          IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
+          IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
+          IGNITION_MCP_DEPLOYMENT_PROFILE=development \
+          IGNITION_MCP_AUTH_MODE=none \
+          IGNITION_MCP_HOST=127.0.0.1 \
+          IGNITION_MCP_PORT=8765 \
+          IGNITION_MCP_PATH=/mcp \
+          IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
+          uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
+            > "$EVIDENCE_DIR/ignition-rest.log" 2>&1 &
+          REST_PID=$!
+          echo "REST_PID=$REST_PID" >> "$GITHUB_ENV"
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8765/health/ready >/dev/null; then exit 0; fi
+            if ! kill -0 "$REST_PID" 2>/dev/null; then cat "$EVIDENCE_DIR/ignition-rest.log" >&2; exit 1; fi
+            sleep 2
+          done
+          cat "$EVIDENCE_DIR/ignition-rest.log" >&2
+          exit 1
+
+      - name: Run dual-plane G2 probe
+        id: probe
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$EVIDENCE_DIR/raw"
+          uv run --locked --package ignition-rest-mcp python tests/harness/phase2-live/probe.py \
+            --runtime-api-token "$CI_API_TOKEN" \
+            --gateway-version "$GATEWAY_VERSION" \
+            --gateway-build "$GATEWAY_BUILD" \
+            --gateway-image "$GATEWAY_IMAGE" \
+            --gateway-image-digest "$IMAGE_DIGEST" \
+            --module-version "$MCP_MODULE_VERSION" \
+            --module-artifact-version "$MCP_MODULE_ARTIFACT_VERSION" \
+            --module-build "$MCP_MODULE_BUILD" \
+            --module-file "$MODULE_FILE" \
+            --bundle-file "$RUNTIME_BUNDLE_FILE" \
+            --evidence "$EVIDENCE_DIR/evidence.json" \
+            --raw-dir "$EVIDENCE_DIR/raw"
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          if [[ "$rc" != "0" ]]; then
+            echo "::error::G2 probe failed; inspect evidence.json and raw protocol artifacts"
+          fi
+          exit "$rc"
+
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color > "$EVIDENCE_DIR/docker-compose.log" 2>&1 || true
+          curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
+
+      - name: Upload G2 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase2-g2-${{ matrix.gateway_version }}-${{ github.run_id }}
+          path: ${{ env.EVIDENCE_DIR }}
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Stop ignition-rest
+        if: always()
+        shell: bash
+        run: |
+          if [[ -n "${REST_PID:-}" ]]; then kill "$REST_PID" 2>/dev/null || true; fi
+
+      - name: Destroy disposable environment
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+
+      - name: Enforce G2 row
+        if: always()
+        shell: bash
+        run: |
+          rc="${{ steps.probe.outputs.exit_code }}"
+          [[ "$rc" == "0" ]] || { echo "G2 probe failed or did not run: ${rc:-missing}" >&2; exit 1; }
