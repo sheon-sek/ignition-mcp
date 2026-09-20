@@ -23,7 +23,14 @@ class ValidationFailureTest(unittest.TestCase):
             resource = project / "com.inductiveautomation.mcp/tools/bundle-info/resource.json"
             data = json.loads(resource.read_text(encoding="utf-8"))
             data["attributes"]["parameters"] = [
-                {"name": "x", "description": "x", "type": "string", "required": False, "default": ""}
+                {
+                    "name": "x",
+                    "description": "x",
+                    "type": "string",
+                    "required": False,
+                    "default": "",
+                    "unexpected": True
+                }
             ]
             resource.write_text(json.dumps(data), encoding="utf-8")
             with self.assertRaisesRegex(ValidationError, "parameter keys"):
