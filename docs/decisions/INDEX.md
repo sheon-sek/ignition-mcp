@@ -37,6 +37,7 @@ D01–D27 are binding unless explicitly reopened through a new decision or amend
 | D25 | DECIDED | Final Monorepo / Package Layout | second product is `ignition-runtime-bundle` |
 | D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
+| D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 
 ## Cross-decision amendment
 

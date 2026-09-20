@@ -48,12 +48,24 @@ class CapabilityRegistry:
         self._client = client
         self._snapshot = CapabilitySnapshot.unavailable()
         self._refresh_lock = asyncio.Lock()
+        self._refresh_task: asyncio.Task[CapabilitySnapshot] | None = None
 
     @property
     def snapshot(self) -> CapabilitySnapshot:
         return self._snapshot
 
     async def refresh(self) -> CapabilitySnapshot:
+        # No await between observing and publishing the task: concurrent callers join it.
+        if self._refresh_task is None or self._refresh_task.done():
+            self._refresh_task = asyncio.create_task(self._refresh())
+        return await asyncio.shield(self._refresh_task)
+
+    async def aclose(self) -> None:
+        if self._refresh_task is not None:
+            self._refresh_task.cancel()
+            await asyncio.gather(self._refresh_task, return_exceptions=True)
+
+    async def _refresh(self) -> CapabilitySnapshot:
         async with self._refresh_lock:
             try:
                 gateway_info, modules, openapi_bytes = await asyncio.gather(

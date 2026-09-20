@@ -27,6 +27,10 @@ class Settings:
     request_timeout_seconds: float
     structured_output_limit_bytes: int
     log_format: str
+    jwt_jwks_uri: str | None = None
+    jwt_public_key: str | None = None
+    jwt_issuer: str | None = None
+    jwt_audience: str | None = None
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -46,6 +50,10 @@ class Settings:
                 os.getenv("IGNITION_MCP_STRUCTURED_OUTPUT_LIMIT_BYTES", "262144")
             ),
             log_format=os.getenv("IGNITION_MCP_LOG_FORMAT", "auto").lower(),
+            jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
+            jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
+            jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
+            jwt_audience=os.getenv("IGNITION_MCP_JWT_AUDIENCE") or None,
         )
         settings.validate()
         return settings
@@ -72,14 +80,19 @@ class Settings:
             raise ConfigurationError("IGNITION_MCP_LOG_FORMAT must be auto, text, or json")
         if self.deployment_profile not in {"development", "trusted-internal", "secured"}:
             raise ConfigurationError("Unknown deployment profile")
-        if self.auth_mode not in {"none", "static-token"}:
-            raise ConfigurationError("Phase 1 supports auth modes none and static-token only")
+        if self.auth_mode not in {"none", "static-token", "jwt"}:
+            raise ConfigurationError("Supported auth modes are none, static-token, and jwt")
+        if self.auth_mode == "jwt":
+            if bool(self.jwt_jwks_uri) == bool(self.jwt_public_key):
+                raise ConfigurationError("JWT requires exactly one JWKS URI or static public key")
+            if not self.jwt_issuer or not self.jwt_audience:
+                raise ConfigurationError("JWT requires issuer and audience validation")
+            if self.jwt_jwks_uri and urlparse(self.jwt_jwks_uri).scheme != "https":
+                raise ConfigurationError("JWT JWKS URI must use HTTPS")
         if self.auth_mode == "static-token" and not self.static_token:
             raise ConfigurationError("Static-token mode requires IGNITION_MCP_STATIC_TOKEN")
-        if self.deployment_profile == "secured":
-            raise ConfigurationError(
-                "secured profile requires JWT/OAuth configuration not yet enabled in the Phase 1 slice"
-            )
+        if self.deployment_profile == "secured" and self.auth_mode != "jwt":
+            raise ConfigurationError("secured profile requires JWT authentication")
         if self.deployment_profile == "development" and not _is_loopback(self.bind_host):
             raise ConfigurationError("development profile may bind only to loopback")
         if (

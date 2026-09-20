@@ -10,11 +10,12 @@ import logging
 from typing import AsyncIterator
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
+from fastmcp.exceptions import ResourceError, ToolError
+from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
-from ignition_rest_mcp.auth import build_auth
+from ignition_rest_mcp.auth import build_auth, operation_actor
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import Settings
@@ -41,6 +42,7 @@ HARD_OUTPUT_BYTES = 1_048_576
 
 
 def create_server(settings: Settings) -> FastMCP:
+    settings.validate()
     state = RuntimeState()
 
     @asynccontextmanager
@@ -74,6 +76,7 @@ def create_server(settings: Settings) -> FastMCP:
                 await watcher
             except asyncio.CancelledError:
                 pass
+            await registry.aclose()
             await client.aclose()
             state.client = None
             state.registry = None
@@ -95,7 +98,7 @@ def create_server(settings: Settings) -> FastMCP:
         timeout=30,
     )
     async def gateway_info() -> GatewayInfoResult:
-        context = OperationContext.read("gateway_info", settings.service_identity)
+        context = OperationContext.read("gateway_info", operation_actor(settings))
         metrics = state.require_metrics()
         try:
             result = await info_service(state.require_client(), state.require_registry(), context)
@@ -116,14 +119,19 @@ def create_server(settings: Settings) -> FastMCP:
         timeout=30,
     )
     async def gateway_diagnose() -> GatewayDiagnoseResult:
-        context = OperationContext.read("gateway_diagnose", settings.service_identity)
+        context = OperationContext.read("gateway_diagnose", operation_actor(settings))
         metrics = state.require_metrics()
-        result = await diagnose_service(state.require_client(), state.require_registry(), context)
-        _enforce_output_budget(result, settings.structured_output_limit_bytes)
-        outcome = "success" if result.gatewayReachable and result.authenticationOk else "degraded"
-        metrics.record_tool("gateway_diagnose", outcome)
-        _log_tool(context, outcome)
-        return result
+        try:
+            result = await diagnose_service(state.require_client(), state.require_registry(), context)
+            _enforce_output_budget(result, settings.structured_output_limit_bytes)
+            outcome = "success" if result.gatewayReachable and result.authenticationOk else "degraded"
+            metrics.record_tool("gateway_diagnose", outcome)
+            _log_tool(context, outcome)
+            return result
+        except GatewayError as error:
+            metrics.record_tool("gateway_diagnose", error.code)
+            _log_tool(context, "error", error.code)
+            raise ToolError(f"{error.code}: {error.message}; correlationId={context.correlation_id}") from error
 
     @mcp.resource(
         "ignition://gateway/capabilities",
@@ -133,6 +141,10 @@ def create_server(settings: Settings) -> FastMCP:
     )
     async def gateway_capabilities() -> str:
         value: CapabilitiesResource = capabilities_resource(state.require_registry())
+        try:
+            _enforce_output_budget(value, settings.structured_output_limit_bytes)
+        except GatewayError as error:
+            raise ResourceError(str(error)) from error
         return value.model_dump_json()
 
     @mcp.resource(
@@ -143,6 +155,10 @@ def create_server(settings: Settings) -> FastMCP:
     )
     async def gateway_openapi_info() -> str:
         value: OpenApiInfoResource = openapi_info_resource(state.require_registry())
+        try:
+            _enforce_output_budget(value, settings.structured_output_limit_bytes)
+        except GatewayError as error:
+            raise ResourceError(str(error)) from error
         return value.model_dump_json()
 
     @mcp.custom_route("/health/live", methods=["GET"], include_in_schema=False)
@@ -191,7 +207,7 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
 
 
 def _enforce_output_budget(
-    model: GatewayInfoResult | GatewayDiagnoseResult,
+    model: BaseModel,
     configured_limit_bytes: int,
 ) -> None:
     limit = min(configured_limit_bytes, HARD_OUTPUT_BYTES)
@@ -205,7 +221,8 @@ def _enforce_output_budget(
     if size > limit:
         raise GatewayError(
             "limit_exceeded",
-            f"Structured output requires {size} bytes; configured limit is {limit} bytes",
+            f"Structured output requires {size} bytes; configured limit is {limit} bytes. "
+            "Reduce requested data or raise the deployment limit within the hard ceiling.",
         )
 
 
@@ -218,6 +235,9 @@ def _log_tool(context: OperationContext, outcome: str, error_code: str | None = 
         "event": "tool_call",
         "correlationId": context.correlation_id,
         "tool": context.tool,
+        "server": context.server,
+        "actor": context.actor,
+        "permissionClass": context.permission_class,
         "outcome": outcome,
         "durationMs": round(duration_ms, 3),
     }

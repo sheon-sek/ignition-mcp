@@ -9,7 +9,7 @@
   "attributes": {
     "title": "tag_read_output",
     "description": "Semantic output contract for tag_read. D27 baseline does not publish native Tool outputSchema.",
-    "size": 1970,
+    "size": 2766,
     "dataType": "Text",
     "mimeType": "application/schema+json"
   }

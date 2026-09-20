@@ -20,7 +20,7 @@ from ignition_rest_mcp.operation import OperationContext
 async def gateway_info(client: GatewayClient, registry: CapabilityRegistry, context: OperationContext) -> GatewayInfoResult:
     if not registry.supports("gateway_info"):
         raise GatewayError("unsupported_capability", "gateway_info is not present in the current capability snapshot")
-    payload = await client.gateway_info()
+    payload = await client.gateway_info(context)
     return GatewayInfoResult(
         correlationId=context.correlation_id,
         name=_string(payload, "name"),
@@ -40,11 +40,13 @@ async def gateway_diagnose(
 ) -> GatewayDiagnoseResult:
     snapshot = registry.snapshot
     try:
-        info = await client.gateway_info()
-        modules = await client.healthy_modules()
-        module_items = modules.get("items", [])
-        module_count = len(module_items) if isinstance(module_items, list) else 0
-        version = info.get("ignitionVersion")
+        info = await client.gateway_info(context)
+        version = _string(info, "ignitionVersion")
+        modules = await client.healthy_modules(context)
+        module_items = modules.get("items")
+        if not isinstance(module_items, list) or any(not isinstance(item, dict) for item in module_items):
+            raise GatewayError("schema_mismatch", "Gateway module items are invalid")
+        module_count = len(module_items)
         return GatewayDiagnoseResult(
             correlationId=context.correlation_id,
             gatewayReachable=True,
@@ -57,10 +59,13 @@ async def gateway_diagnose(
             message="Gateway REST authentication and low-cost diagnostics succeeded.",
         )
     except GatewayError as error:
+        if error.code == "limit_exceeded":
+            raise
         return GatewayDiagnoseResult(
             correlationId=context.correlation_id,
             gatewayReachable=error.code not in {"gateway_unavailable", "timeout"},
-            authenticationOk=error.code != "permission_denied",
+            # False means not confirmed; an outage must never assert authentication succeeded.
+            authenticationOk=False,
             registryState=snapshot.state,
             registryGeneration=snapshot.generation,
             openapiSha256=snapshot.openapi_sha256,

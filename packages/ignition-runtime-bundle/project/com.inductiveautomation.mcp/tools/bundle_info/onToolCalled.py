@@ -2,7 +2,8 @@ def onToolCalled(builder):
 	bundleVersion = "0.1.0"
 	gatewayVersion = str(system.util.getVersion())
 	moduleVersion = "unknown"
-	moduleBuild = None
+	# D28: explicit logical null survives the pinned Module serializer.
+	moduleBuild = {"$ignition": "null"}
 	modules = system.util.getModules()
 	for rowIndex in range(modules.getRowCount()):
 		if str(modules.getValueAt(rowIndex, "Id")) == "com.inductiveautomation.mcp":

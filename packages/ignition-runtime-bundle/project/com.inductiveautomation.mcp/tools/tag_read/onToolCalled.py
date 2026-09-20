@@ -1,12 +1,26 @@
 def onToolCalled(builder, tagPaths, timeout, timestampFormat):
-	from java.lang import Boolean, Number
+	from java.lang import Boolean, Number, Exception as JavaException
 	from java.util import UUID, Date, Map, List
 	import math
 	correlationId = unicode(UUID.randomUUID())
 	logger = system.util.getLogger("IgnitionMCP.Runtime.TagRead")
 
 	def toolError(code, message):
-		return {"content": builder.text(code + ": " + message + "; correlationId=" + correlationId), "isError": True}
+		error = {"code": code, "message": message, "correlationId": correlationId}
+		logger.warn("correlationId=" + correlationId + " code=" + code + " " + message)
+		return {"content": builder.text(system.util.jsonEncode(error)), "isError": True}
+
+	def encodeNulls(value):
+		# D28 ignition-null-v1: escape reserved-key objects to avoid collisions.
+		if value is None:
+			return {"$ignition": "null"}
+		if isinstance(value, dict):
+			if "$ignition" in value:
+				return {"$ignition": "object", "entries": [[key, encodeNulls(child)] for key, child in sorted(value.items())]}
+			return dict((key, encodeNulls(child)) for key, child in value.items())
+		if isinstance(value, (list, tuple)):
+			return [encodeNulls(child) for child in value]
+		return value
 
 	def optionalText(value):
 		return None if value is None else unicode(value)
@@ -88,7 +102,7 @@ def onToolCalled(builder, tagPaths, timeout, timestampFormat):
 		if timestampFormat is None:
 			timestampFormat = "iso8601"
 		if timestampFormat not in ("iso8601", "epochMillis"):
-			return toolError("invalid_argument", "timestampFormat must be iso8601 or epochMillis.")
+			return toolError("invalid_argument", "Unsupported timestampFormat. Supported values: iso8601, epochMillis (case-sensitive).")
 		values = system.tag.readBlocking(paths, int(timeout))
 		if len(values) != len(paths):
 			return toolError("schema_mismatch", "Native Tag read result count does not match the request.")
@@ -101,15 +115,16 @@ def onToolCalled(builder, tagPaths, timeout, timestampFormat):
 					raise TypeError("Native item is not a QualifiedValue")
 				item = {"path": paths[index], "status": "ok", "value": jsonValue(value.getValue()), "quality": quality(value.getQuality()), "timestamp": jsonValue(value.getTimestamp())}
 				succeeded += 1
-			except Exception as itemExc:
+			except (Exception, JavaException) as itemExc:
 				logger.error("correlationId=" + correlationId + " tag_read item serialization failed: " + unicode(itemExc))
 				item = {"path": paths[index], "status": "error", "error": {"code": "schema_mismatch", "message": "The Tag read item could not be represented.", "correlationId": correlationId}}
 			items.append(item)
 		domain = {"items": items, "summary": {"requested": len(paths), "succeeded": succeeded, "failed": len(paths) - succeeded}, "meta": {"correlationId": correlationId}}
+		domain = encodeNulls(domain)
 		encoded = system.util.jsonEncode(domain)
 		if len(encoded.encode("utf-8")) > 262144:
 			return toolError("limit_exceeded", "Structured output exceeds the Phase 1 default limit of 256 KiB.")
 		return {"structuredContent": domain}
-	except Exception as exc:
+	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " tag_read failed: " + unicode(exc))
 		return toolError("upstream_error", "The Tag read operation could not be completed.")

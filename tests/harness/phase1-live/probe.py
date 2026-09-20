@@ -12,6 +12,9 @@ from typing import Any
 import urllib.error
 import urllib.request
 
+from jsonschema import Draft202012Validator
+
+ROOT = Path(__file__).resolve().parents[3]
 PROTOCOL_VERSION = "2025-06-18"
 ACCEPT = "application/json, text/event-stream"
 
@@ -110,8 +113,10 @@ class McpClient:
         _, response = self._post(payload)
         if response is None:
             raise ProbeError(f"{method} returned no response")
+        if response.get("jsonrpc") != "2.0" or response.get("id") != self.request_id:
+            raise ProbeError(f"{method} JSON-RPC response identity mismatch")
         if "error" in response:
-            raise ProbeError(f"{method} JSON-RPC error: {response['error']}")
+            raise ProbeError(f"{method} at {self.url} JSON-RPC error: {response['error']}")
         result = response.get("result")
         if not isinstance(result, dict):
             raise ProbeError(f"{method} result must be an object")
@@ -183,12 +188,46 @@ def _assert_input_schema(
         raise ProbeError(f"{name} required parameter mismatch: {set(raw_required)} != {required}")
 
 
-def _structured(response: dict[str, Any]) -> dict[str, Any]:
+def _structured(response: dict[str, Any], schema_name: str | None = None) -> dict[str, Any]:
     result = response.get("result")
-    value = result.get("structuredContent") if isinstance(result, dict) else None
+    if not isinstance(result, dict) or result.get("isError", False) is not False:
+        raise ProbeError("expected a successful Tool result, received Tool Error")
+    value = result.get("structuredContent")
     if not isinstance(value, dict):
         raise ProbeError("tool call did not return structuredContent")
+    for content in result.get("content", []):
+        if content.get("type") == "text":
+            try:
+                text_value = json.loads(content["text"])
+            except (KeyError, ValueError) as error:
+                raise ProbeError("Tool text copy is not JSON") from error
+            if text_value != value:
+                raise ProbeError("Tool text and structuredContent disagree")
+    if schema_name:
+        schema = json.loads((ROOT / "contracts/schemas" / schema_name).read_text())
+        Draft202012Validator(schema).validate(value)
     return value
+
+
+def probe_empty_prompts(client: McpClient, init: dict[str, Any], raw_dir: Path, plane: str) -> dict[str, Any]:
+    """Capability absence is not a successful prompts/list response.
+
+    An empty inventory is valid without a prompts capability. Never swallow an
+    error from an advertised capability or apply this rule to nonempty profiles.
+    """
+    capabilities = init["result"].get("capabilities")
+    if not isinstance(capabilities, dict):
+        raise ProbeError("initialize must return capabilities")
+    if "prompts" not in capabilities:
+        observation = {"inventory": [], "capabilityAdvertised": False, "listStatus": "NOT_APPLICABLE"}
+    else:
+        response = client.call("prompts/list", {})
+        _write(raw_dir / f"{plane}-prompts-list.json", response)
+        if _list(response, "prompts") or response["result"].get("nextCursor"):
+            raise ProbeError(f"{plane} Phase 1 prompt inventory must be empty")
+        observation = {"inventory": [], "capabilityAdvertised": True, "listStatus": "PASS"}
+    _write(raw_dir / f"{plane}-prompts-observation.json", observation)
+    return observation
 
 
 def _write(path: Path, value: object) -> None:
@@ -242,13 +281,13 @@ def probe_external(base_url: str, raw_dir: Path) -> dict[str, Any]:
 
     info_response = client.call("tools/call", {"name": "gateway_info", "arguments": {}})
     _write(raw_dir / "rest-gateway-info.json", info_response)
-    info = _structured(info_response)
+    info = _structured(info_response, "gateway-info.output.schema.json")
     if not str(info.get("ignitionVersion", "")).startswith("8.3.8"):
         raise ProbeError("gateway_info did not return the expected Gateway version")
 
     diagnose_response = client.call("tools/call", {"name": "gateway_diagnose", "arguments": {}})
     _write(raw_dir / "rest-gateway-diagnose.json", diagnose_response)
-    diagnose = _structured(diagnose_response)
+    diagnose = _structured(diagnose_response, "gateway-diagnose.output.schema.json")
     if diagnose.get("gatewayReachable") is not True or diagnose.get("authenticationOk") is not True:
         raise ProbeError("gateway_diagnose did not prove connectivity/authentication")
 
@@ -263,10 +302,7 @@ def probe_external(base_url: str, raw_dir: Path) -> dict[str, Any]:
         response = client.call("resources/read", {"uri": uri})
         _write(raw_dir / ("rest-resource-" + uri.rsplit("/", 1)[-1] + ".json"), response)
 
-    prompts_response = client.call("prompts/list", {})
-    _write(raw_dir / "rest-prompts-list.json", prompts_response)
-    if _list(prompts_response, "prompts"):
-        raise ProbeError("ignition-rest Phase 1 prompt inventory must be empty")
+    prompts = probe_empty_prompts(client, init, raw_dir, "rest")
 
     live_status, _ = _http_json(base_url.rstrip("/") + "/health/live")
     ready_status, ready = _http_json(base_url.rstrip("/") + "/health/ready")
@@ -282,6 +318,7 @@ def probe_external(base_url: str, raw_dir: Path) -> dict[str, Any]:
     return {
         "tools": sorted(str(name) for name in names),
         "resources": sorted(str(uri) for uri in uris),
+        "prompts": prompts,
         "gatewayInfo": info,
         "diagnose": diagnose,
         "healthLive": live_status,
@@ -347,7 +384,7 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
 
     bundle_response = client.call("tools/call", {"name": "bundle_info", "arguments": {}})
     _write(raw_dir / "runtime-bundle-info.json", bundle_response)
-    bundle = _structured(bundle_response)
+    bundle = _structured(bundle_response, "bundle-info.output.schema.json")
     gateway_version = bundle.get("gatewayVersion")
     if not isinstance(gateway_version, str) or not gateway_version.startswith("8.3.8"):
         raise ProbeError(f"bundle_info Gateway version mismatch: {bundle}")
@@ -362,7 +399,7 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
         },
     )
     _write(raw_dir / "runtime-tag-browse.json", browse_response)
-    browse = _structured(browse_response)
+    browse = _structured(browse_response, "tag-browse.output.schema.json")
     if not isinstance(browse.get("nodes"), list) or not browse["nodes"]:
         raise ProbeError("tag_browse returned no Gateway System Tag nodes")
 
@@ -378,7 +415,7 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
         },
     )
     _write(raw_dir / "runtime-tag-read.json", read_response)
-    read = _structured(read_response)
+    read = _structured(read_response, "tag-read.output.schema.json")
     items = read.get("items")
     if (
         not isinstance(items, list)
@@ -388,12 +425,47 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
     ):
         raise ProbeError(f"tag_read SystemName smoke failed: {read}")
 
+    # Real JVM serialization must preserve Bad/null samples and duplicates.
+    paths = ["[System]Gateway/__mcp_ci_missing_tag__", "[System]Gateway/SystemName"] * 2
+    batch_response = client.call("tools/call", {"name": "tag_read", "arguments": {
+        "tagPaths": paths, "timestampFormat": "epochMillis",
+    }})
+    _write(raw_dir / "runtime-tag-read-bad-duplicates.json", batch_response)
+    batch = _structured(batch_response, "tag-read.output.schema.json")
+    if [item["path"] for item in batch["items"]] != paths:
+        raise ProbeError("tag_read did not preserve order/duplicates")
+    for index in (0, 2):
+        item = batch["items"][index]
+        if item["status"] != "ok" or item["quality"]["good"] is not False:
+            raise ProbeError("Bad Tag quality must remain a successful domain item")
+        if item["value"] != {"$ignition": "null"}:
+            raise ProbeError("D28 logical null did not survive native structured output")
+    if not isinstance(batch["items"][1]["timestamp"], int):
+        raise ProbeError("epochMillis must be an integer")
+    for name, arguments in (
+        ("tag_read", {"tagPaths": ["[System]Gateway/SystemName"], "timestampFormat": "INVALID"}),
+        ("tag_browse", {"path": "relative-path"}),
+    ):
+        response = client.call("tools/call", {"name": name, "arguments": arguments})
+        _write(raw_dir / f"runtime-{name}-invalid.json", response)
+        result = response["result"]
+        if result.get("isError") is not True:
+            raise ProbeError(f"{name} invalid input did not set native isError")
+        content = result.get("content", [])
+        if len(content) != 1 or content[0].get("type") != "text":
+            raise ProbeError("Tool Error must contain canonical JSON text")
+        error = json.loads(content[0]["text"])
+        if set(error) != {"code", "message", "correlationId"} or error["code"] != "invalid_argument":
+            raise ProbeError("Tool Error did not return canonical invalid_argument")
+        if not error["message"] or not error["correlationId"]:
+            raise ProbeError("Tool Error missing message/correlation")
+
     resources_response = client.call("resources/list", {})
     _write(raw_dir / "runtime-resources-list.json", resources_response)
     resources = _list(resources_response, "resources")
     titles = {item.get("title") for item in resources}
     expected_titles = {"bundle_info_output", "tag_browse_output", "tag_read_output"}
-    if titles != expected_titles:
+    if len(resources) != len(expected_titles) or titles != expected_titles:
         raise ProbeError(f"Runtime Resource inventory mismatch: {titles}")
     for index, resource in enumerate(resources):
         uri = resource.get("uri")
@@ -401,16 +473,21 @@ def probe_runtime(url: str, token: str, raw_dir: Path) -> dict[str, Any]:
             raise ProbeError("Runtime Resource missing URI")
         response = client.call("resources/read", {"uri": uri})
         _write(raw_dir / f"runtime-resource-{index}.json", response)
+        contents = _list(response, "contents")
+        schema_name = str(resource["title"]).replace("_", "-").removesuffix("-output")
+        schema = json.loads((ROOT / f"contracts/schemas/{schema_name}.output.schema.json").read_text())
+        if len(contents) != 1 or contents[0].get("mimeType") != "application/json":
+            raise ProbeError("Runtime schema Resource metadata mismatch")
+        if json.loads(contents[0].get("text", "")) != schema:
+            raise ProbeError("Runtime schema Resource differs from source contract")
 
-    prompts_response = client.call("prompts/list", {})
-    _write(raw_dir / "runtime-prompts-list.json", prompts_response)
-    if _list(prompts_response, "prompts"):
-        raise ProbeError("Runtime Phase 1 prompt inventory must be empty")
+    prompts = probe_empty_prompts(client, init, raw_dir, "runtime")
 
     return {
         "unauthenticatedInitializeHttpStatus": unauthorized,
         "tools": sorted(str(name) for name in names),
         "resourceTitles": sorted(str(title) for title in titles),
+        "prompts": prompts,
         "bundleInfo": bundle,
         "tagBrowseReturned": len(browse["nodes"]),
         "tagReadSystemName": items[0].get("value"),
@@ -438,9 +515,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    stage = "identity"
     try:
+        expected_identity = ("8.3.8", "2026071409", "1.3.5-SNAPSHOT", "2026021307",
+                             "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365")
+        if (args.gateway_version, args.gateway_build, args.module_version, args.module_build,
+                _sha256_file(args.module_file)) != expected_identity:
+            raise ProbeError("Uncharacterized identity cannot inherit D27/D28 exceptions")
+        stage = "external"
         external = probe_external(args.external_base_url, args.raw_dir)
+        stage = "runtime"
         runtime = probe_runtime(args.runtime_url, args.runtime_api_token, args.raw_dir)
+        stage = "evidence"
         bundle_version = runtime["bundleInfo"].get("bundleVersion")
         openapi_sha256 = external["diagnose"].get("openapiSha256")
         if not isinstance(bundle_version, str) or not bundle_version:
@@ -464,6 +550,10 @@ def main() -> int:
             "external": external,
             "runtime": runtime,
             "status": "VERIFIED",
+            "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+            "runtimeNullEncoding": "ignition-null-v1",
+            "decisions": ["D27", "D28"],
+            "compatibilityStatus": "UNTESTED",
         }
         _write(args.evidence, evidence)
         print(json.dumps(evidence, indent=2, sort_keys=True))
@@ -475,6 +565,7 @@ def main() -> int:
                 "schemaVersion": 2,
                 "gate": "G1",
                 "status": "FAILED",
+                "stage": stage,
                 "fatalError": f"{type(error).__name__}: {error}",
             },
         )

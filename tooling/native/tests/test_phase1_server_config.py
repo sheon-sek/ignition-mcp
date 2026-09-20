@@ -11,7 +11,7 @@ SERVER_CONFIG = (
 )
 
 
-def test_phase1_runtime_server_config_advertises_all_primitive_surfaces() -> None:
+def test_phase1_runtime_server_config_selectors_and_empty_prompt_sources() -> None:
     payload = json.loads(SERVER_CONFIG.read_text(encoding="utf-8"))
     expected = {"project/ignition_runtime": "*"}
     assert payload["tools"] == expected

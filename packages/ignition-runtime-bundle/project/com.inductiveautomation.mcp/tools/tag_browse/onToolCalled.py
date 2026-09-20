@@ -1,10 +1,13 @@
 def onToolCalled(builder, path, recursive, maxResults):
 	from java.util import UUID
+	from java.lang import Exception as JavaException
 	correlationId = unicode(UUID.randomUUID())
 	logger = system.util.getLogger("IgnitionMCP.Runtime.TagBrowse")
 
 	def toolError(code, message):
-		return {"content": builder.text(code + ": " + message + "; correlationId=" + correlationId), "isError": True}
+		error = {"code": code, "message": message, "correlationId": correlationId}
+		logger.warn("correlationId=" + correlationId + " code=" + code + " " + message)
+		return {"content": builder.text(system.util.jsonEncode(error)), "isError": True}
 
 	def validAbsolutePath(value):
 		if not isinstance(value, basestring) or not value.strip():
@@ -57,6 +60,6 @@ def onToolCalled(builder, path, recursive, maxResults):
 		if len(encoded.encode("utf-8")) > 262144:
 			return toolError("limit_exceeded", "Structured output exceeds the Phase 1 default limit of 256 KiB.")
 		return {"structuredContent": domain}
-	except Exception as exc:
+	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " tag_browse failed: " + unicode(exc))
 		return toolError("internal_error", "The Tag browse operation could not be completed.")

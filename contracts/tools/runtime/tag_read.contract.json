@@ -13,5 +13,7 @@
   "nativeRequirements": ["system.tag.readBlocking"],
   "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
   "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
-  "badQualityIsToolError": false
+  "badQualityIsToolError": false,
+  "nullEncoding": "ignition-null-v1",
+  "nullEncodingDecision": "D28"
 }

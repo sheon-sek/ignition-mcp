@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import httpx
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class GatewayError(Exception):
     code: str
     message: str
@@ -18,7 +18,7 @@ class GatewayError(Exception):
 
 
 def map_http_error(error: Exception) -> GatewayError:
-    if isinstance(error, httpx.TimeoutException):
+    if isinstance(error, (httpx.TimeoutException, TimeoutError)):
         return GatewayError("timeout", "Ignition Gateway request timed out")
     if isinstance(error, httpx.NetworkError):
         return GatewayError("gateway_unavailable", "Ignition Gateway is unavailable")

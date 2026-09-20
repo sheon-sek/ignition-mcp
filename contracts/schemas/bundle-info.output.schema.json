@@ -7,7 +7,7 @@
     "bundleVersion": {"type": "string", "minLength": 1},
     "gatewayVersion": {"type": "string", "minLength": 1},
     "mcpModuleVersion": {"type": "string", "minLength": 1},
-    "mcpModuleBuild": {"type": ["string", "null"]},
+    "mcpModuleBuild": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false}]},
     "compatibilityStatus": {"enum": ["SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UNKNOWN"]}
   },
   "required": ["bundleVersion", "gatewayVersion", "mcpModuleVersion", "mcpModuleBuild", "compatibilityStatus"]
