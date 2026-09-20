@@ -182,9 +182,14 @@ def test_tag_query_normalizes_native_full_path_before_property_allowlist() -> No
 
 def test_tag_query_uses_documented_pywrapper_continuation_property() -> None:
     source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
-    assert 'getattr(result, "continuationPoint", None)' in source
+    continuation_read = source.index('nextCursor = getattr(result, "continuationPoint", None)')
+    cursor_text = source.index('nextCursor = unicode(nextCursor)')
+    empty_cursor = source.index('if nextCursor == "":')
+    logical_null = source.index('nextCursor = None', empty_cursor)
+    serialization = source.index('stage = "serialization"')
+    assert continuation_read < cursor_text < empty_cursor < logical_null < serialization
     assert 'result.getContinuationPoint()' not in source
-    assert 'nextCursor = unicode(nextCursor)' in source
+    assert '"hasMore": nextCursor is not None' in source
 
 
 def test_tag_query_upstream_errors_identify_safe_execution_stage() -> None:

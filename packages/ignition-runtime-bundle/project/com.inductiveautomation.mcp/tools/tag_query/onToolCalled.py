@@ -122,6 +122,8 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 		nextCursor = getattr(result, "continuationPoint", None)
 		if nextCursor is not None:
 			nextCursor = unicode(nextCursor)
+			if nextCursor == "":
+				nextCursor = None
 		stage = "serialization"
 		domain = {"items": items, "continuation": nextCursor, "summary": {"returned": len(items), "limit": int(maxResults), "hasMore": nextCursor is not None}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
