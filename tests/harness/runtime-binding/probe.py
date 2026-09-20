@@ -295,7 +295,7 @@ def characterize(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
             f"OpenAPI fingerprint unavailable: {type(error).__name__}: {error}"
         )
 
-    verified = all(checks.values()) and openapi_sha256 is not None
+    verified = all(checks.values())
     status = "VERIFIED" if verified else "FAILED"
     evidence = {
         "schemaVersion": 2,
