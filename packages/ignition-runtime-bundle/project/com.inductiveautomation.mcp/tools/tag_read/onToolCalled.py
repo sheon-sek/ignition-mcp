@@ -107,8 +107,8 @@ def onToolCalled(builder, tagPaths, timeout, timestampFormat):
 			items.append(item)
 		domain = {"items": items, "summary": {"requested": len(paths), "succeeded": succeeded, "failed": len(paths) - succeeded}, "meta": {"correlationId": correlationId}}
 		encoded = system.util.jsonEncode(domain)
-		if len(encoded.encode("utf-8")) > 1048576:
-			return toolError("limit_exceeded", "Structured output exceeds the 1 MiB hard limit.")
+		if len(encoded.encode("utf-8")) > 262144:
+			return toolError("limit_exceeded", "Structured output exceeds the Phase 1 default limit of 256 KiB.")
 		return {"structuredContent": domain}
 	except Exception as exc:
 		logger.error("correlationId=" + correlationId + " tag_read failed: " + unicode(exc))

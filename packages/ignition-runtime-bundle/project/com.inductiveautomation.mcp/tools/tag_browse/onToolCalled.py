@@ -54,8 +54,8 @@ def onToolCalled(builder, path, recursive, maxResults):
 			return toolError("limit_exceeded", "Browse exceeds the requested bounded result limit; narrow path/filter scope.")
 		domain = {"path": path, "recursive": bool(recursive), "nodes": nodes, "summary": {"returned": len(nodes), "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
 		encoded = system.util.jsonEncode(domain)
-		if len(encoded.encode("utf-8")) > 1048576:
-			return toolError("limit_exceeded", "Structured output exceeds the 1 MiB hard limit.")
+		if len(encoded.encode("utf-8")) > 262144:
+			return toolError("limit_exceeded", "Structured output exceeds the Phase 1 default limit of 256 KiB.")
 		return {"structuredContent": domain}
 	except Exception as exc:
 		logger.error("correlationId=" + correlationId + " tag_browse failed: " + unicode(exc))
