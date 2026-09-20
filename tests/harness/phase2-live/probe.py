@@ -243,8 +243,9 @@ def probe_runtime(
         client, raw_dir, "runtime", "alarm_shelved_list", {"maxResults": 100}
     )
     browse = _call_success(client, raw_dir, "runtime", "historian_browse", {
-        "rootPath": "histprov:MCP_CI_HISTORY", "nameFilters": [], "recursive": True,
-        "maxResults": 100, "continuation": "",
+        # Documented 8.3 historical path syntax: histprov:<name>:/prov:<provider>:/tag:<path>/
+        "rootPath": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/", "nameFilters": [],
+        "recursive": True, "maxResults": 100, "continuation": "",
     })
     smokes["historian_browse"] = browse
     historical_paths = [item.get("path") for item in browse.get("items", []) if isinstance(item.get("path"), str)]

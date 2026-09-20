@@ -209,14 +209,9 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
                 "name": "MCP_CI_HISTORY",
                 "enabled": True,
                 "description": "Bounded disposable Phase 2 CI historian",
-                "config": {
-                    "profile": {"type": "InternalHistorian"},
-                    "settings": {
-                        "timeLimit": {"enabled": True, "size": 1, "sizeUnits": "DAY"},
-                        "pointLimit": {"enabled": True, "size": 10000},
-                        "remoteSync": {"enabled": False},
-                    },
-                },
+                # 8.3's Core Historian supersedes the legacy Internal Historian
+                # profile; empty settings accept the Gateway-documented defaults.
+                "config": {"profile": {"type": "CoreHistorian"}, "settings": {}},
             },
         ),
     ]
