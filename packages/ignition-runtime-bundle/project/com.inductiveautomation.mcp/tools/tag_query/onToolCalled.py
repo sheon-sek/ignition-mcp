@@ -113,15 +113,22 @@ def onToolCalled(builder, provider, pathPattern, namePattern, tagType, valueSour
 			result = system.tag.query(provider, query, int(maxResults))
 		items = []
 		for native in result:
-			values = dict((unicode(key), jsonValue(value)) for key, value in nativeItems(native))
-			path = values.get("path")
+			nativePairs = nativeItems(native)
+			rawValues = dict((unicode(key), value) for key, value in nativePairs)
+			path = rawValues.get("path")
 			if path is None:
-				return toolError("schema_mismatch", "Tag query result omitted path.")
+				path = rawValues.get("fullPath")
+			if path is None:
+				return toolError("schema_mismatch", "Tag query result omitted path/fullPath.")
 			pathText = unicode(path)
 			if "/_types_/" in pathText or pathText.endswith("]_types_") or pathText.startswith("_types_/"):
 				continue
 			if len(items) >= maxResults:
 				return toolError("limit_exceeded", "Tag query exceeded the requested result limit; continue with the returned cursor or narrow the query.")
+			values = dict((key, jsonValue(value)) for key, value in rawValues.items())
+			if "fullPath" in values:
+				del values["fullPath"]
+			values["path"] = pathText
 			items.append({"path": pathText, "properties": values})
 		nextCursor = result.getContinuationPoint() if hasattr(result, "getContinuationPoint") else getattr(result, "continuationPoint", None)
 		domain = {"items": items, "continuation": nextCursor, "summary": {"returned": len(items), "limit": int(maxResults), "hasMore": nextCursor is not None}, "meta": {"correlationId": correlationId}}

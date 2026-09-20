@@ -165,3 +165,14 @@ def test_alarm_journal_rejects_unbounded_associated_data_before_native_call() ->
     assert guard < native
     contract = json.loads((CONTRACTS / "alarm_journal.contract.json").read_text(encoding="utf-8"))
     assert contract["parameters"]["includeData"]["trueBehavior"] == "unsupported_capability"
+
+
+def test_tag_query_normalizes_native_full_path_before_json_conversion() -> None:
+    source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
+    raw_values = source.index('rawValues = dict((unicode(key), value) for key, value in nativePairs)')
+    full_path = source.index('path = rawValues.get("fullPath")')
+    path_text = source.index('pathText = unicode(path)')
+    json_values = source.index('values = dict((key, jsonValue(value)) for key, value in rawValues.items())')
+    canonical = source.index('values["path"] = pathText')
+    assert raw_values < full_path < path_text < json_values < canonical
+    assert 'del values["fullPath"]' in source
