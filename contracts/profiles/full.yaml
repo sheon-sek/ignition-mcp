@@ -9,6 +9,10 @@
   "tools": [
     "bundle_info",
     "tag_browse",
-    "tag_read"
+    "tag_query",
+    "tag_read",
+    "tag_get_config",
+    "udt_type_list",
+    "udt_type_get"
   ]
 }

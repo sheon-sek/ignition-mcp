@@ -14,7 +14,7 @@ PROJECT = ROOT / "packages/ignition-runtime-bundle/project"
 
 
 class RuntimeProjectTest(unittest.TestCase):
-    def test_phase1_project_is_valid_enabled_and_standalone(self) -> None:
+    def test_phase2_project_is_valid_enabled_and_standalone(self) -> None:
         files = validate_project(PROJECT)
         self.assertIn("project.json", files)
         self.assertIn(b'"enabled": true', files["project.json"])
@@ -51,11 +51,11 @@ class RuntimeProjectTest(unittest.TestCase):
             for name, value in files.items()
             if name.endswith("/onToolCalled.py")
         ]
-        self.assertEqual(len(handlers), 3)
+        self.assertEqual(len(handlers), 7)
         for handler in handlers:
             self.assertNotIn(b"NATIVE_BINDING_PENDING", handler)
 
-    def test_phase1_runtime_tool_inventory_is_exact(self) -> None:
+    def test_phase2_tag_runtime_tool_inventory_is_exact(self) -> None:
         files = validate_project(PROJECT)
         identifiers = []
         titles = []
@@ -66,7 +66,15 @@ class RuntimeProjectTest(unittest.TestCase):
                 identifiers.append(relative.rsplit("/", 1)[0])
                 resource = json.loads(payload)
                 titles.append(resource["attributes"]["title"])
-        expected = ["bundle_info", "tag_browse", "tag_read"]
+        expected = [
+            "bundle_info",
+            "tag_browse",
+            "tag_get_config",
+            "tag_query",
+            "tag_read",
+            "udt_type_get",
+            "udt_type_list",
+        ]
         self.assertEqual(sorted(identifiers), expected)
         self.assertEqual(sorted(titles), expected)
 

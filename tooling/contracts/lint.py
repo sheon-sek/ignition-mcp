@@ -18,7 +18,15 @@ EXPECTED_PROFILES = {
     "configurator": frozenset({"READ", "CONFIG"}),
     "full": frozenset({"READ", "CONFIG", "CONTROL"}),
 }
-PHASE1_RUNTIME_TOOLS = ["bundle_info", "tag_browse", "tag_read"]
+CURRENT_RUNTIME_TOOLS = [
+    "bundle_info",
+    "tag_browse",
+    "tag_query",
+    "tag_read",
+    "tag_get_config",
+    "udt_type_list",
+    "udt_type_get",
+]
 
 
 class ContractError(ValueError):
@@ -37,6 +45,7 @@ def _load(path: Path) -> dict[str, Any]:
 
 def lint_contracts(root: str | Path) -> None:
     root_path = Path(root)
+    repo_root = root_path.parent
     errors = _load(root_path / "shared/error-codes.json")
     if tuple(errors.get("codes", ())) != EXPECTED_ERROR_CODES:
         raise ContractError("stable D06 error taxonomy drift")
@@ -71,8 +80,8 @@ def lint_contracts(root: str | Path) -> None:
         tools = profile.get("tools")
         if not isinstance(tools, list) or len(tools) != len(set(tools)):
             raise ContractError(f"{name}: tools must be an explicit duplicate-free list")
-        if tools != PHASE1_RUNTIME_TOOLS:
-            raise ContractError(f"{name}: Phase 1 Runtime inventory drift")
+        if tools != CURRENT_RUNTIME_TOOLS:
+            raise ContractError(f"{name}: current Runtime READ inventory drift")
 
     compatibility = _load(root_path / "shared/compatibility-status.json")
     if compatibility.get("supportedRequiresMachineEvidence") is not True:
@@ -80,16 +89,19 @@ def lint_contracts(root: str | Path) -> None:
     if compatibility.get("supportedRequiresVerifiedNativeResponseBinding") is not True:
         raise ContractError("SUPPORTED compatibility requires verified native response binding")
 
-    for tool_name in PHASE1_RUNTIME_TOOLS:
+    for tool_name in CURRENT_RUNTIME_TOOLS:
         tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
         if tool.get("name") != tool_name:
             raise ContractError(f"{tool_name}: contract name drift")
         if tool.get("permissionClass") != "READ" or tool.get("mutationClass") != "NONE":
-            raise ContractError(f"{tool_name}: Phase 1 Runtime read contract drift")
+            raise ContractError(f"{tool_name}: Runtime read contract drift")
         if tool.get("nativeResponseBinding") != "VERIFIED_WITH_LIMITATION":
             raise ContractError(f"{tool_name}: D27 native binding status drift")
         if tool.get("nativeOutputSchema") != "UNAVAILABLE_ON_D27_BASELINE":
             raise ContractError(f"{tool_name}: D27 native outputSchema limitation drift")
+        output_schema = tool.get("outputSchema")
+        if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
+            raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
 
     for tool_name in ("gateway_info", "gateway_diagnose"):
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
