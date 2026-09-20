@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import runpy
 
 ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = ROOT / "tests/harness/phase2-live/docker-compose.yml"
@@ -44,3 +45,20 @@ def test_phase2_provisioning_uses_openapi_readiness_not_certificate_healing() ->
     assert "_accept_quarantined_certificates" not in source
     assert "--stage heal" not in workflow
     assert "Heal quarantined bundled modules" not in workflow
+
+
+def test_phase2_tag_import_uses_export_document_shape_and_accepts_observed_success_wire() -> None:
+    namespace = runpy.run_path(str(PROVISION))
+    document = json.loads(namespace["_tag_document"](10))
+    assert set(document) == {"tags"}
+    assert isinstance(document["tags"], list)
+    assert {tag["name"] for tag in document["tags"]} == {"McpCiType", "_mcp_ci"}
+
+    failure_detail = namespace["_tag_import_failure_detail"]
+    assert failure_detail([]) is None
+    assert failure_detail({"successCount": 2, "failureCount": 0, "failures": []}) is None
+    assert failure_detail({
+        "successCount": 1,
+        "failureCount": 1,
+        "failures": [{"quality": "Error"}],
+    }) is not None

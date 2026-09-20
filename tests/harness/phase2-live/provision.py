@@ -118,7 +118,9 @@ def _create_resource(base_url: str, token: str, resource_type: str, resource: di
 
 
 def _tag_document(value: int) -> bytes:
-    document = [
+    # Native REST consumes the same JSON export-document shape as Designer import:
+    # a top-level object containing the exported Tag list, not a bare JSON array.
+    document = {"tags": [
         {
             "name": "McpCiType",
             "tagType": "UdtType",
@@ -145,8 +147,22 @@ def _tag_document(value: int) -> bytes:
                 {"name": "Instance", "tagType": "UdtInstance", "typeId": "McpCiType"},
             ],
         },
-    ]
+    ]}
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
+def _tag_import_failure_detail(payload: Any) -> str | None:
+    # The committed 8.3.8 OpenAPI describes a list of non-Good QualityCodes, while
+    # live 8.3.8/8.3.9 return a summary object with success/failure counts. Accept
+    # both successful wire shapes and fail closed on every other payload.
+    if payload in (None, []):
+        return None
+    if isinstance(payload, dict):
+        failure_count = payload.get("failureCount")
+        failures = payload.get("failures")
+        if failure_count == 0 and failures in (None, []):
+            return None
+    return str(payload)
 
 
 def _import_tags(base_url: str, token: str, value: int) -> int:
@@ -166,8 +182,9 @@ def _import_tags(base_url: str, token: str, value: int) -> int:
     )
     if status != 200:
         raise ProvisionError(f"Tag import returned unexpected HTTP {status}")
-    if payload not in (None, []):
-        raise ProvisionError(f"Tag import returned non-Good QualityCodes: {payload}")
+    failure_detail = _tag_import_failure_detail(payload)
+    if failure_detail is not None:
+        raise ProvisionError(f"Tag import returned non-Good QualityCodes: {failure_detail}")
     return status
 
 
@@ -186,10 +203,10 @@ def _resource_names(base_url: str, token: str, resource_type: str) -> list[str]:
     return names
 
 
-# D04 principle applied to fixtures: discover what the target Gateway actually bundles
-# instead of hard-coding driver assumptions. A fresh 8.3.x standard Gateway does not
-# include a PostgreSQL JDBC driver; the first live G2 attempt proved this with
-# "422 Invalid reference: 'PostgreSQL'".
+# D04 principle applied to fixtures: discover the driver/translator identities that
+# are actually registered on the target Gateway instead of hard-coding display names.
+# The first G2 attempt returned "422 Invalid reference: 'PostgreSQL'"; later evidence
+# showed the original module whitelist had also suppressed JDBC modules.
 _DB_KEYWORDS = ("mariadb", "mysql")
 _DB_URL_BY_KEYWORD = {
     "mariadb": "jdbc:mariadb://db:3306/ignition_mcp_ci",
