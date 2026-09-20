@@ -48,4 +48,7 @@ jobs:
           uv run --no-sync python tests/harness/runtime-binding/build_fixture.py dist/g0-first.zip
           uv run --no-sync python tests/harness/runtime-binding/build_fixture.py dist/g0-second.zip
           cmp dist/g0-first.zip dist/g0-second.zip
-          uv run --no-sync python -m py_compile tests/harness/runtime-binding/probe.py tests/harness/runtime-binding/build_fixture.py
+          uv run --no-sync python -m py_compile \
+            tests/harness/runtime-binding/probe.py \
+            tests/harness/runtime-binding/build_fixture.py \
+            tests/harness/runtime-binding/prepare_ci_security.py

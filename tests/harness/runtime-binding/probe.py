@@ -148,11 +148,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _fetch_bytes(url: str, timeout: float) -> bytes:
-    request = urllib.request.Request(
-        url,
-        headers={"Accept": "application/json", "User-Agent": "ignition-mcp-g0-probe/1"},
-    )
+def _fetch_bytes(url: str, timeout: float, api_token: str | None = None) -> bytes:
+    headers = {"Accept": "application/json", "User-Agent": "ignition-mcp-g0-probe/1"}
+    if api_token:
+        headers["X-Ignition-API-Token"] = api_token
+    request = urllib.request.Request(url, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout) as response:
         return response.read()
 
@@ -298,7 +298,7 @@ def characterize(args: argparse.Namespace) -> tuple[dict[str, Any], bool]:
         observations.append("deliberate failure result did not contain isError=true")
 
     try:
-        openapi = _fetch_bytes(args.openapi_url, args.request_timeout)
+        openapi = _fetch_bytes(args.openapi_url, args.request_timeout, args.rest_api_token)
         openapi_sha256 = hashlib.sha256(openapi).hexdigest()
         (raw_dir / "openapi.json").write_bytes(openapi)
     except Exception as error:
@@ -357,6 +357,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--url", default="http://127.0.0.1:8088/data/mcp/phase0")
     parser.add_argument("--openapi-url", default="http://127.0.0.1:8088/openapi.json")
     parser.add_argument("--api-token")
+    parser.add_argument("--rest-api-token")
     parser.add_argument("--gateway-version", default="8.3.8")
     parser.add_argument("--gateway-build", required=True)
     parser.add_argument("--gateway-image", default="inductiveautomation/ignition:8.3.8")

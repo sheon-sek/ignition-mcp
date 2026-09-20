@@ -113,7 +113,22 @@ jobs:
           tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
           exit 1
 
-      - name: Install Phase 0 MCP project and server config
+      - name: Prepare CI API token security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          test -n "$cid"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install Phase 0 project, MCP config, and CI security
         shell: bash
         run: |
           set -euo pipefail
@@ -121,11 +136,15 @@ jobs:
           test -n "$cid"
           data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
           test -n "$data_owner"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
 
           docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
 
           docker cp tests/harness/runtime-binding/project "$cid:/usr/local/bin/ignition/data/projects/mcp_characterization"
           docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
 
           docker run --rm \
             --volumes-from "$cid" \
@@ -134,9 +153,44 @@ jobs:
             "$GATEWAY_IMAGE" \
             -c "chown -R '$data_owner' \
               /usr/local/bin/ignition/data/projects/mcp_characterization \
-              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp"
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
 
           docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Verify authenticated Native REST/OpenAPI access
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 240))
+          while (( SECONDS < deadline )); do
+            code="$(curl --silent --output "$EVIDENCE_DIR/gateway-info.json.tmp" --write-out '%{http_code}' \
+              --max-time 5 \
+              -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              http://127.0.0.1:8088/data/api/v1/gateway-info || true)"
+            if [[ "$code" == "200" ]]; then
+              mv "$EVIDENCE_DIR/gateway-info.json.tmp" "$EVIDENCE_DIR/gateway-info.json"
+              break
+            fi
+            sleep 3
+          done
+          test -f "$EVIDENCE_DIR/gateway-info.json"
+
+          unauth_code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            --max-time 5 http://127.0.0.1:8088/openapi.json || true)"
+          [[ "$unauth_code" == "403" ]]
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/openapi.json \
+            -o "$EVIDENCE_DIR/openapi-authenticated.json"
+
+          curl --fail --silent --show-error --max-time 15 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci \
+            -o "$EVIDENCE_DIR/ci-api-token-resource.json"
 
       - name: Run real MCP characterization
         id: probe
@@ -153,6 +207,7 @@ jobs:
             --module-build "2026021307" \
             --module-file "$MODULE_FILE" \
             --fixture-zip "$FIXTURE_ZIP" \
+            --rest-api-token "$CI_API_TOKEN" \
             --evidence "$EVIDENCE_DIR/evidence.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
             --startup-timeout 240
