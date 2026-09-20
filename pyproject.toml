@@ -18,6 +18,8 @@ line-length = 120
 exclude = [
   "packages/ignition-runtime-bundle/project",
   "tests/harness/runtime-binding/project",
+  "docs/ignition-mcp-tools-designer",
+  "docs/ignition-mcp-tools-native-scaffold",
 ]
 
 [tool.ruff.lint]
