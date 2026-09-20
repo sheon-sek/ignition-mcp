@@ -21,5 +21,7 @@
   "resources": {
     "project/ignition_runtime": "*"
   },
-  "prompts": {}
+  "prompts": {
+    "project/ignition_runtime": "*"
+  }
 }
