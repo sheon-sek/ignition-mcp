@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import json
 import logging
 from typing import AsyncIterator
@@ -24,6 +25,7 @@ from ignition_rest_mcp.models import (
     GatewayInfoResult,
     OpenApiInfoResource,
 )
+from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.observability.metrics import Metrics
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.runtime import RuntimeState
@@ -55,6 +57,14 @@ def create_server(settings: Settings) -> FastMCP:
         state.metrics = metrics
         await registry.refresh()
         _apply_visibility(mcp, registry.snapshot)
+        LOGGER.info(
+            "Capability registry initialized",
+            extra={
+                "event": "capability_registry",
+                "registryState": registry.snapshot.state,
+                "registryGeneration": registry.snapshot.generation,
+            },
+        )
         watcher = asyncio.create_task(_watch_capabilities(mcp, registry, settings.watcher_interval_seconds))
         try:
             yield
@@ -89,11 +99,13 @@ def create_server(settings: Settings) -> FastMCP:
         metrics = state.require_metrics()
         try:
             result = await info_service(state.require_client(), state.require_registry(), context)
-            _enforce_output_budget(result)
+            _enforce_output_budget(result, settings.structured_output_limit_bytes)
             metrics.record_tool("gateway_info", "success")
+            _log_tool(context, "success")
             return result
         except GatewayError as error:
             metrics.record_tool("gateway_info", error.code)
+            _log_tool(context, "error", error.code)
             raise ToolError(f"{error.code}: {error.message}; correlationId={context.correlation_id}") from error
 
     @mcp.tool(
@@ -107,8 +119,10 @@ def create_server(settings: Settings) -> FastMCP:
         context = OperationContext.read("gateway_diagnose", settings.service_identity)
         metrics = state.require_metrics()
         result = await diagnose_service(state.require_client(), state.require_registry(), context)
-        _enforce_output_budget(result)
-        metrics.record_tool("gateway_diagnose", "success" if result.gatewayReachable else "degraded")
+        _enforce_output_budget(result, settings.structured_output_limit_bytes)
+        outcome = "success" if result.gatewayReachable and result.authenticationOk else "degraded"
+        metrics.record_tool("gateway_diagnose", outcome)
+        _log_tool(context, outcome)
         return result
 
     @mcp.resource(
@@ -156,9 +170,17 @@ def create_server(settings: Settings) -> FastMCP:
 async def _watch_capabilities(mcp: FastMCP, registry: CapabilityRegistry, interval: float) -> None:
     while True:
         await asyncio.sleep(interval)
-        if await registry.fingerprint_changed():
-            await registry.refresh()
-        _apply_visibility(mcp, registry.snapshot)
+        try:
+            if await registry.fingerprint_changed():
+                await registry.refresh()
+            _apply_visibility(mcp, registry.snapshot)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception(
+                "Capability watcher iteration failed",
+                extra={"event": "capability_watch"},
+            )
 
 
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
@@ -168,15 +190,45 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
         mcp.disable(names={"gateway_info"}, components={"tool"})
 
 
-def _enforce_output_budget(model: GatewayInfoResult | GatewayDiagnoseResult) -> None:
-    size = len(json.dumps(model.model_dump(mode="json"), separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
-    if size > HARD_OUTPUT_BYTES:
-        raise GatewayError("limit_exceeded", f"Structured output exceeds {HARD_OUTPUT_BYTES} bytes")
+def _enforce_output_budget(
+    model: GatewayInfoResult | GatewayDiagnoseResult,
+    configured_limit_bytes: int,
+) -> None:
+    limit = min(configured_limit_bytes, HARD_OUTPUT_BYTES)
+    size = len(
+        json.dumps(
+            model.model_dump(mode="json"),
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    )
+    if size > limit:
+        raise GatewayError(
+            "limit_exceeded",
+            f"Structured output requires {size} bytes; configured limit is {limit} bytes",
+        )
+
+
+def _log_tool(context: OperationContext, outcome: str, error_code: str | None = None) -> None:
+    duration_ms = max(
+        0.0,
+        (datetime.now(timezone.utc) - context.started_at).total_seconds() * 1000.0,
+    )
+    extra: dict[str, object] = {
+        "event": "tool_call",
+        "correlationId": context.correlation_id,
+        "tool": context.tool,
+        "outcome": outcome,
+        "durationMs": round(duration_ms, 3),
+    }
+    if error_code is not None:
+        extra["errorCode"] = error_code
+    LOGGER.info("MCP tool completed", extra=extra)
 
 
 def main() -> None:
     settings = Settings.from_env()
-    logging.basicConfig(level=os_log_level(), format="%(message)s")
+    configure_logging(log_format=settings.resolved_log_format, level=os_log_level())
     mcp = create_server(settings)
     mcp.run(
         transport="streamable-http",

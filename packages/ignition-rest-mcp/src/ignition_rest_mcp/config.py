@@ -25,6 +25,8 @@ class Settings:
     service_identity: str
     watcher_interval_seconds: float
     request_timeout_seconds: float
+    structured_output_limit_bytes: int
+    log_format: str
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -40,6 +42,10 @@ class Settings:
             service_identity=os.getenv("IGNITION_MCP_SERVICE_IDENTITY", "ignition-rest"),
             watcher_interval_seconds=float(os.getenv("IGNITION_MCP_WATCHER_INTERVAL_SECONDS", "60")),
             request_timeout_seconds=float(os.getenv("IGNITION_MCP_GATEWAY_TIMEOUT_SECONDS", "10")),
+            structured_output_limit_bytes=int(
+                os.getenv("IGNITION_MCP_STRUCTURED_OUTPUT_LIMIT_BYTES", "262144")
+            ),
+            log_format=os.getenv("IGNITION_MCP_LOG_FORMAT", "auto").lower(),
         )
         settings.validate()
         return settings
@@ -58,6 +64,12 @@ class Settings:
             raise ConfigurationError("Gateway timeout must be >0 and <=30 seconds")
         if self.watcher_interval_seconds <= 0:
             raise ConfigurationError("Watcher interval must be positive")
+        if not 0 < self.structured_output_limit_bytes <= 1_048_576:
+            raise ConfigurationError(
+                "Structured output limit must be >0 and <=1048576 bytes"
+            )
+        if self.log_format not in {"auto", "text", "json"}:
+            raise ConfigurationError("IGNITION_MCP_LOG_FORMAT must be auto, text, or json")
         if self.deployment_profile not in {"development", "trusted-internal", "secured"}:
             raise ConfigurationError("Unknown deployment profile")
         if self.auth_mode not in {"none", "static-token"}:
@@ -76,6 +88,13 @@ class Settings:
             and not _is_loopback(self.bind_host)
         ):
             raise ConfigurationError("Unauthenticated non-loopback binding requires trusted-internal profile")
+
+
+    @property
+    def resolved_log_format(self) -> str:
+        if self.log_format != "auto":
+            return self.log_format
+        return "text" if self.deployment_profile == "development" else "json"
 
 
 def _is_loopback(host: str) -> bool:

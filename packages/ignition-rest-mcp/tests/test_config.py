@@ -18,6 +18,8 @@ def _settings(**changes: object) -> Settings:
         "service_identity": "test",
         "watcher_interval_seconds": 60.0,
         "request_timeout_seconds": 10.0,
+        "structured_output_limit_bytes": 262_144,
+        "log_format": "auto",
     }
     values.update(changes)
     return Settings(**values)  # type: ignore[arg-type]
@@ -36,5 +38,17 @@ def test_trusted_internal_allows_explicit_non_loopback_none_auth() -> None:
 
 def test_static_token_requires_secret() -> None:
     settings = _settings(auth_mode="static-token")
+    with pytest.raises(ConfigurationError):
+        settings.validate()
+
+
+def test_auto_log_format_uses_json_outside_development() -> None:
+    settings = _settings(deployment_profile="trusted-internal", bind_host="0.0.0.0")
+    settings.validate()
+    assert settings.resolved_log_format == "json"
+
+
+def test_structured_output_limit_rejects_values_above_hard_ceiling() -> None:
+    settings = _settings(structured_output_limit_bytes=1_048_577)
     with pytest.raises(ConfigurationError):
         settings.validate()
