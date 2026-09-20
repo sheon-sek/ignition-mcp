@@ -18,8 +18,8 @@
     "fallbackEnabled": false,
     "permissions": [],
     "parameters": [
-      {"type": "Parameter", "identifier": "limit", "sqlType": 4},
-      {"type": "Parameter", "identifier": "offset", "sqlType": 4}
+      {"type": "Parameter", "identifier": "limit", "sqlType": 2},
+      {"type": "Parameter", "identifier": "offset", "sqlType": 2}
     ]
   }
 }
