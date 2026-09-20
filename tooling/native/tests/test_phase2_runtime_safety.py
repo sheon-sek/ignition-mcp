@@ -167,15 +167,17 @@ def test_alarm_journal_rejects_unbounded_associated_data_before_native_call() ->
     assert contract["parameters"]["includeData"]["trueBehavior"] == "unsupported_capability"
 
 
-def test_tag_query_normalizes_native_full_path_before_json_conversion() -> None:
+def test_tag_query_normalizes_native_full_path_before_property_allowlist() -> None:
     source = (TOOLS / "tag_query/onToolCalled.py").read_text(encoding="utf-8")
     raw_values = source.index('rawValues = dict((unicode(key), value) for key, value in nativePairs)')
+    canonical_path = source.index('path = rawValues.get("path")')
     full_path = source.index('path = rawValues.get("fullPath")')
     path_text = source.index('pathText = unicode(path)')
-    json_values = source.index('values = dict((key, jsonValue(value)) for key, value in rawValues.items())')
-    canonical = source.index('values["path"] = pathText')
-    assert raw_values < full_path < path_text < json_values < canonical
-    assert 'del values["fullPath"]' in source
+    values = source.index('values = {"path": pathText}')
+    property_loop = source.index(
+        'for propertyName in ("name", "tagType", "dataType", "valueSource", "typeId", "quality")'
+    )
+    assert raw_values < canonical_path < full_path < path_text < values < property_loop
 
 
 def test_tag_query_uses_documented_pywrapper_continuation_property() -> None:
