@@ -1,10 +1,10 @@
-# Ignition MCP Architecture Decisions — D01–D25
+# Ignition MCP Architecture Decisions — D01–D26
 
 **Status:** DECIDED
 
 **Canonical location:** `docs/decisions/` (see D25). This single index replaces the three per-batch index files, which are kept unchanged in `docs/_archive/`.
 
-D01–D25 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
+D01–D26 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
 
 ## Decision index
 
@@ -35,6 +35,7 @@ D01–D25 are binding unless explicitly reopened through a new decision or amend
 | D23 | DECIDED | Testing Matrix and Real Ignition Gateway CI | Resource/Prompt protocol and artifact tests |
 | D24 | DECIDED | Canonical Dual-Server Architecture and Optional Unified Facade | future federation must cover Prompts |
 | D25 | DECIDED | Final Monorepo / Package Layout | second product is `ignition-runtime-bundle` |
+| D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
 
 ## Cross-decision amendment
 
@@ -86,6 +87,7 @@ Key frozen principles:
 - Runtime MCP uses explicit Server Profiles/Security Levels/Tool inventories.
 - All Tools have bounded input/execution/output; Resource/Prompt payloads are bounded too.
 - Repository is a monorepo with two primary products and one canonical decision directory.
+- v1 implementation is dependency-first: prove Native response binding and a minimal dual-plane read-only vertical slice before broad Tool expansion; mutations and Perspective authoring are gated behind their safety/transaction foundations.
 
 ## Runtime MCP primitive model
 
@@ -155,9 +157,23 @@ https://github.com/WhiskeyHouse/ignition-mcp.git
 
 ## Decision directory conventions
 - Canonical decisions live in `docs/decisions/` (D25).
-- `INDEX.md` is the single index for D01–D25.
+- `INDEX.md` is the single index for D01–D26.
 - Later changes to an existing decision must leave an explicit trace: a new decision, an amendment section, or a recorded D07-A style amendment.
 - `docs/_archive/` holds pre-cleanup batch snapshots and is not authoritative.
+
+## D26 implementation entry point
+
+D26 freezes the first complete product scope and converts D01–D25 into an executable delivery sequence:
+
+1. **Phase 0 / G0:** repository foundation plus real Native MCP response-binding proof.
+2. **Phase 1 / G1:** minimal read-only end-to-end slice for both canonical servers.
+3. **Phase 2 / G2:** complete readonly surface.
+4. **Phase 3 / G3:** Artifact, Project, diagnostics, deployment and mutation-safety foundations.
+5. **Phase 4 / G4:** controlled non-Perspective mutations.
+6. **Phase 5 / G5:** typed Perspective authoring on D16/D17 transaction infrastructure.
+7. **Phase 6 / G6:** deployment completion and compatibility-certified release.
+
+The critical first implementation rule is that `NATIVE_BINDING_PENDING` must be resolved through a real Gateway + exact MCP Module build before Runtime breadth-first implementation or any production `SUPPORTED` claim.
 
 ## Pre-D26 consistency cleanup (applied)
 
@@ -176,10 +192,8 @@ Unchanged: D01, D03, D04, D08, D11–D17, and every architectural principle they
 
 ## Resume point
 
-The next unresolved decision is:
+The original D01–D26 architecture / implementation decision backlog is now complete.
 
-### D26
+Implementation begins at **D26 Phase 0**. The first hard gate is **G0 Native Tool response binding verification**; in parallel, the repository skeleton, contracts/tooling/CI foundation and ignition-rest foundation may be implemented.
 
-D26 has not been discussed or decided yet.
-
-Treat D01–D25 plus D07-A as binding unless explicitly reopened.
+Treat D01–D26 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
