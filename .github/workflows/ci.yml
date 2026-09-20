@@ -38,6 +38,14 @@ jobs:
             echo "production build unexpectedly succeeded while native binding is pending" >&2
             exit 1
           fi
+      - name: Validate Phase 0 live characterization fixture
+        run: |
+          (cd tests/fixtures/modules && sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256)
+          uv run --no-sync python -m tooling.native.cli validate --project-dir tests/harness/runtime-binding/project
+          uv run --no-sync python tests/harness/runtime-binding/build_fixture.py dist/g0-first.zip
+          uv run --no-sync python tests/harness/runtime-binding/build_fixture.py dist/g0-second.zip
+          cmp dist/g0-first.zip dist/g0-second.zip
+          uv run --no-sync python -m py_compile tests/harness/runtime-binding/probe.py tests/harness/runtime-binding/build_fixture.py
       - name: Build disabled technical scaffold twice
         run: |
           uv run --no-sync python -m tooling.native.cli build             --project-dir packages/ignition-runtime-bundle/project             --output dist/first.zip --allow-unbound-scaffold

@@ -1,0 +1,17 @@
+{
+  "title": "Phase 0 Native Binding Characterization",
+  "version": "1.0.0",
+  "permissions": {
+    "type": "AllOf",
+    "securityLevels": []
+  },
+  "tools": {
+    "project/mcp_characterization": "*"
+  },
+  "resources": {
+    "project/mcp_characterization": "*"
+  },
+  "prompts": {
+    "project/mcp_characterization": "*"
+  }
+}
