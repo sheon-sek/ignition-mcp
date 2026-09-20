@@ -26,6 +26,9 @@ CURRENT_RUNTIME_TOOLS = [
     "tag_get_config",
     "udt_type_list",
     "udt_type_get",
+    "alarm_status",
+    "alarm_journal",
+    "alarm_shelved_list"
 ]
 
 

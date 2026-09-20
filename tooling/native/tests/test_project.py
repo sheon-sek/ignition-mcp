@@ -28,12 +28,7 @@ class RuntimeProjectTest(unittest.TestCase):
         )
         for schema_name, resource_name in pairs:
             source = ROOT / "contracts/schemas" / schema_name
-            published = (
-                PROJECT
-                / "com.inductiveautomation.mcp/resources/contracts"
-                / resource_name
-                / "data.bin"
-            )
+            published = PROJECT / "com.inductiveautomation.mcp/resources/contracts" / resource_name / "data.bin"
             self.assertEqual(source.read_bytes(), published.read_bytes())
 
     def test_production_build_is_deterministic_after_d27_binding_resolution(self) -> None:
@@ -46,16 +41,12 @@ class RuntimeProjectTest(unittest.TestCase):
 
     def test_runtime_handlers_have_no_pending_binding_marker(self) -> None:
         files = validate_project(PROJECT)
-        handlers = [
-            value
-            for name, value in files.items()
-            if name.endswith("/onToolCalled.py")
-        ]
-        self.assertEqual(len(handlers), 7)
+        handlers = [value for name, value in files.items() if name.endswith("/onToolCalled.py")]
+        self.assertEqual(len(handlers), 10)
         for handler in handlers:
             self.assertNotIn(b"NATIVE_BINDING_PENDING", handler)
 
-    def test_phase2_tag_runtime_tool_inventory_is_exact(self) -> None:
+    def test_phase2_current_runtime_tool_inventory_is_exact(self) -> None:
         files = validate_project(PROJECT)
         identifiers = []
         titles = []
@@ -67,14 +58,17 @@ class RuntimeProjectTest(unittest.TestCase):
                 resource = json.loads(payload)
                 titles.append(resource["attributes"]["title"])
         expected = [
-            "bundle_info",
-            "tag_browse",
-            "tag_get_config",
-            "tag_query",
-            "tag_read",
-            "udt_type_get",
-            "udt_type_list",
-        ]
+    "alarm_journal",
+    "alarm_shelved_list",
+    "alarm_status",
+    "bundle_info",
+    "tag_browse",
+    "tag_get_config",
+    "tag_query",
+    "tag_read",
+    "udt_type_get",
+    "udt_type_list"
+]
         self.assertEqual(sorted(identifiers), expected)
         self.assertEqual(sorted(titles), expected)
 
