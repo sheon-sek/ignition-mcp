@@ -1,0 +1,12 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "database_query_list",
+    "description": "List only deployment-approved Named Query aliases. Backend project/path/datasource details are not caller-selectable.",
+    "parameters": []
+  }
+}

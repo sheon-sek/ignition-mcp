@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:database-query:output",
+  "oneOf": [
+    {"$ref": "#/$defs/dataset"},
+    {"$ref": "#/$defs/scalar"}
+  ],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "value": {
+      "oneOf": [
+        {"type": ["string", "number", "boolean"]},
+        {"$ref": "#/$defs/null"},
+        {"type": "array", "items": {"$ref": "#/$defs/value"}},
+        {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}},
+        {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "decimal"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false},
+        {"type": "object", "properties": {"type": {"const": "non-finite-number"}, "text": {"type": "string"}}, "required": ["type", "text"], "additionalProperties": false}
+      ]
+    },
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]},
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alias": {"type": "string", "minLength": 1},
+        "resultMode": {"const": "dataset"},
+        "columns": {"type": "array", "items": {"type": "string"}},
+        "rows": {"type": "array", "maxItems": 2000, "items": {"type": "array", "items": {"$ref": "#/$defs/value"}}},
+        "page": {"type": "object", "additionalProperties": false, "properties": {"mode": {"enum": ["offset", "fixed"]}, "offset": {"type": "integer", "minimum": 0}, "limit": {"type": "integer", "minimum": 1, "maximum": 2000}, "nextOffset": {"oneOf": [{"type": "integer", "minimum": 0}, {"$ref": "#/$defs/null"}]}}, "required": ["mode", "offset", "limit", "nextOffset"]},
+        "meta": {"$ref": "#/$defs/meta"}
+      },
+      "required": ["alias", "resultMode", "columns", "rows", "page", "meta"]
+    },
+    "scalar": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "alias": {"type": "string", "minLength": 1},
+        "resultMode": {"const": "scalar"},
+        "value": {"$ref": "#/$defs/value"},
+        "meta": {"$ref": "#/$defs/meta"}
+      },
+      "required": ["alias", "resultMode", "value", "meta"]
+    }
+  }
+}

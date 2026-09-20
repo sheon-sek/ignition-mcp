@@ -1,0 +1,17 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "database_query",
+    "description": "Execute one deployment-approved bounded Named Query alias. Arbitrary SQL, arbitrary Named Query paths, transactions, QueryString parameters, and dynamic datasource selection are not exposed.",
+    "parameters": [
+      {"name": "alias", "description": "Approved alias returned by database_query_list.", "type": "string", "required": true},
+      {"name": "parameters", "description": "Validated Value-style parameters declared by the approved alias.", "type": "object", "required": false, "default": {}},
+      {"name": "pageSize", "description": "Dataset page size. 0 selects the registry default. Hard ceiling 2000. Ignored only for scalar aliases.", "type": "integer", "required": false, "default": 0},
+      {"name": "offset", "description": "Dataset offset for aliases whose approved pagination mode is offset. Default 0.", "type": "integer", "required": false, "default": 0}
+    ]
+  }
+}

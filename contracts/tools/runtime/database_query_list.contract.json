@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "name": "database_query_list",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {},
+  "registrySource": "deployment-env:IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON",
+  "registryMaxBytes": 32768,
+  "registryMaxEntries": 100,
+  "callerCanSelectProject": false,
+  "callerCanSelectNamedQueryPath": false,
+  "callerCanSelectDatasource": false,
+  "outputSchema": "contracts/schemas/database-query-list.output.schema.json",
+  "nativeRequirements": [],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nullEncoding": "ignition-null-v1"
+}

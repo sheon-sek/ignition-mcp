@@ -94,6 +94,28 @@ The generic Skill still documents `NATIVE_BINDING_PENDING` and a narrower parame
 17. **Domain-negative state is data.** Bad/Uncertain Quality, active alarms, disconnected status and empty searches are not automatically Tool Errors.
 18. **Compatibility claims come from evidence.** G2 evidence may remain `UNTESTED`; never hand-edit a tuple to `SUPPORTED`.
 
+## Phase 2 Runtime database registry
+
+D14 requires an explicit approved Named Query registry but does not freeze its storage mechanism. Phase 2 uses a small deployment configuration rather than an arbitrary SQL/path surface or a guessed shared Project Library resource.
+
+Gateway process environment variable:
+
+`IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON`
+
+Rules:
+
+- schemaVersion is exactly 1;
+- at most 100 aliases and 32 KiB serialized registry data;
+- alias maps server-side to a fixed `project` + Named Query `path`;
+- datasource policy is `named-query-fixed`; the caller cannot choose a datasource;
+- only Value-style parameter types are accepted: string, integer, number, boolean, datetime;
+- QueryString/Database parameters, arbitrary SQL, transactions and caller-supplied Named Query paths remain impossible;
+- dataset aliases must declare either handler-owned offset pagination or an independently reviewed fixed row bound, both capped at D10's 2,000-row hard maximum;
+- scalar aliases use `system.db.execScalar`;
+- an absent registry is a valid empty approved registry; malformed registry configuration fails closed.
+
+The two Runtime database Tools remain self-contained and independently validate the same deployment registry. This deliberately avoids introducing an unverified shared Jython Project Library during Phase 2. The G2 harness will configure a test-only approved alias and a separate PostgreSQL-backed fixture project without modifying the exact Runtime Bundle ZIP under test.
+
 ## Implementation order
 
 Use dependency-first slices rather than adding the whole catalog at once.

@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:database-query-list:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "entries": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "alias": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,63}$"},
+          "description": {"type": "string", "minLength": 1, "maxLength": 512},
+          "resultMode": {"enum": ["dataset", "scalar"]},
+          "parameters": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "type": {"enum": ["string", "integer", "number", "boolean", "datetime"]},
+                "required": {"type": "boolean"},
+                "minimum": {"type": "number"},
+                "maximum": {"type": "number"},
+                "maxLength": {"type": "integer", "minimum": 1, "maximum": 4096}
+              },
+              "required": ["name", "type", "required"]
+            }
+          },
+          "pagination": {
+            "oneOf": [
+              {"type": "object", "additionalProperties": false, "properties": {"mode": {"const": "none"}}, "required": ["mode"]},
+              {"type": "object", "additionalProperties": false, "properties": {"mode": {"const": "offset"}, "defaultPageSize": {"type": "integer", "minimum": 1, "maximum": 200}, "hardPageSize": {"type": "integer", "minimum": 1, "maximum": 2000}, "maxOffset": {"type": "integer", "minimum": 0, "maximum": 1000000}}, "required": ["mode", "defaultPageSize", "hardPageSize", "maxOffset"]},
+              {"type": "object", "additionalProperties": false, "properties": {"mode": {"const": "fixed"}, "maxRows": {"type": "integer", "minimum": 1, "maximum": 2000}}, "required": ["mode", "maxRows"]}
+            ]
+          }
+        },
+        "required": ["alias", "description", "resultMode", "parameters", "pagination"]
+      }
+    },
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"approved": {"type": "integer", "minimum": 0, "maximum": 100}}, "required": ["approved"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  },
+  "required": ["entries", "summary", "meta"]
+}
