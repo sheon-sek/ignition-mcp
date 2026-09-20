@@ -218,65 +218,77 @@ def _select_database_identity_when_ready(
             time.sleep(5.0)
 
 
-def _accept_quarantined_certificates(base_url: str, token: str) -> list[str]:
+def _accept_quarantined_certificates(base_url: str, token: str) -> dict[str, list[str]]:
     status, payload = _request(
         base_url, token, "GET", "/data/api/v1/modules/quarantined",
         query={"limit": "500", "offset": "0"},
     )
     if status != 200 or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
         raise ProvisionError(f"quarantine discovery returned unexpected HTTP {status}")
-    accepted: list[str] = []
+    outcome: dict[str, list[str]] = {"newlyAccepted": [], "alreadyAccepted": []}
     for module in payload["items"]:
         if not isinstance(module, dict) or not isinstance(module.get("id"), str):
             continue
         module_id = module["id"]
         if module.get("certAccepted") is not False:
             continue
+        # All bundled IA modules share one signing certificate: the first acceptance
+        # succeeds and every subsequent module returns 409 "already accepted", which
+        # is the same end state and must be treated idempotently.
         code, body = _request(
             base_url, token, "POST", "/data/api/v1/modules/certificate",
-            query={"moduleId": module_id}, allowed_error_statuses=frozenset({404}),
+            query={"moduleId": module_id}, allowed_error_statuses=frozenset({404, 409}),
         )
         if code == 404:
-            # Pre-commissioned state races: re-reading the same module's certificate
-            # view on a fresh Gateway can 404 after a concurrent accept.
+            continue
+        if code == 409:
+            outcome["alreadyAccepted"].append(module_id)
             continue
         if code not in {200, 201, 202, 204}:
             raise ProvisionError(
                 f"accepting certificate for {module_id} returned HTTP {code}: {str(body)[:400]}"
             )
-        accepted.append(module_id)
-    return accepted
+        outcome["newlyAccepted"].append(module_id)
+    return outcome
 
 
-def _await_required_modules(base_url: str, token: str) -> dict[str, str]:
-    deadline = time.monotonic() + 240.0
+def _await_required_modules(base_url: str, token: str, timeout: float = 240.0) -> dict[str, str]:
+    deadline = time.monotonic() + timeout
     seen: dict[str, str] = {}
-    last_error = ""
     while time.monotonic() < deadline:
-        try:
-            status, payload = _request(
-                base_url, token, "GET", "/data/api/v1/modules/healthy",
-                query={"limit": "500", "offset": "0"},
-            )
-            items = payload.get("items") if status == 200 and isinstance(payload, dict) else None
-            if isinstance(items, list):
-                seen = {
-                    str(item.get("id")): str(item.get("name"))
-                    for item in items
-                    if isinstance(item, dict) and isinstance(item.get("id"), str)
-                }
-                if all(
-                    any(marker in module_id.lower() for module_id in seen)
-                    for marker in _REQUIRED_MODULE_MARKERS
-                ):
-                    return seen
-            last_error = f"healthy modules so far: {sorted(seen)}"
-        except ProvisionError as error:
-            last_error = str(error)
+        status, payload = _request(
+            base_url, token, "GET", "/data/api/v1/modules/healthy",
+            query={"limit": "500", "offset": "0"},
+        )
+        items = payload.get("items") if status == 200 and isinstance(payload, dict) else None
+        if isinstance(items, list):
+            seen = {
+                str(item.get("id")): str(item.get("name"))
+                for item in items
+                if isinstance(item, dict) and isinstance(item.get("id"), str)
+            }
+            if all(
+                any(marker in module_id.lower() for module_id in seen)
+                for marker in _REQUIRED_MODULE_MARKERS
+            ):
+                return seen
         time.sleep(5.0)
     raise ProvisionError(
-        f"required modules {_REQUIRED_MODULE_MARKERS} never became healthy: {last_error}"
+        f"required modules {_REQUIRED_MODULE_MARKERS} never became healthy: have={sorted(seen)}"
     )
+
+
+def heal(base_url: str, token: str) -> dict[str, Any]:
+    # Certificate acceptance may only take effect for already-quarantined modules on
+    # the next Gateway start. The workflow performs the (persisted) acceptance and the
+    # bounded restart, so this stage classifies the remaining state as healthy or
+    # RESTART_REQUIRED instead of silently continuing.
+    certificates = _accept_quarantined_certificates(base_url, token)
+    try:
+        healthy = _await_required_modules(base_url, token, timeout=120.0)
+    except ProvisionError as error:
+        return {"status": "RESTART_REQUIRED", "certificates": certificates, "detail": str(error)}
+    return {"status": "HEALTHY", "certificates": certificates, "healthyModuleIds": sorted(healthy)}
 
 
 def provision(base_url: str, token: str) -> dict[str, Any]:
@@ -284,7 +296,7 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
     # so they sit in quarantine and expose no REST route (e.g. Historian provider
     # POST -> 404 "No route match"). Accept certificates through the product REST flow,
     # then wait for the Phase 2 required modules to become healthy before provisioning.
-    certificates_accepted = _accept_quarantined_certificates(base_url, token)
+    certificates = _accept_quarantined_certificates(base_url, token)
     healthy_modules = _await_required_modules(base_url, token)
     driver, translator, connect_url = _select_database_identity_when_ready(base_url, token)
     resources = [
@@ -336,7 +348,7 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
     # both Tools are deferred per the D12 Phase 2 bounded-execution amendment.
     results: dict[str, Any] = {
         "resources": {},
-        "certificatesAccepted": certificates_accepted,
+        "certificates": certificates,
         "healthyModuleIds": sorted(healthy_modules),
         "databaseDriver": driver,
         "databaseTranslator": translator,
@@ -371,15 +383,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8088")
     parser.add_argument("--api-token", required=True)
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--stage", choices=("heal", "provision"), default="provision")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        result = {"status": "PASS", **provision(args.gateway_url, args.api_token)}
+        if args.stage == "heal":
+            outcome = heal(args.gateway_url, args.api_token)
+            result = {"status": "PASS", "stage": "heal", **outcome}
+        else:
+            result = {"status": "PASS", "stage": "provision", **provision(args.gateway_url, args.api_token)}
     except Exception as error:
-        result = {"status": "FAILED", "fatalError": f"{type(error).__name__}: {error}"}
+        result = {"status": "FAILED", "stage": args.stage, "fatalError": f"{type(error).__name__}: {error}"}
         args.evidence.parent.mkdir(parents=True, exist_ok=True)
         args.evidence.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(result["fatalError"])
@@ -387,6 +404,8 @@ def main() -> int:
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True))
+    if args.stage == "heal" and outcome["status"] == "RESTART_REQUIRED":
+        return 40
     return 0
 
 

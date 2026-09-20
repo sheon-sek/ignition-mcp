@@ -182,13 +182,44 @@ jobs:
           echo "Authenticated Gateway REST did not become ready" >&2
           exit 1
 
+      - name: Heal quarantined bundled modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          heal() {
+            set +e
+            uv run --locked --package ignition-rest-mcp python tests/harness/phase2-live/provision.py \
+              --stage heal --api-token "$CI_API_TOKEN" --evidence "$1"
+            rc=$?
+            set -e
+            return "$rc"
+          }
+          if ! heal "$EVIDENCE_DIR/provision-heal.json"; then
+            # Certificate acceptance is persisted but may only un-quarantine bundled
+            # modules on the next Gateway start; restart once and re-classify.
+            echo "Module healing requires a Gateway restart; restarting once" >&2
+            docker compose -f "$COMPOSE_FILE" restart -t 30 gateway
+            deadline=$((SECONDS + 300))
+            until curl --fail --silent --max-time 5 -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              http://127.0.0.1:8088/data/api/v1/gateway-info >/dev/null; do
+              if (( SECONDS >= deadline )); then
+                echo "Gateway REST did not recover after restart" >&2
+                exit 1
+              fi
+              sleep 3
+            done
+            if ! heal "$EVIDENCE_DIR/provision-heal-after-restart.json"; then
+              echo "Required modules still unhealthy after certificate acceptance and restart" >&2
+              exit 1
+            fi
+          fi
+
       - name: Provision bounded Phase 2 fixtures
         shell: bash
         run: |
           set -euo pipefail
           uv run --locked --package ignition-rest-mcp python tests/harness/phase2-live/provision.py \
-            --api-token "$CI_API_TOKEN" \
-            --evidence "$EVIDENCE_DIR/provision.json"
+            --stage provision --api-token "$CI_API_TOKEN" --evidence "$EVIDENCE_DIR/provision.json"
 
       - name: Start ignition-rest
         shell: bash
