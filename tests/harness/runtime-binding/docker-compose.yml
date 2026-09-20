@@ -16,7 +16,6 @@ services:
       - phase0-gateway-data:/usr/local/bin/ignition/data
       - ../../fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl:/usr/local/bin/ignition/user-lib/modules/MCP-module.modl
       - ./project:/usr/local/bin/ignition/data/projects/mcp_characterization
-      - ./gateway-config/com.inductiveautomation.mcp/server-config:/usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp/server-config
     command: >
       -n ignition-mcp-phase0-ci
       -m 1024

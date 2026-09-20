@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - "feature/phase-0-foundation-native-binding"
   pull_request:
     paths:
       - ".github/workflows/live-gateway-g0.yml"
@@ -86,32 +85,43 @@ jobs:
           set -euo pipefail
           docker compose -f "$COMPOSE_FILE" up -d --no-build
 
-      - name: Wait for exact Gateway and MCP Module startup
+      - name: Wait for initial Gateway commissioning
         shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$EVIDENCE_DIR"
-          deadline=$((SECONDS + 360))
+          deadline=$((SECONDS + 300))
           gateway_seen=0
-          module_seen=0
           while (( SECONDS < deadline )); do
             docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
             if grep -Fq "Starting Ignition 8.3.8 (b${GATEWAY_BUILD})" "$EVIDENCE_DIR/gateway.log"; then
               gateway_seen=1
             fi
-            if grep -Fq "com.inductiveautomation.mcp" "$EVIDENCE_DIR/gateway.log" \
-              && grep -Fq "1.3.5.2026021307-SNAPSHOT" "$EVIDENCE_DIR/gateway.log"; then
-              module_seen=1
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              echo "Gateway faulted during initial commissioning" >&2
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
             fi
-            if (( gateway_seen == 1 && module_seen == 1 )) \
+            if (( gateway_seen == 1 )) \
               && curl --fail --silent --show-error --max-time 3 http://127.0.0.1:8088/StatusPing >/dev/null; then
               exit 0
             fi
             sleep 3
           done
-          echo "Gateway/module readiness deadline exceeded" >&2
+          echo "Initial Gateway commissioning deadline exceeded" >&2
           tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
           exit 1
+
+      - name: Install Phase 0 MCP server config
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          test -n "$cid"
+          target="/usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp/server-config"
+          docker exec "$cid" mkdir -p "$target"
+          docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp/server-config/. "$cid:$target/"
+          docker compose -f "$COMPOSE_FILE" restart gateway
 
       - name: Run real MCP characterization
         id: probe
@@ -126,7 +136,7 @@ jobs:
             --fixture-zip "$FIXTURE_ZIP" \
             --evidence "$EVIDENCE_DIR/evidence.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
-            --startup-timeout 180
+            --startup-timeout 240
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           exit 0
