@@ -1,9 +1,9 @@
 {
   "schemaVersion": 3,
   "gate": "G0",
-  "sourceRunId": 35505312397,
-  "sourceRunHeadSha": "5bbd6e6283fe598cfff1a804de206230aa679cf5",
-  "sourceArtifactDigest": "sha256:3033f0dc775b8338477807429ba06005f03b919e5e872cc56e12ca0902488d8f",
+  "sourceRunId": 35506715670,
+  "sourceRunHeadSha": "cfb53a55dfccf5e28907879c7fac38b212e1b3b2",
+  "sourceArtifactDigest": "sha256:6f4e2ff245aec92f7c1ed7eb4425ba295623b1ac2d25a237c46640400dee6b0e",
   "gatewayVersion": "8.3.8",
   "gatewayBuild": "2026071409",
   "gatewayImage": "inductiveautomation/ignition:8.3.8",
@@ -14,7 +14,7 @@
   "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
   "bundleVersion": "phase0-characterization-fixture-1",
   "bundleSha256": "a1c007c0317fe1ee94fe1f9f1d2ab4cda9f5d5bba5741236a4fe2701c602adbb",
-  "openapiSha256": null,
+  "openapiSha256": "2941eb80f2db91135b1c488223ab33465f42b5545afbc18b9c522d2292503b4c",
   "initialize": true,
   "toolsList": true,
   "resourcesList": true,
@@ -28,7 +28,6 @@
   "d27OutputSchemaExceptionApplied": true,
   "observations": [
     "binding-success did not publish outputSchema in tools/list",
-    "D27 exact-tuple native outputSchema exception applied",
-    "OpenAPI fingerprint unavailable during G0: HTTP 403; OpenAPI is not a G0 native-binding requirement"
+    "D27 exact-tuple native outputSchema exception applied"
   ]
 }

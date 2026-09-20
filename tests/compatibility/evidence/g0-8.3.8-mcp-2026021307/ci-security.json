@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "sourceRunId": 35506715670,
+  "sourceRunHeadSha": "cfb53a55dfccf5e28907879c7fac38b212e1b3b2",
+  "credentialScope": "ephemeral-ci-only",
+  "tokenName": "ignition-mcp-ci",
+  "tokenHash": "QaH9skRX4DQggE1M8oVuwZSNIU9tOzkt9TKzKNPt53M",
+  "secureChannelRequired": false,
+  "securityLevelPath": "Authenticated/IgnitionMcpCi",
+  "securityTreePlacement": "Authenticated child; sibling of Authenticated/Roles",
+  "gatewayPermissions": {
+    "access": {"type": "AnyOf", "verified": true},
+    "read": {"type": "AnyOf", "verified": true},
+    "write": {"type": "AnyOf", "verified": true}
+  },
+  "liveChecks": {
+    "unauthenticatedOpenapiHttpStatus": 403,
+    "authenticatedOpenapiHttpStatus": 200,
+    "gatewayInfoHttpStatus": 200,
+    "apiTokenGenerateWriteProbeHttpStatus": 200
+  },
+  "openapiSha256": "2941eb80f2db91135b1c488223ab33465f42b5545afbc18b9c522d2292503b4c"
+}
