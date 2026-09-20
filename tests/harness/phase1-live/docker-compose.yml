@@ -1,0 +1,23 @@
+services:
+  gateway:
+    image: inductiveautomation/ignition:8.3.8
+    pull_policy: never
+    ports:
+      - "127.0.0.1:8088:8088"
+    environment:
+      ACCEPT_IGNITION_EULA: "Y"
+      GATEWAY_ADMIN_USERNAME: "admin"
+      GATEWAY_ADMIN_PASSWORD: "phase1-ci-only-not-a-production-secret"
+      IGNITION_EDITION: "standard"
+      DISABLE_QUICKSTART: "true"
+      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp"
+      ACCEPT_MODULE_CERTS: "com.inductiveautomation.mcp"
+    volumes:
+      - phase1-gateway-data:/usr/local/bin/ignition/data
+      - ../../fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl:/usr/local/bin/ignition/user-lib/modules/MCP-module.modl
+    command: >
+      -n ignition-mcp-phase1-ci
+      -m 1024
+
+volumes:
+  phase1-gateway-data:
