@@ -27,7 +27,7 @@ services:
       GATEWAY_ADMIN_PASSWORD: "phase2-ci-only-not-a-production-secret"
       IGNITION_EDITION: "standard"
       DISABLE_QUICKSTART: "true"
-      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp"
+      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp,com.inductiveautomation.historian,com.inductiveautomation.alarm-notification,com.inductiveautomation.jdbc.mariadb"
       ACCEPT_MODULE_CERTS: "com.inductiveautomation.mcp"
       IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON: >-
         {"schemaVersion":1,"entries":[{"alias":"ci_page","description":"Bounded CI fixture database query.","project":"ignition_mcp_phase2_fixtures","path":"mcp_ci/page","resultMode":"dataset","datasourcePolicy":"named-query-fixed","parameters":{},"pagination":{"mode":"offset","limitParameter":"limit","offsetParameter":"offset","defaultPageSize":2,"hardPageSize":100,"maxOffset":1000}}]}

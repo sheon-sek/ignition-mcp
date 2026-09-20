@@ -16,12 +16,20 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 MAX_RESPONSE_BYTES = 1_048_576
-# Live G2 evidence: a fresh 8.3.x standard Gateway quarantines every bundled module
-# (Historian Core, Alarm Notification, JDBC drivers, ...) until certificates are
-# accepted; ACCEPT_MODULE_CERTS is documented only for third-party identifiers, so
-# the harness heals the actual Gateway state through the product's own REST flow
-# instead of guessing image-internal module ID lists or wildcard semantics.
-_REQUIRED_MODULE_MARKERS = ("historian", "alarm-notification")
+MAX_OPENAPI_BYTES = 16 * 1_048_576
+
+# GATEWAY_MODULES_ENABLED is a whitelist. Phase 2 explicitly enables only the
+# modules required by this disposable certification environment. Provisioning is
+# gated by the actual OpenAPI routes those modules contribute, not by module-health
+# labels or certificate side effects.
+_REQUIRED_OPENAPI_ENDPOINTS = frozenset({
+    ("GET", "/data/alarm-notification/api/v1/pipeline"),
+    ("GET", "/data/alarm-notification/api/v1/pipelines"),
+    ("POST", "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider"),
+    ("POST", "/data/api/v1/resources/ignition/audit-profile"),
+    ("POST", "/data/api/v1/resources/ignition/database-connection"),
+    ("POST", "/data/api/v1/tags/import"),
+})
 
 
 class ProvisionError(RuntimeError):
@@ -39,6 +47,7 @@ def _request(
     query: dict[str, str] | None = None,
     timeout: float = 20.0,
     allowed_error_statuses: frozenset[int] = frozenset(),
+    max_response_bytes: int = MAX_RESPONSE_BYTES,
 ) -> tuple[int, Any]:
     url = base_url.rstrip("/") + path
     if query:
@@ -56,13 +65,16 @@ def _request(
     )
     try:
         with urlopen(request, timeout=timeout) as response:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(raw) > MAX_RESPONSE_BYTES:
-                raise ProvisionError(f"{method} {path} response exceeded {MAX_RESPONSE_BYTES} bytes")
+            raw = response.read(max_response_bytes + 1)
+            if len(raw) > max_response_bytes:
+                raise ProvisionError(f"{method} {path} response exceeded {max_response_bytes} bytes")
             return response.status, json.loads(raw) if raw.strip() else None
     except HTTPError as error:
-        raw = error.read(MAX_RESPONSE_BYTES + 1)
-        detail = raw[:2000].decode("utf-8", errors="replace")
+        raw = error.read(max_response_bytes + 1)
+        if len(raw) > max_response_bytes:
+            detail = f"<response exceeded {max_response_bytes} bytes>"
+        else:
+            detail = raw[:2000].decode("utf-8", errors="replace")
         if error.code in allowed_error_statuses:
             try:
                 parsed = json.loads(raw) if raw.strip() else None
@@ -204,9 +216,9 @@ def _select_database_identity(base_url: str, token: str) -> tuple[str, str, str]
 def _select_database_identity_when_ready(
     base_url: str, token: str, timeout: float = 180.0,
 ) -> tuple[str, str, str]:
-    # Bundled JDBC driver modules un-quarantine asynchronously after certificate
-    # acceptance, so discovery is retried under a bounded deadline instead of
-    # assuming a fixed sleep or permanently registered driver resources.
+    # Driver resources can register asynchronously after the Gateway becomes
+    # authenticated. Discovery is retried under a bounded deadline instead of
+    # assuming a fixed startup delay.
     deadline = time.monotonic() + timeout
     while True:
         try:
@@ -218,86 +230,58 @@ def _select_database_identity_when_ready(
             time.sleep(5.0)
 
 
-def _accept_quarantined_certificates(base_url: str, token: str) -> dict[str, list[str]]:
-    status, payload = _request(
-        base_url, token, "GET", "/data/api/v1/modules/quarantined",
-        query={"limit": "500", "offset": "0"},
-    )
-    if status != 200 or not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
-        raise ProvisionError(f"quarantine discovery returned unexpected HTTP {status}")
-    outcome: dict[str, list[str]] = {"newlyAccepted": [], "alreadyAccepted": []}
-    for module in payload["items"]:
-        if not isinstance(module, dict) or not isinstance(module.get("id"), str):
+def _openapi_endpoint_inventory(payload: Any) -> set[tuple[str, str]]:
+    if not isinstance(payload, dict) or not isinstance(payload.get("paths"), dict):
+        raise ProvisionError("Gateway OpenAPI document is missing paths")
+    endpoints: set[tuple[str, str]] = set()
+    for path, operations in payload["paths"].items():
+        if not isinstance(path, str) or not isinstance(operations, dict):
             continue
-        module_id = module["id"]
-        if module.get("certAccepted") is not False:
-            continue
-        # All bundled IA modules share one signing certificate: the first acceptance
-        # succeeds and every subsequent module returns 409 "already accepted", which
-        # is the same end state and must be treated idempotently.
-        code, body = _request(
-            base_url, token, "POST", "/data/api/v1/modules/certificate",
-            query={"moduleId": module_id}, allowed_error_statuses=frozenset({404, 409}),
-        )
-        if code == 404:
-            continue
-        if code == 409:
-            outcome["alreadyAccepted"].append(module_id)
-            continue
-        if code not in {200, 201, 202, 204}:
-            raise ProvisionError(
-                f"accepting certificate for {module_id} returned HTTP {code}: {str(body)[:400]}"
-            )
-        outcome["newlyAccepted"].append(module_id)
-    return outcome
+        for method in operations:
+            method_upper = str(method).upper()
+            if method_upper in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+                endpoints.add((method_upper, path))
+    return endpoints
 
 
-def _await_required_modules(base_url: str, token: str, timeout: float = 240.0) -> dict[str, str]:
+def _await_required_openapi_endpoints(
+    base_url: str, token: str, timeout: float = 180.0,
+) -> dict[str, Any]:
     deadline = time.monotonic() + timeout
-    seen: dict[str, str] = {}
+    last_detail = "OpenAPI not requested"
     while time.monotonic() < deadline:
-        status, payload = _request(
-            base_url, token, "GET", "/data/api/v1/modules/healthy",
-            query={"limit": "500", "offset": "0"},
-        )
-        items = payload.get("items") if status == 200 and isinstance(payload, dict) else None
-        if isinstance(items, list):
-            seen = {
-                str(item.get("id")): str(item.get("name"))
-                for item in items
-                if isinstance(item, dict) and isinstance(item.get("id"), str)
-            }
-            if all(
-                any(marker in module_id.lower() for module_id in seen)
-                for marker in _REQUIRED_MODULE_MARKERS
-            ):
-                return seen
-        time.sleep(5.0)
-    raise ProvisionError(
-        f"required modules {_REQUIRED_MODULE_MARKERS} never became healthy: have={sorted(seen)}"
-    )
-
-
-def heal(base_url: str, token: str) -> dict[str, Any]:
-    # Certificate acceptance may only take effect for already-quarantined modules on
-    # the next Gateway start. The workflow performs the (persisted) acceptance and the
-    # bounded restart, so this stage classifies the remaining state as healthy or
-    # RESTART_REQUIRED instead of silently continuing.
-    certificates = _accept_quarantined_certificates(base_url, token)
-    try:
-        healthy = _await_required_modules(base_url, token, timeout=120.0)
-    except ProvisionError as error:
-        return {"status": "RESTART_REQUIRED", "certificates": certificates, "detail": str(error)}
-    return {"status": "HEALTHY", "certificates": certificates, "healthyModuleIds": sorted(healthy)}
+        try:
+            status, payload = _request(
+                base_url,
+                token,
+                "GET",
+                "/openapi.json",
+                timeout=20.0,
+                max_response_bytes=MAX_OPENAPI_BYTES,
+            )
+            if status != 200:
+                raise ProvisionError(f"Gateway OpenAPI returned unexpected HTTP {status}")
+            endpoints = _openapi_endpoint_inventory(payload)
+            missing = sorted(_REQUIRED_OPENAPI_ENDPOINTS - endpoints)
+            if not missing:
+                return {
+                    "endpointCount": len(endpoints),
+                    "requiredEndpoints": [
+                        f"{method} {path}" for method, path in sorted(_REQUIRED_OPENAPI_ENDPOINTS)
+                    ],
+                }
+            last_detail = "missing=" + ", ".join(f"{method} {path}" for method, path in missing)
+        except ProvisionError as error:
+            last_detail = str(error)
+        time.sleep(3.0)
+    raise ProvisionError(f"required OpenAPI endpoints never became available: {last_detail}")
 
 
 def provision(base_url: str, token: str) -> dict[str, Any]:
-    # Step 0: the CI Gateway bundles modules whose certificates are not yet accepted,
-    # so they sit in quarantine and expose no REST route (e.g. Historian provider
-    # POST -> 404 "No route match"). Accept certificates through the product REST flow,
-    # then wait for the Phase 2 required modules to become healthy before provisioning.
-    certificates = _accept_quarantined_certificates(base_url, token)
-    healthy_modules = _await_required_modules(base_url, token)
+    # Step 0: prove that the exact Gateway/module composition exposes every Native
+    # REST route required by this fixture before issuing any mutation. This prevents
+    # module-health labels from being mistaken for capability readiness.
+    openapi_readiness = _await_required_openapi_endpoints(base_url, token)
     driver, translator, connect_url = _select_database_identity_when_ready(base_url, token)
     resources = [
         (
@@ -348,8 +332,7 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
     # both Tools are deferred per the D12 Phase 2 bounded-execution amendment.
     results: dict[str, Any] = {
         "resources": {},
-        "certificates": certificates,
-        "healthyModuleIds": sorted(healthy_modules),
+        "openapiReadiness": openapi_readiness,
         "databaseDriver": driver,
         "databaseTranslator": translator,
         "databaseConnectUrl": connect_url,
@@ -383,20 +366,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8088")
     parser.add_argument("--api-token", required=True)
     parser.add_argument("--evidence", required=True, type=Path)
-    parser.add_argument("--stage", choices=("heal", "provision"), default="provision")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     try:
-        if args.stage == "heal":
-            outcome = heal(args.gateway_url, args.api_token)
-            result = {"status": "PASS", "stage": "heal", **outcome}
-        else:
-            result = {"status": "PASS", "stage": "provision", **provision(args.gateway_url, args.api_token)}
+        result = {"status": "PASS", "stage": "provision", **provision(args.gateway_url, args.api_token)}
     except Exception as error:
-        result = {"status": "FAILED", "stage": args.stage, "fatalError": f"{type(error).__name__}: {error}"}
+        result = {"status": "FAILED", "stage": "provision", "fatalError": f"{type(error).__name__}: {error}"}
         args.evidence.parent.mkdir(parents=True, exist_ok=True)
         args.evidence.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         print(result["fatalError"])
@@ -404,8 +382,6 @@ def main() -> int:
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(result, indent=2, sort_keys=True))
-    if args.stage == "heal" and outcome["status"] == "RESTART_REQUIRED":
-        return 40
     return 0
 
 

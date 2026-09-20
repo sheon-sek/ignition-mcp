@@ -5,6 +5,7 @@
   "overridable": true,
   "files": ["config.json"],
   "attributes": {
-    "title": "Phase 2 Runtime Readonly"
+    "title": "Phase 2 Runtime Readonly",
+    "uuid": "24c38cf5-1080-567c-bbf3-74916fe4bea4"
   }
 }
