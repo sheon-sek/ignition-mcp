@@ -53,6 +53,12 @@ CI Runner
 
 不维护共享、长期运行的 CI Gateway。
 
+### CI-owned Gateway provisioning
+
+L3–L5 自动化测试所需的真实 Gateway 由 CI Runner 自己创建和销毁。Phase 0 baseline 使用精确镜像 `inductiveautomation/ignition:8.3.8`。除非专门执行人工环境兼容性调查，否则**不得把“由用户提供一台现成真实 Gateway”作为开发、G0 或 release certification 的前置条件**。
+
+开发与认证的标准路径是：repo checkout → CI 拉取官方 exact-patch Docker image → 创建 fresh isolated Gateway → 安装/挂载精确 MCP Module fixture → 执行真实协议测试 → 收集证据 → `docker compose down -v`。
+
 ## Version Pinning
 
 Certification 禁止使用浮动：
@@ -77,24 +83,24 @@ MCP Module 使用 exact version + build identity。
 
 ## MCP Module Artifact
 
-EA/受保护 module artifact 不提交 repo。
+MCP Module 必须使用 exact version + build identity，并在执行前验证 SHA-256。禁止自动下载 “latest”。
 
-Protected CI 注入：
+本项目允许两种受控来源：
 
-```text
-MCP_MODULE_ARTIFACT
-MCP_MODULE_SHA256
-```
+1. **Repo-pinned CI fixture**：当项目所有者确认 artifact 来自官方渠道并明确授权该 repository 保存它时，可以把 `.modl` 作为测试 fixture 提交到 repo。必须同时保存 provenance metadata 与固定 SHA-256；CI 不信任 PR 中任意变化的 hash，必须对预期 artifact 路径与已审查 checksum 做 fail-closed 校验。
+2. **Protected artifact injection**：当 artifact 不适合提交、授权范围不足或后续版本需要保密时，使用受保护 CI artifact/secret 注入，例如 `MCP_MODULE_ARTIFACT` + `MCP_MODULE_SHA256`。
+
+当前 Phase 0 baseline 采用第 1 种：项目所有者提供并授权提交的官方 MCP Module `1.3.5.2026021307-SNAPSHOT`（build `2026021307`）。
 
 CI：
 
 ```text
-verify SHA-256
-→ install
+load pinned artifact
+→ verify SHA-256
+→ install/mount into fresh Gateway
 → verify actual module version/build
 ```
 
-禁止自动下载 “latest”。
 
 ## Public vs Protected CI
 
@@ -105,19 +111,18 @@ verify SHA-256
 - L0
 - L1
 - L2
-- External tests that need no protected module artifact
+- External tests that need no protected artifact
 - contracts
 
-### Protected Live CI
+### Trusted Live CI
 
-运行：
+Repo-pinned MCP Module fixture 使 baseline L4 不再依赖 secret，但 live workflow 仍属于受信任执行路径：
 
-- L4
-- L5
-- release certification
-- exact MCP Module artifact
+- trusted branch push / maintainer-controlled PR 可运行 baseline L3/L4；
+- 未信任 fork 不允许运行可替换 module binary 的 live job；
+- L5、release certification、任何需要额外 credentials/licensed artifacts 的 job 继续使用 protected environment。
 
-未信任 fork PR 不获得 secrets/artifacts。
+若将来恢复 protected artifact injection，则未信任 fork 同样不得获得 secrets/artifacts。
 
 ## Licensing
 
@@ -649,9 +654,10 @@ initial_matrix:
 
 mcp_module:
   exact_version_and_build: required
-  stored_in_repo: false
+  stored_in_repo: allowed_when_owner_authorized_and_provenance_pinned
+  baseline_phase0_artifact_in_repo: true
   automatic_latest_download: false
-  protected_artifact_injection: true
+  protected_artifact_injection: optional_for_nonredistributable_or_secret_artifacts
   sha256_verify: true
 
 licensing:
@@ -750,3 +756,8 @@ C03 — mutation verification no longer refers to `ok=true`, because D06 rejects
 C04 — the database integration tests are rephrased around D14's approved Named Query registry: approved aliases, Value parameters, fixed datasource policy, bounded results, and rejection of unapproved aliases / dynamic datasource / unsafe query contracts. There is no arbitrary-SQL surface to test.
 
 Runtime MCP primitives — L0/L2/L4 now cover Text Resources and Prompts as well as Tools: Resource metadata/layout and `data.bin` size/MIME/content, Prompt arguments and `def onPrompt(builder, arguments)`, deterministic ZIP inventory, real `resources/list` / `resources/read` and `prompts/list` / `prompts/get`, and compatibility evidence that records those results plus the native response binding status. Test layers, matrix, fixtures, failure injection, soak, and pipelines are otherwise unchanged.
+
+
+## D23 Amendment — CI-owned Gateway and repo-pinned MCP Module fixture
+
+Phase 0 clarification: real Gateway evidence is produced by CI-owned ephemeral official Docker containers; a user-supplied Gateway is not a prerequisite. The project owner has explicitly authorized the official MCP Module artifact supplied for Phase 0 to be committed as a checksum-pinned test fixture. This amendment replaces the earlier blanket `stored_in_repo: false` rule while preserving exact-version, provenance, checksum, trust-boundary, cleanup, and no-automatic-latest requirements.
