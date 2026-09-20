@@ -113,15 +113,29 @@ jobs:
           tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
           exit 1
 
-      - name: Install Phase 0 MCP server config
+      - name: Install Phase 0 MCP project and server config
         shell: bash
         run: |
           set -euo pipefail
           cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
           test -n "$cid"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          test -n "$data_owner"
+
           docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
-          target="/usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp/server-config"
-          docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp/server-config/. "$cid:$target/"
+
+          docker cp tests/harness/runtime-binding/project "$cid:/usr/local/bin/ignition/data/projects/mcp_characterization"
+          docker cp tests/harness/runtime-binding/gateway-config/com.inductiveautomation.mcp/server-config "$cid:/usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp/server-config"
+
+          docker run --rm \
+            --volumes-from "$cid" \
+            --entrypoint /bin/sh \
+            --user 0:0 \
+            "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/projects/mcp_characterization \
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp"
+
           docker compose -f "$COMPOSE_FILE" start gateway
 
       - name: Run real MCP characterization
