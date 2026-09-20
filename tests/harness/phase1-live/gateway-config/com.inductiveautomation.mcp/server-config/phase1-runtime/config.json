@@ -16,11 +16,7 @@
     ]
   },
   "tools": {
-    "project/ignition_runtime": [
-      "bundle_info",
-      "tag_browse",
-      "tag_read"
-    ]
+    "project/ignition_runtime": "*"
   },
   "resources": {
     "project/ignition_runtime": "*"
