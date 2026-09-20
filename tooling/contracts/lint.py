@@ -28,7 +28,10 @@ CURRENT_RUNTIME_TOOLS = [
     "udt_type_get",
     "alarm_status",
     "alarm_journal",
-    "alarm_shelved_list"
+    "alarm_shelved_list",
+    "historian_browse",
+    "historian_query_series",
+    "historian_query_aggregate"
 ]
 
 
