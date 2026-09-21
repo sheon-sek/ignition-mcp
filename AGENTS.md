@@ -11,7 +11,7 @@ Language-neutral Tool contracts, shared taxonomies, and output schemas live unde
 
 ## Governance: Decisions and Phase Gates
 
-- `docs/decisions/D01–D28` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
+- `docs/decisions/D01–D29` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
 - Delivery is phase-gated (D26). Phases 0–3 (G0/G1/G2/G3) are closed and frozen; see `docs/development/phase-{0,1,2,3}.md`. **Phase 4 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
 - Key rules that cut across files:
   - No duplicate equivalent operation across the two servers. Native REST owns an operation whenever a semantically complete official REST endpoint exists. Runtime MCP owns everything else (D02).
@@ -23,7 +23,7 @@ Language-neutral Tool contracts, shared taxonomies, and output schemas live unde
 
 ## Commands
 
-These mirror `.github/workflows/ci.yml`, which pins exact tool versions:
+These mirror `.github/workflows/ci.yml`, which pins exact tool versions. The unit tests require Java 11 (D29) to run Runtime `onToolCalled.py` handlers under Jython 2.7.4. Put it on `PATH` or set `JYTHON_RUNNER_JAVA`. Without it, the tests fail rather than skip:
 
 ```bash
 uv lock --check
@@ -33,6 +33,11 @@ uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooli
 
 # single test
 uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q packages/ignition-rest-mcp/tests/test_phase2_readonly.py -k <name>
+
+# Pre-push: lint every workflow file and every `run:` block shell.
+# actionlint is pinned to 1.7.12, fetched over HTTPS and sha256-verified into
+# ~/.cache/ignition-mcp-ci. Exit 1 lists each finding as path:line.
+uv run --no-sync python -m tooling.ci.check_workflows
 
 uv build --package ignition-rest-mcp
 

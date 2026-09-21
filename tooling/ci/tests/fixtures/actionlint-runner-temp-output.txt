@@ -1,0 +1,4 @@
+tooling/ci/tests/fixtures/reconstructed-runner-temp-env.workflow.yml:10:21: context "runner" is not allowed here. available contexts are "github", "inputs", "matrix", "needs", "secrets", "strategy", "vars". see https://docs.github.com/en/actions/learn-github-actions/contexts#context-availability for more details [expression]
+   |
+10 |       DATA_DIR: ${{ runner.temp }}/ignition-mcp-data
+   |                     ^~~~~~~~~~~
