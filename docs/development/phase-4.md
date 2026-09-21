@@ -390,7 +390,16 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `project-import-no-change-dispatches-nothing` false, and
     `project-import-stale-fingerprint-is-conflict` `conflict`). Draft PR
     [#31](https://github.com/sheon-sek/ignition-mcp/pull/31) (base `p4/rest`) carries the
-    fix; the doc head re-ran the same three workflows green.
+    fix, and **every head of it ran the same three workflows green**: the documentation
+    head `98ac7b0` (CI
+    [35667330968](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667330968), G3
+    [35667331990](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667331990),
+    REST [35667331015](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667331015))
+    and the logging/typing cleanup head `6a963c9` (CI
+    [35667808523](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667808523), G3
+    [35667808580](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667808580),
+    REST [35667806718](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667806718),
+    again 82/82 cases with 0 failures on both rows).
 - **The first live attempt failed both rows, and the fix is in the harness.** Run
   [35658093734](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093734) on
   the code head returned `RECOVERY_REQUIRED` for the commit case: the candidate archive
