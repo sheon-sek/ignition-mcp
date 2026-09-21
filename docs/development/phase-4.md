@@ -415,6 +415,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   nothing, a destination outside the Target allowlist `permission_denied` with none of the
   source Tags at it, and an export another principal owns `not_found`. `provision.json`
   records the disposable provider, the source Tags and the import conventions below.
+- **The import document rule is live-proven, both shapes, in every row.** Run
+  [35663426202](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426202)
+  records `tagProvider.convention`: importing a document whose root names its own node
+  into a throwaway path created `convention_probe_named/Probe` and
+  `convention_probe_named/Probe/Leaf`, and importing a provider-root document created
+  `convention_probe_flat/Flat` — the two readings the Tool's declaration follows (a named
+  root is imported under the request path, a nameless root contributes its children). The
+  source Tags and both probes took one import attempt each on both Gateway rows.
 - **The first live attempt failed its Tag section on both rows, and it exposed two real
   defects.** Run
   [35661939628](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939628)
@@ -431,18 +439,26 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   before returning. `provision.py` also probes both document shapes into throwaway paths
   and re-exports the provider root, so every row records where the Gateway really puts
   each shape (`tagProvider.convention`) instead of leaving the rule an assumption.
-- Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`): CI
-  [35661939654](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939654) and
-  [35662815732](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815732),
+- Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`, `9d25d98`):
+  CI
+  [35661939654](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939654),
+  [35662815732](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815732) and
+  [35663426154](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426154);
   Phase 3 Live Gateway G3
-  [35661939740](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939740) and
-  [35662816113](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662816113), and
+  [35661939740](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939740),
+  [35662816113](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662816113) and
+  [35663426231](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426231); and
   Phase 4 Live Gateway G4a
-  [35661939632](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939632) and
-  [35662815762](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815762) — all
+  [35661939632](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939632),
+  [35662815762](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815762) and
+  [35663426276](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426276) — all
   success. The first REST run on `89c8b52` is also recorded as success by the workflow;
   that green is what the driver's fail-open path produced, and the head after it is where
-  the Tag cases are proven.
+  the Tag cases are proven. The REST workflow ran on all three heads; the run cited above
+  is the one on `9d25d98`, and the earlier two are
+  [35661939628](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939628) (the
+  failing attempt) and
+  [35662815877](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815877).
 
 ## Open questions
 
@@ -459,15 +475,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   rule (the Runtime Target Policy already has one, D30 §1).
 - **Ticket #17 — a document's root decides which Tag paths the import declares.** The
   first live run showed the assumption mattered: the Tool declared only the document's
-  `tags`, while the Gateway also creates the document's *named* root (recorded live: the
-  destination holds a Tag named `source` after importing the export of `source`). The
-  implemented rule is now "the document declares what it declares" — a named root is
-  imported under the request path, a nameless root contributes its children — and
-  `provision.py` records both shapes' outcome in every live row
-  (`tagProvider.convention`). A caller whose artifact is a per-Tag (rather than
-  per-folder) export is the remaining unprobed case: its root is the Tag itself and the
-  rule reads it as one Tag under the path. **For the owner:** confirm, or ask for a
-  live case for a leaf-root document.
+  `tags`, while the Gateway also creates the document's *named* root. The implemented rule
+  is "the document declares what it declares" — a named root is imported under the request
+  path, a nameless root contributes its children — and both shapes are now recorded live
+  in every row (`tagProvider.convention`, run 35663426202). A caller whose artifact is a
+  per-Tag (rather than per-folder) export is the remaining unprobed case: its root is the
+  Tag itself and the rule reads it as one Tag under the path. **For the owner:** confirm,
+  or ask for a live case for a leaf-root document.
 - **Ticket #17 — an uninterpretable 2xx body is not a success.** The import route's
   documented response is a list of non-Good QualityCodes; live 8.3.8/8.3.9 answer a
   summary object. The Tool reads both, treats a zero-failure report as the Gateway's
