@@ -37,11 +37,63 @@ with `operation_disabled`.
 
 ### Evidence (frozen live run)
 
-`@@ EVIDENCE-POLICY @@`
+`phase4-live-g4a` run
+[35635225572](https://github.com/sheon-sek/ignition-mcp/actions/runs/35635225572),
+artifact `phase4-g4a-8.3.9-35635225572` (`policy-provision.json`,
+`policy-read-before-restart.json`, `policy-read-after-restart.json`), plus the
+8.3.8 job of the same run for the provider-startup race. Both Gateway rows
+produced the same policy facts.
+
+| Step | Live result |
+|---|---|
+| required Native REST routes present | `POST /resources/ignition/tag-provider`, `POST /tags/import`, `GET /tags/export` all present (0 missing) |
+| `POST /resources/ignition/tag-provider` | HTTP 200 `{"changes":[{"collection":"core","name":"IgnitionMCPPolicy","type":"ignition/tag-provider","newSignature":"ba2596…"}],"problem":null,"success":true}` |
+| provider readable through REST | `GET /resources/find/ignition/tag-provider/IgnitionMCPPolicy` → 200, `collection: core`, `config.profile.type: STANDARD`, signature `ba2596…` = the create report's `newSignature` |
+| first `POST /tags/import?collisionPolicy=Abort` on a just-created provider | HTTP 200 `{"successCount":0,"failureCount":2,"failures":[Bad 776 "Cannot invoke …TagPath.getPathLength() because cleanPath is null"]}` — a retry is required (recorded from the 8.3.8 job) |
+| `POST /tags/import?collisionPolicy=Abort` after the retry | HTTP 200 `{"successCount":2,"failureCount":0,"failures":[]}` |
+| `POST /tags/import?collisionPolicy=Abort` on the existing Tags | HTTP 200 `{"successCount":0,"failureCount":2,"failures":[Bad 527 "Tag '[IgnitionMCPPolicy]RuntimeTargetPolicy' already exists, and 'abort' collision policy has been specified"]}` |
+| `POST /tags/import?collisionPolicy=MergeOverwrite` | HTTP 200 `{"successCount":2,"failureCount":0}` |
+| `GET /tags/export?type=json` read-back | 283-byte policy text, SHA-256 `b98bedf5…` = the applied document's SHA-256 |
+| handler `system.tag.readBlocking(["[IgnitionMCPPolicy]RuntimeTargetPolicy"], 5000)` | `Quality: Good`, 1 result, `unicode`, 283 bytes, SHA-256 `b98bedf5…` = the REST read-back, `system.util.jsonDecode` → dict with keys `alarmShelveMaxSeconds, allowlists, auditMode, schemaVersion, serviceIdentity`, 24–26 ms |
+| handler read of an absent policy path | `Bad_NotFound("Path '[IgnitionMCPPolicy]MissingPolicy' not found.")` |
+| handler `system.tag.getConfiguration` (policy Tag and provider root) | both read cleanly; the Tag entry carries `dataType, defaultValue, enabled, name, path, tagType, value, valueSource` |
+| handler `system.tag.writeBlocking` on a sibling Tag *inside* the policy provider | `Good`; the value read back afterwards equals the written value |
+| Gateway restart, then the same handler read | same 283 bytes and same SHA-256 |
+| `system.config.getResource(moduleId="ignition", typeId="tag-provider", name="IgnitionMCPPolicy")` | readable; `signature` = the REST signature; `config` keys `profile, settings` |
+| `system.config.getResourceTypes()` | 35 registered types, every one module-owned (recorded list in the evidence) |
+| handler scope inventory | `system.config`, `system.alarm`, `system.file`, `system.tag`, `system.util` all present; `System.getenv` callable; `system.util.getProjectName()` = `mcp_p4_probe` |
 
 ### What the live run shows
 
-`@@ FINDINGS-POLICY @@`
+- **A Tag holding the policy document is the only candidate that satisfies all
+  three D30 properties.** A dedicated Tag provider and its Tags are creatable and
+  readable through Native REST, a handler reads one exact Tag path in ~25 ms
+  with a bounded timeout, and the read is the same bytes `apply` wrote.
+- **The write path needs a readiness retry, not a stronger bound.** One 8.3.8
+  run had a freshly created provider answer the first import with
+  `Bad 776 … cleanPath is null`; the identical request succeeded on retry and on
+  the other row. `setup-native apply` must therefore poll (or retry) the policy
+  import under a deadline instead of assuming one import is enough. Recorded as
+  `phase4/tag-import-provider-not-ready.json`.
+- **`Abort` and `MergeOverwrite` are both needed by `apply`.** `Abort` refuses
+  the write when the policy Tags already exist (Bad 527 per Tag), so an update
+  needs an explicitly chosen collision policy; `MergeOverwrite` of an identical
+  document succeeds, which is what an idempotent re-apply looks like. The
+  resulting signatures (`newSignature`, `find … signature`, the Tag provider
+  resource signature) are available on every row, so `plan`/`verify` can diff
+  without guessing.
+- **The document survives a Gateway restart.** The post-restart handler read
+  returned the same 283 bytes and SHA-256 as the pre-restart read, so `apply`
+  does not have to re-write the policy on every restart — but `verify` should
+  still compare the signature, because nothing else enforces the document's
+  presence.
+- **`system.config.getResource` works, and still does not give candidate B a
+  document type.** The read succeeded against the very provider resource the
+  harness had created, and the live type inventory has 35 module-owned types and
+  no free-form one.
+- **The Runtime plane's inability to write the policy is a product rule.** The
+  handler wrote a Tag inside the policy provider successfully, so the boundary
+  cannot be the Jython scope; see the recommended rule below.
 
 ### Chosen location and read primitive
 
@@ -119,15 +171,105 @@ active → clear without acknowledgement to test accumulation.
 
 ### Evidence (frozen live run)
 
-`@@ EVIDENCE-ALARM @@`
+`phase4-live-g4a` run
+[35635887711](https://github.com/sheon-sek/ignition-mcp/actions/runs/35635887711),
+artifacts `phase4-g4a-8.3.8-35635887711` and `phase4-g4a-8.3.9-35635887711`
+(`alarm.json`, `evidence.json`). Both Gateway rows produced identical
+measurements; the numbers below are from the 8.3.8 row.
+
+Fixture: 62 Tags in one run-unique folder under `[default]`, four of them the
+measured paths (`Exact`, `ExactSibling`, `Fold/ChildA`, `Fold/ChildB`) and 60
+noise Alarms, each with one manual-acknowledge `AboveValue` Alarm. All 64
+Alarms were activated before the measurements. Query repetitions: 3 per form.
+
+| Query pattern | Items returned |
+|---|---|
+| exact source `prov:default:/tag:mcp_p4_<run>/Exact:/alm:ProbeHi` | **1** |
+| sibling source `…/ExactSibling:/alm:ProbeHi` | **1** |
+| tag-path only `prov:default:/tag:mcp_p4_<run>/Exact` | 0 |
+| tag-path only `[default]mcp_p4_<run>/Exact` | 0 |
+| tag-path only `mcp_p4_<run>/Exact` | 0 |
+| folder tag-path `prov:…/tag:mcp_p4_<run>/Fold` | 0 |
+| partial leaf `prov:…/tag:mcp_p4_<run>/Fold/Chi` | 0 |
+| folder trailing wildcard `…/Fold/*` | 2 |
+| alarm-name wildcard `…/Exact:/alm:*` | 1 |
+| root trailing wildcard `prov:…/tag:mcp_p4_<run>/*` | 64 |
+| root bare wildcard `*mcp_p4_<run>*` | 64 |
+| no filters at all | 64 |
+| exact source through `source=` instead of `path=` | 1 |
+| exact source with `state=["ActiveUnacked"]` | 1 |
+
+| Experiment | Live result |
+|---|---|
+| one exact Alarm path, activated → cleared without acknowledgement, three times | exact-path item count **1 → 2 → 3** |
+| event detail after those cycles | the same exact pattern listed **3** events, `getState()` = `Cleared, Unacknowledged` |
+| `system.alarm.acknowledge(ids, note, user)` on the returned event ids | 3 ids acknowledged, 0 left unacknowledged, state afterwards `Cleared, Acknowledged` |
+| median query time | exact 0 ms, root wildcard 1 ms, unfiltered 0 ms |
 
 ### What the live run shows
 
-`@@ FINDINGS-ALARM @@`
+**Matching is literal, and that is good news for target checks.** A pattern
+without `*` matches only the source string it spells out. A tag-path-only
+pattern matches nothing at all — not the alarm on that Tag, and not anything
+below a folder — and `Fold/Chi` does not match `ChildA`. `*` is the only
+expansion mechanism, so a handler that builds an exact source pattern cannot
+accidentally reach a subtree.
+
+**One exact Alarm path is nevertheless not bounded, and `alarm_acknowledge` is
+therefore parked.** The same exact pattern that returned one item returned two
+after the next unacknowledged activate/clear cycle and three after the third.
+Ignition keeps each *cleared and unacknowledged* event; nothing about the
+caller's request bounds how many exist, because the count is driven by how long
+operators have left alarms unacknowledged on that source. A single exact Alarm
+path on a busy Gateway can therefore hold an arbitrarily large number of current
+events, and `queryStatus` returns all of them: the recorded run already shows
+`len(results)` growing 1 → 2 → 3 over three cycles, with the query itself
+carrying no limit, no continuation and no interruptible timeout (D12 Phase 2
+amendment).
+
+**No per-call execution or cost bound can be claimed either.** There is one
+fixed query implementation: the exact pattern, the wildcard pattern and the
+unfiltered query all take the same sub-millisecond median at 64 live events,
+and the unfiltered query returns 64× the exact query's items. Nothing in the
+measurement shows the filter being applied during execution in a way the
+handler could rely on to keep memory or time bounded.
+
+That fails the D12 Phase 4 amendment's condition — "recorded evidence shows an
+exact-path `queryStatus` is bounded before or during execution, the standard set
+by the Phase 2 amendment" — so `alarm_acknowledge` is parked like `alarm_status`
+and `alarm_journal`, and the Phase 4 scope loses ticket #9 until an owner
+decision supplies a credible bound.
+
+**Positive side effect for `alarm_shelve`/`alarm_unshelve` (tickets #3).**
+Literal matching is exactly what "exact targets only, wildcard mutation
+forbidden" (D08/D12) needs: a caller cannot pass a folder or a prefix to widen a
+shelve, because such a pattern matches nothing rather than a subtree. Shelving
+also returns no materialized result for the handler to collect.
 
 ## 3. Consequences for Phase 4
 
-`@@ CONSEQUENCES @@`
+- **Ticket #7 (`tag_write`) and the Tag CONFIG Mutations (#10–#12)** read the
+  policy from `[IgnitionMCPPolicy]RuntimeTargetPolicy` with
+  `system.tag.readBlocking([path], timeoutMs)`, size-bound the document, validate
+  the schema and fail closed with `operation_disabled` when it is missing or
+  malformed. They must also refuse any target inside the policy provider before
+  Preflight runs (see Open question 1).
+- **Ticket #21 (`setup-native apply`)** creates the provider with
+  `POST /data/api/v1/resources/ignition/tag-provider`, imports the policy with a
+  bounded retry loop (the first import on a fresh provider can fail while the
+  provider starts), uses `Abort` for a create and `MergeOverwrite` for a
+  deliberate update, and verifies with `GET /data/api/v1/tags/export` plus the
+  provider resource signature. `verify` compares the exported bytes and the
+  signature; the document survives a Gateway restart, so it does not have to be
+  rewritten on every boot.
+- **Ticket #9 (`alarm_acknowledge`) is parked** and its row in the Phase 4 scope
+  table must stop being planned work until the owner decides. `alarm_status` and
+  `alarm_journal` stay parked for the same class of reason.
+- **Ticket #3 (`alarm_shelve`/`alarm_unshelve`) is unaffected** and gains a
+  safety argument: literal pattern matching means an exact-path shelve cannot
+  widen to a subtree, and shelving materializes no result for the handler.
+- **No new error code and no contract change** results from this ticket; it adds
+  no Tool. The policy document's field names live in ticket #7's contract work.
 
 ## 4. Evidence index
 
@@ -145,5 +287,10 @@ Recorded in the runbook; repeated here so this note is self-contained.
 
 1. Approve the reserved policy provider (`IgnitionMCPPolicy`) and the product
    rule that every Runtime Tag Mutation refuses targets inside it before
-   Preflight, including under an explicit `*` allowlist.
-2. `@@ OPEN-ALARM @@`
+   Preflight, including under an explicit `*` allowlist. D30 §1 states the
+   property; the enforcement point has to be named.
+2. Approve parking `alarm_acknowledge` (ticket #9). The D12 Phase 4 amendment
+   holds only with recorded evidence of a bounded exact-path `queryStatus`, and
+   the recorded run shows the opposite: one exact Alarm path grows an event per
+   unacknowledged activate/clear cycle. Re-opening it needs a credible
+   pre/during-execution bound, not a handler-side check after the fact.

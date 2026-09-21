@@ -30,7 +30,7 @@ Expose D26's Phase 4 Mutation Tools on both Planes. Each goes through the full D
 | `tag_write` | CONTROL | no | 4a | — | bounded `readBlocking` of the written paths |
 | `alarm_shelve` | CONTROL | no | 4a | — | `alarm_shelved_list` state for the exact paths |
 | `alarm_unshelve` | CONTROL | no | 4a | — | same |
-| `alarm_acknowledge` | CONTROL | yes | 4a | — | exact-path `queryStatus` (D12 Phase 4 amendment) |
+| `alarm_acknowledge` | CONTROL | yes | 4a | — | **PARKED** — #6 evidence: one exact Alarm path accumulates an event per unacknowledged activate/clear cycle, so exact-path `queryStatus` is not bounded (D12 Phase 4 amendment condition failed) |
 | `tag_update` | CONFIG | no | 4b | Tag config fingerprint | `tag_get_config` re-read |
 | `tag_create` | CONFIG | no | 4b | — (existing target → `conflict`) | same |
 | `tag_copy` | CONFIG | no | 4b | — (existing destination → `conflict`) | same |
@@ -103,7 +103,7 @@ Tickets are tracer bullets: each one cuts through contract, schema, implementati
 | 1 | #6 | 4a | Characterize Runtime Target Policy storage + bounded exact-path alarm `queryStatus` | — | codex |
 | 2 | #7 | 4a | `tag_write` tracer bullet (Target Policy read, Preflight, Observed state, Runtime audit, operator profile, `phase4-live` harness) | 1 | codex |
 | 3 | #8 | 4a | `alarm_shelve` + `alarm_unshelve` | 2 | omp |
-| 4 | #9 | 4a | `alarm_acknowledge` (`{alarmPath, eventId}` pairs) | 1, 2 | codex |
+| 4 | #9 | 4a | ~~`alarm_acknowledge` (`{alarmPath, eventId}` pairs)~~ **PARKED** by #6 evidence (see Open questions) | 1, 2 | codex |
 | 5 | #10 | 4b | `tag_get_config` fingerprint + `tag_update` tracer bullet (configurator profile) | 2 | codex |
 | 6 | #11 | 4b | `tag_create` + `tag_copy` | 5 | omp |
 | 7 | #12 | 4b | `tag_delete` + `tag_move` + `tag_rename` | 5 | omp |
@@ -144,4 +144,6 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
-- None yet.
+- **Ticket #6 outcome (2026-09-22, `phase4-live-g4a` run 35635887711, both Gateway rows).** Runtime Target Policy storage is characterized and one location is recommended: a dedicated `IgnitionMCPPolicy` Tag provider holding a String Tag `RuntimeTargetPolicy` with the canonical JSON policy text, read by handlers with `system.tag.readBlocking([ "[IgnitionMCPPolicy]RuntimeTargetPolicy" ], timeoutMs)`. `setup-native apply` writes it through Native REST (create the provider, import the Tag with a bounded retry; `Abort` on create, `MergeOverwrite` on update), and reads it back with `/tags/export` plus the provider resource signature. Evidence and the rejected candidates are in [the research note](../research/runtime-target-policy-storage-and-alarm-query-bound.md). **For the owner to approve:** the reserved provider name, and the product rule that every Runtime Tag Mutation (`tag_write`, `tag_update`, `tag_delete`, `tag_move`, `tag_rename`, `tag_copy` destination) refuses any target inside the policy provider *before* Preflight executes, whatever the Target allowlist says, including an explicit `*`. D30 §1 states the property but not the enforcement point; the harness measured that a handler can write Tags inside that provider, so the boundary has to be the product rule.
+- **`alarm_acknowledge` (ticket #9) is parked.** The D12 Phase 4 amendment holds only if recorded evidence shows an exact-path `queryStatus` is bounded before or during execution. The recorded run shows the opposite: one exact Alarm path returned 1 → 2 → 3 items over three unacknowledged activate/clear cycles, because cleared-unacknowledged events accumulate until they are acknowledged, and the query exposes no limit or continuation (D12 Phase 2 amendment). The handler-side Observed state for an acknowledge has no bounded source, so the ticket cannot be implemented as specified. **For the owner:** approve the park, or supply a credible pre/during-execution bound (a verified native limit/continuation, or an independently bounded alarm backend). The scope and ticket tables mark it parked.
+- **`phase4-live` environment reuse.** The new `phase4-live` GitHub environment was created with no protection rules, reusing the owner-accepted deviation recorded for `phase3-live`. The compensating controls are the trusted-repo guard, no repository or environment secrets in the job, compose-localhost endpoints only, run-unique Alarm paths, and the driver-enforced CI marker plus Gateway-identity check that fails closed before any probe call. Recorded in every evidence row (`ownerAcceptedDeviations`).
