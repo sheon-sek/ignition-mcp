@@ -77,7 +77,7 @@ class ScopeAuthorizationMiddleware(Middleware):
         call_next: CallNext[mt.ListToolsRequest, Sequence[Tool]],
     ) -> Sequence[Tool]:
         tools = await call_next(context)
-        return [tool for tool in tools if self._authorized(tool.tags)]
+        return [tool for tool in tools if self._allows(tool.tags)]
 
     async def on_call_tool(
         self,
@@ -90,10 +90,8 @@ class ScopeAuthorizationMiddleware(Middleware):
             # rather than let an unchecked call through.
             self._deny_tool(name, None)
         tool = await self._resolve_tool(context, name)
-        if tool is not None:
-            scope = declared_scope(tool.tags)
-            if scope is None or not self._principal().has_scope(scope):
-                self._deny_tool(name, scope)
+        if tool is not None and not self._allows(tool.tags):
+            self._deny_tool(name, declared_scope(tool.tags))
         # An unknown or capability-disabled Tool keeps FastMCP's own refusal.
         return await call_next(context)
 
@@ -105,7 +103,7 @@ class ScopeAuthorizationMiddleware(Middleware):
         call_next: CallNext[mt.ListResourcesRequest, Sequence[Resource]],
     ) -> Sequence[Resource]:
         resources = await call_next(context)
-        return [resource for resource in resources if self._authorized(resource.tags)]
+        return [resource for resource in resources if self._allows(resource.tags)]
 
     async def on_read_resource(
         self,
@@ -114,10 +112,8 @@ class ScopeAuthorizationMiddleware(Middleware):
     ) -> ResourceResult:
         uri = str(context.message.uri)
         resource = await self._resolve_resource(context, uri)
-        if resource is not None:
-            scope = declared_scope(resource.tags)
-            if scope is None or not self._principal().has_scope(scope):
-                self._deny_resource(uri, scope)
+        if resource is not None and not self._allows(resource.tags):
+            self._deny_resource(uri, declared_scope(resource.tags))
         return await call_next(context)
 
     # ------------------------------------------------------------------ helpers
@@ -127,11 +123,11 @@ class ScopeAuthorizationMiddleware(Middleware):
         # resolves to the configured service identity with ignition.read only.
         return current_principal(self._settings)
 
-    def _authorized(self, tags: Iterable[str]) -> bool:
+    def _allows(self, tags: Iterable[str]) -> bool:
+        """The caller holds the scope this component declares."""
+
         scope = declared_scope(tags)
-        if scope is None:
-            return False
-        return self._principal().has_scope(scope)
+        return scope is not None and self._principal().has_scope(scope)
 
     async def _resolve_tool(self, context: MiddlewareContext[Any], name: str) -> Tool | None:
         server = _component_server(context)
@@ -175,7 +171,7 @@ class ScopeAuthorizationMiddleware(Middleware):
         }, separators=(",", ":")))
 
     def _deny_resource(self, uri: str, scope: str | None) -> NoReturn:
-        reason = scope if scope is not None else "no-declared-scope"
+        reason = f"missing-scope:{scope}" if scope is not None else "no-declared-scope"
         self._log_denial("resource", uri, reason)
         raise ResourceError(
             f"permission_denied: the caller's scopes do not cover this resource ({reason})"
