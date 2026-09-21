@@ -77,6 +77,19 @@ def committed_documents() -> list[Path]:
     return sorted((ROOT / "docs").glob("ignition-*-openapi/openapi.min.json"))
 
 
+def committed_inventories() -> list[Path]:
+    """The resource-type inventory of a version whose full document is not committed.
+
+    A candidate Gateway's document is large and module-dependent, so its derived
+    inventory (``docs/ignition-<version>-openapi/resource-types.json``, carrying the
+    source document's SHA-256 and the run that captured it) is what has to be
+    classified in place of the whole document. Discovery is by path, so adding an
+    inventory for a new version is enforced the moment it is committed.
+    """
+
+    return sorted((ROOT / "docs").glob("ignition-*-openapi/resource-types.json"))
+
+
 def unclassified(document: dict[str, object]) -> set[str]:
     return {
         resource_type for resource_type in _documented_resource_types(document)
@@ -119,6 +132,30 @@ def test_an_unclassified_resource_type_fails_the_classification_check() -> None:
     document = json.loads(committed_documents()[0].read_text(encoding="utf-8"))
     document["paths"][f"{RESOURCE_TYPE_PREFIX}com.example/new-module-type"] = {"get": {}}
     assert unclassified(document) == {"com.example/new-module-type"}
+
+
+@pytest.mark.parametrize(
+    "inventory_path", committed_inventories(), ids=lambda path: path.parts[-2],
+)
+def test_every_resource_type_of_a_captured_candidate_inventory_is_classified(
+    inventory_path: Path,
+) -> None:
+    """A candidate version whose full document is not committed still has to be
+    classified: the live capture's inventory is the anchor, and it fails closed."""
+
+    inventory = json.loads(inventory_path.read_text(encoding="utf-8"))
+    resource_types = inventory["resourceTypes"]
+    assert isinstance(resource_types, list) and resource_types
+    assert inventory["sourceDocumentSha256"], inventory_path
+    assert inventory["gatewayVersion"] and inventory["sourceRunId"], inventory_path
+    unclassified_types = sorted(
+        resource_type for resource_type in resource_types
+        if resource_type not in ALLOWED_RESOURCE_TYPES and resource_type not in REFUSED_RESOURCE_TYPES
+    )
+    assert unclassified_types == [], (
+        f"{inventory_path}: unclassified resource types are refused at runtime, "
+        "and must be added to contracts/shared/refused-resource-types.json"
+    )
 
 
 @pytest.mark.parametrize(

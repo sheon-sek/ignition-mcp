@@ -146,17 +146,32 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ### Ticket #14 — REST `config_resource_update` (milestone 4c)
 
-- Fixture-first coverage: the 8.3.8 OpenAPI resource-type classification, the
+- Fixture-first coverage: the 8.3.8/8.3.9 resource-type classification, the
   `config_resource_get` signature, the refusal, the precondition and the two
   deployment gates are all covered by `packages/ignition-rest-mcp/tests/test_phase4_*`
   against the recorded Gateway; the full `AGENTS.md` command block is green.
-- Live: `.github/workflows/phase4-live-rest.yml` (environment `phase4-live`,
-  matrix 8.3.8 required / 8.3.9 candidate) runs
-  `tests/harness/phase4-live-rest/rest_driver.py` twice — class enabled and class
-  disabled — plus the local rehearsal `rehearse_local.py` (14/14 cases) against the
-  recorded Gateway. Run IDs and outcomes are recorded here as each live run lands;
-  the uploaded artifacts hold `provision.json`, `observations.json`, `identity.json`
-  and the raw MCP bodies.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — 14/14 cases
+  against the recorded Gateway.
+- Live ([run 35639720856](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720856),
+  and again with the OpenAPI capture in
+  [run 35640169826](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169826)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green, 14/14 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate) — exact REST
+  inventory with the class enabled and disabled, the read-only credential excluded
+  from the Mutation Tool, an allowlisted update applied and confirmed by an
+  independent re-read, a stale signature refused with `conflict` and changing
+  nothing, `ignition/api-token` refused with `permission_denied` and left usable, and
+  a resource outside the Target allowlist denied with nothing changed. The observed
+  Target-denial code is `operation_disabled` (see Open questions).
+- The same runs captured each Gateway's `/openapi.json`; the 8.3.9 candidate exposes
+  56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
+  the MCP Module's own `server-config`), and every one of them is classified. The
+  derived inventory is committed with its source SHA-256 and run ID.
+- Frozen gates on this branch head: CI run 35640170047 (later
+  [35639720685](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720685))
+  and Phase 3 G3 run
+  [35639720676](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720676)
+  both green.
 
 ## Open questions
 
@@ -169,12 +184,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   left the shared Target-allowlist layer on the frozen Phase 3 code so no G3 artifact changes.
   Unifying the two needs a D30 §7 amendment or a G3 driver change; both are owner-visible, so
   neither was made here.
-- **Ticket #14 — no 8.3.9 OpenAPI document is committed.** `contracts/shared/refused-resource-types.json`
-  classifies the 8.3.8 document's 57 resource types (39 allowed, 18 refused), and every unclassified
-  type is refused, so an 8.3.9-only type is refused at runtime on the candidate Gateway. The
-  classification test discovers documents by `docs/ignition-*-openapi/openapi.min.json`, so
-  committing an 8.3.9 export fails the test until its types are classified. Producing that export
-  needs a live Gateway, which only CI has.
+- **Ticket #14 — the 8.3.9 candidate's full OpenAPI document is not committed.**
+  `docs/ignition-8.3.9-openapi/resource-types.json` records the resource-type inventory a live
+  8.3.9 Gateway exposed (56 types, a strict subset of the 8.3.8 document's 57 — the difference is
+  the MCP Module's own `server-config`), with the source document's SHA-256, the Gateway build and
+  the capturing run. Every listed type is classified. Committing the 12.7 MB document itself is a
+  repository-size decision for the owner; until then the classification test enforces the inventory
+  and the discovery-by-path rule, and anything unclassified stays refused.
 - **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
   live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
   timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open

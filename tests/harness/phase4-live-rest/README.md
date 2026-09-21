@@ -58,7 +58,12 @@ creates resources through the Gateway's own API.
 ## Evidence scope
 
 The uploaded artifacts are `provision.json`, `observations.json`, `identity.json`,
-the raw MCP bodies, the server logs and the Gateway diagnostics for the run.
+`openapi-<version>.json` with its SHA-256, the raw MCP bodies, the server logs and
+the Gateway diagnostics for the run.
+
+The captured `/openapi.json` is what feeds the D30 §5 resource-type classification:
+the 8.3.9 candidate's inventory under `docs/ignition-8.3.9-openapi/` was derived
+from a capture of this harness, and a future version is classified the same way.
 
 No G4 compatibility row is composed here. A G4 row carries the Gateway/Module
 tuple, and this harness deliberately deploys no MCP Module; the REST observations

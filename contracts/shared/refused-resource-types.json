@@ -11,9 +11,9 @@
     },
     {
       "gatewayVersion": "8.3.9",
-      "path": null,
-      "source": "No 8.3.9 OpenAPI document is committed to the repository, so its resource types are not listed here. The runtime rule refuses every type this contract does not classify, which covers an 8.3.9 type this document never declared; anchored by the classification test over committed documents when the 8.3.9 document lands.",
-      "resourceTypes": null
+      "path": "docs/ignition-8.3.9-openapi/resource-types.json",
+      "source": "Resource-type inventory derived from a live 8.3.9 candidate Gateway's /openapi.json (document sha256 1f466e5084a0d45dcb6de2535059a555676b55838609e87354c6552cfca0d71a, build 2026082511, run 35640169826). The full document is not committed: it is 12.7 MB and its module composition depends on the harness image. The candidate exposes 56 resource types, a strict subset of the 8.3.8 document's 57.",
+      "resourceTypes": 56
     }
   ],
   "allowed": [
