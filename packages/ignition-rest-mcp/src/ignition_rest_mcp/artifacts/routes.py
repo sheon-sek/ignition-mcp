@@ -22,8 +22,8 @@ from starlette.responses import JSONResponse, Response, StreamingResponse
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, validate_artifact_id
 from ignition_rest_mcp.artifacts.model import Artifact
 from ignition_rest_mcp.audit.sink import AuditRow, SqliteAuditSink
-from ignition_rest_mcp.auth import ADMIN_SCOPE, Principal, build_auth, principal_from_token
-from ignition_rest_mcp.config import Settings
+from ignition_rest_mcp.auth import Principal, build_auth, principal_from_token
+from ignition_rest_mcp.config import ADMIN_SCOPE, READ_SCOPE, Settings
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.operation import uuid7
 from ignition_rest_mcp.projects.zip_safety import ZipSafetyConfig, validate_zip_file
@@ -116,9 +116,6 @@ class ArtifactDataPlane:
         access = await self._verifier.verify_token(token_value)
         if access is None:
             return Principal(key="unauthenticated", scopes=frozenset(), auth_mode="invalid-credential")
-        required = set(self._verifier.required_scopes or [])
-        if not required.issubset(set(access.scopes)):
-            return Principal(key="unauthenticated", scopes=frozenset(), auth_mode="insufficient-scope")
         return principal_from_token(self._settings, access)
 
     @staticmethod
@@ -190,7 +187,7 @@ class ArtifactDataPlane:
             return _error(correlation_id, error.code, error.message)
 
         principal = await self.authenticate(request)
-        if not principal.has_scope("ignition.read"):
+        if not principal.has_scope(READ_SCOPE):
             await self._decision_quietly(
                 correlation_id, principal, None, method, artifact_id, "authentication",
             )
@@ -298,7 +295,7 @@ class ArtifactDataPlane:
             # deployment-disabled by default; 404/disabled posture
             return _error(correlation_id, "operation_disabled", "Artifact upload is not enabled")
         principal = await self.authenticate(request)
-        if not principal.has_scope("ignition.read"):
+        if not principal.has_scope(READ_SCOPE):
             return _error(correlation_id, "permission_denied", "A valid ignition.read credential is required")
         kind = request.query_params.get("kind", "")
         if kind not in UPLOADABLE_KINDS:

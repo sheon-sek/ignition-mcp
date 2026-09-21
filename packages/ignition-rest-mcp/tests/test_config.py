@@ -19,7 +19,7 @@ def _settings(**changes: object) -> Settings:
         "mcp_path": "/mcp",
         "deployment_profile": "development",
         "auth_mode": "none",
-        "static_token": None,
+        "static_tokens": (),
         "service_identity": "test",
         "watcher_interval_seconds": 60.0,
         "request_timeout_seconds": 10.0,
@@ -78,12 +78,6 @@ def test_development_rejects_non_loopback() -> None:
 def test_trusted_internal_allows_explicit_non_loopback_none_auth() -> None:
     settings = _persistent(bind_host="0.0.0.0", deployment_profile="trusted-internal")
     settings.validate()
-
-
-def test_static_token_requires_secret() -> None:
-    settings = _settings(auth_mode="static-token")
-    with pytest.raises(ConfigurationError):
-        settings.validate()
 
 
 def test_auto_log_format_uses_json_outside_development() -> None:

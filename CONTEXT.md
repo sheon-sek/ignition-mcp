@@ -68,6 +68,10 @@ _Avoid_: service account, ack user
 The verified caller identity a Mutation is attributed to and authorized against. A `jwt` subject or a named static token can be a Mutation principal; an `auth=none` caller never is.
 _Avoid_: user, actor, caller identity
 
+**Named static token**:
+A deployment-configured `static-token` credential with its own name and scope set (D07 Phase 4 amendment). Its name is its Mutation principal; its value is a secret that never leaves the authentication module.
+_Avoid_: API key, shared secret
+
 **Native outcome**:
 The per-item result Ignition itself reports for a Mutation, such as a Tag write QualityCode. For `tag_write` it is the item's outcome.
 _Avoid_: result code, status

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import ipaddress
 import json
 import os
@@ -11,9 +11,38 @@ from urllib.parse import urlparse
 
 TEMP_FILESYSTEM_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
 
+# D07 canonical authorization scopes. No hierarchy: membership is the only rule.
+READ_SCOPE = "ignition.read"
+CONFIG_SCOPE = "ignition.config"
+CONTROL_SCOPE = "ignition.control"
+ADMIN_SCOPE = "ignition.admin"
+CANONICAL_SCOPES = (READ_SCOPE, CONFIG_SCOPE, CONTROL_SCOPE, ADMIN_SCOPE)
+
+#: Name of the single token configured by the legacy ``IGNITION_MCP_STATIC_TOKEN``.
+#: It preserves the Phase 1–3 principal name so audit rows, operation records and
+#: artifact owners recorded before the upgrade stay attributable to the same
+#: principal.
+LEGACY_STATIC_TOKEN_NAME = "trusted-internal-static-token"
+
+MAX_STATIC_TOKENS = 32
+MAX_STATIC_TOKEN_BYTES = 512
+
 
 class ConfigurationError(ValueError):
     """Invalid or unsafe server configuration."""
+
+
+@dataclass(frozen=True, slots=True)
+class StaticToken:
+    """One named static token and the scopes the deployment grants it (D07).
+
+    The name — never the value — is the Mutation principal. ``token`` is excluded
+    from ``repr`` so a logged or dumped Settings object cannot leak it.
+    """
+
+    name: str
+    token: str = field(repr=False)
+    scopes: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,7 +54,7 @@ class Settings:
     mcp_path: str
     deployment_profile: str
     auth_mode: str
-    static_token: str | None
+    static_tokens: tuple[StaticToken, ...]
     service_identity: str
     watcher_interval_seconds: float
     request_timeout_seconds: float
@@ -81,7 +110,7 @@ class Settings:
             mcp_path=os.getenv("IGNITION_MCP_PATH", "/mcp"),
             deployment_profile=os.getenv("IGNITION_MCP_DEPLOYMENT_PROFILE", "development"),
             auth_mode=os.getenv("IGNITION_MCP_AUTH_MODE", "none"),
-            static_token=os.getenv("IGNITION_MCP_STATIC_TOKEN") or None,
+            static_tokens=_static_tokens_env(),
             service_identity=os.getenv("IGNITION_MCP_SERVICE_IDENTITY", "ignition-rest"),
             watcher_interval_seconds=float(os.getenv("IGNITION_MCP_WATCHER_INTERVAL_SECONDS", "60")),
             request_timeout_seconds=float(os.getenv("IGNITION_MCP_GATEWAY_TIMEOUT_SECONDS", "10")),
@@ -173,8 +202,12 @@ class Settings:
                 raise ConfigurationError("JWT requires issuer and audience validation")
             if self.jwt_jwks_uri and urlparse(self.jwt_jwks_uri).scheme != "https":
                 raise ConfigurationError("JWT JWKS URI must use HTTPS")
-        if self.auth_mode == "static-token" and not self.static_token:
-            raise ConfigurationError("Static-token mode requires IGNITION_MCP_STATIC_TOKEN")
+        if self.auth_mode == "static-token" and not self.static_tokens:
+            raise ConfigurationError(
+                "Static-token mode requires at least one token in IGNITION_MCP_STATIC_TOKENS "
+                "(or the single-token IGNITION_MCP_STATIC_TOKEN)"
+            )
+        self._validate_static_tokens()
         if self.deployment_profile == "secured" and self.auth_mode != "jwt":
             raise ConfigurationError("secured profile requires JWT authentication")
         if self.deployment_profile == "development" and not _is_loopback(self.bind_host):
@@ -186,6 +219,47 @@ class Settings:
         ):
             raise ConfigurationError("Unauthenticated non-loopback binding requires trusted-internal profile")
         self._validate_storage()
+
+    def _validate_static_tokens(self) -> None:
+        # D07 Phase 4 amendment: named static tokens with per-token scopes, no
+        # hierarchy. Every rule fails closed at startup rather than at first call.
+        if not self.static_tokens:
+            return
+        if self.auth_mode != "static-token":
+            raise ConfigurationError(
+                "IGNITION_MCP_STATIC_TOKENS is configured but IGNITION_MCP_AUTH_MODE is not static-token"
+            )
+        if len(self.static_tokens) > MAX_STATIC_TOKENS:
+            raise ConfigurationError(f"IGNITION_MCP_STATIC_TOKENS accepts at most {MAX_STATIC_TOKENS} tokens")
+        names: set[str] = set()
+        values: set[str] = set()
+        for entry in self.static_tokens:
+            if re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", entry.name) is None:
+                raise ConfigurationError(
+                    "static token name must be 1-64 characters of [A-Za-z0-9._:-]",
+                )
+            if entry.name in names:
+                raise ConfigurationError(f"duplicate token name: {entry.name}")
+            names.add(entry.name)
+            if not entry.token or len(entry.token) > MAX_STATIC_TOKEN_BYTES:
+                raise ConfigurationError(
+                    f"static token {entry.name}: token value must be 1-{MAX_STATIC_TOKEN_BYTES} characters"
+                )
+            if entry.token in values:
+                raise ConfigurationError(
+                    "two static tokens share one token value; the principal would be ambiguous"
+                )
+            values.add(entry.token)
+            if not entry.scopes:
+                raise ConfigurationError(f"static token {entry.name} needs at least one scope")
+            if len(set(entry.scopes)) != len(entry.scopes):
+                raise ConfigurationError(f"static token {entry.name}: duplicate scope")
+            unknown = sorted({scope for scope in entry.scopes if scope not in CANONICAL_SCOPES})
+            if unknown:
+                raise ConfigurationError(
+                    f"static token {entry.name}: unknown scope(s) {unknown}; "
+                    f"canonical scopes are {list(CANONICAL_SCOPES)}"
+                )
 
     def _validate_storage(self) -> None:
         # D17/D18: the persistent data directory is mandatory in every profile.
@@ -325,6 +399,49 @@ def _targets_env(name: str) -> dict[str, tuple[str, ...]]:
             raise ConfigurationError(f"{name} values must be string lists keyed by operation")
         result[operation] = tuple(targets)
     return result
+
+
+def _static_tokens_env() -> tuple[StaticToken, ...]:
+    """D07: named static tokens. The legacy single-token variable stays supported
+    as one token named :data:`LEGACY_STATIC_TOKEN_NAME` with ``ignition.read``."""
+
+    legacy = (os.getenv("IGNITION_MCP_STATIC_TOKEN") or "").strip()
+    raw = os.getenv("IGNITION_MCP_STATIC_TOKENS") or ""
+    if raw and legacy:
+        raise ConfigurationError(
+            "Set IGNITION_MCP_STATIC_TOKENS or the single-token IGNITION_MCP_STATIC_TOKEN, not both"
+        )
+    if legacy:
+        return (StaticToken(name=LEGACY_STATIC_TOKEN_NAME, token=legacy, scopes=(READ_SCOPE,)),)
+    if not raw:
+        return ()
+    if len(raw.encode("utf-8")) > 32 * 1024:
+        raise ConfigurationError("IGNITION_MCP_STATIC_TOKENS exceeds the 32 KiB bound")
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise ConfigurationError(
+            "IGNITION_MCP_STATIC_TOKENS must be a JSON object mapping token name to {token, scopes}"
+        ) from error
+    if type(value) is not dict:
+        raise ConfigurationError("IGNITION_MCP_STATIC_TOKENS must be a JSON object")
+    tokens: list[StaticToken] = []
+    for name, entry in value.items():
+        if (
+            not isinstance(name, str)
+            or type(entry) is not dict
+            or set(entry) != {"token", "scopes"}
+            or not isinstance(entry["token"], str)
+        ):
+            raise ConfigurationError(
+                "IGNITION_MCP_STATIC_TOKENS values must be objects with exactly a string 'token' "
+                "and a 'scopes' list, keyed by token name"
+            )
+        scopes = entry["scopes"]
+        if not isinstance(scopes, list) or any(not isinstance(scope, str) for scope in scopes):
+            raise ConfigurationError("IGNITION_MCP_STATIC_TOKENS scopes must be a list of strings")
+        tokens.append(StaticToken(name=name, token=entry["token"], scopes=tuple(scopes)))
+    return tuple(tokens)
 
 
 def _is_loopback(host: str) -> bool:

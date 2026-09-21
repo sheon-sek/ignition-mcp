@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ignition_rest_mcp.auth import VerifiedPrincipal
-from ignition_rest_mcp.config import Settings
+from ignition_rest_mcp.config import ADMIN_SCOPE, CONFIG_SCOPE, CONTROL_SCOPE, Settings
 
 CONFIG_MUTATION = "CONFIG_MUTATION"
 CONTROL_MUTATION = "CONTROL_MUTATION"
@@ -16,9 +16,9 @@ MUTATION_CLASSES = (CONFIG_MUTATION, CONTROL_MUTATION, ADMIN_MUTATION)
 
 # D07: scope by operation effect, not module/domain.
 CLASS_SCOPE = {
-    CONFIG_MUTATION: "ignition.config",
-    CONTROL_MUTATION: "ignition.control",
-    ADMIN_MUTATION: "ignition.admin",
+    CONFIG_MUTATION: CONFIG_SCOPE,
+    CONTROL_MUTATION: CONTROL_SCOPE,
+    ADMIN_MUTATION: ADMIN_SCOPE,
 }
 
 WILDCARD = "*"
