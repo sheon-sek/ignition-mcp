@@ -36,10 +36,18 @@ async def probe(rest_url: str, bearer: str) -> dict[str, Any]:
         except ProbeError as error:
             # A disabled component is rejected at the router (JSON-RPC error):
             # exactly the call-time failure this probe demands.
-            call_code = f"router-refused: {str(error)[:120]}"
+            call_code = f"router-refused: {str(error)[:160]}"
         else:
             if call.get("isError"):
-                call_code = f"isError:{error_envelope(call).get('code')}"
+                try:
+                    call_code = f"isError:{error_envelope(call).get('code')}"
+                except ProbeError:
+                    # FastMCP refuses a disabled component with a plain-text
+                    # error result, not the D06 envelope. Any refusal shape is
+                    # admissible here; EXECUTED-UNEXPECTED is not.
+                    texts = " ".join(str(item.get("text", "")) for item in call.get("content", [])
+                                     if isinstance(item, dict))
+                    call_code = f"isError:{texts[:160]}"
             else:
                 call_code = "EXECUTED-UNEXPECTED"
         executed = call_code == "EXECUTED-UNEXPECTED"

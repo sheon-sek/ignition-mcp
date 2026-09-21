@@ -47,6 +47,9 @@ CAPABILITY_ORDER = tuple(CAPABILITY_ENDPOINTS)
 PROJECT_FIND_ENDPOINT = ("GET", PROJECT_FIND_PATH.format(name="{name}"))
 
 GATEWAY_VERSION_RE = re.compile(r"^\s*(\d+\.\d+\.\d+) \(b(\d{10})\)\s*$")
+#: A module *display* version as served by ``/data/api/v1/modules/healthy``:
+#: ``1.3.5-SNAPSHOT (b2026021307)``. This is the display form, not the artifact form.
+MODULE_DISPLAY_VERSION_RE = re.compile(r"^([0-9][0-9A-Za-z._-]*?) \(b([0-9]{10})\)$")
 MANAGED_MARKER_PREFIX = "ignition-mcp-managed:"
 MANAGED_MARKER_RE = re.compile(r"^ignition-mcp-managed:\s*product=(\S+)\s*;\s*bundle=(\S+)\s*$")
 MANAGED_PRODUCT = "ignition-runtime-bundle"
@@ -104,15 +107,23 @@ def parse_gateway_identity(ignition_version: Any) -> tuple[str | None, str | Non
 
 
 def parse_module_identity(raw_version: Any) -> ModuleIdentity | None:
-    """Split ``1.3.5.2026021307-SNAPSHOT`` into ``1.3.5-SNAPSHOT`` plus build ``2026021307``.
+    """``1.3.5.2026021307-SNAPSHOT`` → ``("1.3.5-SNAPSHOT", "2026021307")`` and
+    ``1.3.5-SNAPSHOT (b2026021307)`` → ``("1.3.5-SNAPSHOT", "2026021307")``.
 
-    Same rule the bundled ``bundle_info`` handler applies: the fourth dot-separated
-    segment, minus any qualifier suffix, is the build when it is ten digits.
+    Two live shapes exist: the ``bundle_info`` handler and module resource files
+    report the four-segment artifact version; ``GET /data/api/v1/modules/healthy``
+    reports the *display* version with a ``(b<build>)`` suffix (live finding, G3
+    run 35589924939). The dot form keeps the handler's rule: the fourth
+    dot-separated segment, minus any qualifier suffix, is the build when it is
+    ten digits.
     """
 
     if not isinstance(raw_version, str) or not raw_version.strip():
         return None
     value = raw_version.strip()
+    display = MODULE_DISPLAY_VERSION_RE.fullmatch(value)
+    if display is not None:
+        return ModuleIdentity(raw_version=value, version=display.group(1), build=display.group(2))
     parts = value.split(".")
     logical = value
     build: str | None = None

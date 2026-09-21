@@ -4,8 +4,8 @@ transactions against a real (disposable) Ignition Gateway.
 
 Exit codes: 0 all G3 checks passed on the required (D27-tuple) row; 3 all G3
 checks passed but the row carries the known fail-closed native-binding
-limitation (compatibility candidate); 2 fatal — a stage failed, with the
-observations file recording the failing stage honestly.
+limitation (compatibility candidate); 2 fatal: a stage failed, and the
+observations file records which stage failed.
 
 This is harness code, not an installer: every Gateway write it performs goes
 through the guarded mutation executor / Project transaction service under the
@@ -160,22 +160,45 @@ def _read_entries(data: bytes) -> dict[str, bytes]:
     return {info.filename: source.read(info.filename) for info in source.infolist()}
 
 
+#: The live Gateway rewrites project.json on every export (deterministic but
+#: not our indentation), so the candidate edit must preserve the exported bytes
+#: exactly except for the description value. Otherwise a re-import/export
+#: cannot reproduce pcf1(B) and COMMITTED degrades to RECOVERY_REQUIRED. g3diag
+#: R1 found that no JSON re-serialization variant matched the live pcf1.
+DESCRIPTION_RE = re.compile(r'("description"\s*:\s*)"((?:[^"\\]|\\.)*)"')
+CANDIDATE_SUFFIX_RE = re.compile(r"\s*mcp-g3-candidate=[0-9a-f]{1,8}\s*$")
+
+
 def _edit_description(entries: dict[str, bytes], token: str) -> dict[str, bytes]:
-    """Deterministic content edit: append a run token to the Project description."""
+    """Append a run token to the description, byte-preserving the rest.
+
+    Falls back to an added entry only when no project.json description string
+    is found (which would mean the export layout changed; the probe entry then
+    still makes B != A deterministically).
+    """
     edited = dict(entries)
     original = edited.get("project.json")
     if original is not None:
-        try:
-            document = json.loads(original.decode("utf-8"))
-        except ValueError:
-            document = None
-        if isinstance(document, dict):
-            base = str(document.get("description") or "").strip()
-            document["description"] = f"{base} mcp-g3-candidate={token}".strip()
-            edited["project.json"] = (json.dumps(document, indent=2, sort_keys=True) + "\n").encode("utf-8")
-            return edited
+        match = DESCRIPTION_RE.search(original.decode("utf-8", errors="replace"))
+        if match is not None:
+            current = json.loads(f'"{match.group(2)}"')
+            base = CANDIDATE_SUFFIX_RE.sub("", current).strip()
+            new_value = f"{base} mcp-g3-candidate={token}".strip()
+            text = original.decode("utf-8", errors="replace")
+            replaced = DESCRIPTION_RE.sub(
+                lambda m: m.group(1) + json.dumps(new_value), text, count=1,
+            )
+            if replaced != text:
+                edited["project.json"] = replaced.encode("utf-8")
+                return edited
     edited["mcp-g3-probe.txt"] = token.encode("utf-8")
     return edited
+
+
+def _entry_digests(data: bytes) -> dict[str, str]:
+    """Per-entry SHA-256 of uncompressed content, the diff a round-trip mismatch compares."""
+    source = zipfile.ZipFile(io.BytesIO(data))
+    return {info.filename: _sha256_bytes(source.read(info.filename)) for info in source.infolist()}
 
 
 async def _drain(reader: Any) -> bytes:
@@ -197,17 +220,26 @@ class _CopyBuilder(CandidateBuilder):
 
 
 class _EditBuilder(CandidateBuilder):
-    """Deterministic description edit + optional external-drift hook."""
+    """Deterministic description edit + optional external-drift hook.
+
+    Records the baseline and candidate entry digests, so a round-trip mismatch
+    is diagnosable from a single run (g3diag R1 diagnostics).
+    """
 
     def __init__(self, token: str, hook: Callable[[], Coroutine[Any, Any, None]] | None = None) -> None:
         self.token = token
         self.hook = hook
+        self.baseline_entries: dict[str, str] = {}
+        self.candidate_entries: dict[str, str] = {}
 
     async def build(self, baseline: Any, out: Any) -> None:
         data = await _drain(baseline)
+        self.baseline_entries = _entry_digests(data)
         if self.hook is not None:
             await self.hook()
-        await out.write(_drained_zip(_edit_description(_read_entries(data), self.token)))
+        payload = _drained_zip(_edit_description(_read_entries(data), self.token))
+        self.candidate_entries = _entry_digests(payload)
+        await out.write(payload)
 
 
 async def _artifact_bytes(store: LocalArtifactStore, artifact_id: str) -> bytes:
@@ -321,12 +353,14 @@ class Driver:
                 "SELECT phase, outcome, error_code FROM audit_log WHERE correlation_id = ? ORDER BY seq",
                 (correlation_id,),
             ).fetchall()
-            return [{"phase": r["phase"], "outcome": r["outcome"], "error_code": r["error_code"]} for r in rows]
+            # No row_factory is configured: sqlite3 returns plain tuples.
+            return [{"phase": r[0], "outcome": r[1], "error_code": r[2]} for r in rows]
 
         return await self.storage.audit.run(_read)
 
     async def transaction_row(self, transaction_id: str) -> dict[str, Any] | None:
         assert self.storage is not None
+        columns = ("state", "gateway_id", "gateway_id_derived", "import_dispatched", "error_code")
 
         def _read(conn: Any) -> dict[str, Any] | None:
             row = conn.execute(
@@ -334,19 +368,20 @@ class Driver:
                 "FROM project_transactions WHERE transaction_id = ?",
                 (transaction_id,),
             ).fetchone()
-            return dict(row) if row else None
+            return dict(zip(columns, row, strict=True)) if row else None
 
         return await self.storage.state.run(_read)
 
     async def artifact_row(self, artifact_id: str) -> dict[str, Any] | None:
         assert self.storage is not None
+        columns = ("state", "retention_class", "retention_lock", "expires_at")
 
         def _read(conn: Any) -> dict[str, Any] | None:
             row = conn.execute(
                 "SELECT state, retention_class, retention_lock, expires_at FROM artifacts WHERE artifact_id = ?",
                 (artifact_id,),
             ).fetchone()
-            return dict(row) if row else None
+            return dict(zip(columns, row, strict=True)) if row else None
 
         return await self.storage.state.run(_read)
 
@@ -602,11 +637,20 @@ class Driver:
 
         verifier = build_auth(self.settings)
         assert verifier is not None
+
+        async def rejected(token: str) -> bool:
+            # FastMCP's JWT verifier either returns None or raises on a bad
+            # credential. Either way the token is refused before authz.
+            try:
+                return await verifier.verify_token(token) is None
+            except Exception:
+                return True
+
         foreign = make_foreign_jwt(issuer, audience)
         expired = make_jwt(private_pem, issuer, audience, sub="g3-live",
                            scopes=["ignition.read", "ignition.config"], skew_seconds=-60)
-        self.stage.check("invalid-jwt-rejected", await verifier.verify_token(foreign) is None, "foreign signing key")
-        self.stage.check("expired-jwt-rejected", await verifier.verify_token(expired) is None, "expired token")
+        self.stage.check("invalid-jwt-rejected", await rejected(foreign), "foreign signing key")
+        self.stage.check("expired-jwt-rejected", await rejected(expired), "expired token")
         denials["invalidJwt"] = "rejected-before-authz"
 
         _, principal_read = await self.mint_principal(private_pem, "g3-readonly", ["ignition.read"])
@@ -702,7 +746,8 @@ class Driver:
 
         # -- COMMITTED
         committed_token = uuid7()[:8]
-        context, result = await run(_EditBuilder(committed_token))
+        committed_builder = _EditBuilder(committed_token)
+        context, result = await run(committed_builder)
         self.stage.check(
             "txn-committed",
             result.state is TransactionState.COMMITTED and result.import_dispatched is True
@@ -727,8 +772,28 @@ class Driver:
             reexport = await mcp.call_structured("project_export", {"projectName": project})
         finally:
             await mcp.aclose()
-        self.stage.check("txn-committed-reexport", reexport["fingerprint"] == result.candidate_fingerprint,
-                         {"candidate": result.candidate_fingerprint, "reexport": reexport["fingerprint"]})
+        round_trip = str(reexport["fingerprint"]) == str(result.candidate_fingerprint)
+        entry_diff: dict[str, Any] = {
+            "candidate": committed_builder.candidate_entries,
+            "baseline": committed_builder.baseline_entries,
+        }
+        if not round_trip:
+            # g3diag R1 diagnostics: record which entries the Gateway changed on
+            # import and re-export. The re-export artifact is CONFIDENTIAL and owned
+            # by this same principal, so the data plane serves it to us.
+            reexport_artifact = reexport["artifact"]
+            async with httpx.AsyncClient(timeout=120.0) as http:
+                body = await http.get(self.args.rest_url + str(reexport_artifact["download"]["path"]),
+                                      headers={"Authorization": "Bearer " + token_read})
+            if body.status_code == 200:
+                entry_diff["reexport"] = _entry_digests(body.content)
+                entry_diff["changed"] = sorted(
+                    key for key, digest in entry_diff["reexport"].items()
+                    if committed_builder.candidate_entries.get(key) != digest
+                ) + sorted(set(committed_builder.candidate_entries) - set(entry_diff["reexport"]))
+        self.stage.check("txn-committed-reexport", round_trip,
+                         {"candidate": result.candidate_fingerprint, "reexport": reexport["fingerprint"],
+                          "entries": entry_diff})
         audit = await self.audit_rows(context.correlation_id)
         results["COMMITTED"] = {
             "state": result.state.value, "importDispatched": result.import_dispatched,
@@ -820,8 +885,14 @@ class Driver:
         except (ProbeError, GatewayError, httpx.HTTPError, ValueError, OSError) as error:
             fatal = f"{type(error).__name__}: {str(error)[:400]}"
             self.stage.fail(f"stage-{self.stage.current}-fatal", fatal)
-        except Exception as error:  # record the stage honestly, never a secret
-            fatal = type(error).__name__
+        except Exception as error:  # coding bugs: record type + message + source-line traceback
+            # Tracebacks show source lines only (no variable values) and messages
+            # of internal exceptions never carry credentials; driver.log is the
+            # diagnosis surface, so hiding them is worse than the residual risk.
+            import traceback
+
+            fatal = f"{type(error).__name__}: {str(error)[:300]}"
+            print(traceback.format_exc(limit=25)[:4000])
             self.stage.fail(f"stage-{self.stage.current}-fatal", fatal)
         return await self._finish(fatal)
 

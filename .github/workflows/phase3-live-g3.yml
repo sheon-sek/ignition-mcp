@@ -278,7 +278,18 @@ jobs:
             > "$EVIDENCE_DIR/driver.log" 2>&1
           rc=$?
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
-          exit "$rc"
+          # rc 3 means "G3 checks passed, row carries the native-binding
+          # limitation" (the expected 8.3.9 candidate outcome). The step must
+          # not fail there or the gate-off and evidence steps would be skipped;
+          # the Enforce step applies the per-row rc policy. g3diag C3.
+          [[ "$rc" == 0 || "$rc" == 3 ]]
+
+      - name: Scrape metrics while the server is live
+        if: always()
+        shell: bash
+        run: |
+          curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
+          wc -c "$EVIDENCE_DIR/metrics.txt"
 
       - name: Restart ignition-rest (sensitive exports OFF)
         shell: bash
@@ -390,8 +401,8 @@ jobs:
               find "$EVIDENCE_DIR/gateway-logs" -type l -delete 2>/dev/null || true
               sudo chown -R "$(id -u):$(id -g)" "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
             fi
-          fi
-          curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
+          # metrics scraped live in its own step (g3diag R6: this ran after the
+          # server had already stopped, so the file was always empty)
 
       - name: Upload G3 evidence
         if: always()

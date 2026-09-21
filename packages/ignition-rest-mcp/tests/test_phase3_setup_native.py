@@ -184,6 +184,7 @@ class FakeGateway:
     def _modules_body(self) -> bytes:
         items = {
             "installed": [{"id": gateway.MCP_MODULE_ID, "version": "1.3.5.2026021307-SNAPSHOT"}],
+            "display": [{"id": gateway.MCP_MODULE_ID, "version": "1.3.5-SNAPSHOT (b2026021307)"}],
             "missing": [{"id": "com.other.module", "version": "1.0.0.2026021307"}],
             "unparseable": [{"id": gateway.MCP_MODULE_ID, "version": "1.3.5"}],
             "absent": [],
@@ -629,6 +630,21 @@ def test_doctor_unparseable_gateway_version_keeps_compatibility_unknown(runner: 
     assert "compatibility stays UNKNOWN" in checks["gateway-info"]["detail"]
     assert checks["compatibility"]["status"] == "UNKNOWN"
     assert "gatewayVersion" in checks["compatibility"]["detail"]
+    assert code == 0
+
+
+def test_doctor_parses_the_live_module_display_version(runner: Runner) -> None:
+    """The Gateway's healthy-modules endpoint serves ``1.3.5-SNAPSHOT
+    (b2026021307)``, not the four-segment artifact form (live finding, G3 run
+    35589924939). doctor must read version and build from it."""
+    code, payload, _ = runner("doctor", make_manifest(testedTuples=[evidence_row()]),
+                              gateway_fake=FakeGateway(module="display"), mcp_fake=FakeMcp())
+    checks = checks_of(payload)
+    assert checks["module-installed"]["status"] == "PASS"
+    assert "version=1.3.5-SNAPSHOT" in checks["module-installed"]["detail"]
+    assert "build=2026021307" in checks["module-installed"]["detail"]
+    assert checks["compatibility"]["status"] == "UNKNOWN"
+    assert "testedTuples match" in checks["compatibility"]["detail"]
     assert code == 0
 
 

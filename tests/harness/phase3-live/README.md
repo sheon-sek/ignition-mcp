@@ -11,8 +11,8 @@ the evidence row), and a run-unique disposable Project
 ## What the driver proves live
 
 1. L5 guards: explicit CI marker + Gateway identity match + run-unique
-   disposable project + writer-scoped allowlists — checked before any import,
-   fail-closed on anything missing.
+   disposable project + writer-scoped allowlists. The driver checks all of these before any import and fails
+   closed when one is missing.
 2. `setup-native doctor / plan / verify` against the real Gateway and the
    deployed bundle (`plan` reports only NO CHANGE for provisioned items).
 3. Sensitive exports ON: exact 16-Tool REST inventory (zero mutation Tools),
@@ -39,16 +39,16 @@ the evidence row), and a run-unique disposable Project
 
 ## Layout
 
-- `docker-compose.yml` — Gateway-only compose (no database is needed);
+- `docker-compose.yml`: Gateway-only compose (no database is needed).
   `GATEWAY_IMAGE` must be an exact patch tag, ports bound to 127.0.0.1 only.
-- `driver.py` — the G3 driver (library consumer of `ignition_rest_mcp`;
+- `driver.py`: the G3 driver (library consumer of `ignition_rest_mcp`;
   exit 0 = row verified, 3 = verified with the recorded binding limitation,
   2 = failed stage, recorded honestly in `observations.json`).
-- `inventory_gate_off.py` — the gate-off discovery/call-time probe.
-- `harness_common.py` — frozen expected inventories + the MCP wire client.
-- `fixture-project/` — the disposable Project template (loaded by directory
+- `inventory_gate_off.py`: the gate-off discovery and call-time probe.
+- `harness_common.py`: frozen expected inventories + the MCP wire client.
+- `fixture-project/`: the disposable Project template (loaded by directory
   copy; content is CI-only).
-- `gateway-config/` — the `phase3-runtime` MCP server-config resource.
+- `gateway-config/`: the `phase3-runtime` MCP server-config resource.
 
 The workflow `.github/workflows/phase3-live-g3.yml` runs only from trusted
 pull requests under the `phase3-live` environment (no protection rules by

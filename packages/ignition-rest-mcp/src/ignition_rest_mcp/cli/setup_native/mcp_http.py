@@ -5,7 +5,7 @@ application/json, text/event-stream``, optional ``Mcp-Session-Id`` echo, SSE
 ``data:`` decoding, 1 MiB response ceiling, JSON-RPC error = failure) but use
 the package's ``httpx`` dependency.  ``doctor`` and ``verify`` are diagnostics,
 not installers: ``initialize`` gets exactly one attempt under a bounded timeout
-and never a readiness wait loop — waiting for a starting Gateway belongs to the
+and never a readiness wait loop. Waiting for a starting Gateway belongs to the
 live harness.
 """
 
@@ -29,7 +29,7 @@ ERROR_BODY_SNIPPET = 160
 METHOD_NOT_FOUND = -32601
 INVALID_REQUEST = -32600
 #: The live Gateway module answers unimplemented list capabilities (an empty
-#: Prompt inventory omits the prompts capability — the G1 lesson, proven live in
+#: Prompt inventory omits the prompts capability, the G1 lesson confirmed live in
 #: run 35588754132) with ``-32600 Invalid Request`` rather than ``-32601 Method
 #: not found``.  For list methods both codes mean "this endpoint does not offer
 #: that capability"; anywhere else ``-32600`` stays a hard failure.

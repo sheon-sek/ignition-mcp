@@ -1,4 +1,4 @@
-"""``ignition-mcp setup-native`` — read-only Runtime Bundle doctor / plan / verify (D20, D21).
+"""``ignition-mcp setup-native``: read-only Runtime Bundle doctor / plan / verify (D20, D21).
 
 The whole desired state comes from the bundle manifest JSON the operator passes
 in; this package never reads repo-relative paths (no ``contracts/``, no
