@@ -542,7 +542,116 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   **82/82 cases in both rows** again). The head this section was last touched on re-runs the
   same four workflows; its run IDs are in the ticket report.
 
+### Ticket #19 — REST `artifact_delete` (milestone 4c)
+
+- Fixture-first coverage: the new module
+  `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py` (19 cases) drives the
+  real server through MCP and the artifact data plane against
+  `tests/harness/recorded_gateway.py`; it fails before the change (the Tool, its
+  operation and its service module do not exist — the module cannot even import
+  `ARTIFACT_DELETE`), and the full `AGENTS.md` command block is green (887 pytest
+  cases).
+- **This Tool dispatches nothing at all.** D30 dropped the artifact HTTP route and made
+  the Tool the only delete path, so D08's capability layer had no route to check. The
+  operation therefore declares `gateway_backed=False` and its capability is the local
+  `artifact_store`; `preflight_mutation` only consults the D04 registry for a
+  Gateway-backed operation (and refuses a Gateway-backed one that names a local
+  capability, and the reverse), `tooling/contracts/lint.py` requires a routeless REST
+  Mutation to declare `localCapability` instead of a `capabilityId` that could not
+  exist, and a structural scan pins that exactly one operation in the whole server may
+  declare it.
+- **Discovery for a routeless Tool is the class gate alone.**
+  `_apply_visibility` treats a `None` capability as "no Gateway route to check", so the
+  deployment's `IGNITION_MCP_CONFIG_MUTATION_ENABLED` decides whether the Tool is
+  listed — an unreachable Gateway must not hide the one path a deployment has for
+  collecting its own artifacts, and a case pins that the Tool stays discoverable while
+  the capability-gated Tools disappear.
+- **The D08 chain runs for a local effect too.** `safety/executor.py` gains
+  `execute_local_mutation`: same order (scope → class → operation allowlist → Target
+  allowlist → capability → Precondition), same `decision` → `attempt` → `result` rows,
+  one effect exactly once, then the bounded verification. A refusal the operation
+  recognises (the D17 retention lock) is its own result and a read-back can only confirm
+  or contradict it — never upgrade it to a success, and never `recovered_success`, which
+  the contract declares unreachable: TTL cleanup, the D16 transaction and any
+  `ignition.admin` remove artifacts too, so absence is never attributable to this call.
+- **D30 §6 visibility is the Precondition hook.** The Target allowlist is checked
+  against the caller's identifier before the store is read, then the artifact is
+  resolved (READY only) and visibility is enforced: the owning principal, or any holder
+  of `ignition.admin`. An artifact the caller cannot see answers exactly as an unknown
+  identifier does (`not_found`, with the denial audited), so the Tool is never an
+  existence oracle. `artifact_delete` is a CONFIG effect, so D07's scope is required as
+  well: ownership is not authorization, and a case pins that a read-only owner still
+  cannot remove its own artifact.
+- **D17 retention and crash safety.** Behind `store.delete_internal`: the lock check and
+  the `DELETING` transition are one transaction (a locked RECOVERY artifact is
+  `conflict` and nothing is unlinked), then the object is unlinked and its directory
+  fsynced, then the row is removed — and the `DELETING` split point is now a
+  `_fail_hook` point like the create path's, so a case crashes the removal there and
+  proves both halves: the artifact is already invisible to every read (`not_found`,
+  absent from `artifact_list`, state `DELETING`, object still on disk), and one
+  `reconcile` pass finishes it (`finished_delete: 1`, no row, no object).
+- **The Target of this Tool is the artifact's own storage identifier.** D30 §6 says
+  nothing about its Target form and D08 requires an allowlist, so the Tool uses the
+  identity every other Phase 4 Tool uses — the exact thing being changed — matched
+  exactly, deny-by-default, with the explicit `*` a deployment needs for identifiers
+  that are generated at removal time. The denial is `permission_denied` (D30 §7) and is
+  evaluated before the artifact is read.
+- Wiring (D07/D30 §7): registered as a CONFIG-scope, destructive, audited Tool gated by
+  `IGNITION_MCP_CONFIG_MUTATION_ENABLED`, budget class ARTIFACT (the runbook's
+  artifact-involving class), with `artifactId` bounded to the store's own 128-character
+  identifier rule (D10) and `artifact_delete` added to the D18 safe-field allowlist
+  (`kind`, `sensitivity`, `retentionClass`) so an audit row says what was destroyed.
+  Contract, output schema, lint inventory, the shared test fixtures, the structural
+  scans and the live harness moved together.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **98/98 cases**
+  against the recorded Gateway, both deployment gates and all three credentials.
+- Live: run IDs in the ticket report; the artifact cases need no Gateway at all (the
+  Tool has no route), so what the rows add is the end-to-end removal on the real
+  server, the independent `artifact_info`/`artifact_list` re-read, the ownership rule in
+  both directions, the CONFIG scope refusal, both D10 input bounds, the `DELETE
+  /artifacts/{id}` refusal (405, D30), and the class gate at discovery and at call time.
+
 ## Open questions
+
+- **Ticket #19 — the Target of an artifact removal is the artifact's own identifier.**
+  D30 §6 fixes this Tool's class, its ownership rule and its retention rule but says
+  nothing about its Target form, and D08 requires a Target allowlist. What is
+  implemented is the identity every other Phase 4 Tool uses — the exact thing the call
+  changes, here the `artifactId` the caller read — so a deployment can pin a long-lived
+  artifact by name, and one that lets an agent collect its own artifacts writes the
+  explicit `*` (D30 §3 forbids anything implicit), with D30 §6 ownership as the bound
+  that makes `*` defensible. The alternative reading — the
+  artifact's *kind*, a deployment-meaningful class the allowlist could name precisely —
+  would put the allowlist check after the artifact read, because the kind is only known
+  once the artifact is resolved, which inverts D08's order (policy before precondition).
+  **For the owner:** confirm the identifier reading, or amend D08/D30 to allow a
+  class-valued Target for artifacts.
+- **Ticket #19 — a live Target-allowlist denial is not provable in this harness.** The
+  live deployment must write `*` for `artifact_delete` (identifiers are generated at
+  removal time, so no fixed entry can name the artifact a case removes), which leaves no
+  identifier outside the allowlist to refuse. The denial is pinned by the unit fixture
+  (`test_a_target_outside_the_allowlist_is_permission_denied`, with the audited
+  `denied:target-allowlist:target-not-allowlisted` row) and the live rows prove the
+  visible, ownership, scope, bounds and route-asymmetry cases instead. **For the owner:**
+  confirm, or ask for a harness that restarts the server with a per-run allowlist once
+  the artifact identifiers are known.
+- **Ticket #19 — a live retention-lock `conflict` is not provable in this harness
+  either.** A locked RECOVERY artifact exists only while a D16 transaction is
+  `OUTCOME_UNKNOWN` or `RECOVERY_REQUIRED`, and no case in this harness can land a
+  transaction in those states on a live Gateway (#16's ambiguity cases are fixture-only
+  by the same rule). The `conflict` is pinned by the unit fixture
+  (`test_a_retention_locked_recovery_artifact_is_a_conflict_and_survives`, including the
+  lock still being held and the object still on disk) plus its release counterpart, and
+  the store's lock rule itself is Phase 3 evidence. **For the owner:** confirm, or ask
+  for a live case driven through #20's fault-injecting proxy, which can hold an import
+  request open and leave a transaction unresolved.
+- **Ticket #19 — the crash-safe `DELETING` recovery is fixture-proven, not live.** A live
+  case would have to kill the server between the `DELETING` commit and the unlink, which
+  the harness cannot do deterministically (the window is a local unlink inside one
+  call). The unit fixture fails the removal at that split point through the store's own
+  `_fail_hook`, asserts the partial state, and then finishes it with a `reconcile` pass
+  in a fresh store over the same data directory. **For the owner:** confirm the fixture
+  as the G4 evidence for this split point.
 
 - **Ticket #18 — a live cancel of a *running* pipeline is not provisioned by this
   harness.** A fresh CI Gateway serves no Alarm Notification Pipeline runs (the Phase 2
