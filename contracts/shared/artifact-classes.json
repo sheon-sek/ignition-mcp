@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "artifactKinds": ["project_archive", "project_export", "tag_config_export"],
+  "sensitivityClasses": ["INTERNAL", "CONFIDENTIAL", "RESTRICTED"],
+  "retentionClasses": {
+    "EPHEMERAL": {
+      "ttlClock": "Owning request or transaction lifetime; removed when the owner reaches a lock-releasing terminal state."
+    },
+    "EXPORT": {
+      "defaultTtlHours": 24
+    },
+    "RECOVERY": {
+      "defaultTtlDays": 7,
+      "ttlClock": "Starts only when the owning transaction reaches a lock-releasing terminal state.",
+      "retentionLockedUntilRelease": true
+    }
+  },
+  "publicDeleteToolPhase3": false,
+  "httpDownloadPathPrefix": "/artifacts/"
+}

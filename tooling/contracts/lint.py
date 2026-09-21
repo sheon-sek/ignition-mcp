@@ -30,7 +30,28 @@ CURRENT_REST_READ_TOOLS = [
     "audit_query",
     "alarm_pipeline_list",
     "alarm_pipeline_status",
+    "artifact_list",
+    "artifact_info",
+    "project_export",
+    "tag_config_export",
+    "operation_diagnose",
 ]
+CURRENT_REST_STORAGE_TOOLS = frozenset({"artifact_list", "artifact_info", "operation_diagnose"})
+CURRENT_REST_SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
+SENSITIVE_EXPORT_GATE = "IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"
+EXPECTED_ARTIFACT_KINDS = ("project_archive", "project_export", "tag_config_export")
+EXPECTED_SENSITIVITY_CLASSES = ("INTERNAL", "CONFIDENTIAL", "RESTRICTED")
+EXPECTED_RETENTION_CLASSES = ("EPHEMERAL", "EXPORT", "RECOVERY")
+EXPECTED_PROJECT_TRANSACTION_STATES = (
+    "PREPARING", "BASELINE_CAPTURED", "CANDIDATE_VALIDATED", "BACKUP_PERSISTED",
+    "CONCURRENCY_VERIFIED", "IMPORT_SENT", "VERIFYING", "COMMITTED",
+)
+EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES = frozenset({
+    "COMMITTED", "NO_CHANGE", "CONFLICTED", "FAILED_PRE_IMPORT",
+    "NOT_APPLIED", "OUTCOME_UNKNOWN", "RECOVERY_REQUIRED",
+})
+EXPECTED_RECOVERY_LOCK_RELEASED_ON = frozenset({"COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"})
+EXPECTED_RECOVERY_LOCK_HELD_ON = frozenset({"OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"})
 
 CURRENT_RUNTIME_TOOLS = [
     "bundle_info",
@@ -132,6 +153,75 @@ def lint_contracts(root: str | Path) -> None:
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
+
+    rest_inventory = sorted(
+        path.name[: -len(".contract.json")]
+        for path in (root_path / "tools/rest").glob("*.contract.json")
+    )
+    if rest_inventory != sorted(CURRENT_REST_READ_TOOLS):
+        raise ContractError("REST Tool contract inventory drift (Phase 3 freeze; zero mutation Tools)")
+
+    for tool_name in CURRENT_REST_STORAGE_TOOLS:
+        tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
+        if tool.get("storageBacked") is not True or tool.get("principalScoped") is not True:
+            raise ContractError(f"{tool_name}: storage-backed principal-scoped contract drift")
+        if tool.get("budgetClass") != "FAST" or tool.get("requiredScope") != "ignition.read":
+            raise ContractError(f"{tool_name}: storage Tool budget/scope drift")
+
+    for tool_name in CURRENT_REST_SENSITIVE_EXPORT_TOOLS:
+        tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
+        if tool.get("sensitivity") != "CONFIDENTIAL" or tool.get("retentionClass") != "EXPORT":
+            raise ContractError(f"{tool_name}: sensitive export class drift")
+        if tool.get("deploymentGate") != SENSITIVE_EXPORT_GATE or tool.get("audited") is not True:
+            raise ContractError(f"{tool_name}: sensitive export gate/audit drift")
+        if tool.get("budgetClass") != "ARTIFACT" or tool.get("requiredScope") != "ignition.read":
+            raise ContractError(f"{tool_name}: sensitive export budget/scope drift")
+        capability = tool.get("capabilityId")
+        requirements = tool.get("nativeRequirements")
+        if not isinstance(capability, str) or not capability:
+            raise ContractError(f"{tool_name}: sensitive export must be capability-backed")
+        if not isinstance(requirements, list) or not requirements:
+            raise ContractError(f"{tool_name}: sensitive export must declare native requirements")
+
+    artifact_classes = _load(root_path / "shared/artifact-classes.json")
+    if tuple(artifact_classes.get("artifactKinds", ())) != EXPECTED_ARTIFACT_KINDS:
+        raise ContractError("Artifact kind inventory drift")
+    if tuple(artifact_classes.get("sensitivityClasses", ())) != EXPECTED_SENSITIVITY_CLASSES:
+        raise ContractError("Artifact sensitivity class drift")
+    if frozenset(artifact_classes.get("retentionClasses", {})) != frozenset(EXPECTED_RETENTION_CLASSES):
+        raise ContractError("Artifact retention class drift")
+    if artifact_classes.get("publicDeleteToolPhase3") is not False:
+        raise ContractError("D26: artifact_delete remains a Phase 4 mutation")
+
+    artifact_ref = _load(root_path / "shared/artifact-ref.schema.json")
+    ref_properties = cast(dict[str, Any], artifact_ref.get("properties", {}))
+    for field, expected_enum in (
+        ("kind", EXPECTED_ARTIFACT_KINDS),
+        ("sensitivity", EXPECTED_SENSITIVITY_CLASSES),
+        ("retentionClass", EXPECTED_RETENTION_CLASSES),
+    ):
+        enum_value = cast(dict[str, Any], ref_properties.get(field, {})).get("enum", ())
+        if tuple(enum_value) != expected_enum:
+            raise ContractError(f"artifact-ref {field} enum drift")
+    if "token" in json.dumps(artifact_ref).lower():
+        raise ContractError("artifact-ref download is a relative data-plane path; never a token")
+    if "principal" in json.dumps(artifact_ref):
+        raise ContractError("the owning principal is internal metadata, not part of ArtifactRef")
+
+    transactions = _load(root_path / "shared/project-transaction-states.json")
+    if tuple(transactions.get("states", ())) != EXPECTED_PROJECT_TRANSACTION_STATES:
+        raise ContractError("D16 Project transaction state order drift")
+    if frozenset(transactions.get("terminalStates", ())) != EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES:
+        raise ContractError("D16 transaction terminal state drift")
+    if frozenset(transactions.get("recoveryLockReleasedOn", ())) != EXPECTED_RECOVERY_LOCK_RELEASED_ON:
+        raise ContractError("D16 recovery-lock release set drift")
+    if frozenset(transactions.get("recoveryLockHeldOn", ())) != EXPECTED_RECOVERY_LOCK_HELD_ON:
+        raise ContractError("D16 recovery-lock hold set drift")
+    if tuple(transactions.get("possiblyDispatchedStates", ())) != ("IMPORT_SENT", "VERIFYING"):
+        raise ContractError("D16 possibly-dispatched state set drift")
+    for key in ("automaticRollback", "automaticReplay", "automaticMerge"):
+        if transactions.get(key) is not False:
+            raise ContractError(f"D16 forbids automatic {key}")
 
 
 def main() -> int:

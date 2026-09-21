@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_config_export",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "ARTIFACT",
+  "sensitivity": "CONFIDENTIAL",
+  "retentionClass": "EXPORT",
+  "deploymentGate": "IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED",
+  "audited": true,
+  "parameters": {
+    "provider": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "path": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 1024
+    },
+    "recursive": {
+      "type": "boolean",
+      "required": false,
+      "default": true
+    },
+    "includeUdts": {
+      "type": "boolean",
+      "required": false,
+      "default": false
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-config-export.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/tags/export?type=json"
+  ],
+  "capabilityId": "tag_config_export",
+  "exportTypeLocked": "json",
+  "silentTruncation": false
+}

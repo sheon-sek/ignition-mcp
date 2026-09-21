@@ -12,7 +12,7 @@ Language-neutral Tool contracts, shared taxonomies, and output schemas live unde
 ## Governance: Decisions and Phase Gates
 
 - `docs/decisions/D01–D28` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
-- Delivery is phase-gated (D26). Phases 0–2 (G0/G1/G2) are closed and frozen; see `docs/development/phase-{0,1,2}.md`. **Phase 3 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
+- Delivery is phase-gated (D26). Phases 0–3 (G0/G1/G2/G3) are closed and frozen; see `docs/development/phase-{0,1,2,3}.md`. **Phase 4 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
 - Key rules that cut across files:
   - No duplicate equivalent operation across the two servers. Native REST owns an operation whenever a semantically complete official REST endpoint exists. Runtime MCP owns everything else (D02).
   - No arbitrary REST-request Tool, no arbitrary SQL (Named Queries only, D14), no WebDev bridge.
@@ -40,6 +40,10 @@ uv build --package ignition-rest-mcp
 uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
 uv run --no-sync python -m tooling.native.cli build --project-dir packages/ignition-runtime-bundle/project --output dist/runtime.zip
 
+# Deterministic release artifacts (CI builds twice and `cmp`s all three files)
+uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+uv run --no-sync python -m tooling.native.cli release --project-dir packages/ignition-runtime-bundle/project --out-dir dist/release --source-revision "$(git rev-parse HEAD)" --evidence-dir tests/compatibility/evidence
+
 # After editing a contracts/schemas source that is published as a Runtime Text Resource
 uv run --no-sync python -m tooling.native.sync_schemas
 
@@ -51,7 +55,7 @@ mypy runs in `strict` mode. Ruff and mypy exclude the Jython bundle project dire
 
 Run the server locally with the `ignition-rest-mcp` script (`ignition_rest_mcp.server:main`). Configuration is entirely through `IGNITION_MCP_*` environment variables; see `packages/ignition-rest-mcp/README.md` and `config.py`. The development profile binds `127.0.0.1:8000/mcp`.
 
-The live Gateway harnesses (`tests/harness/runtime-binding`, `phase1-live`, `phase2-live`) use docker compose with a real Ignition image and the checksum-pinned MCP Module in `tests/fixtures/modules/`. They are driven by the `live-gateway-g0`, `phase1-live-g1` and `phase2-live-g2` workflows. Persisted evidence lives in `tests/compatibility/evidence/`.
+The live Gateway harnesses (`tests/harness/runtime-binding`, `phase1-live`, `phase2-live`, `phase3-live`) use docker compose with a real Ignition image and the checksum-pinned MCP Module in `tests/fixtures/modules/`. They are driven by the `live-gateway-g0`, `phase1-live-g1`, `phase2-live-g2` and `phase3-live-g3` workflows. The G3 harness uses an in-process transaction driver; run `uv run --no-sync python tests/harness/phase3-live/rehearse_local.py` before spending another live CI run on driver or workflow changes. Persisted evidence lives in `tests/compatibility/evidence/`.
 
 ## Architecture
 

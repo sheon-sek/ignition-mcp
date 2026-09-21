@@ -11,6 +11,6 @@
     "description": "JSON Schema for the bundle_info Tool output contract.",
     "dataType": "Text",
     "mimeType": "application/schema+json",
-    "size": 754
+    "size": 1173
   }
 }

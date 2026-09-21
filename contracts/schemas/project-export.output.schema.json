@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:project-export:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "projectName": {"type": "string", "minLength": 1, "maxLength": 256},
+    "fingerprint": {"type": "string", "pattern": "^pcf1:[0-9a-f]{64}$"},
+    "artifact": {"$ref": "#/$defs/artifactRef"}
+  },
+  "required": ["correlationId", "projectName", "fingerprint", "artifact"],
+  "$defs": {
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "mediaType": {"type": "string", "minLength": 1},
+        "sizeBytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kind": {"enum": ["project_archive", "project_export", "tag_config_export"]},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+        "sensitivity": {"enum": ["INTERNAL", "CONFIDENTIAL", "RESTRICTED"]},
+        "retentionClass": {"enum": ["EPHEMERAL", "EXPORT", "RECOVERY"]},
+        "createdAt": {"type": "string", "minLength": 1},
+        "expiresAt": {"type": ["string", "null"]},
+        "download": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {"type": "string", "pattern": "^/artifacts/[A-Za-z0-9._:-]+$"}
+          },
+          "required": ["path"]
+        }
+      },
+      "required": [
+        "artifactId",
+        "mediaType",
+        "sizeBytes",
+        "sha256",
+        "kind",
+        "filename",
+        "sensitivity",
+        "retentionClass",
+        "createdAt",
+        "expiresAt",
+        "download"
+      ]
+    }
+  }
+}

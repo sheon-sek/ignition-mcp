@@ -67,7 +67,10 @@ def test_direct_failure_updates_wire_resources(gateway, tool, failure):
             async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.http_app()), base_url="http://test") as health:
                 response = await health.get("/health/ready")
                 assert response.status_code == 503
-                assert response.json() == {"ready": False, "registryState": "STALE"}
+                payload = response.json()
+                assert (payload["ready"], payload["registryState"]) == (False, "STALE")
+                # A Gateway failure must never implicate the storage subsystems.
+                assert payload["storageReady"] is True
             assert gateway["direct"] == 1  # refresh is metadata, not operation replay
             assert gateway["refresh"] == (1 if failure == "gateway_unavailable" else 2)
     asyncio.run(scenario())
@@ -83,7 +86,6 @@ def test_canonical_errors_and_telemetry(monkeypatch, caplog, gateway, tool, fail
             raise GatewayError("permission_denied", "Safe rejection")
         raise RuntimeError("DO-NOT-LEAK")
 
-    monkeypatch.setattr("ignition_rest_mcp.server.TOOL_TIMEOUT_SECONDS", 0.01)
     monkeypatch.setattr("ignition_rest_mcp.server." + ("info_service" if tool == "gateway_info" else "diagnose_service"), service)
     recorded = []
     monkeypatch.setattr("ignition_rest_mcp.observability.metrics.Metrics.record_tool",
@@ -91,7 +93,7 @@ def test_canonical_errors_and_telemetry(monkeypatch, caplog, gateway, tool, fail
     caplog.set_level(logging.INFO, logger="ignition_rest_mcp")
 
     async def scenario():
-        async with Client(create_server(_settings())) as client:
+        async with Client(create_server(_settings(tool_timeout_seconds=0.01))) as client:
             result = await client.call_tool(tool, {}, raise_on_error=False)
             assert result.is_error
             error = json.loads(result.content[0].text)
@@ -135,7 +137,9 @@ def test_pydantic_validation_error_is_canonical_and_degrades_readiness(gateway, 
             ) as health:
                 response = await health.get("/health/ready")
                 assert response.status_code == 503
-                assert response.json() == {"ready": False, "registryState": "STALE"}
+                payload = response.json()
+                assert (payload["ready"], payload["registryState"]) == (False, "STALE")
+                assert payload["storageReady"] is True
             assert calls == 1
             assert gateway["refresh"] == 2
 
@@ -157,7 +161,7 @@ def test_mismatch_refresh_coalesces_without_replay(gateway, monkeypatch):
 
         monkeypatch.setattr(GatewayClient, "openapi", openapi)
         gateway["failure"] = "schema_mismatch"
-        tasks = [asyncio.create_task(gateway_info(client, registry, OperationContext.read("gateway_info", "test"))) for _ in range(5)]
+        tasks = [asyncio.create_task(gateway_info(client, registry, OperationContext.start("gateway_info", "test", "FAST"))) for _ in range(5)]
         await started.wait()
         assert registry.snapshot.state == "STALE"
         release.set()
@@ -254,7 +258,7 @@ def test_wire_cancellation_records_once(monkeypatch, caplog, gateway, tool):
         monkeypatch.setattr("ignition_rest_mcp.observability.metrics.Metrics.record_tool",
                             lambda self, name, outcome: recorded.append((name, outcome)))
         caplog.set_level(logging.INFO, logger="ignition_rest_mcp")
-        async with Client(create_server(_settings())) as client:
+        async with Client(create_server(_settings(tool_timeout_seconds=0.01))) as client:
             task = asyncio.create_task(client.call_tool(tool, {}))
             await entered.wait()
             task.cancel()

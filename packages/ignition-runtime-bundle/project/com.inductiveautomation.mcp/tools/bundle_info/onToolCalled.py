@@ -1,5 +1,7 @@
 def onToolCalled(builder):
-	bundleVersion = "0.1.0"
+	bundleVersion = "0.2.0"
+	# Stamped at build time by tooling.native; never a secret.
+	bundleSourceRevision = "__BUNDLE_SOURCE_REVISION__"
 	gatewayVersion = str(system.util.getVersion())
 	moduleVersion = "unknown"
 	# D28: explicit logical null survives the pinned Module serializer.
@@ -14,4 +16,4 @@ def onToolCalled(builder):
 				if len(buildCandidate) == 10 and buildCandidate.isdigit():
 					moduleBuild = buildCandidate
 			break
-	return {"structuredContent": {"bundleVersion": bundleVersion, "gatewayVersion": gatewayVersion, "mcpModuleVersion": moduleVersion, "mcpModuleBuild": moduleBuild, "compatibilityStatus": "UNKNOWN"}}
+	return {"structuredContent": {"bundleVersion": bundleVersion, "bundleSourceRevision": bundleSourceRevision, "gatewayVersion": gatewayVersion, "mcpModuleVersion": moduleVersion, "mcpModuleBuild": moduleBuild, "compatibilityStatus": "UNKNOWN"}}

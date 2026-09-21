@@ -1,0 +1,477 @@
+{
+  "authzDenials": {
+    "afterDenialsFingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+    "baselineFingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+    "denials": {
+      "invalidJwt": "rejected-before-authz",
+      "non-allowlisted-target": {
+        "code": "operation_disabled",
+        "decision": "denied:target-allowlist:target-not-allowlisted"
+      },
+      "read-only-jwt": {
+        "code": "permission_denied",
+        "decision": "denied:authz-scope:missing-scope:ignition.config"
+      }
+    }
+  },
+  "bundleSha256": "4ecbb3ca4b5b0d127e735080e774e5baf5b659f7d798929b1048980d101085a7",
+  "bundleVersion": "0.2.0",
+  "compatibilityStatus": "UNTESTED",
+  "d27ExceptionApplied": false,
+  "deployedBundleSha256": "4ecbb3ca4b5b0d127e735080e774e5baf5b659f7d798929b1048980d101085a7",
+  "deployment": {
+    "authMode": "jwt",
+    "designerPolicy": "deny",
+    "mutationOperations": [
+      "project_import"
+    ],
+    "projectWriterEnabled": true,
+    "sensitiveExportsEnabled": true
+  },
+  "disposableProject": "mcp_g3_35595061842_839",
+  "fingerprintStability": "STABLE",
+  "gate": "G3",
+  "gateOffInventory": {
+    "exportsVisible": [],
+    "missing": [],
+    "mutationTools": [],
+    "passed": true,
+    "projectExportCall": "isError:Unknown tool: 'project_export'",
+    "tools": [
+      "alarm_pipeline_list",
+      "alarm_pipeline_status",
+      "artifact_info",
+      "artifact_list",
+      "audit_query",
+      "config_resource_describe",
+      "config_resource_get",
+      "config_resource_list",
+      "config_resource_names",
+      "config_resource_search",
+      "gateway_diagnose",
+      "gateway_info",
+      "operation_diagnose",
+      "project_list"
+    ],
+    "unexpected": []
+  },
+  "gatewayBuild": "2026082511",
+  "gatewayImage": "inductiveautomation/ignition:8.3.9",
+  "gatewayImageDigest": "sha256:28bd6b320157ec8dbbe465d0cd7c9f0ababfda4ff01c0bab982c0522a7b4eba2",
+  "gatewayVersion": "8.3.9",
+  "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+  "mcpModuleBuild": "2026021307",
+  "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+  "mcpModuleVersion": "1.3.5-SNAPSHOT",
+  "nativeResponseBinding": "UNVERIFIED_LIMITATION",
+  "openapiSha256": "d74e347fe97ae917f714282070d58c4b6a73faf92be10af7f1a271db7bb7fb62",
+  "ownerAcceptedDeviations": [
+    "phase3-live-environment-protection"
+  ],
+  "projectMutationConcurrencySafe": true,
+  "restPlane": {
+    "artifactId": "01a0c3c3-d09d-7000-8000-81f7bf47d270",
+    "auditRows": [
+      {
+        "error_code": null,
+        "outcome": "allowed",
+        "phase": "decision"
+      },
+      {
+        "error_code": null,
+        "outcome": "attempted",
+        "phase": "attempt"
+      },
+      {
+        "error_code": null,
+        "outcome": "completed",
+        "phase": "result"
+      }
+    ],
+    "bodySha256": "80efcecc607c6ec60f6eb36d951568f627c1b5782ccbdb65a6b4f0d1ee19c150",
+    "diagnose": {
+      "auditResultMissing": false,
+      "correlationId": "01a0c3c3-d092-7000-8000-2f9209fc5630",
+      "downstreamCorrelationId": null,
+      "errorCode": null,
+      "finishedAt": "2026-09-21T11:39:45.195478Z",
+      "outcome": "succeeded",
+      "phases": [],
+      "phasesTruncated": false,
+      "startedAt": "2026-09-21T11:39:45.170074Z",
+      "tool": "project_export",
+      "transactionId": null
+    },
+    "export": {
+      "artifact": {
+        "artifactId": "01a0c3c3-d09d-7000-8000-81f7bf47d270",
+        "createdAt": "2026-09-21T11:39:45.181926Z",
+        "download": {
+          "path": "/artifacts/01a0c3c3-d09d-7000-8000-81f7bf47d270"
+        },
+        "expiresAt": "2026-09-22T11:39:45.181926Z",
+        "filename": "mcp_g3_35595061842_839.zip",
+        "kind": "project_export",
+        "mediaType": "application/zip",
+        "retentionClass": "EXPORT",
+        "sensitivity": "CONFIDENTIAL",
+        "sha256": "80efcecc607c6ec60f6eb36d951568f627c1b5782ccbdb65a6b4f0d1ee19c150",
+        "sizeBytes": 903
+      },
+      "correlationId": "01a0c3c3-d092-7000-8000-2f9209fc5630",
+      "fingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+      "projectName": "mcp_g3_35595061842_839"
+    },
+    "exportRepeatFingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+    "principal": "jwt:g3-live"
+  },
+  "runId": "35595061842",
+  "runtime": {
+    "bundleInfo": {
+      "bundleSourceRevision": "a2ff07b4d626516433c4a2b1b684743bdc45f819",
+      "bundleVersion": "0.2.0",
+      "compatibilityStatus": "UNKNOWN",
+      "gatewayVersion": "8.3.9 (b2026082511)",
+      "mcpModuleBuild": {
+        "$ignition": "null"
+      },
+      "mcpModuleVersion": "1.3.5-SNAPSHOT"
+    },
+    "nativeResponseBindingAccepted": true,
+    "outputSchemaPublished": false,
+    "tools": [
+      "alarm_shelved_list",
+      "bundle_info",
+      "database_query",
+      "database_query_list",
+      "historian_browse",
+      "historian_query_aggregate",
+      "historian_query_series",
+      "tag_browse",
+      "tag_get_config",
+      "tag_query",
+      "tag_read",
+      "udt_type_get",
+      "udt_type_list"
+    ]
+  },
+  "runtimeNullEncoding": "ignition-null-v1",
+  "schemaVersion": 3,
+  "setupNative": {
+    "doctor": {
+      "bundleVersion": "0.2.0",
+      "checks": [
+        {
+          "detail": "ignitionVersion=8.3.9 (b2026082511) gateway=ignition-mcp-phase3-ci",
+          "name": "gateway-info",
+          "status": "PASS"
+        },
+        {
+          "detail": "d74e347fe97ae917f714282070d58c4b6a73faf92be10af7f1a271db7bb7fb62 (451 documented operations, 9 MCP operations)",
+          "name": "openapi-sha256",
+          "status": "PASS"
+        },
+        {
+          "detail": "com.inductiveautomation.mcp version=1.3.5-SNAPSHOT build=2026021307 reported=1.3.5-SNAPSHOT (b2026021307) (healthy)",
+          "name": "module-installed",
+          "status": "PASS"
+        },
+        {
+          "detail": "GET /data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name} documented",
+          "name": "capabilities.server-config",
+          "status": "PASS"
+        },
+        {
+          "detail": "POST /data/api/v1/projects/import/{name} documented",
+          "name": "capabilities.project-import",
+          "status": "PASS"
+        },
+        {
+          "detail": "GET /data/api/v1/resources/singleton/ignition/security-levels documented",
+          "name": "capabilities.security-levels",
+          "status": "PASS"
+        },
+        {
+          "detail": "POST /data/api/v1/resources/ignition/api-token documented",
+          "name": "capabilities.api-token",
+          "status": "PASS"
+        },
+        {
+          "detail": "GET /data/api/v1/designers documented",
+          "name": "capabilities.designers",
+          "status": "PASS"
+        },
+        {
+          "detail": "ignition_runtime: MANAGED bundle=0.2.0; standalone (inheritable=false)",
+          "name": "bundle-project",
+          "status": "PASS"
+        },
+        {
+          "detail": "server-config phase3-runtime exists",
+          "name": "server-config-presence",
+          "status": "PASS"
+        },
+        {
+          "detail": "protocol=2025-06-18 server={\"name\":\"phase3-runtime\",\"title\":\"Phase 3 Runtime Readonly\",\"version\":\"0.2.0\"} capabilities=[resources, tools]",
+          "name": "mcp-initialize",
+          "status": "PASS"
+        },
+        {
+          "detail": "exact: 13 advertised, 13 expected",
+          "name": "inventory-tools",
+          "status": "PASS"
+        },
+        {
+          "detail": "exact: 3 advertised, 3 expected",
+          "name": "inventory-resources",
+          "status": "PASS"
+        },
+        {
+          "detail": "endpoint does not offer prompts; profile expects none",
+          "name": "inventory-prompts",
+          "status": "NOT_APPLICABLE"
+        },
+        {
+          "detail": "bundleVersion='0.2.0'; bundleSourceRevision=a2ff07b4d626... matches; gatewayVersion=8.3.9 (b2026082511); mcpModuleVersion=1.3.5-SNAPSHOT; handler compatibilityStatus=UNKNOWN",
+          "name": "bundle-info",
+          "status": "PASS"
+        },
+        {
+          "detail": "no testedTuples row for the observed tuple => UNTESTED; gatewayVersion=8.3.9, gatewayBuild=2026082511, mcpModuleVersion=1.3.5-SNAPSHOT, mcpModuleBuild=2026021307, bundleVersion=0.2.0 (0 row(s) in manifest)",
+          "name": "compatibility",
+          "status": "UNKNOWN"
+        }
+      ],
+      "command": "doctor",
+      "exitCode": 0,
+      "gatewayUrl": "http://127.0.0.1:8088",
+      "manifest": "dist/release/ignition-runtime-bundle-0.2.0.manifest.json",
+      "mcpUrl": "http://127.0.0.1:8088/data/mcp/phase3-runtime",
+      "profile": "readonly",
+      "summary": {
+        "NOT_APPLICABLE": 1,
+        "PASS": 14,
+        "UNKNOWN": 1
+      }
+    },
+    "managedProject": [
+      {
+        "detail": "ignition_runtime: MANAGED bundle=0.2.0; standalone (inheritable=false)",
+        "name": "bundle-project",
+        "status": "PASS"
+      }
+    ],
+    "plan": {
+      "actions": [
+        {
+          "action": "NO CHANGE",
+          "kind": "mcp-module",
+          "name": "com.inductiveautomation.mcp",
+          "reason": "detected version=1.3.5-SNAPSHOT build=2026021307"
+        },
+        {
+          "action": "NO CHANGE",
+          "kind": "bundle-project",
+          "name": "ignition_runtime",
+          "reason": "managed bundle 0.2.0 already deployed"
+        },
+        {
+          "action": "NO CHANGE",
+          "kind": "server-config",
+          "name": "phase3-runtime",
+          "reason": "explicit Tool inventory managed by apply"
+        },
+        {
+          "action": "NO CHANGE",
+          "kind": "security-level",
+          "name": "Gateway security level",
+          "reason": "detect-only, provisioning is apply-phase"
+        },
+        {
+          "action": "NO CHANGE",
+          "kind": "runtime-token",
+          "name": "Ignition API token for the MCP service user",
+          "reason": "detect-only, provisioning is apply-phase"
+        }
+      ],
+      "applied": false,
+      "bundleProject": "ignition_runtime",
+      "bundleVersion": "0.2.0",
+      "command": "plan",
+      "exitCode": 0,
+      "manifest": "dist/release/ignition-runtime-bundle-0.2.0.manifest.json",
+      "profile": "readonly"
+    },
+    "verify": {
+      "bundleVersion": "0.2.0",
+      "checks": [
+        {
+          "detail": "http://127.0.0.1:8088/data/mcp/phase3-runtime HTTP 415",
+          "name": "endpoint-reachable",
+          "status": "PASS"
+        },
+        {
+          "detail": "protocol=2025-06-18 server={\"name\": \"phase3-runtime\", \"title\": \"Phase 3 Runtime Readonly\", \"version\": \"0.2.0\"} capabilities=[resources, tools]",
+          "name": "mcp-initialize",
+          "status": "PASS"
+        },
+        {
+          "detail": "exact: 13 advertised, 13 expected",
+          "name": "inventory-tools",
+          "status": "PASS"
+        },
+        {
+          "detail": "exact: 3 advertised, 3 expected",
+          "name": "inventory-resources",
+          "status": "PASS"
+        },
+        {
+          "detail": "endpoint does not offer prompts; profile expects none",
+          "name": "inventory-prompts",
+          "status": "NOT_APPLICABLE"
+        },
+        {
+          "detail": "1173 UTF-8 characters",
+          "name": "resources-read ignition://?contracts/bundle-info-output",
+          "status": "PASS"
+        },
+        {
+          "detail": "1197 UTF-8 characters",
+          "name": "resources-read ignition://?contracts/tag-browse-output",
+          "status": "PASS"
+        },
+        {
+          "detail": "2766 UTF-8 characters",
+          "name": "resources-read ignition://?contracts/tag-read-output",
+          "status": "PASS"
+        },
+        {
+          "detail": "profile inventory declares no Prompts",
+          "name": "prompts-get",
+          "status": "NOT_APPLICABLE"
+        },
+        {
+          "detail": "bundleVersion='0.2.0'; bundleSourceRevision=a2ff07b4d626... matches; gatewayVersion=8.3.9 (b2026082511); mcpModuleVersion=1.3.5-SNAPSHOT; handler compatibilityStatus=UNKNOWN",
+          "name": "bundle-info",
+          "status": "PASS"
+        }
+      ],
+      "command": "verify",
+      "exitCode": 0,
+      "manifest": "dist/release/ignition-runtime-bundle-0.2.0.manifest.json",
+      "mcpUrl": "http://127.0.0.1:8088/data/mcp/phase3-runtime",
+      "profile": "readonly",
+      "verified": true
+    }
+  },
+  "sourceRevision": "a2ff07b4d626516433c4a2b1b684743bdc45f819",
+  "status": "FAILED_NATIVE_BINDING",
+  "tagExport": {
+    "bytes": 41,
+    "mediaType": "application/json",
+    "path": "",
+    "provider": "default"
+  },
+  "transactions": {
+    "COMMITTED": {
+      "auditRows": [
+        {
+          "error_code": null,
+          "outcome": "allowed",
+          "phase": "decision"
+        },
+        {
+          "error_code": null,
+          "outcome": "attempted",
+          "phase": "attempt"
+        },
+        {
+          "error_code": null,
+          "outcome": "completed",
+          "phase": "result"
+        }
+      ],
+      "baselineFingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+      "candidateFingerprint": "pcf1:051cb6a3086e8e8a0b817d0ef233f2bdd222206eefafb4f3449f9d4d591a2667",
+      "entryDigests": {
+        "baseline": {
+          "ignition/named-query/mcp_g3/probe/query.sql": "68ad3a5a8422b0b5ff935f36658869748432da69de1ed85479ffce17ce582c41",
+          "ignition/named-query/mcp_g3/probe/resource.json": "284867b774bba31411612ef4836ca93e1dc485ac82a98cd9ed4e11f6997b2287",
+          "project.json": "5c2ca85e23c1ea37c5ea573fe692846cffd3a83cba98509ac723b20be58a78f0"
+        },
+        "candidate": {
+          "ignition/named-query/mcp_g3/probe/query.sql": "3c674ef2596379536f1cd35ec23e78f596d1ef1c4c9680418b60b10f3e825e86",
+          "ignition/named-query/mcp_g3/probe/resource.json": "284867b774bba31411612ef4836ca93e1dc485ac82a98cd9ed4e11f6997b2287",
+          "project.json": "5c2ca85e23c1ea37c5ea573fe692846cffd3a83cba98509ac723b20be58a78f0"
+        },
+        "changed": [],
+        "reexport": {
+          "ignition/named-query/mcp_g3/probe/query.sql": "3c674ef2596379536f1cd35ec23e78f596d1ef1c4c9680418b60b10f3e825e86",
+          "ignition/named-query/mcp_g3/probe/resource.json": "284867b774bba31411612ef4836ca93e1dc485ac82a98cd9ed4e11f6997b2287",
+          "project.json": "5c2ca85e23c1ea37c5ea573fe692846cffd3a83cba98509ac723b20be58a78f0"
+        }
+      },
+      "importDispatched": true,
+      "recoveryArtifact": {
+        "id": "01a0c3c3-d4d9-7000-8000-bd8494797bf7",
+        "row": {
+          "expires_at": "2026-09-28T11:39:46.320964Z",
+          "retention_class": "RECOVERY",
+          "retention_lock": 0,
+          "state": "READY"
+        }
+      },
+      "reexportFingerprint": "pcf1:051cb6a3086e8e8a0b817d0ef233f2bdd222206eefafb4f3449f9d4d591a2667",
+      "resultFingerprint": "pcf1:051cb6a3086e8e8a0b817d0ef233f2bdd222206eefafb4f3449f9d4d591a2667",
+      "state": "COMMITTED",
+      "transactionId": "01a0c3c3-d4d6-7000-8000-183208f798b9"
+    },
+    "CONFLICTED": {
+      "auditRows": [],
+      "baselineFingerprint": "pcf1:051cb6a3086e8e8a0b817d0ef233f2bdd222206eefafb4f3449f9d4d591a2667",
+      "candidateFingerprint": "pcf1:0a4279b8459eea91b0f108e78176c2dee6eb57557643bc6fa63aa9158caffcbe",
+      "errorCode": "conflict",
+      "importDispatched": false,
+      "recoveryArtifact": {
+        "id": "01a0c3c3-d56c-7000-8000-ce7fe64741d8",
+        "row": {
+          "expires_at": "2026-09-28T11:39:46.484827Z",
+          "retention_class": "RECOVERY",
+          "retention_lock": 0,
+          "state": "READY"
+        }
+      },
+      "state": "CONFLICTED",
+      "transactionId": "01a0c3c3-d569-7000-8000-de063a94d2d2"
+    },
+    "NO_CHANGE": {
+      "fingerprint": "pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb",
+      "importDispatched": false,
+      "state": "NO_CHANGE",
+      "transactionId": "01a0c3c3-d4c1-7000-8000-49dd0a6f0980"
+    },
+    "externalDrift": [
+      {
+        "auditRows": [
+          {
+            "error_code": null,
+            "outcome": "allowed",
+            "phase": "decision"
+          },
+          {
+            "error_code": null,
+            "outcome": "attempted",
+            "phase": "attempt"
+          },
+          {
+            "error_code": null,
+            "outcome": "completed",
+            "phase": "result"
+          }
+        ],
+        "correlationId": "01a0c3c3-d587-7000-8000-1ee92a0f6a4c",
+        "state": "succeeded"
+      }
+    ]
+  }
+}

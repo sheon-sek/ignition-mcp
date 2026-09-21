@@ -196,6 +196,6 @@ Unchanged: D01, D03, D04, D08, D11–D17, and every architectural principle they
 
 The original D01–D26 architecture / implementation decision backlog is now complete.
 
-**D26 Phase 0 / G0 is closed** on the exact D27 baseline. Current work is **Phase 1 / G1**; see the [Phase 1 runbook](../development/phase-1.md) for evidence and scope. Do not begin Phase 2 without a separate user-directed feature branch.
+**G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence. Phase 4 starts only on a new user-directed feature branch.
 
 Treat D01–D28 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

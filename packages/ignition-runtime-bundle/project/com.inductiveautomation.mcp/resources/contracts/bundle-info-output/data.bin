@@ -4,11 +4,55 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "bundleVersion": {"type": "string", "minLength": 1},
-    "gatewayVersion": {"type": "string", "minLength": 1},
-    "mcpModuleVersion": {"type": "string", "minLength": 1},
-    "mcpModuleBuild": {"oneOf": [{"type": "string"}, {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false}]},
-    "compatibilityStatus": {"enum": ["SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UNKNOWN"]}
+    "bundleVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "gatewayVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mcpModuleVersion": {
+      "type": "string",
+      "minLength": 1
+    },
+    "mcpModuleBuild": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$ignition": {
+              "const": "null"
+            }
+          },
+          "required": [
+            "$ignition"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "compatibilityStatus": {
+      "enum": [
+        "SUPPORTED",
+        "UNTESTED",
+        "INCOMPATIBLE",
+        "UNKNOWN"
+      ]
+    },
+    "bundleSourceRevision": {
+      "type": "string",
+      "pattern": "^([0-9a-f]{40}|UNSTAMPED)$"
+    }
   },
-  "required": ["bundleVersion", "gatewayVersion", "mcpModuleVersion", "mcpModuleBuild", "compatibilityStatus"]
+  "required": [
+    "bundleVersion",
+    "gatewayVersion",
+    "mcpModuleVersion",
+    "mcpModuleBuild",
+    "compatibilityStatus"
+  ]
 }

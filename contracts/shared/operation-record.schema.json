@@ -6,8 +6,26 @@
   "properties": {
     "correlationId": {"$ref": "correlation.schema.json"},
     "tool": {"type": "string", "minLength": 1},
-    "outcome": {"enum": ["succeeded", "failed", "outcome_unknown", "cancelled"]},
-    "errorCode": {"type": ["string", "null"]}
+    "outcome": {"enum": ["in_progress", "succeeded", "failed", "outcome_unknown", "cancelled", "interrupted"]},
+    "errorCode": {"type": ["string", "null"]},
+    "startedAt": {"type": "string", "minLength": 1},
+    "finishedAt": {"type": ["string", "null"]},
+    "phases": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {"type": "string", "minLength": 1, "maxLength": 64},
+          "at": {"type": "string", "minLength": 1}
+        },
+        "required": ["name", "at"]
+      }
+    },
+    "transactionId": {"type": ["string", "null"]},
+    "downstreamCorrelationId": {"type": ["string", "null"]},
+    "auditResultMissing": {"type": "boolean"}
   },
   "required": ["correlationId", "tool", "outcome", "errorCode"]
 }

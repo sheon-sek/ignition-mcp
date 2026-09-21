@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:shared:bundle-manifest",
+  "description": "Deterministic Runtime Bundle release manifest (D21). Serialized with sorted keys, no timestamps; tooling.native.release validates this shape with its stdlib structural mirror.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {"const": 1},
+    "bundleVersion": {"type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$"},
+    "sourceRevision": {"type": "string", "pattern": "^([0-9a-f]{40}|UNSTAMPED)$"},
+    "resourceSchemaVersion": {"type": "integer", "minimum": 1},
+    "nativeResponseBindingStatus": {
+      "enum": ["NATIVE_BINDING_PENDING", "VERIFIED", "VERIFIED_WITH_LIMITATION", "FAILED",
+               "FAILED_NATIVE_BINDING", "UNVERIFIED_LIMITATION", "UNVERIFIED"]
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "filename": {"type": "string", "pattern": "^ignition-runtime-bundle-[0-9]+\\.[0-9]+\\.[0-9]+\\.zip$"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "sizeBytes": {"type": "integer", "minimum": 1}
+      },
+      "required": ["filename", "sha256", "sizeBytes"]
+    },
+    "tools": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "resources": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "prompts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "toolRequirements": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "nativeRequirements": {"type": "array", "items": {"type": "string"}},
+          "nativeResponseBinding": {"type": "string"},
+          "budgetClass": {"type": "string"},
+          "permissionClass": {"type": "string"}
+        },
+        "required": ["nativeRequirements", "nativeResponseBinding", "budgetClass", "permissionClass"]
+      }
+    },
+    "profileInventories": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "readonly": {"$ref": "#/$defs/profile"},
+        "operator": {"$ref": "#/$defs/profile"},
+        "configurator": {"$ref": "#/$defs/profile"},
+        "full": {"$ref": "#/$defs/profile"}
+      },
+      "required": ["readonly", "operator", "configurator", "full"]
+    },
+    "testedTuples": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "gate": {"enum": ["G0", "G1", "G2", "G3"]},
+          "gatewayVersion": {"type": "string", "minLength": 1},
+          "gatewayBuild": {"type": "string", "pattern": "^[0-9]{10}$"},
+          "mcpModuleVersion": {"type": "string", "minLength": 1},
+          "mcpModuleBuild": {"type": "string", "pattern": "^[0-9]{10}$"},
+          "mcpModuleSha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "bundleVersion": {"type": "string", "minLength": 1},
+          "compatibilityStatus": {"enum": ["UNTESTED", "INCOMPATIBLE", "UNKNOWN"]},
+          "nativeResponseBinding": {"type": "string"}
+        },
+        "required": ["gate", "gatewayVersion", "gatewayBuild", "mcpModuleVersion", "mcpModuleBuild",
+                     "mcpModuleSha256", "bundleVersion", "compatibilityStatus", "nativeResponseBinding"]
+      }
+    }
+  },
+  "required": ["schemaVersion", "bundleVersion", "sourceRevision", "resourceSchemaVersion",
+               "nativeResponseBindingStatus", "artifact", "tools", "resources", "prompts",
+               "toolRequirements", "profileInventories", "testedTuples"],
+  "$defs": {
+    "profile": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "permissions": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "tools": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "resources": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "prompts": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      },
+      "required": ["permissions", "tools", "resources", "prompts"]
+    }
+  }
+}

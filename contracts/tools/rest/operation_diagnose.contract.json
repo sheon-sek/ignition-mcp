@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "name": "operation_diagnose",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "storageBacked": true,
+  "principalScoped": true,
+  "alwaysVisibleWhenRegistryUnavailable": true,
+  "parameters": {
+    "correlationId": {
+      "type": "string",
+      "required": true,
+      "minLength": 36,
+      "maxLength": 36,
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  },
+  "outputSchema": "contracts/schemas/operation-diagnose.output.schema.json",
+  "nativeRequirements": [],
+  "exactCorrelationIdOnly": true,
+  "silentTruncation": false
+}

@@ -41,6 +41,27 @@ jobs:
             --project-dir packages/ignition-runtime-bundle/project \
             --output dist/runtime-second.zip
           cmp dist/runtime-first.zip dist/runtime-second.zip
+      - name: Validate compatibility evidence
+        run: uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+      - name: Build deterministic Runtime Bundle release twice
+        run: |
+          uv run --no-sync python -m tooling.native.cli release \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --out-dir dist/release-a \
+            --source-revision "$(git rev-parse HEAD)" \
+            --evidence-dir tests/compatibility/evidence
+          uv run --no-sync python -m tooling.native.cli release \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --out-dir dist/release-b \
+            --source-revision "$(git rev-parse HEAD)" \
+            --evidence-dir tests/compatibility/evidence
+          for f in dist/release-a/*; do cmp "$f" "dist/release-b/$(basename "$f")"; done
+      - name: Unpack the release ZIP and re-run structural validation
+        run: |
+          mkdir -p dist/release-unpacked
+          unzip -q dist/release-a/ignition-runtime-bundle-*.zip -d dist/release-unpacked
+          cp packages/ignition-runtime-bundle/BUNDLE_VERSION packages/ignition-runtime-bundle/RESOURCE_SCHEMA_VERSION dist/
+          uv run --no-sync python -m tooling.native.cli validate --project-dir dist/release-unpacked
       - name: Validate Phase 0 live characterization fixture
         run: |
           (cd tests/fixtures/modules && sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256)

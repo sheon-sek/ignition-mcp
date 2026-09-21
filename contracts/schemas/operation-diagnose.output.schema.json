@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:operation-diagnose:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome": {
+      "enum": [
+        "in_progress",
+        "succeeded",
+        "failed",
+        "outcome_unknown",
+        "cancelled",
+        "interrupted"
+      ]
+    },
+    "errorCode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        null,
+        "invalid_argument",
+        "unsupported_capability",
+        "permission_denied",
+        "operation_disabled",
+        "not_found",
+        "conflict",
+        "limit_exceeded",
+        "rate_limited",
+        "timeout",
+        "outcome_unknown",
+        "gateway_unavailable",
+        "upstream_error",
+        "schema_mismatch",
+        "internal_error"
+      ]
+    },
+    "startedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finishedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "phases": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "at": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "name",
+          "at"
+        ]
+      }
+    },
+    "transactionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "downstreamCorrelationId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "auditResultMissing": {
+      "type": "boolean"
+    },
+    "phasesTruncated": {
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "correlationId",
+    "tool",
+    "outcome",
+    "errorCode",
+    "startedAt",
+    "finishedAt",
+    "phases",
+    "phasesTruncated",
+    "transactionId",
+    "downstreamCorrelationId",
+    "auditResultMissing"
+  ]
+}

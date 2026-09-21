@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, cast
 
@@ -120,6 +121,53 @@ def _prompt(data: bytes, location: str) -> None:
         names.add(argument["name"])
 
 
+SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+SOURCE_REVISION_TOKEN = b"__BUNDLE_SOURCE_REVISION__"
+STAMPED_REVISION = re.compile(r'bundleSourceRevision\s*=\s*"([0-9a-f]{40}|UNSTAMPED)"')
+BUNDLE_VERSION_LITERAL = re.compile(r'bundleVersion\s*=\s*"([^"]+)"')
+MANAGED_MARKER = "ignition-mcp-managed: product=ignition-runtime-bundle; bundle="
+
+
+def _read_sibling_version(project_dir: Path) -> str:
+    path = project_dir.parent / "BUNDLE_VERSION"
+    require(path.is_file(), path, "BUNDLE_VERSION must sit next to a project that ships bundle_info")
+    version = path.read_text(encoding="utf-8").strip()
+    require(SEMVER.fullmatch(version) is not None, path, "BUNDLE_VERSION must be MAJOR.MINOR.PATCH")
+    return version
+
+
+def _check_bundle_identity(project: dict[str, Any], files: dict[str, bytes], root: Path,
+                           handler_path: str) -> None:
+    """D21 single identity source: handler literal + ownership marker == BUNDLE_VERSION."""
+
+    version = _read_sibling_version(root)
+    handler = files[handler_path].decode("utf-8")
+    literal = BUNDLE_VERSION_LITERAL.search(handler)
+    if literal is None:
+        raise ValidationError(f"{handler_path}: bundle_info must assign a bundleVersion string literal")
+    require(
+        literal.group(1) == version, handler_path,
+        f"bundle_info bundleVersion {literal.group(1)!r} does not equal BUNDLE_VERSION {version!r}",
+    )
+    description = project.get("description")
+    require(isinstance(description, str), "project.json", "description must be a string")
+    assert isinstance(description, str)
+    lines = description.splitlines()
+    require(
+        bool(lines) and lines[-1] == MANAGED_MARKER + version,
+        "project.json",
+        f"description must end with the managed-project marker line {MANAGED_MARKER + version!r}",
+    )
+    token_count = handler.encode("utf-8").count(SOURCE_REVISION_TOKEN)
+    if token_count == 1:
+        return  # unstamped source; the builder replaces it deterministically
+    require(token_count == 0, handler_path, "bundle_info must contain the revision token exactly once")
+    require(
+        STAMPED_REVISION.search(handler) is not None, handler_path,
+        "bundle_info must carry a stamped bundleSourceRevision (40-hex SHA or UNSTAMPED)",
+    )
+
+
 def validate_project(project_dir: str | Path) -> dict[str, bytes]:
     root = Path(project_dir)
     files, directories = _snapshot(root)
@@ -166,5 +214,9 @@ def validate_project(project_dir: str | Path) -> dict[str, bytes]:
         elif base == PROMPTS_DIR:
             _prompt(files[resource_path], resource_path)
             validate_prompt_handler(files[payload_path], payload_path)
+
+    bundle_info_handler = TOOLS_DIR + "/bundle_info/" + HANDLER
+    if bundle_info_handler in files:
+        _check_bundle_identity(project, files, root, bundle_info_handler)
 
     return {name: files[name] for name in sorted(allowed_files)}

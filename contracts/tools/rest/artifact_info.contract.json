@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "name": "artifact_info",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "storageBacked": true,
+  "principalScoped": true,
+  "alwaysVisibleWhenRegistryUnavailable": true,
+  "parameters": {
+    "artifactId": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 128
+    }
+  },
+  "outputSchema": "contracts/schemas/artifact-info.output.schema.json",
+  "nativeRequirements": [],
+  "notFoundCodes": ["not_found"],
+  "silentTruncation": false
+}

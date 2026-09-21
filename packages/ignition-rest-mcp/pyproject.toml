@@ -17,4 +17,5 @@ dependencies = [
 ]
 
 [project.scripts]
+ignition-mcp = "ignition_rest_mcp.cli.setup_native.main:main"
 ignition-rest-mcp = "ignition_rest_mcp.server:main"

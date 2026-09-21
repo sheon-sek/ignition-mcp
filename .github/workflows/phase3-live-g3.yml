@@ -1,0 +1,446 @@
+name: Phase 3 Live Gateway G3
+
+# G3 (D26/D23): live mutation-safety evidence for the D08 + D18 chain on
+# disposable CI-owned Gateways. Runs only from pull requests in the trusted
+# repository (no fork execution) and only under the dedicated `phase3-live`
+# GitHub environment. The environment exists WITHOUT protection rules by
+# owner decision (recorded in docs/development/phase-3.md Open questions and
+# in every G3 evidence row via ownerAcceptedDeviations); the compensating
+# controls are mandatory: trusted-repo guard, no repository/environment
+# secrets in this job, localhost/compose-only Gateway endpoints, and the
+# CI-marker + expected-Gateway-identity + run-unique disposable project
+# check enforced by the driver immediately before any guarded import, with
+# fail-closed on any missing guard.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase3-g3-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-gateway-g3:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: phase3-live
+    timeout-minutes: 90
+    continue-on-error: ${{ !matrix.required }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gateway_version: "8.3.8"
+            gateway_image: inductiveautomation/ignition:8.3.8
+            expected_build: "2026071409"
+            attempt: "838"
+            d27_tuple: true
+            required: true
+          - gateway_version: "8.3.9"
+            gateway_image: inductiveautomation/ignition:8.3.9
+            expected_build: ""
+            attempt: "839"
+            d27_tuple: false
+            required: false
+    env:
+      COMPOSE_FILE: tests/harness/phase3-live/docker-compose.yml
+      GATEWAY_IMAGE: ${{ matrix.gateway_image }}
+      GATEWAY_VERSION: ${{ matrix.gateway_version }}
+      EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
+      MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
+      DISPOSABLE_PROJECT: mcp_g3_${{ github.run_id }}_${{ matrix.attempt }}
+      JWT_ISSUER: https://ignition-mcp-ci.invalid
+      JWT_AUDIENCE: ignition-rest
+      EVIDENCE_DIR: artifacts/g3-${{ matrix.gateway_version }}
+      RELEASE_DIR: dist/release
+      GATEWAY_ID: phase3-g3-${{ matrix.gateway_version }}-${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.17"
+          enable-cache: true
+
+      - name: Verify pinned inputs, unit suite and build the exact release
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock --check
+          echo 'b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365  tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl' | sha256sum -c -
+          (cd tests/fixtures/modules && sha256sum -c MCP-module-1.3.5.2026021307-SNAPSHOT.sha256)
+          uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+          uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+          uv run --no-sync python -m tooling.native.cli release \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --out-dir "$RELEASE_DIR" --source-revision "$(git rev-parse HEAD)" \
+            --evidence-dir tests/compatibility/evidence
+          mkdir -p "$EVIDENCE_DIR" "$RUNNER_TEMP/ignition-mcp-data"
+          cp "$RELEASE_DIR"/* "$EVIDENCE_DIR/"
+          (cd "$RELEASE_DIR" && sha256sum ignition-runtime-bundle-*.zip > "$OLDPWD/$EVIDENCE_DIR/deployed.sha256")
+          cat "$EVIDENCE_DIR/deployed.sha256"
+
+      - name: Mint the run-scoped JWT key pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/jwt
+          openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out artifacts/jwt/private.pem 2>/dev/null
+          openssl pkey -in artifacts/jwt/private.pem -pubout -out artifacts/jwt/public.pem
+          chmod 600 artifacts/jwt/private.pem
+
+      - name: Pull exact service images
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$GATEWAY_IMAGE"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Start fresh Gateway
+        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+
+      - name: Wait for initial Gateway commissioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 480))
+          while (( SECONDS < deadline )); do
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
+            fi
+            if grep -Eq "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
+              && curl --fail --silent --max-time 3 http://127.0.0.1:8088/StatusPing >/dev/null; then
+              GATEWAY_BUILD="$(grep -Eo "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" | tail -1 | sed -E 's/.*\(b([0-9]+)\)/\1/')"
+              [[ "$GATEWAY_BUILD" =~ ^[0-9]+$ ]]
+              if [[ -n "$EXPECTED_GATEWAY_BUILD" && "$GATEWAY_BUILD" != "$EXPECTED_GATEWAY_BUILD" ]]; then
+                echo "Unexpected Gateway build: $GATEWAY_BUILD != $EXPECTED_GATEWAY_BUILD" >&2
+                exit 1
+              fi
+              echo "GATEWAY_BUILD=$GATEWAY_BUILD" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Gateway commissioning deadline exceeded" >&2
+          exit 1
+
+      - name: Prepare CI security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          uv run --no-sync python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install exact release Bundle, server config and disposable project
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+
+          rm -rf artifacts/runtime-install
+          mkdir -p artifacts/runtime-install
+          uv run --no-sync python -m zipfile -e "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.zip" artifacts/runtime-install
+          docker cp artifacts/runtime-install "$cid:/usr/local/bin/ignition/data/projects/ignition_runtime"
+          docker cp tests/harness/phase3-live/fixture-project "$cid:/usr/local/bin/ignition/data/projects/$DISPOSABLE_PROJECT"
+          docker cp tests/harness/phase3-live/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker run --rm --volumes-from "$cid" --entrypoint /bin/sh --user 0:0 "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/projects/ignition_runtime \
+              /usr/local/bin/ignition/data/projects/$DISPOSABLE_PROJECT \
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+          docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Write the L5 CI marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > artifacts/ci-marker.json <<EOF
+          {
+            "marker": "ignition-mcp-phase3-live",
+            "environment": "phase3-live",
+            "runId": "${GITHUB_RUN_ID}",
+            "gatewayVersion": "${GATEWAY_VERSION}",
+            "gatewayBuild": "${GATEWAY_BUILD}",
+            "disposableProject": "${DISPOSABLE_PROJECT}",
+            "gatewayId": "${GATEWAY_ID}",
+            "trustedRepo": "${GITHUB_REPOSITORY}"
+          }
+          EOF
+          cat artifacts/ci-marker.json
+
+      - name: Wait for authenticated Native REST
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          while (( SECONDS < deadline )); do
+            code="$(curl --silent --output "$EVIDENCE_DIR/gateway-info.json.tmp" --write-out '%{http_code}' \
+              --max-time 5 -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              http://127.0.0.1:8088/data/api/v1/gateway-info || true)"
+            if [[ "$code" == "200" ]]; then
+              mv "$EVIDENCE_DIR/gateway-info.json.tmp" "$EVIDENCE_DIR/gateway-info.json"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Authenticated Gateway REST did not become ready" >&2
+          exit 1
+
+      - name: Start ignition-rest (sensitive exports ON, JWT auth)
+        shell: bash
+        run: |
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
+          IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
+          IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
+          IGNITION_MCP_DEPLOYMENT_PROFILE=development \
+          IGNITION_MCP_AUTH_MODE=jwt \
+          IGNITION_MCP_JWT_PUBLIC_KEY="$(cat artifacts/jwt/public.pem)" \
+          IGNITION_MCP_JWT_ISSUER="$JWT_ISSUER" \
+          IGNITION_MCP_JWT_AUDIENCE="$JWT_AUDIENCE" \
+          IGNITION_MCP_HOST=127.0.0.1 \
+          IGNITION_MCP_PORT=8765 \
+          IGNITION_MCP_PATH=/mcp \
+          IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true \
+          uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
+            > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
+          echo "$!" > artifacts/rest-gate-on.pid
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8765/health/ready >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat artifacts/rest-gate-on.pid)" 2>/dev/null; then
+              cat "$EVIDENCE_DIR/ignition-rest-gate-on.log" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          cat "$EVIDENCE_DIR/ignition-rest-gate-on.log" >&2
+          exit 1
+
+      - name: Run the G3 live driver
+        id: driver
+        shell: bash
+        run: |
+          set +e
+          mkdir -p "$EVIDENCE_DIR/raw"
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
+          IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
+          IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
+          IGNITION_MCP_DEPLOYMENT_PROFILE=development \
+          IGNITION_MCP_AUTH_MODE=jwt \
+          IGNITION_MCP_JWT_PUBLIC_KEY="$(cat artifacts/jwt/public.pem)" \
+          IGNITION_MCP_JWT_ISSUER="$JWT_ISSUER" \
+          IGNITION_MCP_JWT_AUDIENCE="$JWT_AUDIENCE" \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true \
+          IGNITION_MCP_PROJECT_WRITER_ENABLED=true \
+          IGNITION_MCP_GATEWAY_ID="$GATEWAY_ID" \
+          IGNITION_MCP_CONFIG_MUTATION_ENABLED=true \
+          IGNITION_MCP_MUTATION_OPERATIONS=project_import \
+          IGNITION_MCP_MUTATION_TARGETS="{\"project_import\":[\"$DISPOSABLE_PROJECT\"]}" \
+          uv run --locked --package ignition-rest-mcp python tests/harness/phase3-live/driver.py \
+            --ci-marker artifacts/ci-marker.json \
+            --release-manifest "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.manifest.json" \
+            --release-zip "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.zip" \
+            --jwt-private-key artifacts/jwt/private.pem \
+            --observations "$EVIDENCE_DIR/observations.json" \
+            --raw-dir "$EVIDENCE_DIR/raw" \
+            $([[ "${{ matrix.d27_tuple }}" == "true" ]] && echo --expect-d27-tuple) \
+            > "$EVIDENCE_DIR/driver.log" 2>&1
+          rc=$?
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          # rc 3 means "G3 checks passed, row carries the native-binding
+          # limitation" (the expected 8.3.9 candidate outcome). The step must
+          # not fail there or the gate-off and evidence steps would be skipped;
+          # the Enforce step applies the per-row rc policy. g3diag C3.
+          [[ "$rc" == 0 || "$rc" == 3 ]]
+
+      - name: Scrape metrics while the server is live
+        if: always()
+        shell: bash
+        run: |
+          curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
+          wc -c "$EVIDENCE_DIR/metrics.txt"
+
+      - name: Restart ignition-rest (sensitive exports OFF)
+        shell: bash
+        run: |
+          set -euo pipefail
+          kill "$(cat artifacts/rest-gate-on.pid)" 2>/dev/null || true
+          sleep 3
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
+          IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
+          IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
+          IGNITION_MCP_DEPLOYMENT_PROFILE=development \
+          IGNITION_MCP_AUTH_MODE=jwt \
+          IGNITION_MCP_JWT_PUBLIC_KEY="$(cat artifacts/jwt/public.pem)" \
+          IGNITION_MCP_JWT_ISSUER="$JWT_ISSUER" \
+          IGNITION_MCP_JWT_AUDIENCE="$JWT_AUDIENCE" \
+          IGNITION_MCP_HOST=127.0.0.1 \
+          IGNITION_MCP_PORT=8765 \
+          IGNITION_MCP_PATH=/mcp \
+          IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=false \
+          uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
+            > "$EVIDENCE_DIR/ignition-rest-gate-off.log" 2>&1 &
+          echo "$!" > artifacts/rest-gate-off.pid
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8765/health/ready >/dev/null; then exit 0; fi
+            sleep 2
+          done
+          cat "$EVIDENCE_DIR/ignition-rest-gate-off.log" >&2
+          exit 1
+
+      - name: Verify gate-off exact inventory and call-time deny
+        id: gateoff
+        shell: bash
+        run: |
+          set +e
+          uv run --locked --package ignition-rest-mcp python tests/harness/phase3-live/inventory_gate_off.py \
+            --rest-url http://127.0.0.1:8765 \
+            --jwt-private-key artifacts/jwt/private.pem \
+            --jwt-issuer "$JWT_ISSUER" --jwt-audience "$JWT_AUDIENCE" \
+            --output "$EVIDENCE_DIR/gate-off-inventory.json"
+          rc=$?
+          set -e
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit "$rc"
+
+      - name: Stop ignition-rest
+        shell: bash
+        if: always()
+        run: |
+          kill "$(cat artifacts/rest-gate-on.pid)" 2>/dev/null || true
+          kill "$(cat artifacts/rest-gate-off.pid)" 2>/dev/null || true
+
+      - name: Generate schema-valid G3 evidence row
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - "$EVIDENCE_DIR/identity.json" <<PY
+          import json, os, sys
+          from pathlib import Path
+          release = Path(os.environ["RELEASE_DIR"])
+          zip_path = next(iter(sorted(release.glob("ignition-runtime-bundle-*.zip"))))
+          import hashlib
+          identity = {
+              "gatewayVersion": os.environ["GATEWAY_VERSION"],
+              "gatewayBuild": os.environ["GATEWAY_BUILD"],
+              "gatewayImage": os.environ["GATEWAY_IMAGE"],
+              "gatewayImageDigest": os.environ["IMAGE_DIGEST"],
+              "mcpModuleVersion": os.environ["MCP_MODULE_VERSION"],
+              "mcpModuleArtifactVersion": os.environ["MCP_MODULE_ARTIFACT_VERSION"],
+              "mcpModuleBuild": os.environ["MCP_MODULE_BUILD"],
+              "mcpModuleSha256": hashlib.sha256(Path(os.environ["MODULE_FILE"]).read_bytes()).hexdigest(),
+              "bundleVersion": Path("packages/ignition-runtime-bundle/BUNDLE_VERSION").read_text().strip(),
+              "bundleSha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
+              "deployedBundleSha256": hashlib.sha256(zip_path.read_bytes()).hexdigest(),
+              "sourceRevision": os.environ["GITHUB_SHA"],
+              "runId": os.environ["GITHUB_RUN_ID"],
+          }
+          Path(sys.argv[1]).write_text(json.dumps(identity, indent=2, sort_keys=True) + "\n")
+          PY
+          rm -rf artifacts/g3-evidence
+          mkdir -p artifacts/g3-evidence
+          uv run --no-sync python -m tooling.compat generate \
+            --observations "$EVIDENCE_DIR/observations.json" \
+            --identity "$EVIDENCE_DIR/identity.json" \
+            --gate-off-report "$EVIDENCE_DIR/gate-off-inventory.json" \
+            --out-dir artifacts/g3-evidence
+          # The merged set (frozen G0-G2 + the new G3 row) must validate together.
+          cp -r artifacts/g3-evidence/. tests/compatibility/evidence/
+          uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway || true)"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color > "$EVIDENCE_DIR/docker-compose.log" 2>&1 || true
+          if [[ -n "$cid" ]]; then
+            # Every docker call is hard-bounded (Phase 2 lesson: an unbounded
+            # docker exec hung run 35533572068); cat dereferences symlinked
+            # wrapper logs, the fallback prunes symlinks before upload.
+            timeout 45 docker exec "$cid" cat /usr/local/bin/ignition/logs/wrapper.log > "$EVIDENCE_DIR/gateway-wrapper.log" 2>/dev/null </dev/null || true
+            if [[ ! -s "$EVIDENCE_DIR/gateway-wrapper.log" ]]; then
+              rm -f "$EVIDENCE_DIR/gateway-wrapper.log"
+              mkdir -p "$EVIDENCE_DIR/gateway-logs"
+              timeout 60 docker cp "$cid:/usr/local/bin/ignition/logs/." "$EVIDENCE_DIR/gateway-logs" >/dev/null 2>&1 </dev/null || true
+              find "$EVIDENCE_DIR/gateway-logs" -type l -delete 2>/dev/null || true
+              sudo chown -R "$(id -u):$(id -g)" "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
+            fi
+          fi
+          # metrics scraped live in its own step (g3diag R6: this ran after the
+          # server had already stopped, so the file was always empty)
+
+      - name: Upload G3 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase3-g3-${{ matrix.gateway_version }}-${{ github.run_id }}
+          path: |
+            ${{ env.EVIDENCE_DIR }}
+            artifacts/g3-evidence
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Destroy disposable environment
+        if: always()
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+
+      - name: Enforce G3 row
+        if: always()
+        shell: bash
+        run: |
+          driver_rc='${{ steps.driver.outputs.exit_code }}'
+          gateoff_rc='${{ steps.gateoff.outputs.exit_code }}'
+          if [[ "$gateoff_rc" != "0" ]]; then
+            echo "gate-off inventory probe failed or did not run: ${gateoff_rc:-missing}" >&2
+            exit 1
+          fi
+          if [[ "${{ matrix.required }}" == "true" ]]; then
+            if [[ "$driver_rc" != "0" ]]; then
+              echo "required G3 row needs a clean driver run (rc ${driver_rc:-missing})" >&2
+              exit 1
+            fi
+          elif [[ "$driver_rc" != "0" && "$driver_rc" != "3" ]]; then
+            echo "candidate G3 row failed beyond the known binding limitation (rc ${driver_rc:-missing})" >&2
+            exit 1
+          fi
+          if [[ "$driver_rc" == "3" ]]; then
+            echo "G3 candidate row: checks passed with the recorded native-binding limitation"
+          else
+            echo "G3 driver passed"
+          fi
