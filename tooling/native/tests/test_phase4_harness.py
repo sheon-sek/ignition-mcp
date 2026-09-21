@@ -776,7 +776,7 @@ def test_alarm_stages_record_the_live_facts(
     assert facts["alarmShelveWildcardRefusalReason"] == "wildcardPath"
     assert facts["alarmShelveSiblingDenialReason"] == "targetNotAllowlisted"
     assert facts["alarmShelvePreflightExecutedNothing"] is True
-    assert facts["alarmShelveRefusalsShelvedNothing"] is True
+    assert facts["alarmShelveDurationRefusalsShelvedNothing"] is True
     # The unshelve and its refusals.
     assert facts["alarmUnshelveObservedNotShelved"] is True
     assert facts["alarmUnshelveExactPathRemoved"] is True
