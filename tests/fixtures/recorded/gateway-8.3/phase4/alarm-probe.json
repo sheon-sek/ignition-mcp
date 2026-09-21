@@ -1,0 +1,297 @@
+{
+  "accepted": "AboveValue+ackModeManual",
+  "bracketRoot": "[default]MCP_P4_REHEARSAL",
+  "conclusion": "measured",
+  "cycleResults": [
+    {
+      "activeCount": 1,
+      "clearedCount": 1,
+      "cycle": 0,
+      "ok": true
+    },
+    {
+      "activeCount": 1,
+      "clearedCount": 1,
+      "cycle": 1,
+      "ok": true
+    },
+    {
+      "activeCount": 1,
+      "clearedCount": 1,
+      "cycle": 2,
+      "ok": true
+    }
+  ],
+  "cycles": 3,
+  "expectedActive": 64,
+  "measurements": [
+    {
+      "count": 1,
+      "elapsedMs": [
+        6,
+        6,
+        6
+      ],
+      "maxElapsedMs": 6,
+      "medianElapsedMs": 6,
+      "minElapsedMs": 6,
+      "name": "queryStatus.exact.qualified",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": [
+        6,
+        6,
+        6
+      ],
+      "maxElapsedMs": 6,
+      "medianElapsedMs": 6,
+      "minElapsedMs": 6,
+      "name": "queryStatus.exact.bracket",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.exact.bare",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": [
+        6,
+        6,
+        6
+      ],
+      "maxElapsedMs": 6,
+      "medianElapsedMs": 6,
+      "minElapsedMs": 6,
+      "name": "queryStatus.sibling.qualified",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.folder.qualified",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.folder.partialLeaf",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 2,
+      "elapsedMs": [
+        7,
+        7,
+        7
+      ],
+      "maxElapsedMs": 7,
+      "medianElapsedMs": 7,
+      "minElapsedMs": 7,
+      "name": "queryStatus.folder.trailingWildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": [
+        9,
+        9,
+        9
+      ],
+      "maxElapsedMs": 9,
+      "medianElapsedMs": 9,
+      "minElapsedMs": 9,
+      "name": "queryStatus.root.trailingWildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": [
+        9,
+        9,
+        9
+      ],
+      "maxElapsedMs": 9,
+      "medianElapsedMs": 9,
+      "minElapsedMs": 9,
+      "name": "queryStatus.root.trailingSlashStar",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": [
+        9,
+        9,
+        9
+      ],
+      "maxElapsedMs": 9,
+      "medianElapsedMs": 9,
+      "minElapsedMs": 9,
+      "name": "queryStatus.root.bareWildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": [
+        8,
+        8,
+        8
+      ],
+      "maxElapsedMs": 8,
+      "medianElapsedMs": 8,
+      "minElapsedMs": 8,
+      "name": "queryStatus.system.unfiltered",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": 6,
+      "name": "queryStatus.exact.sourceForm",
+      "ok": true
+    },
+    {
+      "count": 1,
+      "elapsedMs": 5,
+      "name": "queryStatus.exact.count",
+      "ok": true
+    },
+    {
+      "count": 1,
+      "elapsedMs": 12,
+      "eventMethods": [
+        "getId",
+        "getName",
+        "getSource",
+        "getState",
+        "isAcked"
+      ],
+      "events": [
+        {
+          "containsIsActive": "True",
+          "getDisplayPath": "ignition-mcp phase4 probe",
+          "getId": "11111111-2222-3333-4444-555555555555",
+          "getLabel": "ProbeHi",
+          "getName": "ProbeHi",
+          "getNotes": "",
+          "getPriority": "High",
+          "getSource": "prov:default:/tag:MCP_P4_REHEARSAL/Exact",
+          "getState": "ActiveUnacked",
+          "isAcked": "False",
+          "isActive": "True",
+          "isCleared": "False",
+          "isShelved": "False"
+        }
+      ],
+      "name": "queryStatus.exact.eventDetail",
+      "ok": true
+    },
+    {
+      "attempted": 1,
+      "elapsedMs": 40,
+      "name": "alarm.acknowledge.exact",
+      "ok": true,
+      "remaining": [],
+      "statesAfter": [
+        "ClearAcked"
+      ]
+    }
+  ],
+  "noiseCount": 60,
+  "probe": "alarm_probe",
+  "providerRoot": "[default]",
+  "qualifiedRoot": "prov:default:/tag:MCP_P4_REHEARSAL",
+  "repeats": 3,
+  "rootName": "MCP_P4_REHEARSAL",
+  "schemaVersion": 1,
+  "shapeResults": [
+    {
+      "accepted": true,
+      "activation": {
+        "count": 64,
+        "reached": true,
+        "waitedMs": 4000
+      },
+      "configured": true,
+      "label": "AboveValue+ackModeManual",
+      "mode": "AboveValue",
+      "qualityCodes": [
+        "Good"
+      ],
+      "writeQualityCodes": [
+        "Good",
+        "Good",
+        "Good",
+        "Good"
+      ]
+    }
+  ]
+}

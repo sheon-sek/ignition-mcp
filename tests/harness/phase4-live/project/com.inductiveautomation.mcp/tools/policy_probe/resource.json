@@ -1,0 +1,61 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "phase4_policy_probe",
+    "description": "CI-only Phase 4 characterization probe. Reads every candidate Runtime Target Policy storage location at a bounded cost and reports the measurements without deciding the policy.",
+    "parameters": [
+      {
+        "name": "policyPath",
+        "description": "Deployment-owned policy Tag path to read, for example [IgnitionMCPPolicy]RuntimeTargetPolicy.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "readTimeoutMs",
+        "description": "Bounded timeout passed to system.tag.readBlocking.",
+        "type": "integer",
+        "required": true
+      },
+      {
+        "name": "missingPath",
+        "description": "Tag path that must not exist, used to record the fail-closed read shape.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "writeProbePath",
+        "description": "Second Tag inside the policy provider that a handler write is attempted against.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "writeProbeValue",
+        "description": "Value written by the handler-scope write attempt.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "configModuleId",
+        "description": "moduleId passed to system.config.getResource.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "configTypeId",
+        "description": "typeId passed to system.config.getResource.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "configName",
+        "description": "name passed to system.config.getResource.",
+        "type": "string",
+        "required": true
+      }
+    ]
+  }
+}

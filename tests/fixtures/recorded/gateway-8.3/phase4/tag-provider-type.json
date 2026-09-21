@@ -1,0 +1,16 @@
+{
+  "config": {
+    "profile": {
+      "allowBackfill": false,
+      "enableTagReferenceStore": true,
+      "type": "STANDARD"
+    },
+    "settings": {
+      "defaultDatasourceName": "",
+      "tagBrowseLockTimeout": 5000
+    }
+  },
+  "moduleId": "ignition",
+  "scope": "G",
+  "typeId": "tag-provider"
+}

@@ -1,0 +1,6 @@
+{
+  "description": "ignition-mcp Runtime Target Policy provider (deployment-owned)",
+  "enabled": true,
+  "name": "IgnitionMCPPolicy",
+  "signature": "a1b2c3d4e5f60718"
+}

@@ -1,0 +1,11 @@
+{
+  "failureCount": 1,
+  "failures": [
+    {
+      "diagnosticMessage": "Tag already exists: RuntimeTargetPolicy",
+      "quality": "Error",
+      "qualitySubCode": 776
+    }
+  ],
+  "successCount": 0
+}

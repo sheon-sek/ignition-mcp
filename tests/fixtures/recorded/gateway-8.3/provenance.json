@@ -20,6 +20,14 @@
     "phase2/provision-success.json": "run 35527517320 provision.json",
     "phase2/openapi-required.json": "requiredEndpoints from run 35527517320 provision.json",
     "phase2/database-drivers.json": "databaseDriver from run 35527517320 provision.json",
-    "phase2/database-translators.json": "databaseTranslator from run 35527517320 provision.json"
+    "phase2/database-translators.json": "databaseTranslator from run 35527517320 provision.json",
+    "phase4/tag-provider-create.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/tag-provider-find.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/tag-provider-type.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/tag-import-success.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/tag-import-abort.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/tag-export.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded body once `phase4-live-g4a` has run",
+    "phase4/policy-probe.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded handler report once `phase4-live-g4a` has run",
+    "phase4/alarm-probe.json": "expected-shape rehearsal fixture for the Phase 4 ticket #6 live run; replaced by the recorded handler report once `phase4-live-g4a` has run"
   }
 }

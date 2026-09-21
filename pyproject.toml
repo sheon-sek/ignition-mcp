@@ -19,6 +19,7 @@ exclude = [
   "packages/ignition-runtime-bundle/project",
   "packages/ignition-runtime-bundle/deferred",
   "tests/harness/runtime-binding/project",
+  "tests/harness/phase4-live/project",
   "docs/ignition-mcp-tools-designer",
   "docs/ignition-mcp-tools-native-scaffold",
 ]
@@ -34,5 +35,6 @@ exclude = [
   "packages/ignition-runtime-bundle/project/",
   "packages/ignition-runtime-bundle/deferred/",
   "tests/harness/runtime-binding/project/",
+  "tests/harness/phase4-live/project/",
   "tooling/.*/tests/",
 ]
