@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 from typing import Any, cast
 
 EXPECTED_ERROR_CODES = (
@@ -209,6 +210,11 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: D03 request-schema validation must be declared")
         if schema_validation.get("unavailableDisposition") is None:
             raise ContractError(f"{tool_name}: an unusable request schema must fail closed")
+        rejection = tool.get("rejectionPolicy")
+        if not isinstance(rejection, dict) or "D30 §2" not in str(rejection.get("rule", "")):
+            raise ContractError(f"{tool_name}: a mutation must declare the D30 §2 rejection policy")
+        if not re.search(r"conflict", str(rejection.get("rule", ""))):
+            raise ContractError(f"{tool_name}: the rejection policy must state the signature-mismatch mapping")
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")

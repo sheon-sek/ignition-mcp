@@ -602,6 +602,10 @@ def test_the_target_denial_code_is_declared_per_operation() -> None:
 
     assert CONFIG_RESOURCE_UPDATE.target_denial_code == "permission_denied"
     assert PROJECT_IMPORT_OPERATION.target_denial_code == "operation_disabled"
+    # D30 §2: this Tool's explicit Gateway rejections are final, so no read-back can
+    # turn them into a success; the Phase 3 operation keeps its recorded behaviour.
+    assert CONFIG_RESOURCE_UPDATE.rejection_is_final is True
+    assert PROJECT_IMPORT_OPERATION.rejection_is_final is False
 
 
 def test_an_operation_outside_the_allowlist_is_refused_before_dispatch(tmp_path: Path) -> None:
@@ -856,6 +860,83 @@ def test_another_writer_winning_the_race_is_never_reported_as_our_success(
         ("attempt", "attempted", None),
         ("result", "rejected", "conflict"),
         ("result", "failed", "conflict"),
+    ]
+
+
+def test_a_competing_writer_making_the_requested_change_is_not_our_success(
+    tmp_path: Path,
+) -> None:
+    """The hardest race: the competing writer applies the very values this call asked
+    for, at PUT time. The Gateway rejects our stale signature, and the read-back cannot
+    tell whose change it is — so the explicit rejection is the result (D30 §2), never a
+    recovered success, whatever the read-back shows."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        contested = "changed by the other writer"
+        gateway.race_update_with(description=contested)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "description": contested,
+            })
+
+        rows = _audit_rows(tmp_path)
+        stored = gateway.resource(PROFILE, RESOURCE)
+        puts = _put_requests(gateway)
+
+    envelope = _envelope(result)
+    assert envelope["code"] == "conflict"
+    assert len(puts) == 1
+    assert stored["description"] == contested, "the value is present, but not from this call"
+    assert gateway.signature(PROFILE, RESOURCE) != before
+    assert [(row["phase"], row["outcome"], row["error_code"]) for row in rows] == [
+        ("decision", "allowed", None),
+        ("attempt", "attempted", None),
+        ("result", "rejected", "conflict"),
+        ("result", "failed", "conflict"),
+    ]
+
+
+def test_an_ambiguous_dispatch_whose_read_back_matches_is_never_a_success(
+    tmp_path: Path,
+) -> None:
+    """A possibly-sent dispatch (5xx, no usable response) whose read-back shows the
+    requested values still cannot be credited to this call when another writer could
+    have made the same change: the result is outcome_unknown (D30 §2/§7)."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        contested = "written while the dispatch was ambiguous"
+        gateway.fail_updates_with(500)
+        gateway.race_update_with(description=contested)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "description": contested,
+            })
+
+        rows = _audit_rows(tmp_path)
+        stored = gateway.resource(PROFILE, RESOURCE)
+        puts = _put_requests(gateway)
+
+    envelope = _envelope(result)
+    assert envelope["code"] == "outcome_unknown"
+    assert len(puts) == 1
+    assert stored["description"] == contested, "the value is present, but unattributable"
+    assert gateway.signature(PROFILE, RESOURCE) != before
+    assert [row["outcome"] for row in rows] == [
+        "allowed", "attempted", "outcome_unknown", "outcome_unknown",
     ]
 
 

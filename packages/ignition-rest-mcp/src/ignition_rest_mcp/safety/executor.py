@@ -255,6 +255,15 @@ async def _interpret(
     if dispatch.outcome is DispatchOutcome.RESPONDED and (
         rejection is not None or (dispatch.status is not None and 400 <= dispatch.status < 500)
     ):
+        if request.operation.rejection_is_final:
+            # D30 §2: the Gateway answered and refused. That answer is the result —
+            # no read-back may turn it into a success, because a resource that
+            # happens to show the requested values may have been changed by another
+            # writer, and claiming one is exactly the false success this forbids.
+            error = rejection or _map_status(dispatch.status or 500)
+            await auditor.result("rejected", error_code=error.code, target_type=target_type,
+                                 target_id=request.target_id)
+            return MutationResult(MutationState.REJECTED, dispatch, error)
         try:
             verified = await _verify()
         except asyncio.CancelledError:

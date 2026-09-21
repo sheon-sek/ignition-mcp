@@ -40,6 +40,14 @@ class MutationOperation:
     #: that shipped before that decision keeps its recorded `operation_disabled`,
     #: and its frozen G3 evidence stays valid because the code is per operation.
     target_denial_code: str = "operation_disabled"
+    #: Whether an explicit Gateway rejection (4xx, or 2xx carrying a refusal) is the
+    #: final result of the attempt. D30 §2 decides this for the Phase 4 Mutations: a
+    #: read-back cannot attribute a change to a rejected call, so it must never be
+    #: turned into a success. The Phase 3 machinery shipped with the opposite
+    #: behaviour (a rejected dispatch whose observed state matched the intent was
+    #: recorded as a recovered success), and its frozen tests and G3 evidence pin
+    #: that, so the policy is per operation.
+    rejection_is_final: bool = False
 
     def __post_init__(self) -> None:
         if self.mutation_class not in MUTATION_CLASSES:

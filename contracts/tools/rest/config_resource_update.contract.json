@@ -88,7 +88,6 @@
     "allowInvalidReferences": "false"
   },
   "boundedInputBytes": 262144,
-  "verification": "bounded re-read of the changed resource (Observed state). A refused or ambiguous dispatch is a success only if the resource moved in the direction this call asked for; when the requested values were already in place before dispatch nothing is attributable to this call, so an explicit Gateway refusal stays authoritative (conflict) and an ambiguous dispatch is not_applied \u2014 never a recovered success",
   "requestSchemaValidation": {
     "source": "gateway-openapi-capability-snapshot",
     "schema": "the resource type's documented PUT request-body item schema, bundled into a self-contained JSON Schema (internal $refs hoisted to $defs) at capability refresh time",
@@ -99,5 +98,15 @@
     "snapshotImmutability": "the schema is deeply immutable inside the D04 snapshot (mappings are read-only views, arrays are tuples), so a holder of the snapshot cannot change the rules a later write is validated against",
     "referenceBundling": "internal $refs are hoisted into $defs once per target; every occurrence keeps its own sibling keywords (a later occurrence must not lose a constraint the earlier one did not carry)"
   },
-  "changeItem": "name is included when the documented item schema declares it; a singleton's change item carries only signature plus the supplied fields"
+  "changeItem": "name is included when the documented item schema declares it; a singleton's change item carries only signature plus the supplied fields",
+  "rejectionPolicy": {
+    "rule": "D30 \u00a72: an explicit Gateway rejection is the result of the attempt \u2014 a 4xx (including 409) or a 2xx carrying success=false with a problem. It is mapped to conflict for a signature mismatch, and no read-back may turn it into a success: a resource showing the requested values may have been changed by another writer.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (2xx with no refusal)",
+      "the dispatch was genuinely ambiguous (possibly sent with no response, or 5xx) and the change is attributable to this call"
+    ],
+    "ambiguousAttribution": "a competing writer cannot be ruled out for an ambiguous dispatch, so a read-back that merely matches the requested values is outcome_unknown, never a success; a read-back still showing the pre-state is not_applied",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "bounded re-read of the changed resource, reported as Observed state and used for the outcomes above"
 }

@@ -163,6 +163,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   nothing, `ignition/api-token` refused with `permission_denied` and left usable, and
   a resource outside the Target allowlist denied with nothing changed. The observed
   Target-denial code is `operation_disabled` (see Open questions).
+- Review round 3 fixes (see the ticket report): an explicit Gateway rejection is final
+  for the Tool (D30 §2) — a 4xx or a 2xx carrying `success=false` with a `problem` is
+  the result, mapped to `conflict` for a signature mismatch, and no read-back may turn
+  it into a success (a competing writer can make the resource show the requested
+  values). A success comes only from a Gateway claim, or from a genuinely ambiguous
+  dispatch whose change is attributable; where attribution cannot be established the
+  result is `outcome_unknown`. Declared per operation (`rejection_is_final`), so the
+  Phase 3 machinery keeps the behaviour its frozen tests and G3 evidence pin.
 - Review round 2 fixes (see the ticket report): the bundler keeps sibling keywords on
   every `$ref` occurrence (a repeated reference to one definition used to drop the
   later occurrence's constraint); the snapshot's request schemas are deeply immutable,

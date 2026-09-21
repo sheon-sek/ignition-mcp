@@ -592,6 +592,10 @@ class _Server(http.server.ThreadingHTTPServer):
         #: is changed (and its signature moved) at PUT time, after the caller's own
         #: read and before the signature check — the race window D30 §2 documents.
         self.update_race: dict[str, Any] = {}
+        #: Modelled (not recorded) ambiguous dispatch: when set, every resource PUT
+        #: answers this status (500 by default) without applying the change, the
+        #: boundary at which the caller cannot know whether its write landed.
+        self.update_status: int | None = None
 
     # ------------------------------------------------------- config resources
 
@@ -655,6 +659,10 @@ class _Server(http.server.ThreadingHTTPServer):
             for _change, current in targets:
                 current.update(fields)
                 current["signature"] = self.next_signature()
+        if self.update_status is not None:
+            return self.update_status, {
+                "message": "Internal Server Error", "status": str(self.update_status),
+            }
         for change, current in targets:
             if change.get("signature") != current.get("signature"):
                 return 409, {
@@ -824,6 +832,15 @@ class RecordedGateway:
         """
 
         self._server.update_race = dict(fields)
+
+    def fail_updates_with(self, status: int = 500) -> None:
+        """Model a Gateway that answers every resource PUT with ``status``.
+
+        Nothing is applied, and the caller cannot tell whether its write landed before
+        the failure — the ambiguous dispatch boundary of D08.
+        """
+
+        self._server.update_status = status
 
     def change_resource_out_of_band(
         self, resource_type: str, name: str, collection: str = "", **fields: Any,

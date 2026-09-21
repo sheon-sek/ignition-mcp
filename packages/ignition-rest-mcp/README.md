@@ -106,10 +106,14 @@ validated against the target Gateway's own documented `PUT` request schema (D03)
 capability snapshot and bundled into a self-contained, deeply immutable JSON Schema at refresh time
 (a holder of the snapshot cannot change the rules a later write is validated against): a value the
 type's schema forbids is `invalid_argument` without a request leaving the server, and a Gateway that
-documents an update route without a usable request schema exposes no update for it at all. A refused
-or ambiguous dispatch counts as a success only when the resource moved in the direction the call
-asked for, so another writer winning the race between the signature read and the write can never be
-reported as this caller's success.
+documents an update route without a usable request schema exposes no update for it at all. An explicit
+Gateway rejection (a 4xx, or a 2xx carrying `success=false` with a `problem`) is the result of the
+call — `conflict` for a signature mismatch — and no read-back can turn it into a success, because a
+resource that happens to show the requested values may have been changed by another writer. A
+success therefore comes only from a claim the Gateway itself made, or from a genuinely ambiguous
+dispatch whose read-back establishes the change; where attribution cannot be established (an
+ambiguous dispatch whose read-back merely matches, with a competing writer possible) the result is
+`outcome_unknown`.
 `allowInvalidReferences=false` is always sent and is not a parameter, and the change body is bounded
 (262144 bytes). The result carries the resource as Observed state plus the new Resource signature for
 the caller's next change. The **Refused resource types** in

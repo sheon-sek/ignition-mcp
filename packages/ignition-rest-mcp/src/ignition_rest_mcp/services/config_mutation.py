@@ -23,6 +23,12 @@ Three rules decide the wire item:
   default configuration collection. A caller-supplied collection is refused, because
   the Target allowlist cannot name one unambiguously; see
   ``resource_target_id`` and the runbook's open question.
+
+Because an explicit Gateway rejection is final for this Tool (D30 §2), the operation
+is declared ``rejection_is_final``: the caller either gets the Gateway's own refusal
+(``conflict`` for a signature mismatch) or the confirmation of a claim the Gateway
+itself made. ``recovered_success`` is unreachable here, and an ambiguous dispatch
+whose read-back looks right is ``outcome_unknown`` rather than a success.
 """
 
 from __future__ import annotations
@@ -67,6 +73,9 @@ CONFIG_RESOURCE_UPDATE = MutationOperation(
     #: D30 §7: a Phase 4 Mutation answers `permission_denied` for a Target outside
     #: its Target allowlist.
     target_denial_code="permission_denied",
+    #: D30 §2: an explicit Gateway rejection is this Tool's result. Neither a stale
+    #: signature nor any other refusal may be reported as a success.
+    rejection_is_final=True,
 )
 
 UPDATE_OPERATION_ID = CONFIG_RESOURCE_UPDATE.op_id
@@ -153,18 +162,18 @@ async def config_resource_update(
             if _matches_intended_state(current, fields):
                 return VerificationOutcome.CONFIRMED
             return VerificationOutcome.UNCHANGED if unchanged else VerificationOutcome.MISMATCH
-        # A refused or ambiguous dispatch is only a recovered success if the resource
-        # actually moved *in the direction this call asked for*. Two things make that
-        # unattributable: the resource still shows the pre-state, or the pre-state
-        # already satisfied everything this call requested — a request whose values
-        # were already in place cannot be credited with any observation, however the
-        # resource moved afterwards. Both return UNCHANGED, which the executor maps to
-        # a rejection (keeping an explicit Gateway error authoritative) or to
-        # not-applied, never to a success.
+        # No claim to verify (an ambiguous dispatch: possibly sent, no response). A
+        # read-back can show the requested values without proving this call wrote
+        # them — another writer may have made the same change inside the window — so
+        # only a negative conclusion is drawn from it: the pre-state intact, or a
+        # request whose values were already in place, is UNCHANGED ("nothing
+        # attributable to this call"), and anything else is INDETERMINATE, which the
+        # executor reports as outcome_unknown. A success here would be a claim the
+        # evidence cannot support.
         if unchanged or _already_satisfied(fields, before):
             return VerificationOutcome.UNCHANGED
         if _matches_intended_state(current, fields):
-            return VerificationOutcome.CONFIRMED
+            return VerificationOutcome.INDETERMINATE
         return VerificationOutcome.MISMATCH
 
     mutation = await execute_mutation(
