@@ -229,6 +229,7 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   version; that row now resolves the ZIP and manifest the release step just built,
   so the frozen G0–G3 workflows keep passing on a bumped bundle.
 - Live: see the run below.
+- **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
 
 ## Open questions
 

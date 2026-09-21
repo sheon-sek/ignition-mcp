@@ -6,10 +6,16 @@
   "siblingRootName": "IgnitionMCP_CI2",
   "configured": true,
   "configure": {
-    "folderFallbackUsed": false,
+    "rootQualityCodes": [
+      "Good"
+    ],
     "qualityCodes": [
       "Good"
-    ]
+    ],
+    "siblingQualityCodes": [
+      "Good"
+    ],
+    "allGood": true
   },
   "fixturePaths": [
     "[default]IgnitionMCP_CI/WriteTarget",
@@ -33,5 +39,7 @@
       "value": "0"
     }
   ],
-  "fixtureReadable": true
+  "fixtureReadable": true,
+  "readAttempts": 1,
+  "readWaitedMs": 12
 }
