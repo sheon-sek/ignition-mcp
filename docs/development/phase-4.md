@@ -473,6 +473,28 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     (`answer_tag_import_with`, a 2xx body substituted while the transition still applies)
     and eight shapes are covered — the boundary case (the documented empty QualityCode
     list) still reports a clean import as a success, so the rule is pinned on both sides.
+- **The fix heads were validated and proven live.** `p4/rest-fix17` carries the fixes plus
+  a merge of `origin/p4/rest` (the branch had no merge commit after #18 landed, so no
+  workflow could run on it). Full `AGENTS.md` block green: 883 pytest cases, mypy strict
+  clean, contract lint, workflow lint (7 files, 107 run blocks), native validate, compat
+  evidence (6 rows, no SUPPORTED claim). Local rehearsal **86/86** (both gates; 12 of the
+  cases are the Tag import section). Live on head `aa731a5`, both Gateway rows green at
+  **86/86 cases each** — `Phase 4 Live Gateway REST mutation`
+  [35666536297](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536297),
+  with `tag-import-under-the-allowlisted-prefix-applies`,
+  `tag-import-prefix-destination-serves-every-source-tag`,
+  `tag-import-reserved-policy-provider-is-permission-denied` and
+  `tag-import-reserved-policy-provider-says-which-rule` ok on 8.3.8 and 8.3.9. The
+  refusal's own message is in both rows' `observations.json`
+  (`tagReservedProviderResult`: `permission_denied`, "the target is inside the reserved
+  Runtime Target Policy provider…"), and `tagNestedNames` shows the nested destination
+  serving the source Tags. Frozen gates on the same head: CI
+  [35666536324](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536324), Phase 3
+  Live Gateway G3
+  [35666536299](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536299), Phase 4
+  Live Gateway G4a
+  [35666536363](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536363) — all
+  success.
 
 - Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`, `9d25d98`):
   CI
