@@ -360,12 +360,13 @@ class Driver:
 
     async def transaction_row(self, transaction_id: str) -> dict[str, Any] | None:
         assert self.storage is not None
-        columns = ("state", "gateway_id", "gateway_id_derived", "import_dispatched", "error_code")
+        columns = ("state", "gateway_id", "gateway_id_derived", "import_dispatched", "error_code",
+                   "result_artifact_id")
 
         def _read(conn: Any) -> dict[str, Any] | None:
             row = conn.execute(
-                "SELECT state, gateway_id, gateway_id_derived, import_dispatched, error_code "
-                "FROM project_transactions WHERE transaction_id = ?",
+                "SELECT state, gateway_id, gateway_id_derived, import_dispatched, error_code, "
+                "result_artifact_id FROM project_transactions WHERE transaction_id = ?",
                 (transaction_id,),
             ).fetchone()
             return dict(zip(columns, row, strict=True)) if row else None
@@ -748,13 +749,55 @@ class Driver:
         committed_token = uuid7()[:8]
         committed_builder = _EditBuilder(committed_token)
         context, result = await run(committed_builder)
-        self.stage.check(
-            "txn-committed",
-            result.state is TransactionState.COMMITTED and result.import_dispatched is True
-            and result.error is None and result.result_fingerprint == result.candidate_fingerprint,
-            {"state": result.state.value, "dispatched": result.import_dispatched, "error": str(result.error)},
-        )
+
+        # Gather all commit evidence BEFORE asserting. Whether the Gateway-owned
+        # export round-trips the candidate is the open question (g3diag R1); one
+        # run must answer it with per-entry digests, so the failure detail is
+        # collected first and carried inside the check itself.
+        entry_diff: dict[str, Any] = {
+            "baseline": committed_builder.baseline_entries,
+            "candidate": committed_builder.candidate_entries,
+        }
         row = await self.transaction_row(result.transaction_id)
+        verify_artifact = row.get("result_artifact_id") if row else None
+        if verify_artifact:
+            with contextlib.suppress(GatewayError):
+                entry_diff["verify"] = _entry_digests(await _artifact_bytes(self.store, str(verify_artifact)))
+        reexport: dict[str, Any] = {}
+        token_read, _ = await self.mint_principal(private_pem, "g3-live", ["ignition.read"])
+        mcp = McpHttp(self.args.rest_url + "/mcp", token_read, timeout=180.0)
+        try:
+            await mcp.initialize()
+            reexport = await mcp.call_structured("project_export", {"projectName": project})
+        finally:
+            await mcp.aclose()
+        if reexport:
+            try:
+                async with httpx.AsyncClient(timeout=120.0) as http:
+                    body = await http.get(self.args.rest_url + str(reexport["artifact"]["download"]["path"]),
+                                          headers={"Authorization": "Bearer " + token_read})
+                if body.status_code == 200:
+                    reexport_entries = _entry_digests(body.content)
+                    entry_diff["reexport"] = reexport_entries
+                    entry_diff["changed"] = sorted(
+                        key for key, digest in reexport_entries.items()
+                        if committed_builder.candidate_entries.get(key) != digest
+                    ) + sorted(set(committed_builder.candidate_entries) - set(reexport_entries))
+            except (ProbeError, GatewayError, httpx.HTTPError, ValueError) as error:
+                entry_diff["reexportError"] = type(error).__name__
+        diagnosis = {
+            "state": result.state.value, "dispatched": result.import_dispatched,
+            "error": str(result.error),
+            "baselineFingerprint": result.baseline_fingerprint,
+            "candidateFingerprint": result.candidate_fingerprint,
+            "resultFingerprint": result.result_fingerprint,
+            "reexportFingerprint": reexport.get("fingerprint"),
+            "entries": entry_diff,
+        }
+        self.stage.check("txn-committed",
+                         result.state is TransactionState.COMMITTED and result.import_dispatched is True
+                         and result.error is None and result.result_fingerprint == result.candidate_fingerprint,
+                         diagnosis)
         self.stage.check("txn-committed-record",
                          row is not None and row["state"] == "COMMITTED"
                          and row["gateway_id"] == self.settings.gateway_id and row["gateway_id_derived"] == 0,
@@ -765,35 +808,8 @@ class Driver:
                          and recovery["retention_lock"] == 0 and recovery["state"] == "READY"
                          and recovery["expires_at"] is not None,
                          recovery)
-        token_read, _ = await self.mint_principal(private_pem, "g3-live", ["ignition.read"])
-        mcp = McpHttp(self.args.rest_url + "/mcp", token_read, timeout=180.0)
-        try:
-            await mcp.initialize()
-            reexport = await mcp.call_structured("project_export", {"projectName": project})
-        finally:
-            await mcp.aclose()
-        round_trip = str(reexport["fingerprint"]) == str(result.candidate_fingerprint)
-        entry_diff: dict[str, Any] = {
-            "candidate": committed_builder.candidate_entries,
-            "baseline": committed_builder.baseline_entries,
-        }
-        if not round_trip:
-            # g3diag R1 diagnostics: record which entries the Gateway changed on
-            # import and re-export. The re-export artifact is CONFIDENTIAL and owned
-            # by this same principal, so the data plane serves it to us.
-            reexport_artifact = reexport["artifact"]
-            async with httpx.AsyncClient(timeout=120.0) as http:
-                body = await http.get(self.args.rest_url + str(reexport_artifact["download"]["path"]),
-                                      headers={"Authorization": "Bearer " + token_read})
-            if body.status_code == 200:
-                entry_diff["reexport"] = _entry_digests(body.content)
-                entry_diff["changed"] = sorted(
-                    key for key, digest in entry_diff["reexport"].items()
-                    if committed_builder.candidate_entries.get(key) != digest
-                ) + sorted(set(committed_builder.candidate_entries) - set(entry_diff["reexport"]))
-        self.stage.check("txn-committed-reexport", round_trip,
-                         {"candidate": result.candidate_fingerprint, "reexport": reexport["fingerprint"],
-                          "entries": entry_diff})
+        self.stage.check("txn-committed-reexport",
+                         str(reexport.get("fingerprint")) == str(result.candidate_fingerprint), diagnosis)
         audit = await self.audit_rows(context.correlation_id)
         results["COMMITTED"] = {
             "state": result.state.value, "importDispatched": result.import_dispatched,
@@ -801,7 +817,8 @@ class Driver:
             "baselineFingerprint": result.baseline_fingerprint,
             "candidateFingerprint": result.candidate_fingerprint,
             "resultFingerprint": result.result_fingerprint, "auditRows": audit,
-            "reexportFingerprint": reexport["fingerprint"],
+            "reexportFingerprint": reexport.get("fingerprint"),
+            "entryDigests": entry_diff,
             "recoveryArtifact": {"id": result.baseline_artifact_id, "row": dict(recovery or {})},
         }
 
