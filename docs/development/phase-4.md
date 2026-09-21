@@ -460,7 +460,87 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   failing attempt) and
   [35662815877](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815877).
 
+### Ticket #18 — REST `alarm_pipeline_cancel` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models Alarm Notification Pipeline
+  runtime state — `seed_pipeline` publishes the runs one exact path serves, the status
+  route answers from it, and the documented cancel route is a `DELETE` that takes its two
+  facts in a JSON body — plus the knobs the cases need: a competing cancel at dispatch
+  time (`race_cancel_with`), a claim that leaves the run in place
+  (`claim_cancels_without_applying`), a 2xx that claims nothing
+  (`answer_cancels_without_claiming`), a refusal inside a 200 (`refuse_cancels_with`) and
+  an ambiguous status that applies nothing (`fail_cancels_with`). The new module
+  `test_phase4_alarm_pipeline_cancel.py` (32 cases) drives the real server through MCP
+  against that Gateway; it fails before the change (the Tool and its operation do not
+  exist) and the full `AGENTS.md` command block is green (867 pytest cases).
+- **D30 §6, exactly.** The Target is the caller's own pipeline path, matched exactly:
+  `alarm_pipeline_list` reports that string, the deployment's Target allowlist names it,
+  and a path under it — or its own parent — is a different Target
+  (`permission_denied`). A caller-supplied `*` is `invalid_argument`, because the
+  wildcard is an allowlist entry and not a pipeline.
+- **D12, exactly.** The cancel touches the pipeline runtime route only: the bounded status
+  read and the documented `DELETE`. It never acknowledges or clears the Alarm Event, and a
+  case enumerates every Gateway route the call touched to keep it that way.
+- **D30 §2 gives this Tool no Precondition token, so the Tool establishes the pre-state
+  itself.** A destructive cancel's post-state is absence, and absence proves nothing on
+  its own — another operator can cancel the same run — so the Tool reads the same bounded
+  `alarm_pipeline_status` before it dispatches and refuses `not_found` when the pipeline
+  holds no run for that alarm event, dispatching nothing. That read is also the
+  verification, so the Observed state the caller gets is what `alarm_pipeline_status`
+  would have answered, plus the one comparison this Tool makes.
+- **The D10 bound is about coverage, not page size.** The Tool reads one page of 100 runs;
+  when that page cannot cover every run the Gateway matched, the call fails
+  `limit_exceeded` naming the matched count and the limit, and nothing is dispatched. A
+  pipeline whose last run is the page's last item hides nothing, so its absence is
+  definitive — both cases are pinned.
+- **Attribution (D30 §2) in one place.** `rejection_is_final=True`: a 4xx, or the 2xx the
+  route documents carrying `success=false`, is the result and is never reconciled into a
+  success — pinned by a case where another writer makes the run disappear at dispatch
+  time. A claimed success is confirmed only by a re-read that no longer reports the run; a
+  claim whose run is still reported is `recovery_required`; an ambiguous dispatch is
+  `not_applied` when the run is still there and `outcome_unknown` when it is gone, so
+  `recovered_success` stays unreachable. A 2xx this Tool cannot read as a claim is not a
+  success either (`recovery_required`, never a success).
+- Wiring (D07/D30 §7): registered as a CONTROL-scope, destructive, audited Tool gated by
+  `IGNITION_MCP_CONTROL_MUTATION_ENABLED` and a new `alarm_pipeline_cancel` capability
+  that requires *both* documented pipeline routes — a Gateway whose status route is
+  missing cannot be read back, so it exposes no cancel. Contract, output schema, audit
+  allowlist and inventories moved together, and `tooling/contracts/lint.py` now derives
+  each mutation contract's permission class and scope from its mutation class instead of
+  assuming `CONFIG`, so a CONTROL Tool can no longer be declared with a CONFIG surface.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **82/82 cases**
+  against the recorded Gateway, both deployment gates and all three credentials.
+- Live: pending — recorded below once the runs are in.
+
 ## Open questions
+
+- **Ticket #18 — a live cancel of a *running* pipeline is not provisioned by this
+  harness.** A fresh CI Gateway serves no Alarm Notification Pipeline runs (the Phase 2
+  live probe recorded that), and producing one needs an Alarm Event notifying through a
+  provisioned `alarm-notification-profile` whose pipeline holds a block that keeps the run
+  in flight. This harness provisions none of that, so the live rows prove the whole
+  decision surface around the dispatch — the CONTROL class, the scope-by-effect refusal,
+  the exact-path Target rule, both D10 input bounds and the bounded pre-dispatch read
+  refusing a run that does not exist — while the dispatched-and-verified path (the claim,
+  the re-read, the refusal inside a 200, the ambiguous dispatch) is fixture-proven, exactly
+  as #16's A-vs-A' drift variant is. **For the owner:** confirm, or ask for a provisioned
+  notification profile plus an alarm that notifies through it; that would also record
+  whether the Gateway keeps a cancelled run in its status page, the one behaviour this
+  Tool's verification reads and this repository has never observed live.
+- **Ticket #18 — the pre-dispatch read is the Tool's own attribution requirement.** D30 §6
+  names a bounded `alarm_pipeline_status` re-read as this Tool's verification and D30 §2
+  gives it no Precondition token, so the Tool reads before it dispatches as well as after.
+  That costs one extra bounded read per call, and it is what makes `not_found` — rather
+  than a vacuous success — the answer for an alarm event the pipeline is not running.
+  **For the owner:** confirm, or amend D30 §2 to give this Tool a token that would make the
+  extra read unnecessary.
+- **Ticket #18 — a read that cannot cover every match is `limit_exceeded`.** The Tool takes
+  one page (100 runs) and treats the read as evidence only when it covers everything the
+  Gateway matched; otherwise the state cannot be established and the call fails with the
+  D10 code, naming the matched count and the limit. The alternative readings — `not_found`
+  (claiming an absence the page did not establish) or `outcome_unknown` (a transport-shaped
+  answer for an input bound) — were rejected as less honest. **For the owner:** confirm, or
+  name the code you want for a collection whose verification bound cannot cover it.
 
 - **Ticket #17 — the Target of a Tag import is the exact provider-qualified path, not a
   prefix.** The issue says "Target allowlist on the provider and path prefix". What is
