@@ -22,161 +22,52 @@ import ignition_rest_mcp.server as server_module
 from ignition_rest_mcp.authorization import scope_tag
 from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
 from ignition_rest_mcp.services.config_mutation import CONFIG_RESOURCE_UPDATE
-from ignition_rest_mcp.config import StaticToken
-from ignition_rest_mcp.storage.database import Database
-from ignition_rest_mcp.storage.records import OperationRecordStore
-from ignition_rest_mcp.storage.schema import AUDIT_DDL, STATE_DDL
-from test_config import _settings
+from phase4_fixtures import (
+    CONFIG,
+    CREATE_TOOL,
+    DELETE_TOOL,
+    PROFILE,
+    READ_INVENTORY,
+    RENAME_TOOL,
+    RESOURCE,
+    TOKEN_TYPE,
+    UPDATE_TOOL,
+    audit_rows,
+    envelope,
+    mutation_settings,
+    operation_record,
+    read_settings,
+    seed_config_resources,
+    structured,
+    write_requests,
+)
+from phase4_fixtures import Session as _Session
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
-READ = "ignition.read"
-CONFIG = "ignition.config"
-PROFILE = "ignition/audit-profile"
-TOKEN_TYPE = "ignition/api-token"
-RESOURCE = "MCP_CI_AUDIT"
-ACCEPT = "application/json, text/event-stream"
-PROTOCOL_VERSION = "2025-06-18"
-
-READ_INVENTORY = frozenset({
-    "gateway_info",
-    "gateway_diagnose",
-    "project_list",
-    "config_resource_search",
-    "config_resource_describe",
-    "config_resource_names",
-    "config_resource_list",
-    "config_resource_get",
-    "audit_query",
-    "alarm_pipeline_list",
-    "alarm_pipeline_status",
-    "artifact_list",
-    "artifact_info",
-    "operation_diagnose",
-})
-UPDATE_TOOL = "config_resource_update"
-
 
 # ------------------------------------------------------------------- fixtures
 
 
 def _seed(gateway: RecordedGateway) -> None:
-    """The two config resources every case in this module needs: an allowlisted
-    update target and the refused API-token resource the CI Gateway really has."""
+    """The config resources every case in this module needs (shared with the other
+    Phase 4 mutation modules)."""
 
-    gateway.seed_resource(
-        PROFILE, RESOURCE,
-        config={"profile": {"type": "local", "retentionDays": 14}, "settings": {}},
-        description="CI audit profile",
-    )
-    gateway.seed_resource(
-        PROFILE, RESOURCE, collection="custom",
-        config={"profile": {"type": "local", "retentionDays": 3}},
-        description="same name, other collection",
-    )
-    gateway.seed_resource(
-        TOKEN_TYPE, "ignition-mcp-ci",
-        config={"profile": {"type": "basic-token"}, "settings": {"tokenHash": "<redacted>"}},
-        description="Disposable CI-only API token",
-    )
+    seed_config_resources(gateway)
 
 
 def _mutation_settings(**overrides: Any) -> Any:
-    values: dict[str, Any] = {
-        "auth_mode": "static-token",
-        "static_tokens": (
-            StaticToken(name="reader", token="reader-secret", scopes=(READ,)),
-            StaticToken(name="config-agent", token="cfg-secret", scopes=(READ, CONFIG)),
-        ),
-        "config_mutation_enabled": True,
-        "mutation_operations": (UPDATE_TOOL,),
-        "mutation_targets": {UPDATE_TOOL: (f"{PROFILE}/{RESOURCE}",)},
-    }
-    values.update(overrides)
-    return _settings(**values)
+    """The update Tool's deployment: only it is enabled, and only the one Target."""
 
-
-def _read_settings(**overrides: Any) -> Any:
-    values: dict[str, Any] = {"auth_mode": "none"}
-    values.update(overrides)
-    return _settings(**values)
-
-
-class _Session:
-    """A minimal Streamable-HTTP MCP session carrying one bearer credential."""
-
-    def __init__(self, http: TestClient, credential: str) -> None:
-        self._http = http
-        self._headers = {
-            "Authorization": "Bearer " + credential,
-            "Accept": ACCEPT,
-            "Content-Type": "application/json",
-        }
-        self._request_id = 0
-        self.request("initialize", {
-            "protocolVersion": PROTOCOL_VERSION, "capabilities": {},
-            "clientInfo": {"name": "p4-mutation-test", "version": "0"},
-        })
-        self._http.post(
-            "/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}, headers=self._headers,
-        )
-
-    def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
-        self._request_id += 1
-        payload: dict[str, Any] = {"jsonrpc": "2.0", "id": self._request_id, "method": method}
-        if params is not None:
-            payload["params"] = params
-        response = self._http.post("/mcp", json=payload, headers=self._headers)
-        assert response.status_code == 200, response.text
-        session = response.headers.get("mcp-session-id")
-        if session:
-            self._headers["Mcp-Session-Id"] = session
-        decoded = _decode(response)
-        assert "error" not in decoded, decoded
-        return decoded["result"]
-
-    def tools(self) -> frozenset[str]:
-        return frozenset(str(tool["name"]) for tool in self.request("tools/list", {})["tools"])
-
-    def call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return self.request("tools/call", {"name": name, "arguments": arguments})
-
-    def read(self, resource_type: str, name: str) -> dict[str, Any]:
-        return self.call("config_resource_get", {
-            "resourceType": resource_type, "name": name,
-            "collection": "", "defaultIfUndefined": False,
-        })
-
-
-def _decode(response: Any) -> dict[str, Any]:
-    if "text/event-stream" in response.headers.get("content-type", ""):
-        events = [
-            json.loads(line[5:].strip())
-            for line in response.text.splitlines()
-            if line.startswith("data:")
-        ]
-        assert events, response.text
-        return events[-1]
-    return json.loads(response.text)
-
-
-def _structured(result: dict[str, Any]) -> dict[str, Any]:
-    assert result.get("isError") is not True, result
-    assert isinstance(result.get("structuredContent"), dict), result
-    return result["structuredContent"]
-
-
-def _envelope(result: dict[str, Any]) -> dict[str, Any]:
-    assert result.get("isError") is True, result
-    for item in result.get("content", ()):
-        if isinstance(item, dict) and isinstance(item.get("text"), str):
-            decoded = json.loads(item["text"])
-            if isinstance(decoded, dict) and "code" in decoded:
-                return decoded
-    raise AssertionError(f"no structured error envelope in {result!r}")
+    targets = overrides.pop("mutation_targets", None)
+    return mutation_settings(
+        UPDATE_TOOL,
+        targets=targets or {UPDATE_TOOL: (f"{PROFILE}/{RESOURCE}",)},
+        **overrides,
+    )
 
 
 # --------------------------------------------------------------- signature read
@@ -188,14 +79,14 @@ def test_config_resource_get_emits_the_resource_signature(tmp_path: Path) -> Non
 
     with RecordedGateway() as gateway:
         _seed(gateway)
-        settings = _read_settings(
+        settings = read_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
         )
 
         with TestClient(server_module.create_server(settings).http_app()) as http:
             result = _Session(http, "reader-secret").read(PROFILE, RESOURCE)
 
-    body = _structured(result)
+    body = structured(result)
     assert body["signature"] == gateway.signature(PROFILE, RESOURCE)
     assert body["resource"]["config"]["profile"] == {"type": "local", "retentionDays": 14}
 
@@ -209,14 +100,14 @@ def test_config_resource_get_reports_no_signature_when_the_gateway_omits_one(
     with RecordedGateway() as gateway:
         _seed(gateway)
         gateway.resource(PROFILE, RESOURCE).pop("signature")
-        settings = _read_settings(
+        settings = read_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
         )
 
         with TestClient(server_module.create_server(settings).http_app()) as http:
             result = _Session(http, "reader-secret").read(PROFILE, RESOURCE)
 
-    assert _structured(result)["signature"] is None
+    assert structured(result)["signature"] is None
 
 
 # ------------------------------------------------------------------ inventory
@@ -234,12 +125,16 @@ def test_update_tool_declares_the_config_scope() -> None:
 
 
 @pytest.mark.parametrize("class_enabled", [True, False])
-def test_update_tool_visibility_follows_the_class_gate(
+def test_mutation_tool_visibility_follows_the_class_gate(
     tmp_path: Path, class_enabled: bool,
 ) -> None:
-    """The Tool is discoverable only when CONFIG_MUTATION is enabled for the
-    deployment; everything else in the inventory is unchanged (D08)."""
+    """Each Mutation Tool is discoverable only when CONFIG_MUTATION is enabled for
+    the deployment; everything else in the inventory is unchanged (D08). The class
+    gate, not the operation allowlist, decides discovery: only `config_resource_update`
+    is in this deployment's operation allowlist, and the other three are still
+    listed — they refuse at call time instead."""
 
+    mutation_tools = {UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL}
     with RecordedGateway() as gateway:
         _seed(gateway)
         settings = _mutation_settings(
@@ -250,8 +145,7 @@ def test_update_tool_visibility_follows_the_class_gate(
         with TestClient(server_module.create_server(settings).http_app()) as http:
             names = _Session(http, "cfg-secret").tools()
 
-    assert (UPDATE_TOOL in names) is class_enabled
-    assert names - {UPDATE_TOOL} == READ_INVENTORY
+    assert names == (READ_INVENTORY | mutation_tools if class_enabled else READ_INVENTORY)
 
 
 def test_update_tool_is_hidden_when_the_gateway_lacks_the_update_capability(
@@ -345,7 +239,7 @@ def test_an_allowlisted_update_changes_the_resource_and_reports_observed_state(
                 "description": "CI audit profile (30 days)",
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
         stored = gateway.resource(PROFILE, RESOURCE)
 
     assert len(puts) == 1, puts
@@ -359,14 +253,14 @@ def test_an_allowlisted_update_changes_the_resource_and_reports_observed_state(
     assert stored["config"] == {"profile": {"type": "local", "retentionDays": 30}}
     assert stored["signature"] != before, "the Gateway must have moved the signature"
 
-    body = _structured(result)
+    body = structured(result)
     assert body["resourceType"] == PROFILE
     assert body["name"] == RESOURCE
     assert body["signature"] == stored["signature"]
     assert body["observedState"]["description"] == "CI audit profile (30 days)"
     assert body["observedState"]["config"]["profile"]["retentionDays"] == 30
     assert body["correlationId"]
-    assert _operation_record(tmp_path, body["correlationId"]) == (UPDATE_TOOL, "succeeded", None)
+    assert operation_record(tmp_path, body["correlationId"]) == (UPDATE_TOOL, "succeeded", None)
 
 
 def test_an_update_leaves_one_audited_decision_attempt_and_result(tmp_path: Path) -> None:
@@ -386,9 +280,9 @@ def test_an_update_leaves_one_audited_decision_attempt_and_result(tmp_path: Path
                 "name": RESOURCE, "enabled": False,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
 
-    assert _structured(result)["correlationId"] == rows[0]["correlation_id"]
+    assert structured(result)["correlationId"] == rows[0]["correlation_id"]
     assert [
         (row["phase"], row["outcome"], row["operation_class"], row["destructive"], row["safe_fields_json"])
         for row in rows
@@ -421,19 +315,19 @@ def test_a_stale_signature_is_a_conflict_that_never_dispatches(tmp_path: Path) -
                 "name": RESOURCE, "enabled": False,
             })
 
-        puts = _put_requests(gateway)
-        rows = _audit_rows(tmp_path)
+        puts = write_requests(gateway, "PUT")
+        rows = audit_rows(tmp_path)
         stored = gateway.resource(PROFILE, RESOURCE)
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "conflict"
+    error = envelope(result)
+    assert error["code"] == "conflict"
     assert puts == [], "a stale signature must not reach the Gateway"
     assert stored["description"] == "changed by hand"
     assert stored["signature"] == current
     assert [(row["phase"], row["outcome"]) for row in rows] == [
         ("decision", "denied:precondition:conflict"),
     ]
-    assert rows[0]["correlation_id"] == envelope["correlationId"]
+    assert rows[0]["correlation_id"] == error["correlationId"]
 
 
 def test_a_signature_the_gateway_will_not_report_cannot_be_preconditioned(tmp_path: Path) -> None:
@@ -450,9 +344,9 @@ def test_a_signature_the_gateway_will_not_report_cannot_be_preconditioned(tmp_pa
                 "name": RESOURCE, "enabled": False,
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    assert _envelope(result)["code"] == "conflict"
+    assert envelope(result)["code"] == "conflict"
     assert puts == []
 
 
@@ -484,12 +378,12 @@ def test_a_refused_resource_type_is_denied_whatever_the_allowlist_says(
                 "name": "ignition-mcp-ci", "enabled": False,
             })
 
-        puts = _put_requests(gateway)
-        rows = _audit_rows(tmp_path)
+        puts = write_requests(gateway, "PUT")
+        rows = audit_rows(tmp_path)
         stored = gateway.resource(TOKEN_TYPE, "ignition-mcp-ci")
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "permission_denied"
+    error = envelope(result)
+    assert error["code"] == "permission_denied"
     assert puts == [], "a refused resource type must never reach the Gateway"
     assert stored["enabled"] is True
     assert [(row["phase"], row["outcome"], row["target_id"]) for row in rows] == [
@@ -516,11 +410,11 @@ def test_a_gateway_refusal_inside_a_success_response_is_a_conflict(tmp_path: Pat
                 "name": RESOURCE, "enabled": False,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "conflict"
-    assert "stale" in envelope["message"]
+    error = envelope(result)
+    assert error["code"] == "conflict"
+    assert "stale" in error["message"]
     # The guarded executor records the refusal; the lifecycle then records that the
     # Tool call failed under the same correlation ID (two result rows, D18).
     assert [
@@ -531,7 +425,7 @@ def test_a_gateway_refusal_inside_a_success_response_is_a_conflict(tmp_path: Pat
         ("result", "rejected", "conflict"),
         ("result", "failed", "conflict"),
     ]
-    assert rows[0]["correlation_id"] == envelope["correlationId"]
+    assert rows[0]["correlation_id"] == error["correlationId"]
 
 
 def test_a_refused_change_whose_values_were_already_in_place_is_still_a_conflict(
@@ -556,10 +450,10 @@ def test_a_refused_change_whose_values_were_already_in_place_is_still_a_conflict
                 "name": RESOURCE, "description": existing,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "conflict"
+    error = envelope(result)
+    assert error["code"] == "conflict"
     assert gateway.signature(PROFILE, RESOURCE) == before
     assert [(row["phase"], row["outcome"], row["error_code"]) for row in rows] == [
         ("decision", "allowed", None),
@@ -575,7 +469,7 @@ def test_a_change_outside_the_target_allowlist_is_permission_denied(tmp_path: Pa
 
     with RecordedGateway() as gateway:
         _seed(gateway)
-        gateway.seed_resource(PROFILE, "OTHER_PROFILE", config={"profile": {"type": "local"}})
+        gateway.seed_resource(PROFILE, "OTHERPROFILE", config={"profile": {"type": "local"}})
         settings = _mutation_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
         )
@@ -583,15 +477,15 @@ def test_a_change_outside_the_target_allowlist_is_permission_denied(tmp_path: Pa
         with TestClient(server_module.create_server(settings).http_app()) as http:
             result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
                 "resourceType": PROFILE,
-                "expectedSignature": gateway.signature(PROFILE, "OTHER_PROFILE"),
-                "name": "OTHER_PROFILE", "enabled": False,
+                "expectedSignature": gateway.signature(PROFILE, "OTHERPROFILE"),
+                "name": "OTHERPROFILE", "enabled": False,
             })
 
-        puts = _put_requests(gateway)
-        rows = _audit_rows(tmp_path)
+        puts = write_requests(gateway, "PUT")
+        rows = audit_rows(tmp_path)
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "permission_denied"
+    error = envelope(result)
+    assert error["code"] == "permission_denied"
     assert puts == []
     assert rows[0]["outcome"] == "denied:target-allowlist:target-not-allowlisted"
 
@@ -623,9 +517,9 @@ def test_an_operation_outside_the_allowlist_is_refused_before_dispatch(tmp_path:
                 "name": RESOURCE, "enabled": False,
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    assert _envelope(result)["code"] == "operation_disabled"
+    assert envelope(result)["code"] == "operation_disabled"
     assert puts == []
 
 
@@ -642,9 +536,9 @@ def test_an_empty_change_is_rejected_without_consuming_the_signature(tmp_path: P
                 "resourceType": PROFILE, "expectedSignature": before, "name": RESOURCE,
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    assert _envelope(result)["code"] == "invalid_argument"
+    assert envelope(result)["code"] == "invalid_argument"
     assert puts == []
     assert gateway.signature(PROFILE, RESOURCE) == before
 
@@ -665,10 +559,10 @@ def test_a_read_only_credential_cannot_see_or_call_the_update_tool(tmp_path: Pat
                 "name": RESOURCE, "enabled": False,
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
     assert UPDATE_TOOL not in names
-    assert _envelope(denied)["code"] == "permission_denied"
+    assert envelope(denied)["code"] == "permission_denied"
     assert puts == []
 
 
@@ -694,9 +588,9 @@ def test_a_non_default_collection_is_refused_and_dispatches_nothing(tmp_path: Pa
                 "name": RESOURCE, "collection": "custom", "enabled": False,
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    assert _envelope(result)["code"] == "invalid_argument"
+    assert envelope(result)["code"] == "invalid_argument"
     assert puts == [], "a collection-qualified change must not reach the Gateway"
     assert gateway.signature(PROFILE, RESOURCE, "custom") == other_signature
     assert gateway.signature(PROFILE, RESOURCE) == default_signature
@@ -726,10 +620,10 @@ def test_the_default_collection_resource_is_the_one_a_change_applies_to(tmp_path
                 "name": RESOURCE, "description": "default collection only",
             })
 
-        bodies = [json.loads(request["body"]) for request in _put_requests(gateway)]
+        bodies = [json.loads(request["body"]) for request in write_requests(gateway, "PUT")]
 
-    assert _envelope(refused)["code"] == "invalid_argument"
-    assert _structured(applied)["collection"] == ""
+    assert envelope(refused)["code"] == "invalid_argument"
+    assert structured(applied)["collection"] == ""
     assert bodies == [[{
         "name": RESOURCE, "signature": bodies[0][0]["signature"],
         "description": "default collection only",
@@ -762,11 +656,11 @@ def test_a_change_that_violates_the_gateway_request_schema_never_dispatches(
                 "config": {"profile": {"type": "not-a-documented-type"}},
             })
 
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "invalid_argument"
-    assert "/config/profile/type" in envelope["message"]
+    error = envelope(result)
+    assert error["code"] == "invalid_argument"
+    assert "/config/profile/type" in error["message"]
     assert puts == [], "a schema-invalid change must not reach the Gateway"
     assert gateway.signature(PROFILE, RESOURCE) == before
 
@@ -788,7 +682,7 @@ def test_a_schema_valid_change_still_dispatches(tmp_path: Path) -> None:
                 "config": {"profile": {"type": "database", "retentionDays": 7}},
             })
 
-    assert _structured(result)["observedState"]["config"]["profile"]["type"] == "database"
+    assert structured(result)["observedState"]["config"]["profile"]["type"] == "database"
 
 
 def test_a_singleton_change_item_carries_no_name_the_gateway_does_not_document(
@@ -814,9 +708,9 @@ def test_a_singleton_change_item_carries_no_name_the_gateway_does_not_document(
                 "description": "after",
             })
 
-        bodies = [json.loads(request["body"]) for request in _put_requests(gateway)]
+        bodies = [json.loads(request["body"]) for request in write_requests(gateway, "PUT")]
 
-    assert _structured(result)["observedState"]["description"] == "after"
+    assert structured(result)["observedState"]["description"] == "after"
     assert bodies == [[{
         "signature": bodies[0][0]["signature"], "description": "after",
     }]]
@@ -845,12 +739,12 @@ def test_another_writer_winning_the_race_is_never_reported_as_our_success(
                 "name": RESOURCE, "description": already,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
         stored = gateway.resource(PROFILE, RESOURCE)
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "conflict"
+    error = envelope(result)
+    assert error["code"] == "conflict"
     assert len(puts) == 1, "the change was dispatched once"
     assert stored["enabled"] is False, "the other writer's change is the only one applied"
     assert stored["description"] == already
@@ -886,12 +780,12 @@ def test_a_competing_writer_making_the_requested_change_is_not_our_success(
                 "name": RESOURCE, "description": contested,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
         stored = gateway.resource(PROFILE, RESOURCE)
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "conflict"
+    error = envelope(result)
+    assert error["code"] == "conflict"
     assert len(puts) == 1
     assert stored["description"] == contested, "the value is present, but not from this call"
     assert gateway.signature(PROFILE, RESOURCE) != before
@@ -926,12 +820,12 @@ def test_an_ambiguous_dispatch_whose_read_back_matches_is_never_a_success(
                 "name": RESOURCE, "description": contested,
             })
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
         stored = gateway.resource(PROFILE, RESOURCE)
-        puts = _put_requests(gateway)
+        puts = write_requests(gateway, "PUT")
 
-    envelope = _envelope(result)
-    assert envelope["code"] == "outcome_unknown"
+    error = envelope(result)
+    assert error["code"] == "outcome_unknown"
     assert len(puts) == 1
     assert stored["description"] == contested, "the value is present, but unattributable"
     assert gateway.signature(PROFILE, RESOURCE) != before
@@ -960,44 +854,7 @@ def test_a_denied_destructive_tool_records_its_declared_flag(tmp_path: Path) -> 
         with TestClient(server.http_app()) as http:
             denied = _Session(http, "reader-secret").call("destructive_probe", {})
 
-        rows = _audit_rows(tmp_path)
+        rows = audit_rows(tmp_path)
 
-    assert _envelope(denied)["code"] == "permission_denied"
+    assert envelope(denied)["code"] == "permission_denied"
     assert [(row["tool"], row["destructive"]) for row in rows] == [("destructive_probe", 1)]
-
-
-def _operation_record(tmp_path: Path, correlation_id: str) -> tuple[str, str, str | None] | None:
-    """The D19 operation record one Tool call left behind."""
-
-    async def scenario() -> tuple[str, str, str | None] | None:
-        db = Database("state", tmp_path / "state.db", STATE_DDL)
-        await db.open()
-        try:
-            record = await OperationRecordStore(db).fetch(correlation_id)
-            if record is None:
-                return None
-            return (record.tool, record.outcome, record.error_code)
-        finally:
-            await db.close()
-
-    return asyncio.run(scenario())
-
-
-def _audit_rows(tmp_path: Path) -> list[dict[str, Any]]:
-    return asyncio.run(_read_audit_rows(tmp_path))
-
-
-async def _read_audit_rows(tmp_path: Path) -> list[dict[str, Any]]:
-    columns = (
-        "correlation_id", "tool", "actor_key", "operation_class", "destructive", "phase", "outcome",
-        "error_code", "target_id", "safe_fields_json",
-    )
-    db = Database("audit", tmp_path / "audit.db", AUDIT_DDL)
-    await db.open()
-    try:
-        rows = await db.run(
-            lambda conn: conn.execute(f"SELECT {', '.join(columns)} FROM audit_log ORDER BY seq").fetchall()
-        )
-        return [dict(zip(columns, row, strict=True)) for row in rows]
-    finally:
-        await db.close()

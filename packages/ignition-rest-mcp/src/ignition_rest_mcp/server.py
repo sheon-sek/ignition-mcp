@@ -40,6 +40,9 @@ from ignition_rest_mcp.models import (
     ConfigResourceNamesResult,
     ConfigResourceSearchResult,
     ConfigResourceUpdateResult,
+    ConfigResourceCreateResult,
+    ConfigResourceDeleteResult,
+    ConfigResourceRenameResult,
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
@@ -62,6 +65,9 @@ from ignition_rest_mcp.services.artifacts import (
     operation_diagnose as operation_diagnose_service,
 )
 from ignition_rest_mcp.services.config_mutation import (
+    config_resource_create as config_resource_create_service,
+    config_resource_delete as config_resource_delete_service,
+    config_resource_rename as config_resource_rename_service,
     config_resource_update as config_resource_update_service,
 )
 from ignition_rest_mcp.services.gateway import (
@@ -385,6 +391,103 @@ def create_server(settings: Settings) -> FastMCP:
 
         return await _invoke(
             "config_resource_update", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_create",
+        description=(
+            "Create one Gateway configuration resource through Native REST (deployment-gated; "
+            "refuses Refused resource types; an existing target is a conflict)."
+        ),
+        output_schema=ConfigResourceCreateResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_create"},
+    )
+    async def config_resource_create(
+        resourceType: str,
+        name: str = "",
+        collection: str = "",
+        config: dict[str, Any] | None = None,
+        enabled: bool | None = None,
+        description: str | None = None,
+    ) -> ConfigResourceCreateResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceCreateResult:
+            return await config_resource_create_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                config=config, enabled=enabled, description=description,
+            )
+
+        return await _invoke(
+            "config_resource_create", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_delete",
+        description=(
+            "Delete one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused "
+            "resource types)."
+        ),
+        output_schema=ConfigResourceDeleteResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.config", "capability:config_resource_delete",
+        },
+    )
+    async def config_resource_delete(
+        resourceType: str,
+        expectedSignature: str,
+        name: str = "",
+        collection: str = "",
+    ) -> ConfigResourceDeleteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceDeleteResult:
+            return await config_resource_delete_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                expected_signature=expectedSignature,
+            )
+
+        return await _invoke(
+            "config_resource_delete", "FAST", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_rename",
+        description=(
+            "Rename one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused "
+            "resource types; an occupied destination is a conflict)."
+        ),
+        output_schema=ConfigResourceRenameResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_rename"},
+    )
+    async def config_resource_rename(
+        resourceType: str,
+        expectedSignature: str,
+        newName: str,
+        name: str = "",
+        collection: str = "",
+    ) -> ConfigResourceRenameResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceRenameResult:
+            return await config_resource_rename_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, new_name=newName, collection=collection,
+                expected_signature=expectedSignature,
+            )
+
+        return await _invoke(
+            "config_resource_rename", "FAST", flow,
             permission_class="CONFIG", destructive=False, audited=True,
         )
 
@@ -777,6 +880,9 @@ DEPLOYMENT_GATED_TOOLS = {
     "project_export": "sensitive_exports_enabled",
     "tag_config_export": "sensitive_exports_enabled",
     "config_resource_update": "config_mutation_enabled",
+    "config_resource_create": "config_mutation_enabled",
+    "config_resource_delete": "config_mutation_enabled",
+    "config_resource_rename": "config_mutation_enabled",
 }
 
 
@@ -790,6 +896,9 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "config_resource_list": "config_resource_list",
         "config_resource_get": "config_resource_get",
         "config_resource_update": "config_resource_update",
+        "config_resource_create": "config_resource_create",
+        "config_resource_delete": "config_resource_delete",
+        "config_resource_rename": "config_resource_rename",
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",

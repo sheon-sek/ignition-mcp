@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:config-resource-delete:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resourceType": {
+      "type": "string",
+      "minLength": 3
+    },
+    "name": {
+      "type": "string"
+    },
+    "collection": {
+      "type": "string"
+    },
+    "present": {
+      "description": "The bounded Observed state a delete leaves: false when the read-back found no resource at the Target, which is what a successful delete had to observe.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "correlationId",
+    "resourceType",
+    "name",
+    "collection",
+    "present"
+  ]
+}

@@ -1,14 +1,15 @@
 """D03 request-schema validation for generic config writes.
 
 A generic config write may only send what the target Gateway documents. The D04
-capability snapshot therefore keeps, for every resource type with an update route,
-a **self-contained** JSON Schema for one PUT change item: the type's documented
-item schema with every internal ``$ref`` bundled into ``$defs``. Bundling at
-refresh time keeps the snapshot small, needs no document registry at call time and
-holds no reference to the (multi-megabyte) OpenAPI document, while a self-reference
-stays a reference to ``$defs`` and so remains resolvable.
+capability snapshot therefore keeps, for every resource type with a collection write
+route (``POST`` to create, ``PUT`` to modify) and for the rename route, a
+**self-contained** JSON Schema: the type's documented change-item schema (or an
+operation's request body) with every internal ``$ref`` bundled into ``$defs``.
+Bundling at refresh time keeps the snapshot small, needs no document registry at
+call time and holds no reference to the (multi-megabyte) OpenAPI document, while a
+self-reference stays a reference to ``$defs`` and so remains resolvable.
 
-A type whose request schema cannot be bundled gets no update route in the snapshot:
+A route whose request schema cannot be bundled is withheld from the snapshot:
 without the schema there is nothing to validate the write against, and sending an
 unvalidated change is exactly what D03 forbids. Validation of a bundled schema
 cannot hit an unresolvable reference, and a test asserts that for every committed
@@ -25,29 +26,52 @@ COLLECTION_PREFIX = "/data/api/v1/resources/"
 JSON_CONTENT_TYPE = "application/json"
 DEFS_KEY = "$defs"
 
+#: The collection write methods, each of which documents an array of change items.
+COLLECTION_WRITE_METHODS = ("post", "put")
+
 #: Guard against a pathological document: bundling is bounded work, and a schema
-#: that exceeds the bound is treated as unusable (the type then has no update route).
+#: that exceeds the bound is treated as unusable (the type then has no write route).
 MAX_BUNDLED_NODES = 200_000
 
 
-def bundle_update_item_schema(
-    document: dict[str, Any], resource_type: str,
+def bundle_collection_item_schema(
+    document: dict[str, Any], resource_type: str, method: str,
 ) -> Mapping[str, Any] | None:
-    """The self-contained, **deeply immutable** PUT change-item schema, or ``None``.
+    """The self-contained, **deeply immutable** change-item schema of one collection
+    route (``method`` is ``post`` to create or ``put`` to modify), or ``None``.
 
     ``None`` means "no usable schema": the route is absent, the request body is not
     documented as JSON, or a reference could not be resolved inside the document.
+    """
+
+    if method not in COLLECTION_WRITE_METHODS:
+        raise ValueError(f"not a collection write method: {method}")
+    return _bundle(document, _documented_item_schema(document, resource_type, method))
+
+
+def bundle_operation_body_schema(
+    document: dict[str, Any], operation_path: str, method: str,
+) -> Mapping[str, Any] | None:
+    """The self-contained, **deeply immutable** request-body schema of one documented
+    operation, or ``None``. Used for the rename route, whose body is an object rather
+    than an array of change items."""
+
+    return _bundle(document, _documented_body_schema(document, operation_path, method))
+
+
+def _bundle(document: dict[str, Any], node: dict[str, Any] | None) -> Mapping[str, Any] | None:
+    """Bundle one documented schema into a frozen, self-contained one.
+
     The result is frozen (mappings become read-only views, arrays become tuples)
     because it lives inside the D04 snapshot: a caller holding the snapshot must not
     be able to change the rules a later write is validated against.
     """
 
-    item = _documented_item_schema(document, resource_type)
-    if item is None:
+    if node is None:
         return None
     bundler = _Bundler(document)
     try:
-        bundled = bundler.bundle(item)
+        bundled = bundler.bundle(node)
     except (_UnresolvableReference, _TooLarge):
         return None
     if not isinstance(bundled, dict):
@@ -56,7 +80,7 @@ def bundle_update_item_schema(
     if bundler.defs:
         result[DEFS_KEY] = bundler.defs
     frozen = _freeze(result)
-    assert isinstance(frozen, Mapping)  # a change-item schema is an object
+    assert isinstance(frozen, Mapping)  # a bundled schema is an object
     return frozen
 
 
@@ -70,29 +94,56 @@ def _freeze(node: Any) -> Any:
     return node
 
 
-def _documented_item_schema(document: dict[str, Any], resource_type: str) -> dict[str, Any] | None:
-    paths = document.get("paths")
-    if not isinstance(paths, dict):
+def _documented_item_schema(
+    document: dict[str, Any], resource_type: str, method: str,
+) -> dict[str, Any] | None:
+    """One change item of a resource type's documented collection write body."""
+
+    operation = _documented_operation(document, f"{COLLECTION_PREFIX}{resource_type}", method)
+    if operation is None:
         return None
-    operation = paths.get(f"{COLLECTION_PREFIX}{resource_type}")
-    if not isinstance(operation, dict):
-        return None
-    put = operation.get("put")
-    if not isinstance(put, dict):
-        return None
-    content = ((put.get("requestBody") or {}).get("content") or {})
-    if not isinstance(content, dict):
-        return None
-    media = content.get(JSON_CONTENT_TYPE)
-    if not isinstance(media, dict):
-        return None
-    schema = media.get("schema")
+    schema = _documented_schema(document, operation)
     if not isinstance(schema, dict) or schema.get("type") != "array":
         return None
     item = schema.get("items")
     if not isinstance(item, dict):
         return None
     return {str(key): value for key, value in item.items()}
+
+
+def _documented_body_schema(
+    document: dict[str, Any], operation_path: str, method: str,
+) -> dict[str, Any] | None:
+    """The documented JSON request body of one operation, if it declares one."""
+
+    operation = _documented_operation(document, operation_path, method)
+    if operation is None:
+        return None
+    schema = _documented_schema(document, operation)
+    return {str(key): value for key, value in schema.items()} if isinstance(schema, dict) else None
+
+
+def _documented_operation(
+    document: dict[str, Any], operation_path: str, method: str,
+) -> dict[str, Any] | None:
+    paths = document.get("paths")
+    if not isinstance(paths, dict):
+        return None
+    operation = paths.get(operation_path)
+    if not isinstance(operation, dict):
+        return None
+    entry = operation.get(method)
+    return entry if isinstance(entry, dict) else None
+
+
+def _documented_schema(document: dict[str, Any], operation: dict[str, Any]) -> Any:
+    content = ((operation.get("requestBody") or {}).get("content") or {})
+    if not isinstance(content, dict):
+        return None
+    media = content.get(JSON_CONTENT_TYPE)
+    if not isinstance(media, dict):
+        return None
+    return media.get("schema")
 
 
 class _UnresolvableReference(Exception):
