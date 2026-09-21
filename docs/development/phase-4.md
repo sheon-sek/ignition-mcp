@@ -292,6 +292,33 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     verification reads the value quality rather than the probe's label, and the
     workflow gives the stage one bounded Gateway restart — the recorded heal —
     before failing the job.
+  - **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
+    Gateway G4a` run
+    [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)
+    **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}` — the gate passed on its first attempt on both rows
+    (`providerHandlerReadQuality` = `Bad_NotFound`, no import retry, one policy
+    read with `policyReadRepairImports: 0` and a verified gate, and no use of the
+    restart heal), and every ticket #7/#8 live case still holds with the changed
+    handlers (allowlisted batch 3 succeeded + 1 Bad, sibling denial at the segment
+    boundary, Preflight that executed nothing, two audit rows with the Service
+    identity, the Alarm shelve + Observed state, the policy-cap refusal).
+    CI, Phase 0 G0, Phase 3 G3 and the REST mutation workflow are green on the
+    same head. The first push of the fix (head `5d039e0`, runs
+    [35667242361](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667242361)
+    / [35667242363](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667242363))
+    failed both rows of G4a *and* G4b in `policy-provision`: the new gate called
+    the probe Tool without opening its MCP session, and the Module answers
+    `tools/call` with `Session is required for method: tools/call` (HTTP 400) —
+    61 attempts, none served. That is fixed, and a test now drives the gate
+    against an endpoint that enforces the same rule; the recorded Gateway fake
+    does not model the session requirement, which is why the local rehearsal could
+    not catch it (recorded as a residual below). The `Phase 4 Live Gateway G4b`
+    rows are red on that head and on the `p4/runtime` head (`28622ca`,
+    `0b50a52`) for a #10 reason — its `tag-update` stage expects `not_found` for
+    `[default]IgnitionMCP_CI/Missing` but the live Gateway answers
+    `conflict`/`fingerprintMismatch` with an observed fingerprint — so that row is
+    not attributable to this fix's Runtime-plane changes.
 
 ### Ticket #8: Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
 
@@ -568,6 +595,16 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   refusal (a bundle has no shared modules), and the shared contract text is
   `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
   a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
+- **Ticket #7 — the recorded Gateway fake does not model the Module's MCP session
+  requirement.** `tests/harness/recorded_gateway.py` answers `tools/list` and
+  `tools/call` without an `Mcp-Session-Id`, while the Module refuses them with
+  HTTP 400 until the caller has initialized — which is how the fix's first live
+  round failed both G4a rows in `policy-provision` after the local rehearsal and
+  the stage's own test were green. The gate now opens its session and a test
+  enforces the rule against a small endpoint, but the fake still cannot catch this
+  class of bug for any other caller. **For the owner:** accept, or model the
+  session in the fake (it needs an `Mcp-Session-Id` response header on
+  `initialize` and a 400 for a session-less request).
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
   immediate rerun ([run 35653162977](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653162977),
