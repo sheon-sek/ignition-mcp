@@ -285,7 +285,7 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - Local rehearsal: `tests/harness/phase4-live/rehearse_local.py` — all nine stages
   against the recorded Gateway, `drift: {}`.
 - Live (run
-  [35660890483](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890483),
+  [35661498161](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498161),
   workflow `Phase 4 Live Gateway G4a`, both rows green with `drift: {}` — 8.3.8
   `2026071409` required and 8.3.9 `2026082511` candidate; the first
   characterization of the same cases is run
@@ -326,12 +326,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   with provenance recorded and `__ALARM_ROOT__` / `__CORRELATION__` templated
   (both are run-scoped; the fake substitutes the run's values). The two Ticket #6
   probe recordings stay byte-frozen.
-- Frozen gates, green on the same head (`fec1d1b`): CI
-  [35660890362](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890362),
+- Frozen gates, green on the same head that records this evidence (`c68597f`): CI
+  [35661498251](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498251),
   Phase 0 G0
-  [35660890375](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890375),
-  and on the previous head Phase 3 G3
-  [35659773888](https://github.com/sheon-sek/ignition-mcp/actions/runs/35659773888) —
+  [35661498193](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498193),
+  Phase 3 G3
+  [35661498182](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498182) —
   the Runtime `readonly` inventory is unchanged by this ticket, so the G1–G3 rows
   keep their exact 13-Tool read inventory.
 
