@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "states": [
+    "PREPARING",
+    "BASELINE_CAPTURED",
+    "CANDIDATE_VALIDATED",
+    "BACKUP_PERSISTED",
+    "CONCURRENCY_VERIFIED",
+    "IMPORT_SENT",
+    "VERIFYING",
+    "COMMITTED"
+  ],
+  "terminalStates": [
+    "COMMITTED",
+    "NO_CHANGE",
+    "CONFLICTED",
+    "FAILED_PRE_IMPORT",
+    "NOT_APPLIED",
+    "OUTCOME_UNKNOWN",
+    "RECOVERY_REQUIRED"
+  ],
+  "possiblyDispatchedStates": ["IMPORT_SENT", "VERIFYING"],
+  "recoveryLockReleasedOn": ["COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"],
+  "recoveryLockHeldOn": ["OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"],
+  "automaticRollback": false,
+  "automaticReplay": false,
+  "automaticMerge": false
+}

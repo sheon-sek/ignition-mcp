@@ -1,13 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "urn:ignition-mcp:shared:operation-record",
+  "$id": "urn:ignition-mcp:rest:operation-diagnose:output",
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "correlationId": {"$ref": "correlation.schema.json"},
+    "correlationId": {"type": "string", "minLength": 1},
     "tool": {"type": "string", "minLength": 1},
     "outcome": {"enum": ["in_progress", "succeeded", "failed", "outcome_unknown", "cancelled", "interrupted"]},
-    "errorCode": {"type": ["string", "null"]},
+    "errorCode": {
+      "type": ["string", "null"],
+      "enum": [
+        null,
+        "invalid_argument",
+        "unsupported_capability",
+        "permission_denied",
+        "operation_disabled",
+        "not_found",
+        "conflict",
+        "limit_exceeded",
+        "rate_limited",
+        "timeout",
+        "outcome_unknown",
+        "gateway_unavailable",
+        "upstream_error",
+        "schema_mismatch",
+        "internal_error"
+      ]
+    },
     "startedAt": {"type": "string", "minLength": 1},
     "finishedAt": {"type": ["string", "null"]},
     "phases": {
@@ -27,5 +46,16 @@
     "downstreamCorrelationId": {"type": ["string", "null"]},
     "auditResultMissing": {"type": "boolean"}
   },
-  "required": ["correlationId", "tool", "outcome", "errorCode"]
+  "required": [
+    "correlationId",
+    "tool",
+    "outcome",
+    "errorCode",
+    "startedAt",
+    "finishedAt",
+    "phases",
+    "transactionId",
+    "downstreamCorrelationId",
+    "auditResultMissing"
+  ]
 }
