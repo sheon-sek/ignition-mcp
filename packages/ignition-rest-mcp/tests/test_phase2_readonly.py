@@ -121,17 +121,17 @@ def test_openapi_resource_catalog_and_readonly_routing() -> None:
             with pytest.raises(TypeError):
                 snapshot.resource_types["x"] = snapshot.resource_types["ignition/system-properties"]  # type: ignore[index]
 
-            context = OperationContext.read("config_resource_search", "test")
+            context = OperationContext.start("config_resource_search", "test", "FAST")
             found = config_resource_search(registry, context, query="system", limit=100, offset=0)
             assert [item.resourceType for item in found.items] == ["ignition/system-properties"]
             assert found.items[0].singleton is True
             assert found.items[0].supportsNames is False
 
-            project_context = OperationContext.read("project_list", "test")
+            project_context = OperationContext.start("project_list", "test", "FAST")
             projects = await project_list(client, registry, project_context, search="", limit=2, offset=0)
             assert [item.name for item in projects.items] == ["Demo"]
 
-            get_context = OperationContext.read("config_resource_get", "test")
+            get_context = OperationContext.start("config_resource_get", "test", "FAST")
             normal = await config_resource_get(
                 client,
                 registry,
@@ -188,7 +188,7 @@ def test_collection_budget_rejects_out_of_range(limit: int, offset: int) -> None
         registry = CapabilityRegistry(client)
         try:
             await registry.refresh()
-            context = OperationContext.read("project_list", "test")
+            context = OperationContext.start("project_list", "test", "FAST")
             with pytest.raises(GatewayError, match="invalid_argument"):
                 await project_list(client, registry, context, search="", limit=limit, offset=offset)
         finally:
@@ -283,7 +283,7 @@ def test_collection_response_mismatch_marks_registry_stale_without_replay(
                 await project_list(
                     client,
                     registry,
-                    OperationContext.read("project_list", "test"),
+                    OperationContext.start("project_list", "test", "FAST"),
                     search="",
                     limit=1,
                     offset=0,
@@ -324,7 +324,7 @@ def test_pydantic_response_validation_is_schema_mismatch_and_reconciles_once() -
                 await alarm_pipeline_list(
                     client,
                     registry,
-                    OperationContext.read("alarm_pipeline_list", "test"),
+                    OperationContext.start("alarm_pipeline_list", "test", "FAST"),
                     search="",
                     limit=1,
                     offset=0,

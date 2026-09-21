@@ -1,7 +1,8 @@
-"""Caller-facing trusted-internal authentication."""
+"""Caller authentication wiring and safe principal keys (D07/D07-A/D18)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import hmac
 
 from fastmcp.server.auth import AccessToken, TokenVerifier
@@ -9,6 +10,9 @@ from fastmcp.server.auth.providers.jwt import JWTVerifier
 from fastmcp.server.dependencies import get_access_token
 
 from ignition_rest_mcp.config import Settings
+
+READ_SCOPE = "ignition.read"
+ADMIN_SCOPE = "ignition.admin"
 
 
 class ConstantTimeStaticTokenVerifier(TokenVerifier):
@@ -55,8 +59,46 @@ def build_auth(settings: Settings) -> TokenVerifier | None:
     raise RuntimeError("validated auth configuration is inconsistent")
 
 
-def operation_actor(settings: Settings) -> str:
+@dataclass(frozen=True, slots=True)
+class Principal:
+    """A safe principal key plus verified scopes. Never a secret, never loggable as one."""
+
+    key: str
+    scopes: frozenset[str]
+    auth_mode: str
+
+    def has_scope(self, scope: str) -> bool:
+        # D07: scopes have no implicit hierarchy; membership is the only rule.
+        return scope in self.scopes
+
+
+def current_principal(settings: Settings) -> Principal:
+    """Derive the safe principal key from the *just-verified* access token, if any.
+
+    ``auth=none`` and ``static-token`` are each a single trust domain (D18/D07-A):
+    the configured service identity and the static-token client respectively.
+    """
+
     token = get_access_token()
-    if token is not None:
-        return token.subject or token.client_id
-    return settings.service_identity
+    if settings.auth_mode == "jwt" and token is not None:
+        subject = token.subject or token.client_id
+        return Principal(
+            key=f"jwt:{subject}",
+            scopes=frozenset(token.scopes),
+            auth_mode="jwt",
+        )
+    if settings.auth_mode == "static-token" and token is not None:
+        return Principal(
+            key=f"static-token:{token.client_id}",
+            scopes=frozenset(token.scopes),
+            auth_mode="static-token",
+        )
+    if settings.auth_mode == "none":
+        return Principal(
+            key=f"none:{settings.service_identity}",
+            scopes=frozenset({READ_SCOPE}),
+            auth_mode="none",
+        )
+    # Unauthenticated under an authentication mode must never happen through the
+    # MCP middleware; fail to a scope-less identity rather than a trusted one.
+    return Principal(key="unauthenticated", scopes=frozenset(), auth_mode=settings.auth_mode)

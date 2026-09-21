@@ -310,3 +310,11 @@ Phase 3 ends at G3. Phase 4 starts only on a new user-directed feature branch.
 - **Owner-accepted deviation (2026-09-21): `phase3-live` has no protection rules.** D23 places L5 mutation jobs in a *protected* environment. The owner reviewed the environment and chose to keep it without required reviewers, wait timer or deployment-branch restriction (repository is public; admins may bypass). Compensating controls that remain mandatory: the `pull_request` trusted-repo job guard (no fork execution), no repository/environment secrets consumed by the G3 job, localhost/compose-network-only Gateway endpoints, CI-marker + expected-Gateway-identity check and run-unique disposable project immediately before any import, and fail-closed on any missing guard. G3 evidence must record this deviation; adding required reviewers later needs no plan change.
 
 - **Deferred to Phase 4 (not a Phase 3 blocker):** how `static-token` and `auth=none` deployments may obtain `ignition.config` / `ignition.control` / `ignition.admin` for mutations. Phase 3 keeps them read-only; D07 is unchanged.
+
+## Execution log
+
+Commit SHAs are recorded by the next slice's commit (a commit cannot contain its own SHA); Slice 12 fills any final row.
+
+| Slice | Commit | Validation |
+|---|---|---|
+| 0 | `a9f7110` | full validation suite green |

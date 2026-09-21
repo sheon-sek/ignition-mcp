@@ -8,7 +8,7 @@ import httpx
 import pytest
 from fastmcp import Client
 
-from ignition_rest_mcp.auth import build_auth, operation_actor
+from ignition_rest_mcp.auth import build_auth, current_principal
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import ConfigurationError
@@ -112,7 +112,7 @@ def test_singleflight_and_waiter_cancellation() -> None:
 @pytest.mark.parametrize("mode", ["network", "503", "malformed", "missing-fields"])
 def test_diagnose_does_not_claim_authentication_on_failure(mode: str) -> None:
     async def scenario() -> None:
-        context = OperationContext.read("gateway_diagnose", "verified-subject")
+        context = OperationContext.start("gateway_diagnose", "verified-subject", "FAST")
 
         async def handler(request: httpx.Request) -> httpx.Response:
             assert request.headers["X-Correlation-ID"] == context.correlation_id
@@ -137,7 +137,8 @@ def test_diagnose_does_not_claim_authentication_on_failure(mode: str) -> None:
 
 def test_secured_configuration_and_verified_actor(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = _settings(deployment_profile="secured", auth_mode="jwt", jwt_jwks_uri="https://idp/keys",
-                         jwt_issuer="https://idp", jwt_audience="ignition-rest")
+                         jwt_issuer="https://idp", jwt_audience="ignition-rest",
+                         data_dir="/var/lib/ignition-mcp-tests")
     settings.validate()
     assert build_auth(settings) is not None
     with pytest.raises(ConfigurationError):
@@ -148,7 +149,7 @@ def test_secured_configuration_and_verified_actor(monkeypatch: pytest.MonkeyPatc
     monkeypatch.setattr("ignition_rest_mcp.auth.get_access_token", lambda: AccessToken(
         token="caller-secret", client_id="client", subject="subject", scopes=["ignition.read"],
     ))
-    assert operation_actor(settings) == "subject"
+    assert current_principal(settings).key == "jwt:subject"
 
 
 @pytest.mark.parametrize("change", ["valid", "expired", "no-expiry", "wrong-audience", "wrong-issuer", "admin-only"])
@@ -180,7 +181,8 @@ def test_jwt_signature_claims_and_scope(change: str) -> None:
         claims["scope"] = "ignition.admin"
     token = jwt.encode({"alg": "RS256"}, claims, RSAKey.import_key(pem))
     settings = _settings(deployment_profile="secured", auth_mode="jwt", jwt_public_key=public,
-                         jwt_issuer="issuer", jwt_audience="audience")
+                         jwt_issuer="issuer", jwt_audience="audience",
+                         data_dir="/var/lib/ignition-mcp-tests")
     settings.validate()
     verifier = build_auth(settings)
     assert verifier is not None

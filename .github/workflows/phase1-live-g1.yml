@@ -151,6 +151,8 @@ jobs:
         run: |
           set -euo pipefail
           uv sync --locked --package ignition-rest-mcp
+          mkdir -p "$RUNNER_TEMP/ignition-mcp-data"
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
           IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
           IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
           IGNITION_MCP_DEPLOYMENT_PROFILE=development \

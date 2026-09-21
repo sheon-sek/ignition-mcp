@@ -7,6 +7,8 @@ import ipaddress
 import os
 from urllib.parse import urlparse
 
+TEMP_FILESYSTEM_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
+
 
 class ConfigurationError(ValueError):
     """Invalid or unsafe server configuration."""
@@ -27,6 +29,17 @@ class Settings:
     request_timeout_seconds: float
     structured_output_limit_bytes: int
     log_format: str
+    data_dir: str
+    tool_timeout_seconds: float
+    query_timeout_seconds: float
+    artifact_timeout_seconds: float
+    audit_max_rows: int
+    audit_max_age_days: int
+    operation_record_max_rows: int
+    operation_record_max_age_hours: int
+    retention_interval_seconds: float
+    retention_batch_rows: int
+    storage_probe_interval_seconds: float
     jwt_jwks_uri: str | None = None
     jwt_public_key: str | None = None
     jwt_issuer: str | None = None
@@ -50,6 +63,19 @@ class Settings:
                 os.getenv("IGNITION_MCP_STRUCTURED_OUTPUT_LIMIT_BYTES", "262144")
             ),
             log_format=os.getenv("IGNITION_MCP_LOG_FORMAT", "auto").lower(),
+            data_dir=os.getenv("IGNITION_MCP_DATA_DIR", ""),
+            tool_timeout_seconds=float(os.getenv("IGNITION_MCP_TOOL_TIMEOUT_SECONDS", "30")),
+            query_timeout_seconds=float(os.getenv("IGNITION_MCP_QUERY_TIMEOUT_SECONDS", "30")),
+            artifact_timeout_seconds=float(os.getenv("IGNITION_MCP_ARTIFACT_TIMEOUT_SECONDS", "120")),
+            audit_max_rows=int(os.getenv("IGNITION_MCP_AUDIT_MAX_ROWS", "50000")),
+            audit_max_age_days=int(os.getenv("IGNITION_MCP_AUDIT_MAX_AGE_DAYS", "90")),
+            operation_record_max_rows=int(os.getenv("IGNITION_MCP_OPERATION_RECORD_MAX_ROWS", "10000")),
+            operation_record_max_age_hours=int(
+                os.getenv("IGNITION_MCP_OPERATION_RECORD_MAX_AGE_HOURS", "72")
+            ),
+            retention_interval_seconds=float(os.getenv("IGNITION_MCP_RETENTION_INTERVAL_SECONDS", "300")),
+            retention_batch_rows=int(os.getenv("IGNITION_MCP_RETENTION_BATCH_ROWS", "500")),
+            storage_probe_interval_seconds=float(os.getenv("IGNITION_MCP_STORAGE_PROBE_INTERVAL_SECONDS", "30")),
             jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
             jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
             jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
@@ -101,7 +127,43 @@ class Settings:
             and not _is_loopback(self.bind_host)
         ):
             raise ConfigurationError("Unauthenticated non-loopback binding requires trusted-internal profile")
+        self._validate_storage()
 
+    def _validate_storage(self) -> None:
+        # D17/D18: the persistent data directory is mandatory in every profile.
+        if not self.data_dir or not self.data_dir.strip():
+            raise ConfigurationError("IGNITION_MCP_DATA_DIR is required in every deployment profile")
+        if not self.data_dir.startswith("/"):
+            raise ConfigurationError("IGNITION_MCP_DATA_DIR must be an absolute path")
+        if self.deployment_profile in {"trusted-internal", "secured"}:
+            normalized = os.path.normpath(self.data_dir)
+            for prefix in TEMP_FILESYSTEM_PREFIXES:
+                if normalized == prefix or normalized.startswith(prefix + "/"):
+                    raise ConfigurationError(
+                        f"IGNITION_MCP_DATA_DIR must not live on a temporary filesystem path ({prefix}) "
+                        "in trusted-internal or secured deployments"
+                    )
+        if not 0 < self.tool_timeout_seconds <= 30:
+            raise ConfigurationError("Tool (FAST) timeout must be >0 and <=30 seconds")
+        if not 0 < self.query_timeout_seconds <= 120:
+            raise ConfigurationError("QUERY timeout must be >0 and <=120 seconds")
+        if not 0 < self.artifact_timeout_seconds <= 300:
+            raise ConfigurationError("ARTIFACT timeout must be >0 and <=300 seconds")
+        if self.audit_max_rows < 1 or self.operation_record_max_rows < 1:
+            raise ConfigurationError("Audit and operation-record maximum row counts must be >=1")
+        if self.audit_max_age_days < 1 or self.operation_record_max_age_hours < 1:
+            raise ConfigurationError("Audit and operation-record retention ages must be >=1")
+        if self.retention_interval_seconds <= 0 or self.storage_probe_interval_seconds <= 0:
+            raise ConfigurationError("Retention and storage-probe intervals must be positive")
+        if not 0 < self.retention_batch_rows <= 10_000:
+            raise ConfigurationError("Retention batch size must be >0 and <=10000 rows")
+
+    def budget_deadline_seconds(self, budget_class: str) -> float:
+        return {
+            "FAST": self.tool_timeout_seconds,
+            "QUERY": self.query_timeout_seconds,
+            "ARTIFACT": self.artifact_timeout_seconds,
+        }[budget_class]
 
     @property
     def resolved_log_format(self) -> str:
