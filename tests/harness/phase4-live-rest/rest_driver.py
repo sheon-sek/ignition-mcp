@@ -31,7 +31,14 @@ Live cases (tickets #14, #15 and #16):
   marker entry the archive held, re-importing that content is a ``NO_CHANGE``, the
   pre-commit fingerprint is a stale-token ``conflict``, a Project outside the Target
   allowlist is ``permission_denied``, and an archive owned by another principal is
-  ``not_found``.
+  ``not_found``;
+- an Alarm Notification Pipeline cancel (#18) is refused for the config credential
+  (the Tool's effect is CONTROL), for a pipeline the Target allowlist does not name,
+  and for a path that is a prefix of — or under — the allowlisted one (D30 §6: exact
+  paths, never prefixes); both inputs are bounded; and a pipeline that holds no run for
+  the alarm event is a ``not_found`` that changes nothing. A fresh CI Gateway serves no
+  pipeline runs, so the dispatched-and-verified path is proven by the unit fixture and
+  the runbook records the limitation.
 
 The Project cases need the D16 writer enabled (``IGNITION_MCP_PROJECT_WRITER_ENABLED``,
 ``IGNITION_MCP_GATEWAY_ID``), artifact upload and the sensitive exports this driver
@@ -75,7 +82,16 @@ DELETE_TOOL = "config_resource_delete"
 RENAME_TOOL = "config_resource_rename"
 IMPORT_TOOL = "project_import"
 TAG_IMPORT_TOOL = "tag_config_import"
-MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL)
+ALARM_CANCEL_TOOL = "alarm_pipeline_cancel"
+#: Every Phase 4 CONFIG-class REST Mutation Tool (tickets #14–#17). The CONTROL-class
+#: cancel (#18) needs its own scope, so the two lanes are listed separately: the
+#: config credential must never see the cancel, and the operator credential must never
+#: see these.
+CONFIG_MUTATION_TOOLS = (
+    UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL,
+)
+CONTROL_MUTATION_TOOLS = (ALARM_CANCEL_TOOL,)
+MUTATION_TOOLS = CONFIG_MUTATION_TOOLS + CONTROL_MUTATION_TOOLS
 REFUSED_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
 #: An allowed *singleton* (its documented change item carries no name).
@@ -95,6 +111,18 @@ NOT_ALLOWLISTED_RESOURCE = "MCP_CI_AUDIT_OTHER"
 #: Project the Target allowlist deliberately does not name.
 DEFAULT_PROJECT = "MCP_CI_IMPORT"
 DEFAULT_CONTROL_PROJECT = "MCP_CI_IMPORT_CONTROL"
+
+#: The pipeline cancel cases (#18): the exact pipeline path the Target allowlist names
+#: (inside the Project the import cases provision, so it is run-unique), a second
+#: pipeline it deliberately does not name, and an Alarm Event identifier no run holds.
+#: A freshly commissioned Gateway serves no notification pipeline runs — the Phase 2
+#: live probe recorded exactly that — so ``no-run`` is the state the live cases prove.
+DEFAULT_PIPELINE = f"project:{DEFAULT_PROJECT}:/pipeline:MCP_CI_Notify"
+DEFAULT_CONTROL_PIPELINE = f"project:{DEFAULT_CONTROL_PROJECT}:/pipeline:MCP_CI_Notify"
+DEFAULT_ALARM_EVENT_ID = "00000000-0000-4000-8000-000000000000"
+#: The D10 bounds this driver asserts against, from the Tool's own contract.
+MAX_PIPELINE_PATH_LENGTH = 512
+MAX_ALARM_EVENT_ID_LENGTH = 128
 #: The candidate's edit. G3's live runs proved the Gateway rewrites ``project.json`` on
 #: import (docs: tests/harness/phase3-live/driver.py), so a candidate that changes that
 #: file — or that adds an entry the Gateway does not recognise as a resource — does not
@@ -134,7 +162,10 @@ READ_INVENTORY = frozenset({
     "project_export",
     "tag_config_export",
 })
-GATE_ON_INVENTORY = READ_INVENTORY | set(MUTATION_TOOLS)
+GATE_ON_INVENTORY = READ_INVENTORY | set(CONFIG_MUTATION_TOOLS)
+#: The CONTROL credential's inventory: the cancel Tool appears for it and none of the
+#: CONFIG-class Tools do (D07: discovery follows the credential's scopes).
+OPERATOR_INVENTORY = READ_INVENTORY | set(CONTROL_MUTATION_TOOLS)
 
 #: D30 §7: a Target outside the Target allowlist is `permission_denied` for a Phase 4
 #: Mutation. Exactly one code is accepted; the driver must not tolerate the frozen
@@ -218,6 +249,37 @@ def structured(result: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(body, dict):
         raise DriverError("the Tool returned no structuredContent")
     return body
+
+
+def _refusal_code(result: dict[str, Any]) -> Any:
+    """What a call that was expected to be refused actually did.
+
+    A refusal case must fail on the observed value, never on a driver traceback: a
+    result that came back successful — or refused in a shape the envelope reader cannot
+    parse — is recorded as itself and fails the case.
+    """
+
+    if not result.get("isError"):
+        return {"isError": False, "structuredContent": result.get("structuredContent")}
+    try:
+        return _envelope_code(result)
+    except (DriverError, ProbeError):
+        return {"unreadableRefusal": str(result.get("content"))[:160]}
+
+
+async def _pipeline_state(session: "Session", path: str) -> Any:
+    """What the bounded status read serves for one pipeline path.
+
+    The comparison the pipeline cases need: the runs' alarm event ids, or the D06 code
+    the read refused with. Two equal values mean the pipeline did not change.
+    """
+
+    result = await session.call("alarm_pipeline_status", {"path": path, "limit": 100, "offset": 0})
+    if result.get("isError"):
+        return _refusal_code(result)
+    body = result.get("structuredContent")
+    items = body.get("items") if isinstance(body, dict) else None
+    return [item.get("alarmEventId") for item in (items or [])]
 
 
 async def _absent(agent: "Session", resource_type: str, name: str) -> bool:
@@ -606,11 +668,101 @@ async def tag_import_cases(
     return cases, observations
 
 
+async def alarm_pipeline_cancel_cases(
+    *,
+    agent: "Session",
+    operator: "Session",
+    pipeline: str,
+    control_pipeline: str,
+    alarm_event_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The Alarm Notification Pipeline cancel cases (ticket #18).
+
+    A freshly commissioned CI Gateway serves no notification pipeline runs — the Phase 2
+    live probe recorded exactly that, and creating a *run* needs an Alarm Event
+    notifying through a provisioned profile. So the live cases are the ones that hold
+    whatever the Gateway is running: the class gate, the scope-by-effect gate, the exact
+    Target rule (D30 §6), the D10 input bounds, and the bounded pre-dispatch read that
+    refuses a cancel for a run that does not exist. The dispatched-and-verified path
+    itself is fixture-proven in the unit suite; the runbook records the limitation and
+    what would close it.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {
+        "pipelinePath": pipeline, "pipelineControlPath": control_pipeline,
+        "pipelineAlarmEventId": alarm_event_id,
+    }
+    before = await _pipeline_state(agent, pipeline)
+    observations["pipelineStateBefore"] = before
+
+    # D07: this Tool's effect is CONTROL, so the config credential is refused and never
+    # reaches the handler.
+    credential = await agent.call(ALARM_CANCEL_TOOL, {
+        "path": pipeline, "alarmEventId": alarm_event_id,
+    })
+    _check(cases, "pipeline-cancel-config-credential-is-permission-denied", "permission_denied",
+           _refusal_code(credential))
+
+    # D30 §7: a pipeline the Target allowlist does not name.
+    target = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": control_pipeline, "alarmEventId": alarm_event_id,
+    })
+    _check(cases, "pipeline-cancel-non-allowlisted-pipeline-is-permission-denied",
+           TARGET_DENIAL_CODE, _refusal_code(target))
+
+    # D30 §6: exact paths, never prefixes — neither a path under the allowlisted one nor
+    # its own parent may be authorized by that entry.
+    child = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": f"{pipeline}/child", "alarmEventId": alarm_event_id,
+    })
+    _check(cases, "pipeline-cancel-path-under-the-target-is-permission-denied",
+           TARGET_DENIAL_CODE, _refusal_code(child))
+    parent = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": pipeline.rsplit(":/pipeline:", 1)[0], "alarmEventId": alarm_event_id,
+    })
+    _check(cases, "pipeline-cancel-target-parent-path-is-permission-denied",
+           TARGET_DENIAL_CODE, _refusal_code(parent))
+
+    # D10: both inputs are bounded, and the refusal names the requested value.
+    long_path = "project:MCP_CI:/pipeline:" + "P" * (MAX_PIPELINE_PATH_LENGTH + 10)
+    oversize_path = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": long_path, "alarmEventId": alarm_event_id,
+    })
+    _check(cases, "pipeline-cancel-oversize-path-is-limit-exceeded", "limit_exceeded",
+           _refusal_code(oversize_path))
+    longs_event = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": pipeline, "alarmEventId": "e" * (MAX_ALARM_EVENT_ID_LENGTH + 1),
+    })
+    _check(cases, "pipeline-cancel-oversize-event-is-limit-exceeded", "limit_exceeded",
+           _refusal_code(longs_event))
+    blank = await operator.call(ALARM_CANCEL_TOOL, {"path": "   ", "alarmEventId": alarm_event_id})
+    _check(cases, "pipeline-cancel-blank-path-is-invalid-argument", "invalid_argument",
+           _refusal_code(blank))
+
+    # The bounded pre-dispatch read: no run for that alarm event means nothing to cancel,
+    # so the call is refused without a dispatch.
+    no_run = await operator.call(ALARM_CANCEL_TOOL, {
+        "path": pipeline, "alarmEventId": alarm_event_id,
+    })
+    observations["pipelineNoRunResult"] = (
+        no_run.get("structuredContent") if not no_run.get("isError") else _refusal_code(no_run)
+    )
+    _check(cases, "pipeline-cancel-without-a-run-for-the-event-is-not-found", "not_found",
+           _refusal_code(no_run))
+
+    after = await _pipeline_state(agent, pipeline)
+    observations["pipelineStateAfter"] = after
+    _check(cases, "pipeline-cancel-refusals-change-nothing", before, after)
+    return cases, observations
+
+
 async def run_gate_on(
     *,
     rest_url: str,
     reader_token: str,
     agent_token: str,
+    operator_token: str = "",
     resource_type: str,
     allowlisted: str,
     unallowlisted: str,
@@ -626,20 +778,34 @@ async def run_gate_on(
     tag_source_path: str = DEFAULT_TAG_SOURCE_PATH,
     tag_target_path: str = DEFAULT_TAG_TARGET_PATH,
     tag_control_path: str = DEFAULT_TAG_CONTROL_PATH,
+    pipeline: str = DEFAULT_PIPELINE,
+    control_pipeline: str = DEFAULT_CONTROL_PIPELINE,
+    alarm_event_id: str = DEFAULT_ALARM_EVENT_ID,
     raw_dir: Path,
 ) -> dict[str, Any]:
-    """The live cases that need the CONFIG_MUTATION class enabled."""
+    """The live cases that need a mutation class enabled.
+
+    The CONFIG class is enabled for the config credential and the CONTROL class for the
+    operator credential, so this run also proves D07's scope-by-effect rule twice: each
+    credential sees its own Mutation Tools and neither sees the other's.
+    """
 
     cases: list[dict[str, Any]] = []
     observations: dict[str, Any] = {}
     reader = Session(rest_url + "/mcp", reader_token, raw_dir)
     agent = Session(rest_url + "/mcp", agent_token, raw_dir)
+    operator = Session(rest_url + "/mcp", operator_token or agent_token, raw_dir)
     try:
         await reader.initialize()
         await agent.initialize()
+        await operator.initialize()
 
         _check(cases, "inventory-agent-exact", sorted(GATE_ON_INVENTORY), sorted(await agent.tools()))
         _check(cases, "inventory-reader-exact", sorted(READ_INVENTORY), sorted(await reader.tools()))
+        _check(
+            cases, "inventory-operator-exact", sorted(OPERATOR_INVENTORY),
+            sorted(await operator.tools()),
+        )
 
         before = await agent.signature(resource_type, allowlisted)
         observations["signatureBefore"] = before
@@ -933,9 +1099,25 @@ async def run_gate_on(
             tag_observations = {}
         cases.extend(tag_cases)
         observations.update(tag_observations)
+
+        # --------------------------------------------- alarm pipeline cancel (#18)
+        try:
+            pipeline_cases, pipeline_observations = await alarm_pipeline_cancel_cases(
+                agent=agent, operator=operator, pipeline=pipeline,
+                control_pipeline=control_pipeline, alarm_event_id=alarm_event_id,
+            )
+        except (DriverError, ProbeError) as error:
+            pipeline_cases = [{
+                "case": "pipeline-cancel-section", "expected": "no driver error",
+                "observed": str(error), "ok": False,
+            }]
+            pipeline_observations = {}
+        cases.extend(pipeline_cases)
+        observations.update(pipeline_observations)
     finally:
         await reader.aclose()
         await agent.aclose()
+        await operator.aclose()
     return {"mode": "gate-on", "cases": cases, "observations": observations}
 
 
@@ -987,6 +1169,7 @@ async def _run(args: argparse.Namespace) -> int:
     if args.mode == "gate-on":
         mode = await run_gate_on(
             rest_url=args.rest_url, reader_token=args.reader_token, agent_token=args.agent_token,
+            operator_token=args.operator_token,
             resource_type=args.resource_type, allowlisted=args.allowlisted,
             unallowlisted=args.unallowlisted, singleton_type=args.singleton_type,
             created_name=args.created_name, rename_source=args.rename_source,
@@ -995,6 +1178,8 @@ async def _run(args: argparse.Namespace) -> int:
             project=args.project, control_project=args.control_project,
             tag_provider=args.tag_provider, tag_source_path=args.tag_source_path,
             tag_target_path=args.tag_target_path, tag_control_path=args.tag_control_path,
+            pipeline=args.pipeline, control_pipeline=args.control_pipeline,
+            alarm_event_id=args.alarm_event_id,
             raw_dir=args.raw_dir,
         )
     else:
@@ -1020,6 +1205,9 @@ def main() -> int:
     parser.add_argument("--rest-url", default="http://127.0.0.1:8765")
     parser.add_argument("--reader-token", required=True)
     parser.add_argument("--agent-token", required=True)
+    #: The CONTROL credential: the cancel Tool requires `ignition.control`, so the run
+    #: proves scope-by-effect with a credential that has it and one that does not.
+    parser.add_argument("--operator-token", default="")
     parser.add_argument("--resource-type", default="ignition/audit-profile")
     parser.add_argument("--allowlisted", default="MCP_CI_AUDIT")
     parser.add_argument("--unallowlisted", default="MCP_CI_AUDIT_OTHER")
@@ -1035,6 +1223,9 @@ def main() -> int:
     parser.add_argument("--tag-source-path", default=DEFAULT_TAG_SOURCE_PATH)
     parser.add_argument("--tag-target-path", default=DEFAULT_TAG_TARGET_PATH)
     parser.add_argument("--tag-control-path", default=DEFAULT_TAG_CONTROL_PATH)
+    parser.add_argument("--pipeline", default=DEFAULT_PIPELINE)
+    parser.add_argument("--control-pipeline", default=DEFAULT_CONTROL_PIPELINE)
+    parser.add_argument("--alarm-event-id", default=DEFAULT_ALARM_EVENT_ID)
     parser.add_argument("--observations", required=True, type=Path)
     parser.add_argument("--raw-dir", required=True, type=Path)
     args = parser.parse_args()

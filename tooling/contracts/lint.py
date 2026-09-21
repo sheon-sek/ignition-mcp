@@ -129,8 +129,37 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: success is the only thing the bounded re-export can confirm.
         "recoveredSuccess": "unreachable for this Tool",
     },
+    "alarm_pipeline_cancel": {
+        #: D12/D26: cancelling a notification pipeline run is a CONTROL operation.
+        "mutationClass": "CONTROL_MUTATION",
+        "scope": "ignition.control",
+        "gate": "IGNITION_MCP_CONTROL_MUTATION_ENABLED",
+        #: D12: a cancel stops the notification work the Alarm Event is running.
+        "destructive": True,
+        #: D30 §2 gives this Tool no Precondition token (D26's REST table lists none):
+        #: its concurrency rule is the pre-dispatch read plus the bounded verification.
+        "precondition": {"kind": "none"},
+        #: The documented route takes exactly path and alarmEventId, so there is no
+        #: D30 §4 knob to fix.
+        "fixedKnobs": {},
+        #: D30 §5 governs config-resource Mutations; this Tool's Target is a pipeline.
+        "refusedResourceTypes": False,
+        #: D03 request-schema validation governs config-resource write bodies; this Tool
+        #: sends its own two bounded fields, not a caller-supplied document.
+        "requestSchemaValidation": False,
+        #: A destructive cancel's post-state is absence, which another operator's cancel
+        #: also produces, so no read-back can attribute it to this call.
+        "recoveredSuccess": "unreachable for this Tool",
+    },
 }
 REST_MUTATION_CLASSES = frozenset({"CONFIG_MUTATION", "CONTROL_MUTATION", "ADMIN_MUTATION"})
+#: D07 assigns scope by operation effect: one scope, and one permission class, per
+#: mutation class. The contracts and the registrations must agree with this map.
+MUTATION_CLASS_SURFACE = {
+    "CONFIG_MUTATION": ("CONFIG", "ignition.config"),
+    "CONTROL_MUTATION": ("CONTROL", "ignition.control"),
+    "ADMIN_MUTATION": ("ADMIN", "ignition.admin"),
+}
 PRECONDITION_KINDS = frozenset({"resource_signature", "project_fingerprint", "none"})
 PRECONDITION_ENFORCERS = frozenset({"gateway", "server_read_compare"})
 REFUSED_RESOURCE_TYPES_CONTRACT = "contracts/shared/refused-resource-types.json"
@@ -269,7 +298,12 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: mutation class drift")
         if mutation_class not in REST_MUTATION_CLASSES or mutation_class not in declared_mutation_classes:
             raise ContractError(f"{tool_name}: undeclared mutation class")
-        if tool.get("permissionClass") != "CONFIG" or tool.get("requiredScope") != spec["scope"]:
+        # D07: the permission class and the scope follow the mutation class, so a
+        # CONTROL Tool can never be declared with a CONFIG surface (or the reverse).
+        permission_class, scope = MUTATION_CLASS_SURFACE[mutation_class]
+        if tool.get("permissionClass") != permission_class or tool.get("requiredScope") != scope:
+            raise ContractError(f"{tool_name}: mutation scope drift")
+        if tool.get("requiredScope") != spec["scope"]:
             raise ContractError(f"{tool_name}: mutation scope drift")
         if tool.get("deploymentGate") != spec["gate"] or tool.get("audited") is not True:
             raise ContractError(f"{tool_name}: mutation gate/audit drift")

@@ -245,7 +245,7 @@ def test_destructive_registrations_match_the_tool_contracts() -> None:
     }
     assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
     assert [name for name, declared in registered.items() if declared] == [
-        "config_resource_delete", "project_import",
+        "config_resource_delete", "project_import", "alarm_pipeline_cancel",
     ]
 
 
