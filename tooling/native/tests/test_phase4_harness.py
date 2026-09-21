@@ -4,6 +4,7 @@ import http.server
 import importlib.util
 import json
 from pathlib import Path
+import socketserver
 import sys
 import threading
 from types import ModuleType
@@ -38,6 +39,7 @@ def _load(name: str, path: Path) -> ModuleType:
 driver = _load("phase4_driver", PHASE4 / "driver.py")
 policy_document = _load("phase4_policy_document", PHASE4 / "policy_document.py")
 gateway_rest = _load("phase4_gateway_rest", PHASE4 / "gateway_rest.py")
+mcp_client = _load("phase4_mcp_client", PHASE4 / "mcp_client.py")
 
 
 def _fixture(name: str) -> Any:
@@ -523,6 +525,42 @@ def test_wait_for_gateway_reports_readiness_against_the_recorded_fake(
     ])
     assert code == waiter.EXIT_READY
     assert (tmp_path / "gateway-info.json").is_file()
+
+
+class _ResetOnly(socketserver.BaseRequestHandler):
+    """A Gateway port that accepts and drops connections while it starts."""
+
+    def handle(self) -> None:
+        self.request.close()
+
+
+def test_clients_survive_a_gateway_that_resets_connections(tmp_path: Path) -> None:
+    """The recorded live failure: the readiness wait crashed with
+    ConnectionResetError because a socket error escaped the REST client."""
+    waiter = _waiter()
+    try:
+        reset = http.server.ThreadingHTTPServer(("127.0.0.1", driver.EXPECTED_ORIGIN_PORT), _ResetOnly)
+    except OSError as error:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
+    thread = threading.Thread(target=reset.serve_forever, daemon=True)
+    thread.start()
+    try:
+        origin = f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}"
+        with pytest.raises(gateway_rest.RestError):
+            gateway_rest.gateway_info(origin, API_TOKEN)
+        with pytest.raises(mcp_client.McpError):
+            mcp_client.McpClient(origin + driver.EXPECTED_MCP_PATH, API_TOKEN, timeout=5.0).initialize()
+        code = waiter.main([
+            "--base-url", origin,
+            "--api-token", API_TOKEN,
+            "--mcp-url", origin + driver.EXPECTED_MCP_PATH,
+            "--timeout", "1",
+        ])
+        assert code == waiter.EXIT_NOT_READY
+    finally:
+        reset.shutdown()
+        reset.server_close()
+        thread.join(timeout=5)
 
 
 def test_wait_for_gateway_fails_closed_when_nothing_answers(tmp_path: Path) -> None:

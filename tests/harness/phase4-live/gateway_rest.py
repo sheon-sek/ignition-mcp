@@ -7,6 +7,7 @@ not a product code path, and it must not import the shipped package.
 from __future__ import annotations
 
 import hashlib
+import http.client
 import json
 from typing import Any
 import urllib.error
@@ -59,8 +60,10 @@ def request(
     except urllib.error.HTTPError as error:
         payload = error.read(max_bytes + 1)
         status = int(error.code)
-    except urllib.error.URLError as error:
-        raise RestError(f"{method} {path} failed: {error}") from error
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+        # A Gateway that is still starting resets or drops connections; that is a
+        # retryable transport failure, not a crash in the caller.
+        raise RestError(f"{method} {path} failed: {type(error).__name__}: {error}") from error
     if len(payload) > max_bytes:
         raise RestError(f"{method} {path} response exceeded the bounded size")
     return status, payload

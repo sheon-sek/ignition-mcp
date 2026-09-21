@@ -7,6 +7,7 @@ plain JSON or an SSE stream; both are accepted, and every response is capped.
 
 from __future__ import annotations
 
+import http.client
 import json
 from typing import Any
 import urllib.error
@@ -84,15 +85,20 @@ class McpClient:
         except urllib.error.HTTPError as error:
             detail = error.read(2048).decode("utf-8", errors="replace")
             raise McpError(f"MCP endpoint returned HTTP {error.code}: {detail[:400]}") from error
-        except urllib.error.URLError as error:
-            raise McpError(f"MCP endpoint unreachable: {error}") from error
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as error:
+            raise McpError(f"MCP endpoint unreachable: {type(error).__name__}: {error}") from error
         if status >= 400:
             raise McpError(f"MCP endpoint returned HTTP {status}")
         if len(body) > MAX_RESPONSE_BYTES:
             raise McpError("MCP response exceeded the bounded size")
         if session:
             self._session_id = session
-        return _parse_body(content_type, body)
+        try:
+            return _parse_body(content_type, body)
+        except ValueError as error:
+            # A Gateway that is still starting can answer with a non-JSON body;
+            # the readiness waiter retries it instead of crashing.
+            raise McpError(f"MCP response was not JSON: {error}") from error
 
     def initialize(self) -> dict[str, Any]:
         result = self.request("initialize", {
