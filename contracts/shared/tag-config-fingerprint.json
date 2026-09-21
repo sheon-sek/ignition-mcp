@@ -26,37 +26,6 @@
   "notASecret": "A fingerprint is derived from configuration data the same read publishes; it is a Precondition token, never a credential.",
   "goldenVectors": [
     {
-      "name": "atomic-tag-as-recorded",
-      "source": "the key set ticket #6 recorded from a live `getConfiguration` of a real AtomicTag (dataType, defaultValue, enabled, name, path, tagType, value, valueSource), with the ticket #10 fixture Tag's values",
-      "documentation": "A memory Int4 AtomicTag the way a live read reports it. A captured configuration has no null and no reserved key, so the D28 encoding is the identity here.",
-      "nativeConfiguration": [
-        {
-          "dataType": "Int4",
-          "defaultValue": 0,
-          "enabled": true,
-          "name": "WriteTarget",
-          "path": "[default]IgnitionMCP_CI/WriteTarget",
-          "tagType": "AtomicTag",
-          "value": 0,
-          "valueSource": "memory"
-        }
-      ],
-      "configuration": [
-        {
-          "dataType": "Int4",
-          "defaultValue": 0,
-          "enabled": true,
-          "name": "WriteTarget",
-          "path": "[default]IgnitionMCP_CI/WriteTarget",
-          "tagType": "AtomicTag",
-          "value": 0,
-          "valueSource": "memory"
-        }
-      ],
-      "canonicalJson": "[{\"dataType\":\"Int4\",\"defaultValue\":0,\"enabled\":true,\"name\":\"WriteTarget\",\"path\":\"[default]IgnitionMCP_CI/WriteTarget\",\"tagType\":\"AtomicTag\",\"value\":0,\"valueSource\":\"memory\"}]",
-      "fingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e"
-    },
-    {
       "name": "explicit-null-property",
       "source": "D28 rule vector; no non-recursive read of the ticket #6 Tag provider root carried an explicit null",
       "documentation": "An explicit null property: the native read carries a real null, and D28 encodes it as the reserved-key object before the fingerprint is taken, so the encoding rule is part of the token.",
@@ -147,6 +116,74 @@
       ],
       "canonicalJson": "[{\"documentation\":\"Kälte – 12 °C\\u0009ready\",\"name\":\"TextTarget\",\"path\":\"[default]TextTarget\",\"tagType\":\"AtomicTag\",\"value\":\"phase4-initial\"}]",
       "fingerprint": "tcf1:18af5baec547835145db41baadb3d0b2622ea1b631f77a9df43a0d35d65f23ce"
+    },
+    {
+      "name": "atomic-tag-as-recorded",
+      "source": "recorded from the phase4-live G4b run 35668653064 (workflow `Phase 4 Live Gateway G4b`), where the same read and the same fingerprint were observed on the 8.3.8 and the 8.3.9 row: the `tag_get_config` read of [default]IgnitionMCP_CI/WriteTarget",
+      "documentation": "A memory Int4 AtomicTag exactly as a live Gateway reports it. Note `path`: the Gateway answers a native BasicTagPath object, which the handler's normalization publishes in its own native-object form, so the fingerprint is taken over that form.",
+      "nativeConfiguration": [
+        {
+          "dataType": "Int4",
+          "defaultValue": 0,
+          "enabled": true,
+          "name": "WriteTarget",
+          "path": {
+            "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+            "text": "[default]IgnitionMCP_CI/WriteTarget",
+            "type": "native-object"
+          },
+          "tagType": "AtomicTag",
+          "value": 0,
+          "valueSource": "memory"
+        }
+      ],
+      "configuration": [
+        {
+          "dataType": "Int4",
+          "defaultValue": 0,
+          "enabled": true,
+          "name": "WriteTarget",
+          "path": {
+            "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+            "text": "[default]IgnitionMCP_CI/WriteTarget",
+            "type": "native-object"
+          },
+          "tagType": "AtomicTag",
+          "value": 0,
+          "valueSource": "memory"
+        }
+      ],
+      "canonicalJson": "[{\"dataType\":\"Int4\",\"defaultValue\":0,\"enabled\":true,\"name\":\"WriteTarget\",\"path\":{\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\",\"text\":\"[default]IgnitionMCP_CI/WriteTarget\",\"type\":\"native-object\"},\"tagType\":\"AtomicTag\",\"value\":0,\"valueSource\":\"memory\"}]",
+      "fingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3"
+    },
+    {
+      "name": "synthesized-node-for-a-missing-path",
+      "source": "recorded from the phase4-live G4b run 35668653064 (workflow `Phase 4 Live Gateway G4b`), where the same read and the same fingerprint were observed on the 8.3.8 and the 8.3.9 row: the read of [default]IgnitionMCP_CI/Missing, a path that is not there",
+      "documentation": "A Gateway does not answer an empty list for a path that is not there: it answers this synthesized node, `tagType: Unknown`, with its own deterministic fingerprint. That is why a CONFIG Mutation's existence check is `system.tag.exists` and not this read, and why the check has to run before the fingerprint compare: a caller holding this token could otherwise merge-create the target.",
+      "nativeConfiguration": [
+        {
+          "name": "Missing",
+          "path": {
+            "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+            "text": "[default]IgnitionMCP_CI/Missing",
+            "type": "native-object"
+          },
+          "tagType": "Unknown"
+        }
+      ],
+      "configuration": [
+        {
+          "name": "Missing",
+          "path": {
+            "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+            "text": "[default]IgnitionMCP_CI/Missing",
+            "type": "native-object"
+          },
+          "tagType": "Unknown"
+        }
+      ],
+      "canonicalJson": "[{\"name\":\"Missing\",\"path\":{\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\",\"text\":\"[default]IgnitionMCP_CI/Missing\",\"type\":\"native-object\"},\"tagType\":\"Unknown\"}]",
+      "fingerprint": "tcf1:1d225d79b0b34008df860a452a087d89e743974be538f42a7c4e4dc075216e30"
     }
   ],
   "encoding": "The fingerprint is taken over the D28 `ignition-null-v1` encoding of the read, which is exactly the `configuration` value tag_get_config publishes: a null becomes {\"$ignition\":\"null\"} and an object carrying a literal $ignition key is escaped as {\"$ignition\":\"object\",\"entries\":[[key, value], ...]} with its entries sorted."

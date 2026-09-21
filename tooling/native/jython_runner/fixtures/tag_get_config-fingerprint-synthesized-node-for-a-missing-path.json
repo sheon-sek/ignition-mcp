@@ -8,7 +8,7 @@
     "maxResults"
   ],
   "arguments": {
-    "path": "[default]IgnitionMCP_CI/WriteTarget",
+    "path": "[default]IgnitionMCP_CI/Missing",
     "recursive": false,
     "overridesOnly": false,
     "maxResults": 50
@@ -17,7 +17,7 @@
     {
       "target": "system.tag.getConfiguration",
       "args": [
-        "[default]IgnitionMCP_CI/WriteTarget",
+        "[default]IgnitionMCP_CI/Missing",
         false,
         false
       ],
@@ -25,18 +25,13 @@
         "kind": "configurations",
         "items": [
           {
-            "dataType": "Int4",
-            "defaultValue": 0,
-            "enabled": true,
-            "name": "WriteTarget",
+            "name": "Missing",
             "path": {
               "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
-              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "text": "[default]IgnitionMCP_CI/Missing",
               "type": "native-object"
             },
-            "tagType": "AtomicTag",
-            "value": 0,
-            "valueSource": "memory"
+            "tagType": "Unknown"
           }
         ]
       }

@@ -1,5 +1,6 @@
 {
   "8.3.8": {
+    "tagUpdateAllowlistPolicyReinstalled": true,
     "tagUpdateAuditActorIsServiceIdentity": true,
     "tagUpdateAuditAttemptAndResultRecorded": true,
     "tagUpdateAuditRowsForCorrelation": 2,
@@ -19,6 +20,7 @@
     "tagUpdateIndependentReadShowsTheChange": true,
     "tagUpdateMissingTargetAbsentFromExport": true,
     "tagUpdateMissingTargetCode": "not_found",
+    "tagUpdateMissingTargetReadAnswersATemplate": true,
     "tagUpdateMissingTargetReason": "targetMissing",
     "tagUpdateNoPolicyErrorCode": "operation_disabled",
     "tagUpdateNoPolicyFailsClosed": true,
@@ -58,6 +60,7 @@
     "tagUpdateWildcardPolicyInstalled": true
   },
   "8.3.9": {
+    "tagUpdateAllowlistPolicyReinstalled": true,
     "tagUpdateAuditActorIsServiceIdentity": true,
     "tagUpdateAuditAttemptAndResultRecorded": true,
     "tagUpdateAuditRowsForCorrelation": 2,
@@ -77,6 +80,7 @@
     "tagUpdateIndependentReadShowsTheChange": true,
     "tagUpdateMissingTargetAbsentFromExport": true,
     "tagUpdateMissingTargetCode": "not_found",
+    "tagUpdateMissingTargetReadAnswersATemplate": true,
     "tagUpdateMissingTargetReason": "targetMissing",
     "tagUpdateNoPolicyErrorCode": "operation_disabled",
     "tagUpdateNoPolicyFailsClosed": true,

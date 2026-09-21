@@ -1677,11 +1677,22 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     if not facts["tagUpdateBareWildcardDoesNotCoverUdt"]:
         raise StageFailure(f"a bare * must not cover a UDT definition: {json.dumps(wildcard_udt)[:600]}")
 
-    # Case 10: a batch whose second item is refused is refused whole, so the
-    # first item's target still carries the values the allowlisted call wrote.
+    # Case 10: with the ordinary allowlist back in place, a batch whose second item
+    # is outside it is refused whole, so the first item's target keeps its values.
+    # (The wildcard policy above covers the sibling, so the allowlist has to come
+    # back before this case means what it says.)
+    reinstalled = install_tag_update_policy(config, client, allowlist=policy_document.TAG_UPDATE_ALLOWLIST)
+    raw["installAllowlistPolicy"] = bounded(reinstalled, 20_000)
+    facts["tagUpdateAllowlistPolicyReinstalled"] = reinstalled["ok"]
+    if not reinstalled["ok"]:
+        raise StageFailure(
+            "the running provider never served the plain allowlist policy again: "
+            f"{json.dumps(reinstalled['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    current = tag_config(client, paths["target"])
     batch = expect_tool_error(client, "tag_update", {
         "items": [
-            {"path": paths["target"], "expectedFingerprint": after["fingerprint"],
+            {"path": paths["target"], "expectedFingerprint": current["fingerprint"],
              "config": {"documentation": "phase4-batch-should-not-apply"}},
             {"path": paths["siblingTarget"], "expectedFingerprint": "tcf1:" + "0" * 64,
              "config": {"documentation": "phase4-batch-should-not-apply"}},
@@ -1691,7 +1702,7 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     facts["tagUpdatePreflightRefusalCode"] = str(batch.get("code", ""))
     facts["tagUpdatePreflightRefusalItems"] = len((batch.get("details") or {}).get("items") or [])
     batch_after = tag_config(client, paths["target"])
-    facts["tagUpdatePreflightExecutedNothing"] = batch_after["fingerprint"] == after["fingerprint"]
+    facts["tagUpdatePreflightExecutedNothing"] = batch_after["fingerprint"] == current["fingerprint"]
     if not facts["tagUpdatePreflightExecutedNothing"]:
         raise StageFailure("a refused Preflight executed part of its batch")
     return {

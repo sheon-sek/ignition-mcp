@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "note": "The node a live Gateway answers for a `tag_get_config` read of a path that is not there. `__PATH__` is the requested path; the fake substitutes it and derives the fingerprint with the same rule the handlers use.",
+  "configuration": [
+    {
+      "name": "__NAME__",
+      "path": {
+        "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+        "text": "__PATH__",
+        "type": "native-object"
+      },
+      "tagType": "Unknown"
+    }
+  ],
+  "fingerprintRecordedFromRun": "35668653064"
+}

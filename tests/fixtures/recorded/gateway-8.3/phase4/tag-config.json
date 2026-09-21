@@ -3,9 +3,12 @@
     {
       "enabled": true,
       "name": "Nested",
-      "path": "[default]IgnitionMCP_CI/Nested",
-      "tagType": "Folder",
-      "tags": null
+      "path": {
+        "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+        "text": "[default]IgnitionMCP_CI/Nested",
+        "type": "native-object"
+      },
+      "tagType": "Folder"
     }
   ],
   "[default]IgnitionMCP_CI/Nested/Inner": [
@@ -38,7 +41,11 @@
       "defaultValue": 0,
       "enabled": true,
       "name": "WriteTarget",
-      "path": "[default]IgnitionMCP_CI/WriteTarget",
+      "path": {
+        "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+        "text": "[default]IgnitionMCP_CI/WriteTarget",
+        "type": "native-object"
+      },
       "tagType": "AtomicTag",
       "value": 0,
       "valueSource": "memory"

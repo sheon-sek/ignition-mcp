@@ -359,11 +359,43 @@ def _tag_config_fingerprint(configuration: list[Any]) -> str:
     return tag_config_fingerprint(encode_nulls(configuration))
 
 
-def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
-    """The recorded `tag_get_config` domain for a path the fake models, else None."""
+#: The node a Gateway answers for a configuration read of a path that is not
+#: there, recorded from phase4-live-g4b run 35668653064 on both rows: the same
+#: node and the same fingerprint on 8.3.8 and 8.3.9. The `path` comes back as a
+#: native `BasicTagPath` object, which is why the recorded body carries the
+#: handler's own native-object form of it.
+def _synthesized_node(path: str) -> dict[str, Any]:
+    """The node a Gateway answers for a configuration read of a path that is not there.
+
+    The body is the recorded one (`phase4/tag-get-config-missing-template.json`), with
+    the requested path and its leaf substituted.
+    """
+    template = _fixture("phase4/tag-get-config-missing-template.json")["configuration"][0]
+    body = json.dumps(template).replace("__PATH__", path).replace("__NAME__", path.rsplit("/", 1)[-1])
+    return json.loads(body)
+
+
+def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The recorded `tag_get_config` domain for a path the fake models.
+
+    A path the fake has no configuration for answers the synthesized node a live
+    Gateway answers (recorded), which is what makes the missing-target case model
+    the Gateway rather than the rehearsal's convenience.
+    """
     path = arguments.get("path")
-    if not isinstance(path, str) or path not in server.tag_config:
+    if not isinstance(path, str):
         return None
+    if path not in server.tag_config:
+        configuration = [_synthesized_node(path)]
+        return {
+            "path": path,
+            "recursive": bool(arguments.get("recursive", False)),
+            "overridesOnly": bool(arguments.get("overridesOnly", False)),
+            "fingerprint": _tag_config_fingerprint(configuration),
+            "configuration": configuration,
+            "summary": {"returned": 1, "limit": 50},
+            "meta": {"correlationId": "recorded-replay"},
+        }
     configuration = server.tag_config[path]
     recursive = bool(arguments.get("recursive", False))
     overrides_only = bool(arguments.get("overridesOnly", False))
@@ -907,7 +939,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     }
                 elif tool == "tag_get_config":
                     domain = _tag_config_domain(server, tool_arguments)
-                    if domain is None:
+                    if domain is None:  # pragma: no cover - the fake models every valid path
                         result = {
                             "content": [{"type": "text", "text": json.dumps({
                                 "code": "not_found",

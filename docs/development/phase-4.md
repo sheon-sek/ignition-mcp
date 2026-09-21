@@ -443,14 +443,55 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - The live stage also recomputes the published fingerprint from the published
   configuration with the repository's own Python copy of the rule, so the Jython
   handler and the contract definition have to agree on a real Gateway's data.
-- The first live run (workflow `Phase 4 Live Gateway G4b`, run
-  [35666588649](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666588649)) failed its
-  missing-target case on both rows — see the Open question on what a Gateway answers for a path
-  that is not there — and it validated everything before that case on a real Gateway: the
-  published fingerprint recomputed from the published configuration, the allowlisted
-  merge-update, and the stale-fingerprint refusal with `conflict` and nothing changed. The fix
-  is `system.tag.exists` as the existence check, with a live Folder-target case and an
-  independent provider-export absence check added.
+- Live (workflow `Phase 4 Live Gateway G4b`). Two runs shaped this ticket before the one that
+  records the evidence: [35666588649](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666588649)
+  failed its missing-target case on both rows and is what found the existence behavior below, and
+  [35668653064](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668653064) ran every
+  stage on both rows and drifted on exactly one expectation — the batch case, which the driver
+  had built after the wildcard policy was installed, so the sibling it meant to have refused was
+  allowlisted and the batch was refused by the stale token instead. Its recorded bodies are the
+  fixtures and the two live golden vectors committed here. The cases below hold on 8.3.8
+  `2026071409` (required) and 8.3.9 `2026082511` (candidate):
+  - a Gateway with no Runtime Target Policy refuses `tag_update` with `operation_disabled`
+    (`declaredLengthUnavailable`), before anything executes;
+  - the deployed `configurator` inventory is exactly the 14 Tools of
+    `contracts/profiles/configurator.yaml`, and the `operator` deployment's 16 Tools do not
+    include `tag_update` (CONTROL ≠ CONFIG);
+  - the published fingerprint is exactly the D30 rule over the published configuration: the
+    harness recomputes it with the repository's own Python copy of the canonical-JSON rule and
+    gets the handler's token byte for byte
+    (`tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3` for
+    `[default]IgnitionMCP_CI/WriteTarget`, identical on both rows), and two reads of the same
+    target agree;
+  - the allowlisted merge-update executed with a `Good` native outcome and changed the target,
+    confirmed by an independent re-read (`documentation` + `engUnits`), with the observed
+    fingerprint equal to that re-read's;
+  - a Folder (`[default]IgnitionMCP_CI/Nested`) is a target too: `system.tag.exists` answers
+    for one, the merge landed, and the independent read shows it;
+  - the token read before the change is stale after it: the same call was refused with
+    `conflict` / `fingerprintMismatch`, carrying both fingerprints, and the target kept the
+    first call's values;
+  - a target that is not there was refused with `not_found` / `targetMissing` and really is
+    absent: the provider's own export carries no such Tag;
+  - a sibling that only shares a string prefix was refused with `permission_denied` /
+    `targetNotAllowlisted` and left at its pre-value, and a batch mixing it with an allowlisted
+    item was refused whole with the allowlisted target unchanged;
+  - a UDT definition target was refused with `permission_denied` /
+    `udtDefinitionNotAllowlisted` both under a bare `*` and under the plain Tag prefix, while an
+    explicit `_types_` entry let the same target through to the existence check (`not_found`),
+    which is what proves the entry is honoured;
+  - under an explicit `*` the reserved `IgnitionMCPPolicy` provider was refused with
+    `permission_denied` / `reservedProvider`, its Tag value was unchanged and the policy
+    document was not clobbered;
+  - Runtime audit ran in `best_effort`, `auditRecorded=true`, and the `MCP_CI_AUDIT` log held
+    both rows (attempt + result) for the call's correlation ID with `actor` equal to the
+    policy's Service identity;
+  - the run's own bodies are recorded: the `tag_get_config` read of the fixture Tag and the node
+    a Gateway synthesizes for a missing path are the two live golden vectors in
+    `contracts/shared/tag-config-fingerprint.json`, and the refusal bodies the fake replays are
+    in `tests/fixtures/recorded/gateway-8.3/phase4/` with their provenance.
+- Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
+  G3, plus the Phase 4 G4a and REST rows.
 
 ## Open questions
 

@@ -106,7 +106,11 @@
             "defaultValue": "phase4-initial",
             "enabled": true,
             "name": "TextTarget",
-            "path": "[default]IgnitionMCP_CI/TextTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/TextTarget",
+              "type": "native-object"
+            },
             "tagType": "AtomicTag",
             "value": "phase4-initial",
             "valueSource": "memory"

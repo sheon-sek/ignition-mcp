@@ -40,11 +40,16 @@ def _vectors() -> list[dict]:
 def test_the_contract_carries_the_vectors_this_module_asserts_against() -> None:
     vectors = _vectors()
     assert [vector["name"] for vector in vectors] == [
-        "atomic-tag-as-recorded",
         "explicit-null-property",
         "escaped-reserved-key-object",
         "non-ascii-and-control-characters",
+        "atomic-tag-as-recorded",
+        "synthesized-node-for-a-missing-path",
     ]
+    # Two of them are live Gateway reads: the real AtomicTag node and the node a
+    # Gateway synthesizes for a path that is not there.
+    live = [vector for vector in vectors if "phase4-live" in vector["source"]]
+    assert len(live) == 2
     assert {vector["fingerprint"].split(":", 1)[0] for vector in vectors} == {_contract()["version"]}
     # Every vector says where it came from, so a rule vector is never mistaken for
     # a captured Gateway body.
