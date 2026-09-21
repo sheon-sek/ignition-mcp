@@ -199,6 +199,52 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   [35640169783](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169783) and
   [35640770477](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640770477).
 
+### Ticket #15 — REST `config_resource_create`, `config_resource_delete` and `config_resource_rename` (milestone 4c)
+
+- Fixture-first coverage: `packages/ignition-rest-mcp/tests/test_phase4_config_resource_create_delete_rename.py`
+  (38 cases) drives the real server through MCP against
+  `tests/harness/recorded_gateway.py`, which now models the collection `POST`, the
+  signature-carrying `DELETE` and the rename routes, their collisions, their races and
+  the ambiguous-dispatch boundaries. The full `AGENTS.md` command block is green
+  (785 pytest cases).
+- Per-Tool rules implemented and pinned: create takes no Precondition token and relies
+  on the D11 collision policy (checked against the Gateway before dispatch); delete
+  carries the signature in the native `DELETE` path *and* read-compares it before
+  dispatch, verifies the Target's absence, and never sends the route's `confirm` flag;
+  rename is a server-side read-compare only (the D30 §2 race window is documented, and
+  a live case shows another writer's version being renamed inside it), always sends
+  `references=ABORT`, and verifies both names.
+- D30 §3 Preflight extended to more than one Target: `MutationRequest` gained
+  `additional_target_ids`, the guarded executor checks every Target before anything
+  executes and names the refused Target in the audit row, and a rename therefore needs
+  both its source and its destination allowlisted. Unit and live cases cover the
+  destination denial and the source denial separately.
+- D03 extended to the new writes: the capability snapshot bundles a type's documented
+  `POST` item schema and an operation's request body (rename) next to the existing
+  `PUT` item schema; a write route without a usable schema, or without a lookup route to
+  precondition from, exposes no write. Unit tests hold all three routes of every
+  committed 8.3.8 type to that rule.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **47/47 cases**
+  against the recorded Gateway, both deployment gates.
+- Live ([run 35652623709](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623709)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green, **47/47 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — the exact
+  four-Tool inventory with the class enabled and the read-only inventory without it, an
+  allowlisted create/delete/rename each confirmed by an independent read, a create and a
+  delete collision, a rename onto an occupied destination, stale tokens refused with
+  `conflict` and changing nothing, `ignition/api-token` refused with `permission_denied`
+  for all three Tools while the token keeps working, an unallowlisted Target denied for
+  each Tool (including the rename destination), and a refused cross-check that a denied
+  create/delete/rename published or removed nothing. `provision.json` records the four
+  provisioned resources and the nine required OpenAPI routes.
+- Frozen gates on the same head (`b4fcb59`): CI
+  [35652623688](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623688),
+  Phase 3 Live Gateway G3
+  [35652623873](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623873) and
+  Phase 4 Live Gateway G4a
+  [35652623753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623753) —
+  all success.
+
 ## Open questions
 
 - **Ticket #15 — a config rename has two Targets, and D30 does not say so.** D30 §6 gives the Target
