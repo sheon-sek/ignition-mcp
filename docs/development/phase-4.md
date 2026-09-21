@@ -319,7 +319,38 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   allowlist does not name) and enables the sensitive exports, artifact upload and the D16
   writer in its server environment, which is why the driver's expected read inventory
   includes the two sensitive-export Tools.
-- Live: see the runs below.
+- Live ([run 35658893521](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893521)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **61/61 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — the exact
+  inventory with the class enabled and disabled, a Project archive imported and confirmed
+  by an independent re-export this harness fingerprints itself, the marker the candidate
+  carried present in the Project the Gateway now serves, re-importing that content a
+  `NO_CHANGE`, the pre-commit fingerprint a `conflict` that changed nothing, a Project
+  outside the Target allowlist `permission_denied` with that Project untouched, and an
+  archive another principal owns `not_found`. `provision.json` records the two provisioned
+  Projects and the required OpenAPI routes.
+- **The first live attempt failed both rows, and the fix is in the harness.** Run
+  [35658093734](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093734) on
+  the code head returned `RECOVERY_REQUIRED` for the commit case: the candidate archive
+  appended a root entry, and the live Gateway rewrites `project.json` on import and does
+  not carry an entry it does not recognise as a resource into its re-export, so C could
+  never equal B. The driver now appends the marker to the first named-query payload — the
+  edit the G3 transaction case proves the Gateway stores verbatim (see
+  `tests/harness/phase3-live/driver.py`) — and writes the per-entry round-trip diff of the
+  candidate against the Gateway's re-export into `observations.json` before it fails, so
+  one run diagnoses a mismatch instead of costing another. No server code changed.
+- Frozen gates, green on every head of this ticket (`c83e45a` and `a2a7ef0`): CI
+  [35658093748](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093748) and
+  [35658893377](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893377),
+  Phase 3 Live Gateway G3
+  [35658093689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093689) and
+  [35658893366](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893366), and
+  Phase 4 Live Gateway G4a
+  [35658093769](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093769) and
+  [35658893421](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893421) — all
+  success. The 8.3.9 candidate row of the Phase 4 REST workflow is `continue-on-error`,
+  but both of its Gateway rows passed on the head above.
+
 
 ## Open questions
 
