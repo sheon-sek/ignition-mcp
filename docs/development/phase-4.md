@@ -494,7 +494,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   [35666536299](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536299), Phase 4
   Live Gateway G4a
   [35666536363](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536363) — all
-  success.
+  success. The docs-only head `75610c6` repeats all four green: CI
+  [35667023607](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023607), REST
+  mutation [35667023701](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023701)
+  (both rows **86/86**, 0 failures), G3
+  [35667023714](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023714) and G4a
+  [35667023689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023689).
 
 - Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`, `9d25d98`):
   CI
