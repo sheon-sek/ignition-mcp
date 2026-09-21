@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_update",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "expectedSignature": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "source": "config_resource_get.signature"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 512
+    },
+    "collection": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 128
+    },
+    "config": {
+      "type": "object",
+      "required": false,
+      "default": null
+    },
+    "enabled": {
+      "type": "boolean",
+      "required": false,
+      "default": null
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "default": null,
+      "maxLength": 1024
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-update.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/find/<catalog-resourceType>/{name}",
+    "GET /data/api/v1/resources/singleton/<catalog-resourceType>",
+    "PUT /data/api/v1/resources/<catalog-resourceType>"
+  ],
+  "capabilityId": "config_resource_update",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "resource_signature",
+    "parameter": "expectedSignature",
+    "source": "config_resource_get.signature",
+    "enforcedBy": "gateway",
+    "alsoReadComparedBeforeDispatch": true,
+    "raceWindowDocumented": true
+  },
+  "targetId": {
+    "form": "<resourceType>/<name>, or <resourceType> for a singleton",
+    "collection": "the default configuration collection only: the Target allowlist names a resource, so a caller-supplied collection is refused with invalid_argument (a collection-qualified Target policy needs a decision)",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 \u00a77, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "refusedResourceTypes": {
+    "contract": "contracts/shared/refused-resource-types.json",
+    "errorCode": "permission_denied",
+    "unclassified": "refused"
+  },
+  "fixedKnobs": {
+    "allowInvalidReferences": "false"
+  },
+  "boundedInputBytes": 262144,
+  "requestSchemaValidation": {
+    "source": "gateway-openapi-capability-snapshot",
+    "schema": "the resource type's documented PUT request-body item schema, bundled into a self-contained JSON Schema (internal $refs hoisted to $defs) at capability refresh time",
+    "appliesTo": "the complete change item, before dispatch",
+    "unavailableDisposition": "a documented update route without a usable request schema exposes no update route, so the Tool refuses the resource type with unsupported_capability",
+    "errorCode": "invalid_argument",
+    "dependency": "jsonschema (already in uv.lock via fastmcp's OpenAPI server extra)",
+    "snapshotImmutability": "the schema is deeply immutable inside the D04 snapshot (mappings are read-only views, arrays are tuples), so a holder of the snapshot cannot change the rules a later write is validated against",
+    "referenceBundling": "internal $refs are hoisted into $defs once per target; every occurrence keeps its own sibling keywords (a later occurrence must not lose a constraint the earlier one did not carry)"
+  },
+  "changeItem": "name is included when the documented item schema declares it; a singleton's change item carries only signature plus the supplied fields",
+  "rejectionPolicy": {
+    "rule": "D30 \u00a72: an explicit Gateway rejection is the result of the attempt \u2014 a 4xx (including 409) or a 2xx carrying success=false with a problem. It is mapped to conflict for a signature mismatch, and no read-back may turn it into a success: a resource showing the requested values may have been changed by another writer.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (2xx with no refusal)",
+      "the dispatch was genuinely ambiguous (possibly sent with no response, or 5xx) and the change is attributable to this call"
+    ],
+    "ambiguousAttribution": "a competing writer cannot be ruled out for an ambiguous dispatch, so a read-back that merely matches the requested values is outcome_unknown, never a success; a read-back still showing the pre-state is not_applied",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "bounded re-read of the changed resource, reported as Observed state and used for the outcomes above"
+}

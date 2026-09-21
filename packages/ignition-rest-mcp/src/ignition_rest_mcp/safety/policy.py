@@ -23,6 +23,11 @@ CLASS_SCOPE = {
 
 WILDCARD = "*"
 
+#: D06 codes a Target-allowlist denial may carry: D30 §7 decides
+#: ``permission_denied`` for the Phase 4 Mutations, and the Phase 3 machinery that
+#: predates that decision records ``operation_disabled``.
+TARGET_DENIAL_CODES = ("operation_disabled", "permission_denied")
+
 
 @dataclass(frozen=True, slots=True)
 class MutationOperation:
@@ -30,10 +35,25 @@ class MutationOperation:
     mutation_class: str
     capability: str
     destructive: bool
+    #: The D06 code a Target-allowlist denial carries for this operation. D30 §7
+    #: decides `permission_denied` for the Phase 4 Mutations; the Phase 3 machinery
+    #: that shipped before that decision keeps its recorded `operation_disabled`,
+    #: and its frozen G3 evidence stays valid because the code is per operation.
+    target_denial_code: str = "operation_disabled"
+    #: Whether an explicit Gateway rejection (4xx, or 2xx carrying a refusal) is the
+    #: final result of the attempt. D30 §2 decides this for the Phase 4 Mutations: a
+    #: read-back cannot attribute a change to a rejected call, so it must never be
+    #: turned into a success. The Phase 3 machinery shipped with the opposite
+    #: behaviour (a rejected dispatch whose observed state matched the intent was
+    #: recorded as a recovered success), and its frozen tests and G3 evidence pin
+    #: that, so the policy is per operation.
+    rejection_is_final: bool = False
 
     def __post_init__(self) -> None:
         if self.mutation_class not in MUTATION_CLASSES:
             raise ValueError("mutation operations must declare a real D08 mutation class")
+        if self.target_denial_code not in TARGET_DENIAL_CODES:
+            raise ValueError(f"unknown Target denial code: {self.target_denial_code}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +80,17 @@ def authorize_scope(principal: VerifiedPrincipal, operation: MutationOperation) 
 
 def evaluate_deployment_policy(
     settings: Settings, operation: MutationOperation, target_id: str, capability_present: bool,
+    *,
+    target_class: PolicyDecision | None = None,
 ) -> PolicyDecision:
+    """The deployment-side checks, in D08's order.
+
+    Class enablement, then the operation allowlist, then the operation's own
+    Target-class rule (D30 §5 Refused resource types — evaluated *before* the
+    Target allowlist, so a refused type is denied even under ``*``), then the
+    Target allowlist, then the capability.
+    """
+
     class_enabled = {
         CONFIG_MUTATION: settings.config_mutation_enabled,
         CONTROL_MUTATION: settings.control_mutation_enabled,
@@ -77,11 +107,13 @@ def evaluate_deployment_policy(
             allowed=False, layer="operation-allowlist", reason="operation-not-allowlisted",
             error_code="operation_disabled",
         )
+    if target_class is not None and not target_class.allowed:
+        return target_class
     targets = settings.mutation_targets.get(operation.op_id, ())
     if WILDCARD not in targets and target_id not in targets:
         return PolicyDecision(
             allowed=False, layer="target-allowlist", reason="target-not-allowlisted",
-            error_code="operation_disabled",
+            error_code=operation.target_denial_code,
         )
     if not capability_present:
         return PolicyDecision(

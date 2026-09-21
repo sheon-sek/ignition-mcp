@@ -119,6 +119,22 @@ class ConfigResourceGetResult(StrictModel):
     correlationId: str
     resourceType: str
     resource: dict[str, Any]
+    #: D30 Resource signature: the explicit Precondition token a caller passes
+    #: back as ``expectedSignature``. ``None`` when the Gateway reports none.
+    signature: str | None
+
+
+class ConfigResourceUpdateResult(StrictModel):
+    """D30: the change is verified by re-reading the resource; the read-back is
+    reported as Observed state and the resulting Resource signature is the token
+    for the caller's next change."""
+
+    correlationId: str
+    resourceType: str
+    name: str
+    collection: str
+    signature: str | None
+    observedState: dict[str, Any]
 
 
 class AuditRecord(StrictModel):

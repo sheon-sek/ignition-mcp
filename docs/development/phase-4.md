@@ -142,8 +142,96 @@ G4 closes only when all of the following are true:
 
 Run the full command block in `AGENTS.md` (Commands) after every ticket. Before spending a live CI run, rehearse locally against `tests/harness/recorded_gateway.py`.
 
+## Results
+
+### Ticket #14 — REST `config_resource_update` (milestone 4c)
+
+- Fixture-first coverage: the 8.3.8/8.3.9 resource-type classification, the
+  `config_resource_get` signature, the refusal, the precondition and the two
+  deployment gates are all covered by `packages/ignition-rest-mcp/tests/test_phase4_*`
+  against the recorded Gateway; the full `AGENTS.md` command block is green.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — 14/14 cases
+  against the recorded Gateway.
+- Live ([run 35639720856](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720856),
+  and again with the OpenAPI capture in
+  [run 35640169826](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169826)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green, 14/14 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate) — exact REST
+  inventory with the class enabled and disabled, the read-only credential excluded
+  from the Mutation Tool, an allowlisted update applied and confirmed by an
+  independent re-read, a stale signature refused with `conflict` and changing
+  nothing, `ignition/api-token` refused with `permission_denied` and left usable, and
+  a resource outside the Target allowlist denied with nothing changed. The observed
+  Target-denial code is `operation_disabled` (see Open questions).
+- Review round 3 fixes (see the ticket report): an explicit Gateway rejection is final
+  for the Tool (D30 §2) — a 4xx or a 2xx carrying `success=false` with a `problem` is
+  the result, mapped to `conflict` for a signature mismatch, and no read-back may turn
+  it into a success (a competing writer can make the resource show the requested
+  values). A success comes only from a Gateway claim, or from a genuinely ambiguous
+  dispatch whose change is attributable; where attribution cannot be established the
+  result is `outcome_unknown`. Declared per operation (`rejection_is_final`), so the
+  Phase 3 machinery keeps the behaviour its frozen tests and G3 evidence pin.
+- Review round 2 fixes (see the ticket report): the bundler keeps sibling keywords on
+  every `$ref` occurrence (a repeated reference to one definition used to drop the
+  later occurrence's constraint); the snapshot's request schemas are deeply immutable,
+  so no holder can change the rules a later write is validated against; and a refused
+  or ambiguous dispatch is a success only when the resource moved in the direction the
+  call asked for, so a competing writer winning the race between the signature read and
+  the write is never reported as this caller's success (with a deterministic race test
+  that changes an unrelated field at PUT time).
+- Review round 1 fixes (see the ticket report): a non-allowlisted Target is `permission_denied`
+  (D30 §7) through a Tool-scoped mapping that leaves the frozen G3 behavior and evidence untouched;
+  the change item is validated against the target Gateway's own documented PUT request schema (D03)
+  before dispatch, and an update route without a usable schema exposes no update; a
+  collection-qualified change is refused; and a Gateway refusal is never reported as a success when
+  the requested values happened to equal the pre-state.
+- The same runs captured each Gateway's `/openapi.json`; the 8.3.9 candidate exposes
+  56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
+  the MCP Module's own `server-config`), and every one of them is classified. The
+  derived inventory is committed with its source SHA-256 and run ID.
+- Frozen gates: CI and Phase 3 G3 have been green on every pushed head of this
+  branch, for example CI runs
+  [35639720685](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720685),
+  [35640170047](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640170047) and
+  [35640770475](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640770475), and
+  Phase 3 G3 runs
+  [35639720676](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720676),
+  [35640169783](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169783) and
+  [35640770477](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640770477).
+
 ## Open questions
 
+- **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy: RESOLVED by a Tool-scoped
+  mapping.** D30 §7 maps "target not allowlisted" to `permission_denied`; the Phase 3 machinery
+  answers `operation_disabled`, which `test_phase3_safety_executor.py` and the live G3 driver
+  (`tests/harness/phase3-live/driver.py:696`) pin as recorded, frozen evidence. `MutationOperation`
+  now declares `target_denial_code` (D30 §7 decides `permission_denied` for
+  `config_resource_update`; `PROJECT_IMPORT_OPERATION` keeps `operation_disabled`), so the Phase 4
+  Tool returns the decided code, no G3 artifact or evidence changes, and a unit test pins the
+  per-operation split. `tooling/contracts/lint.py` refuses a Phase 4 mutation contract that does
+  not declare `permission_denied`. The live REST driver asserts exactly that code.
+- **Ticket #14 — the 8.3.9 candidate's full OpenAPI document is not committed.**
+  `docs/ignition-8.3.9-openapi/resource-types.json` records the resource-type inventory a live
+  8.3.9 Gateway exposed (56 types, a strict subset of the 8.3.8 document's 57 — the difference is
+  the MCP Module's own `server-config`), with the source document's SHA-256, the Gateway build and
+  the capturing run. Every listed type is classified. Committing the 12.7 MB document itself is a
+  repository-size decision for the owner; until then the classification test enforces the inventory
+  and the discovery-by-path rule, and anything unclassified stays refused.
+- **Ticket #14 — a collection-qualified Target policy does not exist yet.** The Gateway reads and
+  changes a config resource by collection as well as by name, so a Target allowlist entry for
+  `<resourceType>/<name>` would otherwise authorize the same name in every collection.
+  `config_resource_update` therefore refuses a caller-supplied `collection` with `invalid_argument`
+  and addresses only the default collection, which closes the gap without inventing an encoding the
+  Target policy has no room for. Supporting collections means amending the Target policy (D08/D30)
+  to name the triple unambiguously; until then a two-collection test proves the refusal, and the
+  fixture keys resource state by `(name, collection)` so the distinction is observable.
+- **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
+  live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
+  timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open
+  questions. The compensating controls are mandatory in the workflow: the trusted-repo guard, no
+  repository or environment secrets in the job, loopback/compose-only Gateway and MCP endpoints,
+  run-unique CI-only credentials, and the driver's expectation checks over live data. Each run
+  repeats the note in its uploaded `identity.json`.
 - **Ticket #6 outcome (2026-09-22, `phase4-live-g4a` run 35635887711, both Gateway rows).** Runtime Target Policy storage is characterized and one location is recommended: a dedicated `IgnitionMCPPolicy` Tag provider holding a String Tag `RuntimeTargetPolicy` with the canonical JSON policy text, read by handlers through the gated two-step read described in the policy-read-bound question below (companion `RuntimeTargetPolicyLength` Int4 Tag first, then the document). `setup-native apply` writes it through Native REST (create the provider, import the Tag with a bounded retry; `Abort` on create, `MergeOverwrite` on update), and reads it back with `/tags/export` plus the provider resource signature. Evidence and the rejected candidates are in [the research note](../research/runtime-target-policy-storage-and-alarm-query-bound.md). **For the owner to approve:** the reserved provider name, and the product rule that every Runtime Tag Mutation refuses any target inside the policy provider *before* Preflight executes, whatever the Target allowlist says, including an explicit `*`. The rule must cover `tag_write`, `tag_update`, `tag_delete` and `tag_create` (all targets), and **both the source and the destination** of `tag_move`, `tag_rename` and `tag_copy` — a copy into the provider writes the policy, a copy out of it publishes the document elsewhere, and `tag_create` could otherwise add Tags to it under a permissive CONFIG allowlist. D30 §1 states the property but not the enforcement point; the harness measured that a handler can write Tags inside that provider, so the boundary has to be the product rule.
 - **`alarm_acknowledge` (ticket #9) is parked.** The D12 Phase 4 amendment holds only if recorded evidence shows an exact-path `queryStatus` is bounded before or during execution. The recorded run shows the opposite: one exact Alarm path returned 1 → 2 → 3 items over three unacknowledged activate/clear cycles, because cleared-unacknowledged events accumulate until they are acknowledged, and the query exposes no limit or continuation (D12 Phase 2 amendment). The handler-side Observed state for an acknowledge has no bounded source, so the ticket cannot be implemented as specified. **For the owner:** approve the park, or supply a credible pre/during-execution bound (a verified native limit/continuation, or an independently bounded alarm backend). The scope and ticket tables mark it parked.
 - **Policy read bound (ticket #6 follow-up).** The Runtime Target Policy is a `String` Tag, and Ignition documents no maximum length for a Tag value; `system.tag.readBlocking` takes only paths and a timeout, so a post-read length check is not a bound (the reasoning D12's Phase 2 amendment applied to `alarm_status`). The recommendation is therefore conditional on a product-enforced cap: the policy Tag carries a companion `RuntimeTargetPolicyLength` Int4 Tag that `setup-native apply` writes in the same import, and the reader refuses a document whose declared length is missing, non-integer or over `IgnitionMcpPolicyMaxBytes` (32 KiB) **without reading the value at all**, then re-checks the value's byte length after reading. The harness measures both the served, length-verified read and a deliberately oversize pair that must be skipped unmaterialized. **For the owner to approve or reject:** the cap value and the rule that `apply` is the only writer of that provider (which is what makes the declared length an enforced maximum). If the cap is rejected, the fail-closed default is to keep Runtime Mutations disabled and move the policy to a mechanism with a native bound.

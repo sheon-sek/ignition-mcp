@@ -53,8 +53,11 @@ def _registered_tool_functions() -> list[ast.AsyncFunctionDef]:
 
 def test_every_registered_tool_routes_through_the_single_invoke() -> None:
     tools = _registered_tool_functions()
-    # 11 Phase 2 tools + the two sensitive exports (slice 5); slices 8 adds three more.
-    assert len(tools) == 16, "registered REST Tool functions drifted from the routed inventory"
+    # 11 Phase 2 tools + the two sensitive exports (slice 5) + three storage tools
+    # (slice 8) + the first Phase 4 REST Mutation Tool (milestone 4c), whose
+    # operation-record path is pinned in test_phase4_config_resource_update.py
+    # because a CONFIG-scope credential is needed to reach it.
+    assert len(tools) == 17, "registered REST Tool functions drifted from the routed inventory"
     for node in tools:
         calls = {
             call.func.id
@@ -128,7 +131,7 @@ def _stub_services(context_name: str) -> dict[str, Any]:
     async def config_resource_get(*args: Any, **kwargs: Any) -> ConfigResourceGetResult:
         return ConfigResourceGetResult(
             correlationId=args[2].correlation_id, resourceType="ignition/database-connection",
-            resource={},
+            resource={}, signature="sig-1",
         )
 
     async def audit_query(*args: Any, **kwargs: Any) -> AuditQueryResult:

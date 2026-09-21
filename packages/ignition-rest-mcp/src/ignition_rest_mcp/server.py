@@ -39,6 +39,7 @@ from ignition_rest_mcp.models import (
     ConfigResourceListResult,
     ConfigResourceNamesResult,
     ConfigResourceSearchResult,
+    ConfigResourceUpdateResult,
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
@@ -59,6 +60,9 @@ from ignition_rest_mcp.services.artifacts import (
     artifact_info as artifact_info_service,
     artifact_list as artifact_list_service,
     operation_diagnose as operation_diagnose_service,
+)
+from ignition_rest_mcp.services.config_mutation import (
+    config_resource_update as config_resource_update_service,
 )
 from ignition_rest_mcp.services.gateway import (
     capabilities_resource,
@@ -347,6 +351,41 @@ def create_server(settings: Settings) -> FastMCP:
                 resource_type=resourceType, name=name, collection=collection,
                 default_if_undefined=defaultIfUndefined,
             ),
+        )
+
+    @mcp.tool(
+        name="config_resource_update",
+        description=(
+            "Modify one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused resource "
+            "types)."
+        ),
+        output_schema=ConfigResourceUpdateResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_update"},
+    )
+    async def config_resource_update(
+        resourceType: str,
+        expectedSignature: str,
+        name: str = "",
+        collection: str = "",
+        config: dict[str, Any] | None = None,
+        enabled: bool | None = None,
+        description: str | None = None,
+    ) -> ConfigResourceUpdateResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceUpdateResult:
+            return await config_resource_update_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                expected_signature=expectedSignature, config=config, enabled=enabled,
+                description=description,
+            )
+
+        return await _invoke(
+            "config_resource_update", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
         )
 
     @mcp.tool(
@@ -707,9 +746,6 @@ async def _storage_diagnostics(state: RuntimeState, settings: Settings) -> Stora
     )
 
 
-SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
-
-
 async def _transaction_reconcile_loop(service: ProjectTransactionService, settings: Settings) -> None:
     # Startup catch-up first, then an interval loop; reconciliation never replays
     # an import (bounded read-only comparison inside the service).
@@ -733,6 +769,17 @@ async def _transaction_reconcile_loop(service: ProjectTransactionService, settin
             LOGGER.exception("Transaction reconciliation failed", extra={"event": "txn_reconcile"})
 
 
+#: D08 deny-by-default deployment gates: a Tool is hidden from discovery unless the
+#: deployment enables its gate, even when the Gateway advertises the capability. The
+#: Tool repeats the gate at call time (the guarded executor for mutation classes, the
+#: service for sensitive exports), so a stale ``tools/list`` can never bypass it.
+DEPLOYMENT_GATED_TOOLS = {
+    "project_export": "sensitive_exports_enabled",
+    "tag_config_export": "sensitive_exports_enabled",
+    "config_resource_update": "config_mutation_enabled",
+}
+
+
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Settings) -> None:
     gated = {
         "gateway_info": "gateway_info",
@@ -742,6 +789,7 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "config_resource_names": "config_resource_names",
         "config_resource_list": "config_resource_list",
         "config_resource_get": "config_resource_get",
+        "config_resource_update": "config_resource_update",
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",
@@ -750,10 +798,8 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
     }
     usable = snapshot.state in {"READY", "STALE"}
     for tool_name, capability in gated.items():
-        # Sensitive exports (D08 deny-by-default; D17): discovery requires BOTH the
-        # Gateway capability and the deployment gate; the service repeats the gate
-        # at call time so a stale tools/list can never bypass it.
-        gate_blocks = tool_name in SENSITIVE_EXPORT_TOOLS and not settings.sensitive_exports_enabled
+        gate = DEPLOYMENT_GATED_TOOLS.get(tool_name)
+        gate_blocks = gate is not None and not bool(getattr(settings, gate))
         if usable and not gate_blocks and capability in snapshot.semantic_capabilities:
             mcp.enable(names={tool_name}, components={"tool"})
         else:
