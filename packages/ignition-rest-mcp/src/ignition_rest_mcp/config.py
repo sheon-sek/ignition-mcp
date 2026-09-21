@@ -60,6 +60,12 @@ class Settings:
     mutation_operations: tuple[str, ...]
     mutation_targets: dict[str, tuple[str, ...]]
     project_designer_policy: str
+    gateway_id: str
+    project_writer_enabled: bool
+    project_lock_timeout_seconds: float
+    project_lock_max_entries: int
+    project_reconcile_interval_seconds: float
+    project_verification_timeout_seconds: float
     jwt_jwks_uri: str | None = None
     jwt_public_key: str | None = None
     jwt_issuer: str | None = None
@@ -118,6 +124,16 @@ class Settings:
             mutation_operations=_csv_env("IGNITION_MCP_MUTATION_OPERATIONS"),
             mutation_targets=_targets_env("IGNITION_MCP_MUTATION_TARGETS"),
             project_designer_policy=(os.getenv("IGNITION_MCP_PROJECT_DESIGNER_POLICY") or "deny").strip().lower(),
+            gateway_id=(os.getenv("IGNITION_MCP_GATEWAY_ID") or "").strip(),
+            project_writer_enabled=_bool_env("IGNITION_MCP_PROJECT_WRITER_ENABLED"),
+            project_lock_timeout_seconds=float(os.getenv("IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS", "10")),
+            project_lock_max_entries=int(os.getenv("IGNITION_MCP_PROJECT_LOCK_MAX_ENTRIES", "32")),
+            project_reconcile_interval_seconds=float(
+                os.getenv("IGNITION_MCP_PROJECT_RECONCILE_INTERVAL_SECONDS", "60")
+            ),
+            project_verification_timeout_seconds=float(
+                os.getenv("IGNITION_MCP_PROJECT_VERIFICATION_TIMEOUT_SECONDS", "60")
+            ),
             jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
             jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
             jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
@@ -241,6 +257,25 @@ class Settings:
                     raise ConfigurationError("mutation target entries must be <=256 characters")
         if self.project_designer_policy not in {"deny", "warn", "ignore"}:
             raise ConfigurationError("IGNITION_MCP_PROJECT_DESIGNER_POLICY must be deny, warn, or ignore")
+        if self.gateway_id and (
+            len(self.gateway_id) > 128 or re.fullmatch(r"[A-Za-z0-9._:-]+", self.gateway_id) is None
+        ):
+            raise ConfigurationError(
+                "IGNITION_MCP_GATEWAY_ID must be <=128 characters of [A-Za-z0-9._:-]"
+            )
+        if self.project_writer_enabled and not self.gateway_id:
+            raise ConfigurationError(
+                "IGNITION_MCP_GATEWAY_ID is required when IGNITION_MCP_PROJECT_WRITER_ENABLED=true "
+                "(one stable operator-chosen ID per Gateway, identical across replicas of that Gateway)"
+            )
+        if not 0 < self.project_lock_timeout_seconds <= 300:
+            raise ConfigurationError("Project lock acquire timeout must be >0 and <=300 seconds")
+        if self.project_lock_max_entries < 1:
+            raise ConfigurationError("Project lock registry capacity must be >=1")
+        if self.project_reconcile_interval_seconds <= 0:
+            raise ConfigurationError("Project reconcile interval must be positive")
+        if not 0 < self.project_verification_timeout_seconds <= 300:
+            raise ConfigurationError("Project verification timeout must be >0 and <=300 seconds")
 
     def budget_deadline_seconds(self, budget_class: str) -> float:
         return {

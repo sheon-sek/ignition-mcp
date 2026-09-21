@@ -6,6 +6,7 @@ from dataclasses import dataclass
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore
 from ignition_rest_mcp.audit.sink import SqliteAuditSink
+from ignition_rest_mcp.projects.transactions import ProjectTransactionService
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.observability.metrics import Metrics
@@ -22,6 +23,7 @@ class RuntimeState:
     records: OperationRecordStore | None = None
     audit_sink: SqliteAuditSink | None = None
     artifacts: LocalArtifactStore | None = None
+    transactions: ProjectTransactionService | None = None
 
     def require_client(self) -> GatewayClient:
         if self.client is None:
@@ -57,3 +59,8 @@ class RuntimeState:
         if self.artifacts is None:
             raise RuntimeError("Artifact store is not initialized")
         return self.artifacts
+
+    def require_transactions(self) -> ProjectTransactionService:
+        if self.transactions is None:
+            raise RuntimeError("Project transaction service is not initialized")
+        return self.transactions

@@ -15,6 +15,9 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
 from ignition_rest_mcp.artifacts.routes import register_artifact_routes
+from ignition_rest_mcp.projects.identity import gateway_identity
+from ignition_rest_mcp.projects.locks import ProcessWriterGuard, ProjectLockRegistry
+from ignition_rest_mcp.projects.transactions import ProjectTransactionService
 from ignition_rest_mcp.auth import build_auth, current_principal
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -100,6 +103,18 @@ def create_server(settings: Settings) -> FastMCP:
         artifacts = LocalArtifactStore(storage.state, data_dir, quotas_from_settings(settings))
         artifacts.prepare()
         await artifacts.reconcile(batch=settings.artifact_cleanup_batch, deadline_seconds=HARD_ARTIFACT_DEADLINE_SECONDS)
+        writer_guard = ProcessWriterGuard(data_dir)
+        if settings.project_writer_enabled:
+            await writer_guard.acquire()
+        transaction_service = ProjectTransactionService(
+            client=client, registry=registry, store=artifacts, settings=settings,
+            locks=ProjectLockRegistry(
+                timeout_seconds=settings.project_lock_timeout_seconds,
+                max_entries=settings.project_lock_max_entries,
+            ),
+            identity=gateway_identity(settings.gateway_id, settings.gateway_url),
+            db=storage.state,
+        )
         state.client = client
         state.registry = registry
         state.metrics = metrics
@@ -107,6 +122,7 @@ def create_server(settings: Settings) -> FastMCP:
         state.records = records
         state.audit_sink = audit_sink
         state.artifacts = artifacts
+        state.transactions = transaction_service
         interrupted = await records.mark_interrupted_stale(HARD_ARTIFACT_DEADLINE_SECONDS)
         if interrupted:
             LOGGER.warning(
@@ -117,6 +133,7 @@ def create_server(settings: Settings) -> FastMCP:
         retention: asyncio.Task[None] | None = None
         prober: asyncio.Task[None] | None = None
         janitor: asyncio.Task[None] | None = None
+        reconciler: asyncio.Task[None] | None = None
         try:
             await registry.refresh()
             _apply_visibility(mcp, registry.snapshot, settings)
@@ -134,15 +151,18 @@ def create_server(settings: Settings) -> FastMCP:
             retention = asyncio.create_task(_retention_loop(storage, records, audit_sink, settings))
             prober = asyncio.create_task(_probe_loop(storage, settings))
             janitor = asyncio.create_task(_artifact_janitor_loop(artifacts, settings))
+            if settings.project_writer_enabled:
+                reconciler = asyncio.create_task(_transaction_reconcile_loop(transaction_service, settings))
             yield
         finally:
             try:
-                for task in (watcher, retention, prober, janitor):
+                for task in (watcher, retention, prober, janitor, reconciler):
                     if task is not None:
                         task.cancel()
                 await asyncio.gather(*(
-                    task for task in (watcher, retention, prober, janitor) if task is not None
+                    task for task in (watcher, retention, prober, janitor, reconciler) if task is not None
                 ), return_exceptions=True)
+                writer_guard.release_sync()
                 await registry.aclose()
             finally:
                 try:
@@ -158,6 +178,7 @@ def create_server(settings: Settings) -> FastMCP:
                         state.records = None
                         state.audit_sink = None
                         state.artifacts = None
+                        state.transactions = None
 
     mcp = FastMCP(
         name="ignition-rest",
@@ -587,6 +608,29 @@ async def _artifact_janitor_loop(artifacts: LocalArtifactStore, settings: Settin
 
 
 SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
+
+
+async def _transaction_reconcile_loop(service: ProjectTransactionService, settings: Settings) -> None:
+    # Startup catch-up first, then an interval loop; reconciliation never replays
+    # an import (bounded read-only comparison inside the service).
+    try:
+        await service.reconcile_interrupted(
+            batch=settings.retention_batch_rows,
+            per_txn_seconds=settings.artifact_timeout_seconds,
+        )
+    except Exception:
+        LOGGER.exception("Startup transaction reconciliation failed", extra={"event": "txn_reconcile"})
+    while True:
+        await asyncio.sleep(settings.project_reconcile_interval_seconds)
+        try:
+            await service.reconcile_interrupted(
+                batch=settings.retention_batch_rows,
+                per_txn_seconds=settings.artifact_timeout_seconds,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception("Transaction reconciliation failed", extra={"event": "txn_reconcile"})
 
 
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Settings) -> None:

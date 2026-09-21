@@ -20,6 +20,9 @@ ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
+PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
+DESIGNERS_PATH = "/data/api/v1/designers"
+PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 RESOURCE_TYPE_PREFIX = "/data/api/v1/resources/type/"
 
 
@@ -258,6 +261,15 @@ def _semantic_capabilities(
         for item in resource_types.values()
     ):
         semantic.add("config_resource_get")
+    # Write-side and auxiliary capabilities exist exactly when the method+path pair
+    # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
+    # capability only gates internal machinery and future Phase 4 exposure (D08/D26).
+    if ("POST", PROJECT_IMPORT_PATH) in endpoints:
+        semantic.add("project_import")
+    if ("GET", DESIGNERS_PATH) in endpoints:
+        semantic.add("designer_sessions")
+    if ("GET", PROJECT_FIND_PATH) in endpoints:
+        semantic.add("project_find")
     return semantic
 
 

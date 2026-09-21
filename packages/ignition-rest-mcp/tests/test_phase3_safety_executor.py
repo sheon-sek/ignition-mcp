@@ -357,40 +357,45 @@ def test_2xx_with_unchanged_state_requires_recovery(tmp_path: Path) -> None:
     assert env.calls == 1
 
 
-def test_2xx_with_indeterminate_verification_is_outcome_unknown(tmp_path: Path) -> None:
+def test_2xx_with_indeterminate_verification_is_recovery_required(tmp_path: Path) -> None:
+    # Plan 7.6: OUTCOME_UNKNOWN is reachable only from possibly-dispatched
+    # (ambiguous) boundaries. A claimed success that cannot be verified is
+    # dispatch-certain with unconfirmed state -> RECOVERY_REQUIRED, artifacts
+    # preserved, never replayed.
     env = _Env(tmp_path, _status(200))
     calls: list[str] = []
     request = _request(verify=_verifier(VerificationOutcome.INDETERMINATE, calls))
     result, rows = _run(env, request)
 
-    assert result.state is MutationState.OUTCOME_UNKNOWN
+    assert result.state is MutationState.RECOVERY_REQUIRED
     assert result.error is not None and result.error.code == "outcome_unknown"
     assert calls == ["responded"]
     assert rows == [
-        ("decision", "allowed"), ("attempt", "attempted"), ("result", "outcome_unknown"),
+        ("decision", "allowed"), ("attempt", "attempted"), ("result", "recovery_required"),
     ]
     assert env.calls == 1
 
 
-def test_2xx_with_failing_verifier_maps_to_outcome_unknown(tmp_path: Path) -> None:
-    # _verify maps any verification *exception* to INDETERMINATE (no replay).
+def test_2xx_with_failing_verifier_maps_to_recovery_required(tmp_path: Path) -> None:
+    # _verify maps any verification *exception* to INDETERMINATE (no replay);
+    # for a claimed success that is RECOVERY_REQUIRED.
     env = _Env(tmp_path, _status(200))
     calls: list[str] = []
     result, rows = _run(env, _request(verify=_raising_verifier(calls)))
 
-    assert result.state is MutationState.OUTCOME_UNKNOWN
+    assert result.state is MutationState.RECOVERY_REQUIRED
     assert result.error is not None and result.error.code == "outcome_unknown"
     assert calls == ["responded"]
     assert rows == [
-        ("decision", "allowed"), ("attempt", "attempted"), ("result", "outcome_unknown"),
+        ("decision", "allowed"), ("attempt", "attempted"), ("result", "recovery_required"),
     ]
     assert env.calls == 1
 
 
-def test_2xx_verification_timeout_maps_to_outcome_unknown(tmp_path: Path) -> None:
+def test_2xx_verification_timeout_maps_to_recovery_required(tmp_path: Path) -> None:
     # A claimed success whose bounded verification times out cannot be
-    # established: outcome_unknown with a result row, exactly one dispatch,
-    # never a replay (D08).
+    # established: RECOVERY_REQUIRED with a result row (C unobtainable after a
+    # claimed dispatch per D16 slice-7), exactly one dispatch, never a replay.
     env = _Env(tmp_path, _status(200))
 
     async def scenario() -> list[tuple[str, str]]:
@@ -402,7 +407,7 @@ def test_2xx_verification_timeout_maps_to_outcome_unknown(tmp_path: Path) -> Non
                 client=env.client, registry=env.registry,
                 settings=env.settings, context=context, request=request,
             )
-            assert result.state is MutationState.OUTCOME_UNKNOWN
+            assert result.state is MutationState.RECOVERY_REQUIRED
             assert result.error is not None and result.error.code == "outcome_unknown"
             assert result.possibly_dispatched is True
             return await env.audit_rows()
@@ -411,7 +416,7 @@ def test_2xx_verification_timeout_maps_to_outcome_unknown(tmp_path: Path) -> Non
 
     rows = asyncio.run(scenario())
     assert rows == [
-        ("decision", "allowed"), ("attempt", "attempted"), ("result", "outcome_unknown"),
+        ("decision", "allowed"), ("attempt", "attempted"), ("result", "recovery_required"),
     ]
     assert env.calls == 1
 

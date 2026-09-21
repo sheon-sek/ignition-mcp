@@ -55,6 +55,34 @@ STATE_DDL: list[str] = [
     CREATE INDEX IF NOT EXISTS artifacts_state_expiry ON artifacts(state, expires_at);
     CREATE INDEX IF NOT EXISTS artifacts_owner ON artifacts(owner_principal, state);
     """,
+    # 3: D16 Project transaction records (Slice 7)
+    """
+    CREATE TABLE IF NOT EXISTS project_transactions (
+        transaction_id TEXT PRIMARY KEY,
+        gateway_id TEXT NOT NULL,
+        gateway_id_derived INTEGER NOT NULL DEFAULT 0,
+        project_name TEXT NOT NULL,
+        state TEXT NOT NULL,
+        correlation_id TEXT NOT NULL,
+        principal_key TEXT NOT NULL,
+        baseline_artifact_id TEXT,
+        baseline_fingerprint TEXT,
+        candidate_artifact_id TEXT,
+        candidate_fingerprint TEXT,
+        precheck_artifact_id TEXT,
+        result_artifact_id TEXT,
+        result_fingerprint TEXT,
+        import_dispatched INTEGER NOT NULL DEFAULT 0,
+        import_outcome TEXT,
+        import_status INTEGER,
+        external_drift_detected INTEGER NOT NULL DEFAULT 0,
+        designer_warning INTEGER NOT NULL DEFAULT 0,
+        error_code TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS project_transactions_state ON project_transactions(state);
+    """,
 ]
 
 AUDIT_DDL: list[str] = [

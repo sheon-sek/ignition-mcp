@@ -13,7 +13,6 @@ from __future__ import annotations
 import asyncio
 import json
 from typing import Any
-from urllib.parse import quote
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, sanitize_display_filename
 from ignition_rest_mcp.artifacts.model import Artifact
@@ -22,9 +21,8 @@ from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.models import ArtifactRefModel, ProjectExportResult, TagConfigExportResult
 from ignition_rest_mcp.operation import OperationContext
-from ignition_rest_mcp.projects.fingerprint import project_fingerprint
+from ignition_rest_mcp.projects.capture import capture_project, validate_project_name
 
-MAX_PROJECT_NAME_BYTES = 256
 MAX_PROVIDER_LENGTH = 256
 MAX_TAG_PATH_LENGTH = 1024
 # Documented bound (slice 5 step 4): tag config JSON is validated with a full
@@ -52,7 +50,7 @@ def _bounded_export_text(value: str, name: str, *, maximum_bytes: int, allow_emp
         raise GatewayError("invalid_argument", f"{name} must be a string")
     if not allow_empty and not value.strip():
         raise GatewayError("invalid_argument", f"{name} must be non-empty")
-    if len(value) > maximum_bytes:  # UTF-8 byte bound enforced below
+    if len(value) > maximum_bytes:  # cheap character bound first
         raise GatewayError("limit_exceeded", f"{name} exceeds the {maximum_bytes}-byte limit")
     if len(value.encode("utf-8")) > maximum_bytes:
         raise GatewayError("limit_exceeded", f"{name} exceeds the {maximum_bytes}-byte limit")
@@ -91,49 +89,34 @@ async def project_export(
     deadline_seconds: float,
 ) -> ProjectExportResult:
     await _audited_gate(context, settings_gate_on, "project_export", registry)
-    name = _bounded_export_text(project_name, "projectName", maximum_bytes=MAX_PROJECT_NAME_BYTES, allow_empty=False)
+    name = validate_project_name(project_name)
 
-    writer = None
+    auditor = context.auditor
+    if auditor is not None:
+        await auditor.decision(
+            allowed=True, target_type="project", target_id=name, safe_fields={"projectName": name},
+        )
+        await auditor.attempt(target_type="project", target_id=name, safe_fields={"projectName": name})
     try:
-        auditor = context.auditor
-        if auditor is not None:
-            await auditor.decision(
-                allowed=True, target_type="project", target_id=name, safe_fields={"projectName": name},
-            )
-        writer = await store.create(
-            kind="project_export", sensitivity="CONFIDENTIAL", retention_class="EXPORT",
-            owner=context.actor, filename=sanitize_display_filename(f"{name}.zip", fallback="project-export.zip"),
-            media_type="application/zip", correlation_id=context.correlation_id,
-            gateway_id=gateway_id, project_name=name,
+        captured = await capture_project(
+            client, store, context, project_name=name, gateway_id=gateway_id,
+            retention_class="EXPORT", deadline_seconds=deadline_seconds,
         )
-        if auditor is not None:
-            await auditor.attempt(target_type="project", target_id=name, safe_fields={"projectName": name})
-        # quote() enforces the single path segment; no invented charset (D16)
-        path = f"/data/api/v1/projects/export/{quote(name, safe='')}"
-        await client.stream_get_to(
-            path, sink=writer, limit_bytes=store.quotas.max_bytes,
-            deadline_seconds=deadline_seconds, context=context,
-        )
-        fingerprint = await asyncio.to_thread(project_fingerprint, store.staged_path(writer))
     except (Exception, asyncio.CancelledError) as error:
-        if writer is not None:
-            await writer.abort()
-        auditor = context.auditor
         if auditor is not None and auditor.attempt_recorded and not isinstance(error, asyncio.CancelledError):
             code = error.code if isinstance(error, GatewayError) else "internal_error"
             await auditor.result("failed", error_code=code, safe_fields={"projectName": name})
         raise
-    artifact = await store.publish(writer)
-    if context.auditor is not None:
-        await context.auditor.result(
+    if auditor is not None:
+        await auditor.result(
             "completed", duration_ms=context.elapsed_ms(),
             target_type="project", target_id=name, safe_fields={"projectName": name},
         )
     return ProjectExportResult(
         correlationId=context.correlation_id,
         projectName=name,
-        fingerprint=fingerprint,
-        artifact=_ref(artifact),
+        fingerprint=captured.fingerprint,
+        artifact=_ref(captured.artifact),
     )
 
 
@@ -157,10 +140,10 @@ async def tag_config_export(
     if not isinstance(recursive, bool) or not isinstance(include_udts, bool):
         raise GatewayError("invalid_argument", "recursive and includeUdts must be booleans")
 
-    writer = None
+    writer: Any = None
     safe = {"provider": provider, "path": path, "recursive": recursive, "includeUdts": include_udts}
+    auditor = context.auditor
     try:
-        auditor = context.auditor
         if auditor is not None:
             await auditor.decision(allowed=True, target_type="tag_provider", target_id=provider, safe_fields=safe)
         writer = await store.create(
@@ -188,14 +171,13 @@ async def tag_config_export(
     except (Exception, asyncio.CancelledError) as error:
         if writer is not None:
             await writer.abort()
-        auditor = context.auditor
         if auditor is not None and auditor.attempt_recorded and not isinstance(error, asyncio.CancelledError):
             code = error.code if isinstance(error, GatewayError) else "internal_error"
             await auditor.result("failed", error_code=code, safe_fields=safe)
         raise
     artifact = await store.publish(writer)
-    if context.auditor is not None:
-        await context.auditor.result(
+    if auditor is not None:
+        await auditor.result(
             "completed", duration_ms=context.elapsed_ms(),
             target_type="tag_provider", target_id=provider, safe_fields=safe,
         )

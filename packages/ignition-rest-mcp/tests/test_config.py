@@ -54,6 +54,12 @@ def _settings(**changes: object) -> Settings:
         "mutation_operations": (),
         "mutation_targets": {},
         "project_designer_policy": "deny",
+        "gateway_id": "",
+        "project_writer_enabled": False,
+        "project_lock_timeout_seconds": 10.0,
+        "project_lock_max_entries": 32,
+        "project_reconcile_interval_seconds": 60.0,
+        "project_verification_timeout_seconds": 60.0,
     }
     values.update(changes)
     return Settings(**values)  # type: ignore[arg-type]

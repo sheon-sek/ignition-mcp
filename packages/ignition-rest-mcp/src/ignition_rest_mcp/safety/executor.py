@@ -55,6 +55,7 @@ class MutationState(str, Enum):
 class VerificationOutcome(str, Enum):
     CONFIRMED = "confirmed"          # target now matches the intended post-state
     UNCHANGED = "unchanged"          # target still matches the pre-state
+    MISMATCH = "mismatch"            # observable, but matches neither pre- nor post-state
     INDETERMINATE = "indeterminate"  # could not be established within bounds
 
 
@@ -216,15 +217,14 @@ async def _interpret(
         if verified is VerificationOutcome.CONFIRMED:
             await auditor.result("completed", target_type=target_type, target_id=request.target_id)
             return MutationResult(MutationState.SUCCEEDED, dispatch, None)
-        if verified is VerificationOutcome.INDETERMINATE:
-            error = GatewayError("outcome_unknown", "Gateway claimed success but final state could not be established")
-            await auditor.result("outcome_unknown", error_code="outcome_unknown",
-                                 target_type=target_type, target_id=request.target_id)
-            return MutationResult(MutationState.OUTCOME_UNKNOWN, dispatch, error)
+        # A claimed success whose observed state is wrong (UNCHANGED/MISMATCH) or
+        # cannot be exported within budget (INDETERMINATE) is RECOVERY_REQUIRED:
+        # dispatch definitively happened, and OUTCOME_UNKNOWN stays reserved for
+        # possibly-dispatched (ambiguous) boundaries (D16 slice-7 mapping).
         error = GatewayError(
             "outcome_unknown",
-            "Gateway claimed success but the observed target state does not match the intended change; "
-            "manual recovery is required and nothing was replayed",
+            "Gateway claimed success but the verified target state does not confirm the "
+            "intended change; recovery is required and nothing was replayed",
         )
         await auditor.result("recovery_required", error_code="outcome_unknown",
                              target_type=target_type, target_id=request.target_id)
@@ -241,8 +241,8 @@ async def _interpret(
             # rejected response but state changed anyway: recovered success, recorded as such
             await auditor.result("recovered_success", target_type=target_type, target_id=request.target_id)
             return MutationResult(MutationState.RECOVERED_SUCCESS, dispatch, None)
-        if verified is VerificationOutcome.INDETERMINATE:
-            error = GatewayError("outcome_unknown", "Gateway rejected the write but state could not be verified")
+        if verified in {VerificationOutcome.INDETERMINATE, VerificationOutcome.MISMATCH}:
+            error = GatewayError("outcome_unknown", "Gateway rejected the write but the state is neither unchanged nor confirmed")
             await auditor.result("outcome_unknown", error_code="outcome_unknown",
                                  target_type=target_type, target_id=request.target_id)
             return MutationResult(MutationState.OUTCOME_UNKNOWN, dispatch, error)
@@ -266,6 +266,8 @@ async def _interpret(
         await auditor.result("not_applied", error_code="conflict", target_type=target_type,
                              target_id=request.target_id)
         return MutationResult(MutationState.NOT_APPLIED, dispatch, error)
+    # MISMATCH or INDETERMINATE after an ambiguous dispatch: never outcome_unknown
+    # becomes a replay licence; outcome_unknown is reserved for exactly here.
     error = GatewayError(
         "outcome_unknown",
         "the mutation may have reached Ignition and its final state cannot be established; "
