@@ -510,6 +510,73 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   before returning. `provision.py` also probes both document shapes into throwaway paths
   and re-exports the provider root, so every row records where the Gateway really puts
   each shape (`tagProvider.convention`) instead of leaving the rule an assumption.
+- **Review round 1 (codex) found three blockers, all fixed on `p4/rest-fix17`** (the
+  review report and `17-fix-1.md` record the findings and the fix):
+  - **The reserved policy provider is refused (D30 §1).** The #6 research note
+    identified `IgnitionMCPPolicy` as the provider the Runtime Target Policy lives in and
+    required every Tag Mutation to refuse it whatever the Target allowlist says, so the
+    policy cannot be overwritten or extended. `safety/reserved_tag_providers.py` holds the
+    reserved set, and the Tool hands its decision to the D08 chain as the operation's
+    Target-class rule (`target_policy`), which runs *before* the Target allowlist — the
+    same ordering D30 §5 gives a Refused resource type — so neither `*` nor an entry that
+    names the provider reaches it. The comparison is case-insensitive and the audited
+    reason names the reserved provider rather than the caller's spelling. The contract
+    declares the provider and the linter refuses a Tag Target that does not; four MCP
+    cases cover the provider root, a nested path, the policy Tag itself, a folded
+    spelling, an explicitly allowlisted provider, and the ordering (the refusal precedes
+    the artifact read, so even an unknown artifact is answered by the policy).
+  - **The Target allowlist matches provider-qualified path prefixes at segment
+    boundaries (the issue, D30 §1).** `MutationOperation.target_match` declares the rule
+    per operation: `exact` stays the membership rule for every Target that is not a
+    provider-qualified Tag path (the frozen Phase 3 machinery and its G3 evidence are
+    untouched), and `provider_prefix` is this Tool's, so `[MCP_CI_TAGS]target` authorizes
+    `[MCP_CI_TAGS]target/sub`. Boundaries and the provider qualifier are enforced exactly:
+    `[MCP_CI_TAGS]target` does not reach `[MCP_CI_TAGS]target2`, `[MCP_CI_TAGS]` does not
+    reach `[MCP_CI_TAGS_OTHER]target`, and an entry with no path is the provider root and
+    covers that provider. Two live cases prove both directions on the Gateway.
+  - **A malformed import report is uninterpretable, never a success (D30 §2).** The
+    report reader accepted `{"failureCount": -1, "failures": []}` as an explicit
+    zero-failure claim, so a real import with an unreadable report could be returned as
+    `succeeded`. A count that is negative, not a number, or a boolean, a `failures` value
+    that is not a list, and a count that disagrees with its own failure list are now all
+    uninterpretable: no claim and no refusal is read from them, so the call ends
+    `recovery_required`/`outcome_unknown`. The recorded Gateway grew one modelled knob
+    (`answer_tag_import_with`, a 2xx body substituted while the transition still applies)
+    and eight shapes are covered — the boundary case (the documented empty QualityCode
+    list) still reports a clean import as a success, so the rule is pinned on both sides.
+- **The fix heads were validated and proven live.** `p4/rest-fix17` carries the fixes plus
+  a merge of `origin/p4/rest` (the branch had no merge commit after #18 landed, so no
+  workflow could run on it). Full `AGENTS.md` block green: 883 pytest cases, mypy strict
+  clean, contract lint, workflow lint (7 files, 107 run blocks), native validate, compat
+  evidence (6 rows, no SUPPORTED claim). Local rehearsal **86/86** (both gates; 12 of the
+  cases are the Tag import section). Live on head `aa731a5`, both Gateway rows green at
+  **86/86 cases each** — `Phase 4 Live Gateway REST mutation`
+  [35666536297](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536297),
+  with `tag-import-under-the-allowlisted-prefix-applies`,
+  `tag-import-prefix-destination-serves-every-source-tag`,
+  `tag-import-reserved-policy-provider-is-permission-denied` and
+  `tag-import-reserved-policy-provider-says-which-rule` ok on 8.3.8 and 8.3.9. The
+  refusal's own message is in both rows' `observations.json`
+  (`tagReservedProviderResult`: `permission_denied`, "the target is inside the reserved
+  Runtime Target Policy provider…"), and `tagNestedNames` shows the nested destination
+  serving the source Tags. Frozen gates on the same head: CI
+  [35666536324](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536324), Phase 3
+  Live Gateway G3
+  [35666536299](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536299), Phase 4
+  Live Gateway G4a
+  [35666536363](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666536363) — all
+  success. The docs-only heads `75610c6` and `ccf43e8` repeat all four green: CI
+  [35667023607](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023607) and
+  [35667665418](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667665418), REST
+  mutation [35667023701](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023701)
+  and [35667665425](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667665425)
+  (both rows **86/86**, 0 failures), G3
+  [35667023714](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023714) and
+  [35667665510](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667665510), G4a
+  [35667023689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667023689) and
+  [35667665448](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667665448). Every
+  later docs-only head re-triggers the same four and was verified green the same way.
+
 - Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`, `9d25d98`):
   CI
   [35661939654](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939654),
@@ -624,6 +691,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   policy the frozen Phase 3 machinery and its G3 evidence also use. **For the owner:**
   confirm the exact-Target reading, or amend D08/D30 to add a provider-qualified prefix
   rule (the Runtime Target Policy already has one, D30 §1).
+  **RESOLVED in review round 1: the prefix rule is implemented, as the issue and D30 §1
+  require.** Review found the exact reading a blocker ("changes the requested
+  authorization semantics"), and D30 §1 already states the rule the Runtime Target Policy
+  uses — "allowlist entries are provider-qualified path prefixes that match only at
+  segment boundaries" (`allowlist_match: provider_qualified_prefix_segment_boundary`).
+  `MutationOperation.target_match` now carries it per operation (default `exact`, so
+  every non-Tag Target and the frozen Phase 3 machinery keep membership), and the
+  contract's `targetId.match` plus the linter pin it. The token is uniform across the
+  Phase 4 mutation contracts: `alarm_pipeline_cancel`'s existing prose sentence moved
+  verbatim into `targetId.matchNote` beside `"match": "exact"`, so the linter can check
+  every mutation's rule instead of one arbitrary string.
 - **Ticket #17 — a document's root decides which Tag paths the import declares.** The
   first live run showed the assumption mattered: the Tool declared only the document's
   `tags`, while the Gateway also creates the document's *named* root. The implemented rule
@@ -633,6 +711,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   per-Tag (rather than per-folder) export is the remaining unprobed case: its root is the
   Tag itself and the rule reads it as one Tag under the path. **For the owner:** confirm,
   or ask for a live case for a leaf-root document.
+  **RESOLVED in review round 1: the rule stands; the leaf-root live probe is a coverage
+  limitation, not a reason to broaden imports.** Review found the reading reasonable,
+  backed by both the named-root and the provider-root live probes, and consistent with the
+  parser's root handling; a per-Tag artifact still verifies, because a leaf root declares
+  exactly one Tag under the request path and the bounded re-export compares that path.
+  Neither the harness nor the Tool changed here.
 - **Ticket #17 — an uninterpretable 2xx body is not a success.** The import route's
   documented response is a list of non-Good QualityCodes; live 8.3.8/8.3.9 answer a
   summary object. The Tool reads both, treats a zero-failure report as the Gateway's
@@ -642,18 +726,33 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   that shape (both rows recorded the summary), so the reading is undecided for a Gateway
   that answers 200 with no body at all. **For the owner:** confirm the fail-closed
   reading, or name the accepted body.
+  **RESOLVED in review round 1: the fail-closed reading is confirmed, and the one path
+  that violated it is fixed.** Review found the policy correct but the report reader
+  accepting `{"failureCount": -1, "failures": []}` as an explicit zero-failure claim, so
+  an uninterpretable 2xx could still be returned as a success when the re-export showed
+  the Tags. Negative, non-numeric and boolean counts, a `failures` value that is not a
+  list, and a count that disagrees with its own failure list are now all uninterpretable
+  (no claim, no refusal), the call ends `recovery_required`/`outcome_unknown`, and eight
+  fixture cases pin it — including the documented empty QualityCode list, which is still a
+  clean claim. Empty and otherwise unparseable bodies keep the same fail-closed reading.
 - **Ticket #17 — a partly applied import is `recovery_required`, not per-item data.**
   D30 §3's per-item reporting is about Preflight; a Gateway that reports some successes
   and some failures has neither refused the call nor completed it, so the Tool fails
   closed with `outcome_unknown` and the message names the Tags the re-export was not
   showing. The Runtime plane's per-item QualityCode surface is the `tag_write`
   precedent. **For the owner:** confirm, or ask for a per-item result surface here too.
+  **RESOLVED in review round 1: confirmed.** Review found treating a partial report as
+  `recovery_required` correct for a single Tool result, because per-item outcomes would
+  falsely suggest the call was safely completed. No change.
 - **Ticket #17 — `missing` is empty on every returned result by construction.** The
   Observed state carries both lists because that is the comparison the verification made,
   but a declared Tag the bounded re-export does not show is `recovery_required` (an error
   naming up to five of them), so a caller only ever sees `present`. **For the owner:**
   confirm, or ask for the comparison itself to be returned as data on a failed
   verification.
+  **RESOLVED in review round 1: confirmed.** Review found keeping `missing` empty on every
+  returned result correct, because any missing declared Tag makes the call an error, and an
+  unresolved error names the missing paths (up to five) in its message. No change.
 - **Ticket #17 — the `_types_` rule is read from D30 §6 onto the REST Target allowlist.**
   D30 §6 states the explicit-`_types_` requirement for the Runtime Target Policy
   (`[provider]_types_/…`); this Tool applies the same reading to its REST Target: a
@@ -661,6 +760,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`[provider]_types_`), anything else is `invalid_argument`. A `_types_` folder deeper in
   the path is an ordinary folder name and is not restricted. **For the owner:** confirm,
   or state the REST-plane rule separately.
+  **RESOLVED in review round 1: confirmed.** Review found requiring an explicit `_types_`
+  destination for documents that declare UDT definitions consistent with D30 §6 and
+  appropriately fail-closed. One consequence of the new prefix rule is recorded here: the
+  requirement is satisfied by the *call* naming the `_types_` path, since the Tool refuses
+  such a document anywhere else, so an allowlist entry that covers a provider does not by
+  itself make UDT definitions importable — the caller still has to spell the `_types_`
+  Target. No change.
 - **Ticket #17 — provisioning a fresh Tag provider needs a retry, the Tool never
   retries.** The recorded 8.3.8 behaviour (Bad 776 `cleanPath is null` on the first import
   after a provider is created) is handled in `provision.py`, which imports the source Tags
@@ -669,6 +775,28 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   was enough this time (`tagProvider.import.attempts: 1`). **For the owner:** no action
   needed unless `setup-native` should adopt the same retry-and-verify discipline for the
   Runtime Target Policy provider, which #6 already recommends.
+  **RESOLVED in review round 1: confirmed.** Review found keeping readiness retry logic
+  out of the Tool correct — the harness may retry, the mutation dispatch stays exactly
+  once. No change here; the `setup-native` adoption is #21's.
+- **Ticket #17 — the Runtime Target Policy provider is reserved: RESOLVED by a
+  Target-class rule (review round 1).** D30 §1 requires that the Runtime MCP server cannot
+  write the policy, and the #6 research note showed Jython handler scope is not a security
+  boundary, so the rule has to be the product's. Review found the REST Tag import able to
+  write there — with a `*` allowlist, or with an entry naming the provider — which is the
+  same class of hole D30 §5 closes for Refused resource types. `safety/reserved_tag_providers.py`
+  now holds the reserved set (`IgnitionMCPPolicy`, compared case-insensitively), the Tool
+  passes its decision to the D08 chain as the operation's Target-class rule, and the rule
+  therefore runs before the Target allowlist: no `*`, no explicit entry. The contract
+  (`reservedTagProviders`) and the linter require it for a Tool whose Target is a Tag path,
+  and the live REST driver asserts the refusal and its message on every row. **Residual,
+  recorded for the owner:** the rule covers Tag Mutations, which is what D30 §1 protects;
+  `config_resource_update`/`delete` can still change the `ignition/tag-provider` *resource*
+  because D30 §5 classifies that type as allowed. That is a different plane — the provider's
+  configuration, not the policy Tag — and it fails closed rather than open: removing or
+  breaking the provider leaves the policy unreadable, which every Runtime Mutation answers
+  with `operation_disabled` (D30 §1/§7). If the owner wants that resource type refused as
+  well, it is a one-line addition to `contracts/shared/refused-resource-types.json` and the
+  Runtime Text Resource that mirrors it.
 - **Resolved (#16 review round 1) — which artifacts `project_import` consumes: keep the
   union.** D30 §6 names a READY `project_archive`; the ticket names "the artifact ID of a
   READY `project_archive` ... (uploaded through `POST /artifacts` or produced by

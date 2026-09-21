@@ -122,6 +122,12 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: D30 §5 governs config-resource Mutations; a Tag import's Target is a
         #: provider-qualified path, not a config resource.
         "refusedResourceTypes": False,
+        #: D30 §1/D08: the Target is a provider-qualified Tag path, so its allowlist
+        #: entries match as prefixes at segment boundaries.
+        "targetMatch": "provider_qualified_prefix_at_segment_boundaries",
+        #: D30 §1: the Runtime Target Policy's own provider, refused whatever the
+        #: allowlist says.
+        "reservedTagProviders": ("IgnitionMCPPolicy",),
         #: D03 request-schema validation governs the config-resource write bodies; this
         #: Tool sends a Tag export document, gated by its own byte cap and JSON parse.
         "requestSchemaValidation": False,
@@ -363,6 +369,41 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: D30 §7 decides permission_denied for a Target denial")
         if target.get("wildcard") != "*" or target.get("denyByDefault") is not True:
             raise ContractError(f"{tool_name}: the Target allowlist stays deny-by-default with an explicit *")
+        if target.get("match", "exact") != spec.get("targetMatch", "exact"):
+            raise ContractError(
+                f"{tool_name}: the Target match rule must be declared exactly (D08/D30 §1)"
+            )
+        # D30 §1: a Tool whose Target can write Tags must declare the reserved provider
+        # it refuses, and no other Tool may claim one.
+        reserved = spec.get("reservedTagProviders")
+        declared_reserved = tool.get("reservedTagProviders")
+        if reserved is None:
+            if "reservedTagProviders" in tool:
+                raise ContractError(
+                    f"{tool_name}: D30 §1's reserved provider governs Tag Mutations; "
+                    "this Tool's Target is not a Tag path"
+                )
+        else:
+            if not isinstance(declared_reserved, dict) or tuple(
+                declared_reserved.get("providers", ())
+            ) != tuple(reserved):
+                raise ContractError(
+                    f"{tool_name}: the reserved Tag providers must be declared exactly (D30 §1)"
+                )
+            if declared_reserved.get("denialCode") != "permission_denied":
+                raise ContractError(
+                    f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §1/§7)"
+                )
+            if declared_reserved.get("layer") != "target-class":
+                raise ContractError(
+                    f"{tool_name}: a reserved provider is refused as a Target class, before "
+                    "the Target allowlist"
+                )
+            if not re.search(r"\*", str(declared_reserved.get("rule", ""))):
+                raise ContractError(
+                    f"{tool_name}: the reserved-provider rule must state that it holds "
+                    "whatever the allowlist says, including *"
+                )
         if spec["requestSchemaValidation"]:
             schema_validation = tool.get("requestSchemaValidation")
             if not isinstance(schema_validation, dict) or (
