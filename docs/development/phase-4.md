@@ -253,7 +253,107 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   success. One G3 row needed a rerun for a Gateway-side reason recorded in Open
   questions.
 
+### Ticket #16 — REST `project_import` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models the Project import the way it
+  models the config-resource writes — one competing writer at dispatch time
+  (`race_import_with`), one ambiguous status that applies nothing (`fail_imports_with`),
+  one refusal carried inside a 200 (`refuse_imports_with`), plus a scheduled external
+  change that lands after a given number of exports (`change_project_after_exports`) and
+  an out-of-band Project change (`change_project_out_of_band`). The new module
+  `test_phase4_project_import.py` (22 cases) drives the real server through MCP against
+  that Gateway; it fails before the change (the Tool and its operation do not exist) and
+  the full `AGENTS.md` command block is green (807 pytest cases).
+- **D30 §2 and the D16 reconcile rule, in one place.** `expectedFingerprint` is the
+  caller's `pcf1` token from `project_export`, and the transaction compares it with
+  baseline A before it stages a candidate, backs anything up or dispatches; a mismatch
+  ends the transaction `CONFLICTED` (`importAttempted=false`) with the D30 §2/§7
+  `conflict` code and the export is cleaned up. The transaction itself declares
+  `PROJECT_IMPORT_TOOL_OPERATION` — the same `project_import` operation with
+  `target_denial_code="permission_denied"` and `rejection_is_final=True` — because the
+  frozen G3 harness and its evidence record `operation_disabled` and the pre-Phase-4
+  rejection behaviour for the same op id; the frozen operation is untouched (a unit test
+  pins the split, and `PROJECT_IMPORT_OPERATION` keeps `operation_disabled`/`False`).
+  With `rejection_is_final`, a 4xx rejection is the result: no read-back can turn it into
+  a success, so a Project that shows the candidate after a rejected dispatch is never
+  credited to this caller (pinned by a test where a competing writer lands exactly the
+  candidate B at dispatch time). `recovered_success` stays reachable only the way D16
+  says it is — an ambiguous dispatch (possibly sent with no response, or 5xx) whose
+  post-import export C equals the staged candidate B — and it is reachable because the
+  candidate is staged and fingerprinted under the store before dispatch and D16's no-op
+  short-circuit guarantees B differs from A; all three branches (C == B, C == A, foreign
+  C) are pinned through the Tool, including the recovery lock the last one keeps.
+- **The D08 chain now runs before the transaction's work.** `safety/executor.py`
+  extracts `preflight_mutation` (principal, scope, class, operation allowlist, the D30 §5
+  Target-class rule, every Target allowlist, the Precondition hook) out of
+  `execute_mutation` and the Tool calls it before the writer lock, the baseline export
+  and any staging. A Target the allowlist does not name is therefore `permission_denied`
+  without exporting a Project the deployment said not to touch and without a transaction
+  row, the audited reason is the one the executor would have written (one
+  implementation, two callers), and the executor's own preflight remains authoritative —
+  no gap opens if the deployment changes mid-call.
+- Artifact input (D30 §6/D17): a READY `project_archive` or `project_export` visible to
+  the same Mutation principal; anything else answers `not_found`, a non-archive kind is
+  `invalid_argument`, and the candidate pass re-validates the archive through the D15 ZIP
+  gate, so an unsafe archive fails `invalid_argument` before any dispatch (pinned with an
+  artifact published straight through the store, since no public ingress can make one
+  READY).
+- Terminal-state surface (D06): `COMMITTED` and `NO_CHANGE` are returned as data
+  (`state`, `transactionId`, `baselineFingerprint`, `candidateFingerprint`,
+  `resultFingerprint`, `importDispatched`, `designerWarning`); every other D16 terminal
+  state raises the D30 §7 error with the state and the transaction id named in the
+  message, and the operation record is linked to the transaction (`set_transaction`), so
+  `operation_diagnose` follows a refused or unresolved import back to it. The contract
+  spells the whole mapping out (`transaction.terminalStateSurface`) and the linter
+  requires it to cover every terminal state.
+- Wiring: `project_import` is registered as a CONFIG-scope, destructive, audited Tool,
+  gated by `IGNITION_MCP_CONFIG_MUTATION_ENABLED` and the `project_import` capability
+  (already derived from the documented import route); contract, output schema, audit
+  allowlist, inventories and the structural/destructive pins were updated together, and
+  `tooling/contracts/lint.py` learned the per-Tool applicability D30 implies (the Refused
+  resource types rule and D03 body validation govern config resources, not a Project
+  import, while a reachable recovered success must cite D16).
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **61/61 cases**
+  against the recorded Gateway, both deployment gates. The live harness now provisions
+  and verifies two disposable Projects (the allowlisted Target and a Project the
+  allowlist does not name) and enables the sensitive exports, artifact upload and the D16
+  writer in its server environment, which is why the driver's expected read inventory
+  includes the two sensitive-export Tools.
+- Live: see the runs below.
+
 ## Open questions
+
+- **Ticket #16 — which artifacts `project_import` consumes.** D30 §6 names a READY
+  `project_archive`; the ticket names "the artifact ID of a READY `project_archive` ...
+  (uploaded through `POST /artifacts` or produced by `project_export`)", and D17 names
+  server-produced exports as a legitimate binary ingress source. Both kinds are
+  `application/zip` Project archives that passed the D15 ZIP gate before they became
+  READY, so both are accepted, the accepted kinds are declared in the Tool's contract
+  (`artifactInput.kinds`), and the linter requires that declaration; every other kind is
+  `invalid_argument`, and an artifact the caller cannot see answers `not_found` first.
+  **For the owner:** confirm the union, or narrow it to `project_archive` (a one-line
+  change in `services/project_import.py` plus the contract and its test).
+- **Ticket #16 — a stale `expectedFingerprint` ends the transaction `CONFLICTED`.** D16
+  defines `CONFLICTED` for the mandatory pre-import re-export finding an external change
+  (`concurrent_modification`, `import_attempted = false`). The D30 §2 token gate detects
+  the same class of event, one step earlier and without a dispatch, so the Tool reuses
+  that state instead of inventing a new one: the transaction ends `CONFLICTED` with the
+  `conflict` code D30 §2/§7 decides, and because D06 routes an execution failure through
+  Tool error semantics the caller receives `conflict` with the state and the
+  `transactionId` named in the message (the operation record carries the transaction id,
+  D19). **For the owner:** confirm, or name a distinct state if the two are meant to be
+  distinguishable in the result rather than in the message.
+- **Ticket #16 — the REST Tool path proves `CONFLICTED` live through the token gate; its
+  A-vs-A' drift variant is fixture-only there.** Landing an external writer between the
+  baseline export and the pre-import re-export deterministically is not possible through
+  this harness: the window is inside one MCP call and a race would make the row flaky.
+  The branch is driven live by the G3 in-process harness (with a hooked client) and, on
+  the Tool path, by the unit fixture (`change_project_after_exports`). The live REST
+  cases prove the same terminal state through the deterministic stale-token gate, which
+  is also what G4's "concurrent modification" means for the REST plane in #14. If a live
+  Tool-path drift case is wanted, #20's fault-injecting proxy can hold the import request
+  open, which would make the window deterministic. **For the owner:** confirm the
+  reading for #23's L5 matrix, or ask for the proxy-based case there.
 
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
