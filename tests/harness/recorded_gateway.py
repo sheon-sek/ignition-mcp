@@ -45,6 +45,10 @@ _OPENAPI_OPERATIONS = (
     ("post", "/data/api/v1/resources/ignition/tag-provider"),
     ("get", "/data/api/v1/resources/find/ignition/tag-provider/{name}"),
     ("get", "/data/api/v1/resources/type/ignition/tag-provider"),
+    # Phase 4 ticket #7: the audit profile the Runtime audit mode names, and the
+    # audit log the recorded attempt/result rows are read back from.
+    ("get", "/data/api/v1/resources/find/ignition/audit-profile/{name}"),
+    ("get", "/data/api/v1/audit/log/{name}"),
 )
 
 
@@ -89,6 +93,91 @@ def _gateway_import(current: bytes | None, incoming: bytes) -> bytes:
     else:
         incoming_entries["project.json"] = current_entries["project.json"]
     return _zip_bytes(incoming_entries)
+
+
+GOOD_QUALITY = {
+    "code": 192, "name": "Good", "level": "Good", "good": True, "diagnosticMessage": None,
+}
+
+
+def _record_tag_import(server: Any, body: bytes) -> None:
+    """Track the policy document an accepted import leaves in the provider.
+
+    `setup-native apply` (and the ticket #7 harness) verifies the *served*
+    document through a handler-scope read, so the fake has to remember what it
+    was asked to write instead of only replaying the response body.
+    """
+    try:
+        document = json.loads(body)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(document, dict):
+        return
+    for entry in document.get("tags") or []:
+        if not isinstance(entry, dict):
+            continue
+        value = entry.get("value")
+        if entry.get("name") == "RuntimeTargetPolicy" and isinstance(value, str):
+            server.policy_value = value
+        if isinstance(value, str) and "WriteProbe" == entry.get("name"):
+            server.write_probe_value = value
+
+
+def _tag_read_replay(server: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """The recorded `tag_read` domain for a path the fake models, else None.
+
+    The fake answers an invalid path with the recorded Tool Error the Phase 3
+    rehearsal relies on, so only modeled paths take this branch.
+    """
+    paths = [str(path) for path in arguments.get("tagPaths") or []]
+    if not paths:
+        return None
+    items = []
+    for path in paths:
+        if path == "[IgnitionMCPPolicy]RuntimeTargetPolicy" and server.policy_value:
+            items.append({"path": path, "status": "ok", "value": server.policy_value,
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        if path == "[IgnitionMCPPolicy]WriteProbe" and server.write_probe_value:
+            items.append({"path": path, "status": "ok", "value": server.write_probe_value,
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        if path in server.tag_state:
+            items.append({"path": path, "status": "ok", "value": server.tag_state[path],
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        return None
+    return {
+        "items": items,
+        "summary": {"requested": len(paths), "succeeded": len(items), "failed": 0},
+        "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _tag_write_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_write` body the fake replays for these arguments."""
+    writes = arguments.get("writes")
+    paths = [
+        str(item.get("path", ""))
+        for item in (writes or []) if isinstance(item, dict)
+    ]
+    if not server.policy_provider_created:
+        return "no-policy", paths
+    if any(path.startswith("[IgnitionMCPPolicy]") for path in paths):
+        return "reserved-provider-refusal", paths
+    if any("IgnitionMCP_CI2" in path for path in paths):
+        return ("preflight-refusal" if len(paths) > 1 else "sibling-denial"), paths
+    return "allowlisted-batch", paths
+
+
+def _apply_tag_write_case(server: Any, case: str, body: dict[str, Any]) -> None:
+    if case != "allowlisted-batch":
+        return
+    structured = body.get("structuredContent") or {}
+    server.tag_write_correlation_id = str((structured.get("meta") or {}).get("correlationId", ""))
+    for item in structured.get("observed") or []:
+        if isinstance(item, dict) and item.get("status") == "ok" and item.get("path") in server.tag_state:
+            server.tag_state[str(item["path"])] = item.get("value")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -203,6 +292,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "inheritable": bool(document.get("inheritable", False)),
             })
             return
+        if path.startswith("/data/api/v1/resources/find/ignition/audit-profile/"):
+            name = path.rsplit("/", 1)[-1]
+            if name != server.audit_profile:
+                self._json(404, {"message": "No resource", "status": "404"})
+                return
+            self._json(200, _fixture("phase4/audit-profile-find.json"))
+            return
+        if path.startswith("/data/api/v1/audit/log/"):
+            if server.tag_write_correlation_id:
+                document = json.loads(json.dumps(_fixture("phase4/audit-log.json")))
+                for row in document["items"]:
+                    row["actionValue"] = str(row["actionValue"]).replace("__CORRELATION__", server.tag_write_correlation_id)
+                self._json(200, document)
+                return
+            self._json(200, {"items": [], "metadata": {"total": 0.0, "matching": 0.0, "limit": 100, "offset": 0}})
+            return
         if path.startswith("/data/api/v1/resources/find/ignition/tag-provider/"):
             name = path.rsplit("/", 1)[-1]
             if name != server.policy_provider:
@@ -266,12 +371,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._json(200, response)
                 return
             if method == "tools/list":
+                if str(path).endswith("phase4-operator"):
+                    operator_tools = [
+                        str(item["name"]) for item in _fixture("phase4/tools-list-operator.json")["tools"]
+                    ]
+                else:
+                    operator_tools = list(server.runtime_tools)
                 self._json(200, {
                     "jsonrpc": "2.0",
                     "id": payload.get("id"),
                     "result": {"tools": [
                         {"name": name, "description": f"{name} recorded replay"}
-                        for name in server.runtime_tools
+                        for name in operator_tools
                     ]},
                 })
                 return
@@ -298,7 +409,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 })
                 return
             if method == "tools/call":
-                tool = str((payload.get("params") or {}).get("name"))
+                params = payload.get("params") or {}
+                tool = str(params.get("name"))
+                tool_arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
                 if tool == "bundle_info":
                     result = {
                         "content": [{"type": "text", "text": "recorded replay"}],
@@ -312,10 +425,35 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         },
                     }
                 elif tool == "tag_read":
+                    domain = _tag_read_replay(server, tool_arguments)
+                    if domain is None:
+                        result = {
+                            "content": [{"type": "text", "text": "tag path is not valid"}],
+                            "isError": True,
+                        }
+                    else:
+                        result = {
+                            "content": [{"type": "text", "text": "recorded replay"}],
+                            "isError": False,
+                            "structuredContent": domain,
+                        }
+                elif tool == "tag_fixture_probe":
+                    report = json.loads(json.dumps(_fixture("phase4/tag-fixture-probe.json")))
+                    for entry in report.get("initialValues") or []:
+                        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                            raw = str(entry.get("value"))
+                            server.tag_state[entry["path"]] = int(raw) if raw.lstrip("-").isdigit() else raw
+                    server.tag_state.setdefault("[default]IgnitionMCP_CI/Nested/Inner", 0)
                     result = {
-                        "content": [{"type": "text", "text": "tag path is not valid"}],
-                        "isError": True,
+                        "content": [{"type": "text", "text": "recorded replay"}],
+                        "isError": False,
+                        "structuredContent": report,
                     }
+                elif tool == "tag_write":
+                    case, _paths = _tag_write_case(server, tool_arguments)
+                    body = json.loads(json.dumps(_fixture(f"phase4/tag-write-{case}.json")))
+                    _apply_tag_write_case(server, case, body)
+                    result = body
                 elif tool in {"policy_probe", "alarm_probe"}:
                     fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
                     result = {
@@ -374,6 +512,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             provider = query.get("provider", [""])[0]
             collision_policy = query.get("collisionPolicy", [""])[0]
+            _record_tag_import(server, body)
             if provider == server.policy_provider:
                 if not server.policy_provider_created:
                     self._json(404, _fixture("phase2/no-route.json"))
@@ -429,6 +568,7 @@ class _Server(http.server.ThreadingHTTPServer):
         bundle_version: str,
         policy_provider: str = "",
         port: int = 0,
+        audit_profile: str = "",
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -446,6 +586,14 @@ class _Server(http.server.ThreadingHTTPServer):
         self.policy_provider_created = False
         self.policy_tags_imported = False
         self.policy_import_flaked = False
+        # Ticket #7: the fake models Tag values so a `tag_read` after a Mutation
+        # reports what that Mutation recorded, and the audit log can answer with
+        # the correlation ID the recorded `tag_write` result carried.
+        self.audit_profile = audit_profile
+        self.tag_state: dict[str, Any] = {}
+        self.tag_write_correlation_id = ""
+        self.policy_value = ""
+        self.write_probe_value = "phase4-write-probe-value"
 
 
 class RecordedGateway:
@@ -463,6 +611,7 @@ class RecordedGateway:
         bundle_version: str = "0.2.0",
         policy_provider: str = "",
         port: int = 0,
+        audit_profile: str = "",
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -474,6 +623,7 @@ class RecordedGateway:
             bundle_version,
             policy_provider,
             port,
+            audit_profile,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 

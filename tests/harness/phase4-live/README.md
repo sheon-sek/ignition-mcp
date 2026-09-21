@@ -1,30 +1,44 @@
-# Phase 4 live Gateway harness — ticket #6 characterization
+# Phase 4 live Gateway harness — tickets #6 and #7
 
-Ephemeral CI-owned evidence for the two facts Phase 4 milestone 4a depends on
-(issue #6, blockers of tickets #7 and #9):
+Ephemeral CI-owned evidence for the facts Phase 4 milestone 4a depends on:
 
-1. **Runtime Target Policy storage** (D30 §1). Where can a deployment-owned JSON
-   policy document live on a Gateway, outside the Runtime Bundle, so that
+1. **Runtime Target Policy storage** (D30 §1, issue #6). Where can a
+   deployment-owned JSON policy document live on a Gateway, outside the Runtime
+   Bundle, so that
    - a Runtime Tool handler (`onToolCalled.py`) reads it at bounded cost,
    - the Runtime MCP server cannot write it,
    - `setup-native apply` can later write it through Native REST?
-2. **Exact-path `system.alarm.queryStatus` bound** (D12 Phase 4 amendment).
-   Whether querying one exact Alarm path is bounded before or during execution,
-   to the standard the Phase 2 amendment set.
+2. **Exact-path `system.alarm.queryStatus` bound** (D12 Phase 4 amendment,
+   issue #6). Whether querying one exact Alarm path is bounded before or during
+   execution, to the standard the Phase 2 amendment set.
+3. **`tag_write` end to end** (issue #7). The shipped Runtime Bundle, deployed
+   with the `operator` profile, is driven through the Module: an allowlisted
+   write, the Target allowlist refusal at a segment boundary, a Preflight that
+   executes nothing, the reserved policy provider under an explicit `*`, the
+   missing-policy fail-closed case, the Runtime audit rows, and the exact
+   operator inventory.
 
 The harness provisions an exact-patch Ignition Gateway (8.3.8 required row,
 8.3.9 compatibility candidate), installs the checksum-pinned official MCP Module
-and a **CI-only probe project** (`project/`) that hosts two harness Tools:
+plus:
 
-- `policy_probe` reads every candidate storage location and reports bounded-cost
-  measurements (Tag value read, Tag config read, `system.config.getResource`,
-  handler-scope write attempt, handler scope inventory, process environment);
-- `alarm_probe` builds a disposable Alarm fixture, activates it, and measures
-  `system.alarm.queryStatus` matching semantics, cardinality and cost for exact,
-  sibling, folder, partial-leaf and wildcard path patterns, plus activate/clear
-  cycles without acknowledgement.
+- a **CI-only probe project** (`project/`) hosting three harness Tools:
+  - `policy_probe` reads every candidate storage location and reports bounded-cost
+    measurements (Tag value read, Tag config read, `system.config.getResource`,
+    handler-scope write attempt, handler scope inventory, process environment);
+  - `alarm_probe` builds a disposable Alarm fixture, activates it, and measures
+    `system.alarm.queryStatus` matching semantics, cardinality and cost for exact,
+    sibling, folder, partial-leaf and wildcard path patterns, plus activate/clear
+    cycles without acknowledgement;
+  - `tag_fixture_probe` creates the disposable Tag targets the `tag_write` cases
+    write to (the allowlisted root, a nested descendant, and a sibling root whose
+    path only shares a string prefix);
+- the **shipped Runtime Bundle** (`packages/ignition-runtime-bundle/project`,
+  built deterministically and deployed as the `ignition_runtime` project) under a
+  second Server Config (`phase4-operator`), so the `tag_write` cases run the
+  product handler, not a probe copy.
 
-Neither probe Tool ships in a product artifact: the probe project is a test
+None of the probe Tools ship in a product artifact: the probe project is a test
 fixture, exactly like `tests/harness/runtime-binding/project`.
 
 ## Layout
@@ -35,20 +49,26 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
   workstation's real Gateway on 8088 is never bound or called.
 - `project/`: the probe project (D29/D21 profile shape, validated by
   `tooling.native.cli validate`). Deployed by directory copy, like Phase 0.
-- `gateway-config/`: the `phase4-policy-probe` MCP server-config resource.
+- `gateway-config/`: the `phase4-policy-probe` (probe project) and
+  `phase4-operator` (shipped bundle) MCP server-config resources.
 - `policy_document.py`: the deterministic policy document, its companion length
   Tag, its Tag provider resource body and its Tag import document, plus the
   policy SHA-256 that both the REST read-back and the live handler read are
   compared against, and the harness-only oversize pair that proves the gate skips
   an over-cap value (in the same provider, so it goes through the same admission
   path; a deployment's provider holds only the policy Tag and its length Tag).
+  It also holds the ticket #7 fixtures: the audit profile, the Tag targets, the
+  `tag_write` policy (shape-identical to the ticket #6 document plus its
+  `auditProfile`), and the explicit `*` variant used for the reserved-provider
+  refusal proof.
 - `gateway_rest.py`: bounded stdlib Native REST client.
 - `mcp_client.py`: bounded stdlib MCP Streamable-HTTP client for the Module.
 - `driver.py`: the characterization driver (stages below).
 - `wait_for_gateway.py`: the single readiness waiter both readiness points use
-  (Native REST `/data/api/v1/gateway-info` plus an MCP `initialize`). It applies
-  the same exact-origin and MCP-path check as the driver before either request
-  (exit 3 on a refused origin, 2 when the origin never answers).
+  (Native REST `/data/api/v1/gateway-info` plus an MCP `initialize` for every
+  `--mcp-url`). It applies the same exact-origin and MCP-path check as the driver
+  before either request (exit 3 on a refused origin, 2 when an origin never
+  answers).
 - `characterization.json`: the structural facts each Gateway version is expected
   to show. Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs the whole driver against the recorded Gateway fake.
@@ -58,24 +78,32 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
 ## Driver stages
 
 ```bash
+uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-no-policy
 uv run --no-sync python tests/harness/phase4-live/driver.py policy-provision
 uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart
 #   ... restart the Gateway ...
 uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label after-restart
 uv run --no-sync python tests/harness/phase4-live/driver.py alarm
+uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-setup
+uv run --no-sync python tests/harness/phase4-live/driver.py tag-write
 uv run --no-sync python tests/harness/phase4-live/driver.py summarize
 ```
 
 Every stage first verifies — **before the first request** — that both URLs are
-exactly the disposable origin `http://127.0.0.1:8093` with the phase4 MCP path,
-that the alarm root is run-unique, and that the CI marker names this marker, this
-environment, this trusted repository, this run id, this Gateway build, this
-`gatewayId`, this policy provider and this alarm root. Redirects are refused by
-the REST and MCP clients, so a rewritten endpoint cannot bounce the identity check
-elsewhere, and `--base-url http://127.0.0.1:8088` (a real workstation Gateway) is
-rejected with no network call at all. Exit codes: `0` characterized as expected,
-`3` characterized but drifted from `characterization.json`, `2` a stage could not
-be characterized. The workflow fails on `3` now that the expectations are frozen.
+exactly the disposable origin `http://127.0.0.1:8093` with one of the two hosted
+MCP paths, that the alarm root is run-unique, and that the CI marker names this
+marker, this environment, this trusted repository, this run id, this Gateway
+build, this `gatewayId`, this policy provider, this alarm root, this Runtime
+project and this audit profile. Redirects are refused by the REST and MCP
+clients, so a rewritten endpoint cannot bounce the identity check elsewhere, and
+`--base-url http://127.0.0.1:8088` (a real workstation Gateway) is rejected with
+no network call at all. Exit codes: `0` characterized as expected, `3`
+characterized but drifted from `characterization.json`, `2` a stage could not be
+characterized. The workflow fails on `3` now that the expectations are frozen.
+
+`tag-write-no-policy` runs before any provisioning and requires the shipped
+handler to refuse with `operation_disabled` on a Gateway whose policy provider
+does not exist yet.
 
 `policy-provision` writes the policy the way `setup-native apply` will: create
 the dedicated Tag provider through
@@ -94,6 +122,22 @@ provider-startup failures motivate that loop — a first import rejected while t
 provider starts (`Bad 776 … cleanPath is null`), and an accepted import whose
 Tags the running provider never serves. Both are recorded under
 `tests/fixtures/recorded/gateway-8.3/phase4/`.
+
+`tag-write-setup` is test-only provisioning: it creates the disposable Tag
+targets through `tag_fixture_probe`, creates the `MCP_CI_AUDIT` local audit
+profile through Native REST, and installs the `tag_write` policy
+(`MergeOverwrite`) whose `auditProfile` the D18 `best_effort` mode then names.
+Like `setup-native apply`, it treats an accepted import as unproven until a
+Tool handler reads the served document back, and it retries under a deadline.
+
+`tag-write` drives the shipped Tool: the 14-Tool operator inventory, an
+allowlisted batch (four items, one of them a missing path so a Bad Native
+outcome is exercised), the audit rows for that call's correlation ID read back
+through `GET /data/api/v1/audit/log/<profile>`, the segment-boundary refusal (a
+sibling root whose path only shares a string prefix), a Preflight that rejects a
+whole batch without executing its first item, and — after installing the
+explicit `*` policy — the reserved-provider refusal, with the target Tag and the
+policy document both re-read to prove nothing was written.
 
 ## Rehearsal
 

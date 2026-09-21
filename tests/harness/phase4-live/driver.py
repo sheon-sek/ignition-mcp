@@ -53,7 +53,15 @@ PHASE4_ENVIRONMENT = "phase4-live"
 #: 8093 and the driver refuses anything else before the first request.
 EXPECTED_ORIGIN_HOST = "127.0.0.1"
 EXPECTED_ORIGIN_PORT = 8093
-EXPECTED_MCP_PATH = "/data/mcp/phase4-policy-probe"
+#: The two Module-hosted endpoints this harness drives: the ticket #6 probe
+#: project, and the shipped Runtime Bundle deployed with the `operator` profile
+#: whose inventory and Tag Mutations the ticket #7 cases exercise.
+PROBE_MCP_PATH = "/data/mcp/phase4-policy-probe"
+OPERATOR_MCP_PATH = "/data/mcp/phase4-operator"
+EXPECTED_MCP_PATHS = (PROBE_MCP_PATH, OPERATOR_MCP_PATH)
+EXPECTED_MCP_PATH = PROBE_MCP_PATH
+#: Shipped-bundle Server Config and Designer project name on the disposable Gateway.
+RUNTIME_PROJECT = "ignition_runtime"
 READ_TIMEOUT_MS = 5000
 WRITE_PROBE_VALUE = "phase4-write-probe-value"
 REQUIRED_ROUTES = {
@@ -83,6 +91,7 @@ class Config:
     base_url: str = "http://127.0.0.1:8093"
     api_token: str = ""
     mcp_url: str = ""
+    operator_mcp_url: str = ""
     evidence_dir: Path = Path("artifacts/g4a")
     ci_marker: Path = Path("artifacts/ci-marker.json")
     run_id: str = ""
@@ -104,6 +113,8 @@ class Config:
     cycles: int = 3
     repeats: int = 3
     ack_username: str = "ignition-mcp-service"
+    runtime_project: str = RUNTIME_PROJECT
+    audit_profile: str = policy_document.AUDIT_PROFILE_NAME
     guard: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -121,6 +132,10 @@ class Config:
     @property
     def alarm_provider(self) -> str:
         return "default"
+
+    @property
+    def operator_url(self) -> str:
+        return self.operator_mcp_url or self.base_url.rstrip("/") + OPERATOR_MCP_PATH
 
 
 def bounded(value: Any, limit: int = RAW_LIMIT) -> Any:
@@ -180,14 +195,14 @@ def require_origin(base_url: str, mcp_url: str) -> dict[str, str]:
         mcp.scheme != "http"
         or mcp.hostname != EXPECTED_ORIGIN_HOST
         or mcp.port != EXPECTED_ORIGIN_PORT
-        or mcp.path != EXPECTED_MCP_PATH
+        or mcp.path not in EXPECTED_MCP_PATHS
         or mcp.query
         or mcp.fragment
     ):
         raise GuardError(
-            f"MCP URL {mcp_url!r} is not {expected}{EXPECTED_MCP_PATH}"
+            f"MCP URL {mcp_url!r} is not {expected} with one of {list(EXPECTED_MCP_PATHS)}"
         )
-    return {"baseOrigin": expected, "mcpPath": EXPECTED_MCP_PATH}
+    return {"baseOrigin": expected, "mcpPaths": list(EXPECTED_MCP_PATHS)}
 
 
 def require_disposable_origin(config: Config) -> dict[str, str]:
@@ -196,6 +211,7 @@ def require_disposable_origin(config: Config) -> dict[str, str]:
 
 def verify_guard(config: Config) -> None:
     checks = require_disposable_origin(config)
+    checks.update(require_origin(config.base_url, config.operator_url))
     if not config.run_id or not config.provider or not config.root_name:
         raise GuardError("run id, policy provider and alarm root must be configured")
     if str(config.run_id) not in config.root_name:
@@ -215,6 +231,8 @@ def verify_guard(config: Config) -> None:
         "gatewayId": marker.get("gatewayId") == f"phase4-g4a-{config.gateway_version}-{config.run_id}",
         "policyProvider": marker.get("policyProvider") == config.provider,
         "alarmRoot": marker.get("alarmRoot") == config.root_name,
+        "runtimeProject": marker.get("runtimeProject") == config.runtime_project,
+        "auditProfile": marker.get("auditProfile") == config.audit_profile,
     })
     if not all(checks.values()):
         raise GuardError(f"L5 guard failed before any request: {json.dumps(checks, sort_keys=True)}")
@@ -247,6 +265,8 @@ def identity(config: Config) -> dict[str, Any]:
         "sourceRevision": config.source_revision,
         "runId": config.run_id,
         "environment": PHASE4_ENVIRONMENT,
+        "runtimeProject": config.runtime_project,
+        "auditProfile": config.audit_profile,
         "ownerAcceptedDeviations": [
             "phase4-live environment exists without protection rules (same owner-accepted deviation as phase3-live); compensating controls are the trusted-repo guard, no repository secrets in the job, localhost-only Gateway endpoints and the driver-enforced CI marker, Gateway identity and run-unique resource names",
         ],
@@ -754,6 +774,368 @@ def stage_alarm(config: Config) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Stages: ticket #7 (`tag_write` tracer bullet)
+# --------------------------------------------------------------------------- #
+
+def profile_tools(name: str) -> list[str]:
+    """The explicit Tool inventory of one Runtime profile (D09)."""
+    path = Path(__file__).resolve().parents[3] / "contracts/profiles" / f"{name}.yaml"
+    document = json.loads(path.read_text(encoding="utf-8"))
+    return [str(tool) for tool in document.get("tools", [])]
+
+
+def canonical_error(result: dict[str, Any]) -> dict[str, Any]:
+    """The canonical D06 error object a Runtime Tool Error carries in its text part."""
+    content = result.get("content")
+    if isinstance(content, dict):
+        content = [content]
+    text = content[0].get("text") if isinstance(content, list) and content and isinstance(content[0], dict) else None
+    if not isinstance(text, str):
+        raise StageFailure(f"Tool Error carried no canonical text part: {json.dumps(result)[:400]}")
+    try:
+        error = json.loads(text)
+    except ValueError as exc:
+        raise StageFailure(f"Tool Error text was not JSON: {text[:400]}") from exc
+    if not isinstance(error, dict) or not isinstance(error.get("code"), str):
+        raise StageFailure(f"Tool Error text was not a canonical error object: {text[:400]}")
+    return error
+
+
+def expect_tool_error(client: mcp_client.McpClient, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    result = client.tool_result(name, arguments)
+    if result.get("isError") is not True:
+        raise StageFailure(f"{name} was expected to refuse but returned a result: {json.dumps(result)[:600]}")
+    return canonical_error(result)
+
+
+def expect_structured(client: mcp_client.McpClient, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    result = client.tool_result(name, arguments)
+    if result.get("isError") is True:
+        raise StageFailure(f"{name} failed: {json.dumps(result)[:600]}")
+    structured = result.get("structuredContent")
+    if not isinstance(structured, dict):
+        raise StageFailure(f"{name} returned no structuredContent: {json.dumps(result)[:600]}")
+    return structured
+
+
+def read_tag_value(client: mcp_client.McpClient, path: str) -> dict[str, Any]:
+    structured = expect_structured(client, "tag_read", {
+        "tagPaths": [path], "timeout": READ_TIMEOUT_MS, "timestampFormat": "iso8601",
+    })
+    items = structured.get("items")
+    if not isinstance(items, list) or not items or not isinstance(items[0], dict):
+        raise StageFailure(f"tag_read returned no item for {path}: {json.dumps(structured)[:400]}")
+    return items[0]
+
+
+def tag_fixture_arguments(config: Config) -> dict[str, Any]:
+    return {
+        "providerRoot": policy_document.TAG_FIXTURE_PROVIDER,
+        "rootName": policy_document.TAG_FIXTURE_ROOT,
+        "siblingRootName": policy_document.TAG_FIXTURE_SIBLING_ROOT,
+        "targets": [
+            {"name": "WriteTarget", "dataType": "Int4", "value": 0},
+            {"name": "TextTarget", "dataType": "String", "value": "phase4-initial"},
+        ],
+    }
+
+
+def tag_write_paths() -> dict[str, str]:
+    root = policy_document.TAG_FIXTURE_PATH.rsplit("/", 1)[0]
+    return {
+        "writeTarget": policy_document.TAG_FIXTURE_PATH,
+        "textTarget": root + "/TextTarget",
+        "nestedTarget": root + "/Nested/Inner",
+        "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
+    }
+
+
+def served_policy_sha(config: Config, client: mcp_client.McpClient) -> str:
+    """The policy document the *running* provider serves, read by a Tool handler.
+
+    An accepted `/tags/import` is not proof that the provider serves the Tags
+    (ticket #6 recorded both startup failures), so the install is confirmed with
+    the same handler-scope read the shipped mutation performs.
+    """
+    item = read_tag_value(client, config.policy_path)
+    value = item.get("value")
+    return gateway_rest.sha256_text(value) if isinstance(value, str) else ""
+
+
+def install_tag_write_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    document = policy_document.tag_write_tag_document_bytes(allowlist=allowlist)
+    expected = policy_document.tag_write_policy_sha256(allowlist=allowlist)
+    started = time.monotonic()
+    attempts: list[dict[str, Any]] = []
+    while True:
+        status, payload = gateway_rest.import_tags(
+            config.base_url, config.api_token, config.provider, document,
+            collision_policy="MergeOverwrite",
+        )
+        failures = gateway_rest.import_failures(payload)
+        served = ""
+        served_error = ""
+        if status == 200 and failures is None:
+            try:
+                served = served_policy_sha(config, client)
+            except (mcp_client.McpError, StageFailure) as exc:
+                served_error = str(exc)
+        attempts.append({
+            "status": status,
+            "failures": bounded(failures, 4000),
+            "body": bounded(payload, 4000),
+            "servedSha256": served,
+            "servedError": served_error[:400],
+        })
+        if served == expected:
+            return {"ok": True, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
+        if time.monotonic() - started >= deadline_seconds:
+            return {"ok": False, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
+        time.sleep(3.0)
+
+
+def stage_tag_write_no_policy(config: Config) -> dict[str, Any]:
+    """A Gateway with no Runtime Target Policy must refuse the Mutation."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    client = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    paths = tag_write_paths()
+    error = expect_tool_error(client, "tag_write", {
+        "writes": [{"path": paths["writeTarget"], "value": 1}], "timeout": READ_TIMEOUT_MS,
+    })
+    raw["noPolicy"] = bounded(error)
+    details = error.get("details") or {}
+    facts["tagWriteNoPolicyErrorCode"] = str(error.get("code", ""))
+    facts["tagWriteNoPolicyReason"] = str(details.get("reason", ""))
+    facts["tagWriteNoPolicyFailsClosed"] = facts["tagWriteNoPolicyErrorCode"] == "operation_disabled"
+    if not facts["tagWriteNoPolicyFailsClosed"]:
+        raise StageFailure(f"a missing Runtime Target Policy must fail closed: {json.dumps(error)[:600]}")
+    return {
+        "stage": "tag-write-no-policy",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_write_setup(config: Config) -> dict[str, Any]:
+    """Test-only provisioning: fixture Tags, the audit profile and the policy state."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    probe = mcp_client.McpClient(config.mcp_url, config.api_token)
+    raw["probeInitialize"] = bounded(probe.initialize())
+    tools = probe.tools_list()
+    if "tag_fixture_probe" not in tools:
+        raise StageFailure(f"tag_fixture_probe is not discoverable; tools/list = {sorted(tools)}")
+    report = expect_structured(probe, "tag_fixture_probe", tag_fixture_arguments(config))
+    raw["tagFixtureProbe"] = bounded(report, 40_000)
+    fixture_paths = [str(path) for path in report.get("fixturePaths") or []]
+    sibling_path = str(report.get("siblingPath", ""))
+    facts["tagFixtureConfigured"] = bool(report.get("configured"))
+    facts["tagFixtureReadable"] = bool(report.get("fixtureReadable"))
+    facts["tagFixturePaths"] = fixture_paths
+    facts["tagFixtureSiblingPath"] = sibling_path
+    expected = tag_write_paths()
+    facts["tagFixturePathsMatch"] = (
+        sorted(fixture_paths) == sorted([expected["writeTarget"], expected["textTarget"]])
+        and sibling_path == expected["siblingTarget"]
+    )
+    if not facts["tagFixtureConfigured"] or not facts["tagFixtureReadable"] or not facts["tagFixturePathsMatch"]:
+        raise StageFailure(f"the tag_write fixture Tags were not created: {json.dumps(report)[:600]}")
+
+    status, payload = gateway_rest.create_resource(
+        config.base_url, config.api_token, "ignition/audit-profile",
+        policy_document.audit_profile_resource(),
+    )
+    raw["createAuditProfile"] = {"status": status, "body": bounded(payload)}
+    find_status, found = gateway_rest.find_resource(
+        config.base_url, config.api_token, "ignition/audit-profile", config.audit_profile,
+    )
+    raw["auditProfileResource"] = {"status": find_status, "body": bounded(found)}
+    facts["auditProfileCreateStatus"] = status
+    facts["auditProfileAvailable"] = find_status == 200 and isinstance(found, dict)
+    if not facts["auditProfileAvailable"]:
+        raise StageFailure(
+            f"the {config.audit_profile} audit profile is not readable after provisioning: "
+            f"HTTP {find_status}"
+        )
+
+    operator = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["operatorInitialize"] = bounded(operator.initialize())
+    installed = install_tag_write_policy(config, operator, allowlist=policy_document.TAG_WRITE_ALLOWLIST)
+    raw["installPolicy"] = bounded(installed, 20_000)
+    facts["tagWritePolicyInstallAttempts"] = installed["attemptCount"]
+    facts["tagWritePolicyInstalled"] = installed["ok"]
+    facts["tagWritePolicyServedSha256"] = installed["servedSha256"]
+    if not installed["ok"]:
+        raise StageFailure(
+            "the running provider never served the tag_write policy document: "
+            f"{json.dumps(installed['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    return {
+        "stage": "tag-write-setup",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_write(config: Config) -> dict[str, Any]:
+    """The ticket #7 live cases: allowlisted write, two refusals, reserved provider."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_write_paths()
+    client = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+
+    inventory = sorted(client.tools_list())
+    expected_inventory = sorted(profile_tools("operator"))
+    facts["tagWriteOperatorInventory"] = inventory
+    facts["tagWriteOperatorProfile"] = expected_inventory
+    facts["tagWriteOperatorInventoryMatchesProfile"] = inventory == expected_inventory
+    if not facts["tagWriteOperatorInventoryMatchesProfile"]:
+        raise StageFailure(
+            f"the deployed operator inventory does not equal contracts/profiles/operator.yaml: "
+            f"{inventory} != {expected_inventory}"
+        )
+
+    # Case 1: an allowlisted batch whose items are descendants of the allowlisted
+    # prefix, plus one missing path so a Bad Native outcome is exercised too.
+    batch = {
+        "writes": [
+            {"path": paths["writeTarget"], "value": 22},
+            {"path": paths["textTarget"], "value": "phase4-written"},
+            {"path": paths["nestedTarget"], "value": 7},
+            {"path": paths["missingTarget"], "value": 5},
+        ],
+        "timeout": READ_TIMEOUT_MS,
+    }
+    structured = expect_structured(client, "tag_write", batch)
+    raw["allowlistedBatch"] = bounded(structured, 40_000)
+    summary = structured.get("summary") or {}
+    items = structured.get("items") or []
+    observed = structured.get("observed") or []
+    qualities = [str((item.get("quality") or {}).get("name", "")) for item in items]
+    facts["tagWriteBatchRequested"] = summary.get("requested")
+    facts["tagWriteBatchSucceeded"] = summary.get("succeeded")
+    facts["tagWriteBatchFailed"] = summary.get("failed")
+    facts["tagWriteBatchOutcomeUnknown"] = summary.get("outcomeUnknown")
+    facts["tagWriteBatchQualityNames"] = qualities
+    facts["tagWriteBatchNativeOutcomes"] = (
+        len(qualities) == 4
+        and all(name.startswith("Good") for name in qualities[:3])
+        and qualities[3].startswith("Bad")
+    )
+    facts["tagWriteObservedMatchesWritten"] = (
+        len(observed) == 4
+        and observed[0].get("value") == 22
+        and observed[1].get("value") == "phase4-written"
+        and observed[2].get("value") == 7
+    )
+    facts["tagWriteObservedMissingQualityIsBad"] = (
+        len(observed) == 4 and (observed[3].get("quality") or {}).get("good") is False
+    )
+    facts["tagWriteAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagWriteAuditRecorded"] = summary.get("auditRecorded")
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = gateway_rest.audit_rows(
+        config.base_url, config.api_token, config.audit_profile, action="ignition-mcp.tag_write",
+    )
+    matching = [row for row in rows if correlation and correlation in str(row.get("actionValue", ""))]
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(matching, 20_000)}
+    facts["tagWriteAuditCorrelationIdPresent"] = bool(correlation)
+    facts["tagWriteAuditRowsForCorrelation"] = len(matching)
+    facts["tagWriteAuditAttemptAndResultRecorded"] = len(matching) >= 2
+    facts["tagWriteAuditActorIsServiceIdentity"] = bool(matching) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in matching
+    )
+
+    # Case 2: [default]IgnitionMCP_CI2 shares a string prefix with the allowlisted
+    # [default]IgnitionMCP_CI but is a different path segment.
+    denied = expect_tool_error(client, "tag_write", {
+        "writes": [{"path": paths["siblingTarget"], "value": 1}], "timeout": READ_TIMEOUT_MS,
+    })
+    raw["siblingDenial"] = bounded(denied)
+    sibling_details = (denied.get("details") or {}).get("items") or [{}]
+    facts["tagWriteSiblingDenialCode"] = str(denied.get("code", ""))
+    facts["tagWriteSiblingDenialReason"] = str(sibling_details[0].get("reason", ""))
+    facts["tagWriteSiblingDenialIsSegmentBoundary"] = (
+        facts["tagWriteSiblingDenialCode"] == "permission_denied"
+        and facts["tagWriteSiblingDenialReason"] == "targetNotAllowlisted"
+    )
+    if not facts["tagWriteSiblingDenialIsSegmentBoundary"]:
+        raise StageFailure(f"the segment-boundary sibling was not refused: {json.dumps(denied)[:600]}")
+    sibling_after = read_tag_value(client, paths["siblingTarget"])
+    facts["tagWriteSiblingValueUnchanged"] = sibling_after.get("value") == 0
+
+    # Case 3: one refused item rejects the whole batch before anything executes.
+    before = read_tag_value(client, paths["writeTarget"])
+    whole_batch = expect_tool_error(client, "tag_write", {
+        "writes": [
+            {"path": paths["writeTarget"], "value": 42},
+            {"path": paths["siblingTarget"], "value": 1},
+        ],
+        "timeout": READ_TIMEOUT_MS,
+    })
+    raw["preflightRefusal"] = bounded(whole_batch)
+    after = read_tag_value(client, paths["writeTarget"])
+    facts["tagWritePreflightRefusalCode"] = str(whole_batch.get("code", ""))
+    facts["tagWritePreflightRefusalItems"] = len((whole_batch.get("details") or {}).get("items") or [])
+    facts["tagWritePreflightExecutedNothing"] = (
+        before.get("value") == after.get("value") == 22
+    )
+    if not facts["tagWritePreflightExecutedNothing"]:
+        raise StageFailure("a refused Preflight executed part of its batch")
+
+    # Case 4: with an explicit * allowlist the reserved provider is still refused.
+    installed = install_tag_write_policy(config, client, allowlist=policy_document.WILDCARD_ALLOWLIST)
+    raw["installWildcardPolicy"] = bounded(installed, 20_000)
+    facts["tagWriteWildcardPolicyInstalled"] = installed["ok"]
+    if not installed["ok"]:
+        raise StageFailure(
+            "the running provider never served the wildcard policy document: "
+            f"{json.dumps(installed['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    reserved = expect_tool_error(client, "tag_write", {
+        "writes": [{"path": config.write_probe_path, "value": "phase4-clobber-attempt"}],
+        "timeout": READ_TIMEOUT_MS,
+    })
+    raw["reservedProviderRefusal"] = bounded(reserved)
+    reserved_details = (reserved.get("details") or {}).get("items") or [{}]
+    facts["tagWriteReservedProviderCode"] = str(reserved.get("code", ""))
+    facts["tagWriteReservedProviderReason"] = str(reserved_details[0].get("reason", ""))
+    facts["tagWriteReservedProviderRefusedUnderWildcard"] = (
+        facts["tagWriteReservedProviderCode"] == "permission_denied"
+        and facts["tagWriteReservedProviderReason"] == "reservedProvider"
+    )
+    if not facts["tagWriteReservedProviderRefusedUnderWildcard"]:
+        raise StageFailure(f"the reserved provider was not refused: {json.dumps(reserved)[:600]}")
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagWriteReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagWritePolicyDocumentUnclobbered"] = policy_before == policy_after
+    return {
+        "stage": "tag-write",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Stage: summarize
 # --------------------------------------------------------------------------- #
 
@@ -774,6 +1156,11 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
         stages.append(after)
     alarm = load_stage(config, "alarm")
     stages.append(alarm)
+    stages.extend([
+        load_stage(config, "tag-write-no-policy"),
+        load_stage(config, "tag-write-setup"),
+        load_stage(config, "tag-write"),
+    ])
 
     facts: dict[str, Any] = {}
     for stage in stages:
@@ -812,11 +1199,37 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
             "bounded": literal and stable,
             "basis": facts.get("exactPathBoundedBasis"),
         },
+        "runtimeTagWrite": {
+            "allowlistedBatch": {
+                "requested": facts.get("tagWriteBatchRequested"),
+                "succeeded": facts.get("tagWriteBatchSucceeded"),
+                "failed": facts.get("tagWriteBatchFailed"),
+                "outcomeUnknown": facts.get("tagWriteBatchOutcomeUnknown"),
+                "nativeOutcomes": facts.get("tagWriteBatchNativeOutcomes"),
+                "observedMatchesWritten": facts.get("tagWriteObservedMatchesWritten"),
+            },
+            "targetAllowlist": {
+                "siblingRefusedAtSegmentBoundary": facts.get("tagWriteSiblingDenialIsSegmentBoundary"),
+                "preflightExecutedNothing": facts.get("tagWritePreflightExecutedNothing"),
+            },
+            "reservedProvider": {
+                "refusedUnderExplicitWildcard": facts.get("tagWriteReservedProviderRefusedUnderWildcard"),
+                "targetValueUnchanged": facts.get("tagWriteReservedProviderValueUnchanged"),
+                "policyDocumentUnclobbered": facts.get("tagWritePolicyDocumentUnclobbered"),
+            },
+            "audit": {
+                "mode": facts.get("tagWriteAuditMode"),
+                "recorded": facts.get("tagWriteAuditRecorded"),
+                "rowsForCorrelation": facts.get("tagWriteAuditRowsForCorrelation"),
+                "actorIsServiceIdentity": facts.get("tagWriteAuditActorIsServiceIdentity"),
+            },
+            "operatorInventoryMatchesProfile": facts.get("tagWriteOperatorInventoryMatchesProfile"),
+        },
     }
     evidence = {
         "schemaVersion": 1,
-        "ticket": "#6",
-        "title": "Characterize Runtime Target Policy storage and bounded exact-path alarm queryStatus",
+        "tickets": ["#6", "#7"],
+        "title": "Characterize the Runtime Target Policy and the exact-path alarm query bound, and verify tag_write live",
         "identity": identity(config),
         "stages": stages,
         "facts": facts,
@@ -837,10 +1250,19 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
 
 def build_config(argv: list[str]) -> Config:
     parser = argparse.ArgumentParser(description="Phase 4 ticket #6 characterization driver")
-    parser.add_argument("stage", choices=["policy-provision", "policy-read", "alarm", "summarize"])
+    parser.add_argument(
+        "stage",
+        choices=[
+            "tag-write-no-policy", "policy-provision", "policy-read", "alarm",
+            "tag-write-setup", "tag-write", "summarize",
+        ],
+    )
     parser.add_argument("--base-url", default=os.environ.get("P4_BASE_URL", "http://127.0.0.1:8093"))
     parser.add_argument("--api-token", default=os.environ.get("CI_API_TOKEN", ""))
     parser.add_argument("--mcp-url", default=os.environ.get("P4_MCP_URL", ""))
+    parser.add_argument("--operator-mcp-url", default=os.environ.get("P4_OPERATOR_MCP_URL", ""))
+    parser.add_argument("--runtime-project", default=os.environ.get("P4_RUNTIME_PROJECT", RUNTIME_PROJECT))
+    parser.add_argument("--audit-profile", default=os.environ.get("P4_AUDIT_PROFILE", policy_document.AUDIT_PROFILE_NAME))
     parser.add_argument("--evidence-dir", default=os.environ.get("EVIDENCE_DIR", "artifacts/g4a"))
     parser.add_argument("--ci-marker", default=os.environ.get("P4_CI_MARKER", "artifacts/ci-marker.json"))
     parser.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
@@ -868,7 +1290,8 @@ def build_config(argv: list[str]) -> Config:
         stage=args.stage,
         base_url=args.base_url,
         api_token=args.api_token,
-        mcp_url=args.mcp_url or args.base_url.rstrip("/") + "/data/mcp/phase4-policy-probe",
+        mcp_url=args.mcp_url or args.base_url.rstrip("/") + PROBE_MCP_PATH,
+        operator_mcp_url=args.operator_mcp_url or args.base_url.rstrip("/") + OPERATOR_MCP_PATH,
         evidence_dir=Path(args.evidence_dir),
         ci_marker=Path(args.ci_marker),
         run_id=str(args.run_id),
@@ -889,6 +1312,8 @@ def build_config(argv: list[str]) -> Config:
         cycles=args.cycles,
         repeats=args.repeats,
         ack_username=args.ack_username,
+        runtime_project=args.runtime_project,
+        audit_profile=args.audit_profile,
     )
     if not config.gateway_version:
         parser.error("--gateway-version (or GATEWAY_VERSION) is required")
@@ -912,6 +1337,18 @@ def main(argv: list[str] | None = None) -> int:
         elif stage == "alarm":
             record = stage_alarm(config)
             write_stage(config, "alarm", record)
+            code = EXIT_OK
+        elif stage == "tag-write-no-policy":
+            record = stage_tag_write_no_policy(config)
+            write_stage(config, "tag-write-no-policy", record)
+            code = EXIT_OK
+        elif stage == "tag-write-setup":
+            record = stage_tag_write_setup(config)
+            write_stage(config, "tag-write-setup", record)
+            code = EXIT_OK
+        elif stage == "tag-write":
+            record = stage_tag_write(config)
+            write_stage(config, "tag-write", record)
             code = EXIT_OK
         else:
             record, code = stage_summarize(config)

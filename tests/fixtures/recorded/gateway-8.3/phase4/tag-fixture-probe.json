@@ -1,0 +1,37 @@
+{
+  "schemaVersion": 1,
+  "probe": "tag_fixture_probe",
+  "providerRoot": "default",
+  "rootName": "IgnitionMCP_CI",
+  "siblingRootName": "IgnitionMCP_CI2",
+  "configured": true,
+  "configure": {
+    "folderFallbackUsed": false,
+    "qualityCodes": [
+      "Good"
+    ]
+  },
+  "fixturePaths": [
+    "[default]IgnitionMCP_CI/WriteTarget",
+    "[default]IgnitionMCP_CI/TextTarget"
+  ],
+  "siblingPath": "[default]IgnitionMCP_CI2/WriteTarget",
+  "initialValues": [
+    {
+      "path": "[default]IgnitionMCP_CI/WriteTarget",
+      "quality": "Good",
+      "value": "0"
+    },
+    {
+      "path": "[default]IgnitionMCP_CI/TextTarget",
+      "quality": "Good",
+      "value": "phase4-initial"
+    },
+    {
+      "path": "[default]IgnitionMCP_CI2/WriteTarget",
+      "quality": "Good",
+      "value": "0"
+    }
+  ],
+  "fixtureReadable": true
+}

@@ -60,6 +60,37 @@ POLICY: dict[str, Any] = {
     "serviceIdentity": "ignition-mcp-service",
 }
 
+# --------------------------------------------------------------------------- #
+# Ticket #7 (`tag_write`) live fixtures
+#
+# The ticket #6 policy above is the characterization fixture for the storage
+# question, so its bytes stay frozen. The tag_write stage installs its own
+# document over the same reserved provider: the same shape plus the audit profile
+# the D18 `best_effort`/`required` modes use, and (as a second state) an explicit
+# `*` for the reserved-provider refusal proof.
+# --------------------------------------------------------------------------- #
+
+#: The Tag targets the probe project's `tag_fixture_probe` Tool creates. The
+#: prefix is the entry the ticket #6 fixture already carries for `tag_write`, and
+#: `IgnitionMCP_CI2` is its segment-boundary sibling, which must never match.
+TAG_FIXTURE_PROVIDER = "default"
+TAG_FIXTURE_ROOT = "IgnitionMCP_CI"
+TAG_FIXTURE_SIBLING_ROOT = "IgnitionMCP_CI2"
+TAG_FIXTURE_PATH = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/WriteTarget"
+TAG_FIXTURE_SIBLING_PATH = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_SIBLING_ROOT}/WriteTarget"
+TAG_WRITE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+WILDCARD_ALLOWLIST = ("*",)
+#: A path inside the allowed prefix that does not exist, so the item's Native
+#: outcome is a Bad QualityCode rather than a Tool failure (D11).
+TAG_FIXTURE_MISSING_PATH = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/Missing"
+
+#: Disposable local audit profile the tag_write stage provisions through Native
+#: REST and names in the policy, so the Runtime audit row can be read back.
+AUDIT_PROFILE_NAME = "MCP_CI_AUDIT"
+#: The Service identity the policy carries; the Runtime audit actor (CONTEXT.md).
+SERVICE_IDENTITY = str(POLICY["serviceIdentity"])
+
+
 
 #: Every Runtime Tag Mutation that can reach a Tag, and what it must refuse
 #: inside the reserved policy provider (D30 §1, research note §1). The driver's
@@ -117,50 +148,96 @@ def provider_resource() -> dict[str, Any]:
 
 def tag_document() -> dict[str, Any]:
     """Native REST Tag import document (Designer export shape) for the policy."""
+    return {"tags": policy_tags(policy_json()) + [
+        {
+            "name": OVERSIZE_POLICY_TAG_NAME,
+            "tagType": "AtomicTag",
+            "valueSource": "memory",
+            "dataType": "String",
+            "value": oversize_policy_json(),
+            "enabled": True,
+        },
+        {
+            "name": OVERSIZE_LENGTH_TAG_NAME,
+            "tagType": "AtomicTag",
+            "valueSource": "memory",
+            "dataType": "Int4",
+            "value": len(oversize_policy_json().encode("utf-8")),
+            "enabled": True,
+        },
+        {
+            "name": WRITE_PROBE_TAG_NAME,
+            "tagType": "AtomicTag",
+            "valueSource": "memory",
+            "dataType": "String",
+            "value": WRITE_PROBE_INITIAL_VALUE,
+            "enabled": True,
+        },
+    ]}
+
+
+def policy_tags(text: str) -> list[dict[str, Any]]:
+    """The policy Tag and its companion declared-length Tag for one document."""
+    return [
+        {
+            "name": POLICY_TAG_NAME,
+            "tagType": "AtomicTag",
+            "valueSource": "memory",
+            "dataType": "String",
+            "value": text,
+            "enabled": True,
+        },
+        {
+            "name": POLICY_LENGTH_TAG_NAME,
+            "tagType": "AtomicTag",
+            "valueSource": "memory",
+            "dataType": "Int4",
+            "value": len(text.encode("utf-8")),
+            "enabled": True,
+        },
+    ]
+
+
+def tag_write_policy(*, allowlist: tuple[str, ...] = TAG_WRITE_ALLOWLIST, audit_mode: str = "best_effort") -> dict[str, Any]:
+    """The policy the `tag_write` live cases run against (ticket #7).
+
+    Shape-identical to :data:`POLICY` plus the D18 audit profile, so the shipped
+    reader's schema and the D30 fields are exercised by the same document.
+    """
+    document = json.loads(json.dumps(POLICY))
+    document["allowlists"]["tag_write"] = list(allowlist)
+    document["auditMode"] = audit_mode
+    document["auditProfile"] = AUDIT_PROFILE_NAME
+    return document
+
+
+def tag_write_policy_json(**overrides: Any) -> str:
+    return json.dumps(tag_write_policy(**overrides), sort_keys=True, separators=(",", ":"))
+
+
+def tag_write_policy_sha256(**overrides: Any) -> str:
+    return hashlib.sha256(tag_write_policy_json(**overrides).encode("utf-8")).hexdigest()
+
+
+def tag_write_policy_byte_length(**overrides: Any) -> int:
+    return len(tag_write_policy_json(**overrides).encode("utf-8"))
+
+
+def tag_write_tag_document_bytes(*, allowlist: tuple[str, ...] = TAG_WRITE_ALLOWLIST, audit_mode: str = "best_effort") -> bytes:
+    """Tag import document that updates the policy and its length companion."""
+    document = {"tags": policy_tags(tag_write_policy_json(allowlist=allowlist, audit_mode=audit_mode))}
+    return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
+def audit_profile_resource() -> dict[str, Any]:
+    """Native REST body for the disposable local audit profile (D18 read-back)."""
     return {
-        "tags": [
-            {
-                "name": POLICY_TAG_NAME,
-                "tagType": "AtomicTag",
-                "valueSource": "memory",
-                "dataType": "String",
-                "value": policy_json(),
-                "enabled": True,
-            },
-            {
-                "name": POLICY_LENGTH_TAG_NAME,
-                "tagType": "AtomicTag",
-                "valueSource": "memory",
-                "dataType": "Int4",
-                "value": policy_byte_length(),
-                "enabled": True,
-            },
-            {
-                "name": OVERSIZE_POLICY_TAG_NAME,
-                "tagType": "AtomicTag",
-                "valueSource": "memory",
-                "dataType": "String",
-                "value": oversize_policy_json(),
-                "enabled": True,
-            },
-            {
-                "name": OVERSIZE_LENGTH_TAG_NAME,
-                "tagType": "AtomicTag",
-                "valueSource": "memory",
-                "dataType": "Int4",
-                "value": len(oversize_policy_json().encode("utf-8")),
-                "enabled": True,
-            },
-            {
-                "name": WRITE_PROBE_TAG_NAME,
-                "tagType": "AtomicTag",
-                "valueSource": "memory",
-                "dataType": "String",
-                "value": WRITE_PROBE_INITIAL_VALUE,
-                "enabled": True,
-            },
-        ],
+        "name": AUDIT_PROFILE_NAME,
+        "enabled": True,
+        "description": "Disposable Phase 4 CI local audit profile for Runtime audit evidence",
+        "config": {"profile": {"type": "local"}, "settings": {}},
     }
+
 
 
 def tag_document_bytes() -> bytes:

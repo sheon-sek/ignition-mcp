@@ -13,6 +13,7 @@ from types import ModuleType
 from typing import Any
 
 import pytest
+from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[3]
 PHASE4 = ROOT / "tests/harness/phase4-live"
@@ -24,6 +25,7 @@ POLICY_SHA256 = "b98bedf5a697fcf178dfad7cdcbae1e40c4be57071d57674f6cdf11487ba58f
 sys.path.insert(0, str(ROOT / "tests/harness"))
 sys.path.insert(0, str(PHASE4))
 
+import recorded_gateway  # noqa: E402
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
 from tooling.native.project import validate_project  # noqa: E402
@@ -42,6 +44,9 @@ driver = _load("phase4_driver", PHASE4 / "driver.py")
 policy_document = _load("phase4_policy_document", PHASE4 / "policy_document.py")
 gateway_rest = _load("phase4_gateway_rest", PHASE4 / "gateway_rest.py")
 mcp_client = _load("phase4_mcp_client", PHASE4 / "mcp_client.py")
+#: Captured before `stub_mcp` patches `driver.mcp_client.McpClient`, so the stub
+#: can still speak to the recorded Gateway fake for the ticket #7 Tools.
+REAL_MCP_CLIENT = mcp_client.McpClient
 
 
 def _fixture(name: str) -> Any:
@@ -49,10 +54,12 @@ def _fixture(name: str) -> Any:
 
 
 def _config(evidence: Path, **overrides: Any) -> Any:
+    base_url = str(overrides.get("base_url", "http://127.0.0.1:1"))
     values: dict[str, Any] = {
-        "base_url": "http://127.0.0.1:1",
+        "base_url": base_url,
         "api_token": "stub-token",
-        "mcp_url": "http://127.0.0.1:1/data/mcp/phase4-policy-probe",
+        "mcp_url": base_url + driver.PROBE_MCP_PATH,
+        "operator_mcp_url": base_url + driver.OPERATOR_MCP_PATH,
         "evidence_dir": evidence,
         "run_id": "1",
         "gateway_version": "8.3.8",
@@ -64,7 +71,14 @@ def _config(evidence: Path, **overrides: Any) -> Any:
 
 
 class _StubMcp:
-    """Stands in for the live Module-hosted endpoint using recorded payloads."""
+    """Stands in for the live Module-hosted endpoint using recorded payloads.
+
+    The ticket #6 probe reports are injected (their variants are crafted per
+    test), while the ticket #7 Tools are served by the recorded Gateway fake
+    itself: those stages verify state that the fake models (Tag values, the
+    policy document, audit rows), so replaying them through the real client is
+    what the rehearsal does too.
+    """
 
     reports: dict[str, Any] = {}
     sequences: dict[str, list[Any]] = {}
@@ -72,13 +86,26 @@ class _StubMcp:
     def __init__(self, url: str, token: str, **_kwargs: Any) -> None:
         self.url = url
 
+    def _delegate(self) -> Any:
+        return REAL_MCP_CLIENT(self.url, API_TOKEN)
+
     def initialize(self) -> dict[str, Any]:
         return {"protocolVersion": "2025-06-18", "serverInfo": {"name": "ignition-runtime"}}
 
     def tools_list(self) -> list[str]:
-        return ["alarm_probe", "policy_probe"]
+        if self.url.endswith(driver.OPERATOR_MCP_PATH):
+            return list(self._delegate().tools_list())
+        return ["alarm_probe", "policy_probe", "tag_fixture_probe"]
 
-    def structured(self, name: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+    def tool_result(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._delegate().tool_result(name, arguments)
+
+    def tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return self._delegate().tool_call(name, arguments)
+
+    def structured(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        if name == "tag_fixture_probe":
+            return self._delegate().structured(name, arguments)
         sequence = _StubMcp.sequences.get(name)
         if sequence:
             return sequence[0] if len(sequence) == 1 else sequence.pop(0)
@@ -167,6 +194,28 @@ def test_policy_document_is_deterministic_and_provider_qualified() -> None:
     assert tag is not None and tag["value"] == policy_document.policy_json()
     assert tag["dataType"] == "String"
     assert policy_document.find_tag(document, "Absent") is None
+
+
+def test_harness_policy_documents_satisfy_the_shipped_schema() -> None:
+    """The harness writes the policy `setup-native apply` will write, so both
+    documents must satisfy the contract schema the shipped reader implements."""
+    contract = json.loads(
+        (ROOT / "contracts/tools/runtime/tag_write.contract.json").read_text(encoding="utf-8")
+    )
+    schema = json.loads(
+        (ROOT / contract["runtimeTargetPolicy"]["documentSchema"]).read_text(encoding="utf-8")
+    )
+    for document in (
+        policy_document.POLICY,
+        policy_document.tag_write_policy(),
+        policy_document.tag_write_policy(allowlist=policy_document.WILDCARD_ALLOWLIST),
+        policy_document.tag_write_policy(audit_mode="required"),
+    ):
+        Draft202012Validator(schema).validate(document)
+    # The length companion is what bounds the read, so it must measure bytes.
+    assert policy_document.tag_write_policy_byte_length() == len(
+        policy_document.tag_write_policy_json().encode("utf-8")
+    )
 
 
 def test_import_failure_normalization_accepts_both_recorded_wire_shapes() -> None:
@@ -399,8 +448,12 @@ def _record_stage(evidence: Path, name: str, record: dict[str, Any]) -> None:
 
 
 def _record_every_stage(evidence: Path, gateway: RecordedGateway) -> dict[str, Any]:
-    """Write the four stage records the way the live workflow does."""
+    """Write the seven stage records the way the live workflow does."""
     evidence.mkdir(parents=True, exist_ok=True)
+    no_policy = driver.stage_tag_write_no_policy(
+        _config(evidence, base_url=gateway.base_url, api_token=API_TOKEN),
+    )
+    _record_stage(evidence, "tag-write-no-policy", no_policy)
     provision = driver.stage_policy_provision(
         _config(evidence, base_url=gateway.base_url, api_token=API_TOKEN),
     )
@@ -412,13 +465,25 @@ def _record_every_stage(evidence: Path, gateway: RecordedGateway) -> dict[str, A
     )
     alarm = driver.stage_alarm(_config(evidence))
     _record_stage(evidence, "alarm", alarm)
+    _record_stage(
+        evidence, "tag-write-setup",
+        driver.stage_tag_write_setup(_config(evidence, base_url=gateway.base_url, api_token=API_TOKEN)),
+    )
+    _record_stage(
+        evidence, "tag-write",
+        driver.stage_tag_write(_config(evidence, base_url=gateway.base_url, api_token=API_TOKEN)),
+    )
     return alarm
 
 
 def test_summarize_reports_no_drift_and_the_recorded_verdict(
     stub_mcp: dict[str, Any], tmp_path: Path,
 ) -> None:
-    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
         _record_every_stage(tmp_path, gateway)
     evidence, code = driver.stage_summarize(_config(tmp_path))
     assert code == driver.EXIT_OK
@@ -427,6 +492,36 @@ def test_summarize_reports_no_drift_and_the_recorded_verdict(
     assert evidence["verdict"]["exactPathAlarmQuery"]["literalMatchingOnly"] is True
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["chosenLocation"] == "[IgnitionMCPPolicy]RuntimeTargetPolicy"
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["survivesGatewayRestart"] is True
+    assert evidence["tickets"] == ["#6", "#7"]
+
+
+def test_summarize_verdict_carries_the_tag_write_result(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
+        _record_every_stage(tmp_path, gateway)
+    evidence, code = driver.stage_summarize(_config(tmp_path))
+    assert code == driver.EXIT_OK
+    verdict = evidence["verdict"]["runtimeTagWrite"]
+    assert verdict["operatorInventoryMatchesProfile"] is True
+    assert verdict["allowlistedBatch"] == {
+        "requested": 4, "succeeded": 3, "failed": 1, "outcomeUnknown": 0,
+        "nativeOutcomes": True, "observedMatchesWritten": True,
+    }
+    assert verdict["targetAllowlist"] == {
+        "siblingRefusedAtSegmentBoundary": True, "preflightExecutedNothing": True,
+    }
+    assert verdict["reservedProvider"] == {
+        "refusedUnderExplicitWildcard": True, "targetValueUnchanged": True,
+        "policyDocumentUnclobbered": True,
+    }
+    assert verdict["audit"]["mode"] == "best_effort"
+    assert verdict["audit"]["recorded"] is True
+    assert verdict["audit"]["rowsForCorrelation"] == 2
 
 
 def test_summarize_verdict_carries_the_complete_refusal_rule(
@@ -434,7 +529,11 @@ def test_summarize_verdict_carries_the_complete_refusal_rule(
 ) -> None:
     """The evidence verdict is what a later implementer reads, so it has to state
     every refused mutation and both ends of the source/destination pairs."""
-    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
         _record_every_stage(tmp_path, gateway)
     evidence, _code = driver.stage_summarize(_config(tmp_path))
     sentence = evidence["verdict"]["runtimeTargetPolicyStorage"]["runtimeWritePrevention"]
@@ -450,7 +549,11 @@ def test_summarize_verdict_carries_the_complete_refusal_rule(
 def test_summarize_detects_a_descendant_matching_regression(
     stub_mcp: dict[str, Any], tmp_path: Path,
 ) -> None:
-    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
         alarm = _record_every_stage(tmp_path, gateway)
     alarm["facts"]["folderPathExpandsDescendants"] = True
     _record_stage(tmp_path, "alarm", alarm)
@@ -458,6 +561,117 @@ def test_summarize_detects_a_descendant_matching_regression(
     assert code == driver.EXIT_DRIFTED
     assert "folderPathExpandsDescendants" in evidence["drift"]
     assert evidence["verdict"]["exactPathAlarmQuery"]["bounded"] is False
+
+
+def test_tag_write_stages_record_the_live_facts(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The three ticket #7 stages derive their facts from the recorded Gateway."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        no_policy = driver.stage_tag_write_no_policy(config)["facts"]
+        driver.stage_policy_provision(config)
+        setup = driver.stage_tag_write_setup(config)["facts"]
+        facts = driver.stage_tag_write(config)["facts"]
+
+    # No policy on the Gateway: fail closed, before anything executes.
+    assert no_policy["tagWriteNoPolicyErrorCode"] == "operation_disabled"
+    assert no_policy["tagWriteNoPolicyFailsClosed"] is True
+    # Test-only provisioning: fixture Tags, the audit profile and the policy.
+    assert setup["tagFixtureConfigured"] is True
+    assert setup["tagFixturePathsMatch"] is True
+    assert setup["auditProfileAvailable"] is True
+    assert setup["tagWritePolicyInstalled"] is True
+    assert setup["tagWritePolicyServedSha256"] == policy_document.tag_write_policy_sha256()
+    # The batch, both refusals, the reserved provider and the audit read-back.
+    assert facts["tagWriteOperatorInventoryMatchesProfile"] is True
+    assert facts["tagWriteBatchNativeOutcomes"] is True
+    assert facts["tagWriteObservedMatchesWritten"] is True
+    assert facts["tagWriteObservedMissingQualityIsBad"] is True
+    assert facts["tagWriteSiblingDenialIsSegmentBoundary"] is True
+    assert facts["tagWriteSiblingValueUnchanged"] is True
+    assert facts["tagWritePreflightExecutedNothing"] is True
+    assert facts["tagWriteReservedProviderRefusedUnderWildcard"] is True
+    assert facts["tagWriteReservedProviderValueUnchanged"] is True
+    assert facts["tagWritePolicyDocumentUnclobbered"] is True
+    assert facts["tagWriteAuditAttemptAndResultRecorded"] is True
+    assert facts["tagWriteAuditActorIsServiceIdentity"] is True
+
+
+def test_tag_write_refuses_a_deployed_inventory_that_differs_from_the_profile(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """D09: the served inventory must equal the profile exactly, not merely cover it."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        driver.stage_policy_provision(config)
+        driver.stage_tag_write_setup(config)
+        monkeypatch = pytest.MonkeyPatch()
+        original = _StubMcp.tools_list
+
+        def extra(self: Any) -> list[str]:
+            return original(self) + ["tag_delete"]
+
+        monkeypatch.setattr(_StubMcp, "tools_list", extra)
+        try:
+            with pytest.raises(driver.StageFailure) as caught:
+                driver.stage_tag_write(config)
+        finally:
+            monkeypatch.undo()
+        assert "operator inventory" in str(caught.value)
+
+
+def test_tag_write_setup_requires_the_provider_to_serve_the_policy(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """An accepted import is not proof the running provider serves it (ticket #6),
+    so the install loop must verify the handler-scope read and give up loudly."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        driver.stage_policy_provision(config)
+        monkeypatch = pytest.MonkeyPatch()
+        # A provider that accepts the import and serves nothing (the recorded
+        # 8.3.8 failure) must not look like a successful install.
+        monkeypatch.setattr(recorded_gateway, "_record_tag_import", lambda server, body: None)
+        try:
+            installed = driver.install_tag_write_policy(
+                config, mcp_client.McpClient(config.operator_url, API_TOKEN),
+                allowlist=policy_document.TAG_WRITE_ALLOWLIST, deadline_seconds=0.0,
+            )
+        finally:
+            monkeypatch.undo()
+    assert installed["ok"] is False
+    assert installed["attemptCount"] == 1
+    assert installed["servedSha256"] == policy_document.policy_sha256()
+
+
+def test_tag_write_case_selector_replays_the_recorded_refusals() -> None:
+    """The rehearsal's case selection is what makes the negative cases reachable."""
+
+    class _Server:
+        policy_provider_created = True
+
+    cases = {
+        "reserved-provider-refusal": [{"path": "[IgnitionMCPPolicy]WriteProbe"}],
+        "sibling-denial": [{"path": "[default]IgnitionMCP_CI2/WriteTarget"}],
+        "preflight-refusal": [{"path": "[default]IgnitionMCP_CI/WriteTarget"}, {"path": "[default]IgnitionMCP_CI2/WriteTarget"}],
+        "allowlisted-batch": [{"path": "[default]IgnitionMCP_CI/WriteTarget"}],
+    }
+    for expected, writes in cases.items():
+        case, _paths = recorded_gateway._tag_write_case(_Server(), {"writes": writes})
+        assert case == expected, (expected, case)
 
 
 def _marker_document(config: Any, **overrides: Any) -> dict[str, Any]:
@@ -471,6 +685,8 @@ def _marker_document(config: Any, **overrides: Any) -> dict[str, Any]:
         "trustedRepo": "sheon-sek/ignition-mcp",
         "policyProvider": config.provider,
         "alarmRoot": config.root_name,
+        "runtimeProject": config.runtime_project,
+        "auditProfile": config.audit_profile,
     }
     document.update(overrides)
     return document
@@ -550,6 +766,8 @@ def test_guard_requires_the_marker_to_name_this_run_policy_and_alarm_root(
         {"trustedRepo": "someone-else/ignition-mcp"},
         {"marker": "ignition-mcp-phase3-live"},
         {"environment": "phase3-live"},
+        {"runtimeProject": "someone-elses-project"},
+        {"auditProfile": "SomeOtherProfile"},
     ):
         _marker_file(marker, config, **override)
         with pytest.raises(driver.GuardError) as caught:
@@ -734,11 +952,12 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
     assert "pull_request:" in text
     assert "environment: phase4-live" in text
     assert "github.event.pull_request.head.repo.full_name == github.repository" in text
-    for stage in ("policy-provision", "policy-read", "alarm", "summarize"):
+    for stage in ("tag-write-no-policy", "policy-provision", "policy-read", "alarm",
+                  "tag-write-setup", "tag-write", "summarize"):
         assert stage in text, stage
     assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
     assert "python tests/harness/phase4-live/rehearse_local.py" in text
-    # One readiness waiter for both readiness points, not two shell loops.
+    # Two readiness points, each waiting on both hosted endpoints.
     assert text.count("wait_for_gateway.py") == 2
     assert "MAX_RESPONSE" not in text
     # Frozen expectations: drift must fail the job now.

@@ -61,6 +61,8 @@ def write_marker(path: Path) -> None:
         "trustedRepo": "sheon-sek/ignition-mcp",
         "policyProvider": policy_document.POLICY_PROVIDER,
         "alarmRoot": ALARM_ROOT,
+        "runtimeProject": driver.RUNTIME_PROJECT,
+        "auditProfile": policy_document.AUDIT_PROFILE_NAME,
     }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -76,6 +78,7 @@ def run_stage(
         sys.executable, str(DRIVER), *stage,
         "--base-url", base_url,
         "--mcp-url", mcp_url,
+        "--operator-mcp-url", base_url + driver.OPERATOR_MCP_PATH,
         "--api-token", API_TOKEN,
         "--evidence-dir", str(evidence),
         "--ci-marker", str(marker),
@@ -83,6 +86,7 @@ def run_stage(
         "--gateway-version", GATEWAY_VERSION,
         "--gateway-build", GATEWAY_BUILD,
         "--root-name", ALARM_ROOT,
+        "--audit-profile", policy_document.AUDIT_PROFILE_NAME,
         "--characterization", characterization,
         "--noise-count", "60",
         "--cycles", "3",
@@ -117,16 +121,20 @@ def main(argv: list[str] | None = None) -> int:
         write_marker(marker)
         with RecordedGateway(
             policy_provider=policy_document.POLICY_PROVIDER,
-            runtime_tools=("policy_probe", "alarm_probe"),
+            runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+            audit_profile=policy_document.AUDIT_PROFILE_NAME,
             port=driver.EXPECTED_ORIGIN_PORT,
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH
             stages = [
+                (["tag-write-no-policy"], "tag-write-no-policy"),
                 (["policy-provision"], "policy-provision"),
                 (["policy-read", "--label", "before-restart"], "policy-read-before-restart"),
                 (["policy-read", "--label", "after-restart"], "policy-read-after-restart"),
                 (["alarm"], "alarm"),
+                (["tag-write-setup"], "tag-write-setup"),
+                (["tag-write"], "tag-write"),
             ]
             for stage, record in stages:
                 code = run_stage(stage, base_url, mcp_url, work, marker, evidence, args.characterization)
