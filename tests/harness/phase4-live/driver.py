@@ -389,7 +389,10 @@ def stage_policy_provision(config: Config) -> dict[str, Any]:
     facts["restReadBackMatches"] = (
         facts["exportedValueSha256"] == policy_document.policy_sha256()
     )
-    raw["export"] = bounded(exported_document)
+    # The provider export is the recorded read-back body and the rehearsal replay
+    # body, so it is kept whole: truncating it would make the fixture unusable and
+    # hide the policy Tag behind the harness's oversize probe pair.
+    raw["export"] = bounded(exported_document, 400_000)
 
     find_status, found = gateway_rest.find_resource(
         config.base_url, config.api_token, "ignition/tag-provider", config.provider,
@@ -543,8 +546,14 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
             facts.get("policyReadMatchesAppliedDocument")
         )
         gate_reported = bool(facts.get("policyGateReported"))
-        gate_refused = gate_reported and not bool(facts.get("policyGatedReadServedAndVerified"))
-        healthy = served_document and gate_reported and not gate_refused
+        gate_state = str(facts.get("policyGateState", ""))
+        # An over-cap document is a deliberate refusal and must fail at once. A
+        # blocked gate (its length Tag unreadable) is the provider-startup case
+        # the repair loop exists for, so it keeps retrying instead.
+        oversize_refusal = gate_state == "oversize"
+        healthy = served_document and gate_reported and bool(
+            facts.get("policyGatedReadServedAndVerified")
+        )
         attempt: dict[str, Any] = {
             "servedPolicyTag": served_document,
             "policyReadQuality": str(facts.get("policyReadQuality", "")),
@@ -557,7 +566,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         # document whose report carries no gate measurement is a stale recorded
         # payload (the expectation drift check reports it), and a gate that
         # answered "oversize"/"blocked" is a deterministic refusal.
-        if healthy or gate_reported or served_document or time.monotonic() >= deadline:
+        if healthy or oversize_refusal or (served_document and not gate_reported) or time.monotonic() >= deadline:
             attempts.append(attempt)
             break
         # Two recorded 8.3.8 provider-startup failures motivate this loop: the
@@ -578,9 +587,9 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     facts["policyReadRepairImports"] = repairs
     raw["policyProbe"] = bounded(report)
     raw["policyProbeAttempts"] = bounded(attempts, 40_000)
-    if gate_refused:
+    if oversize_refusal:
         raise StageFailure(
-            "the policy size gate refused the document: "
+            "the policy size gate refused an oversize document: "
             + json.dumps(attempts[-1], sort_keys=True)[:800]
         )
     if not served_document:

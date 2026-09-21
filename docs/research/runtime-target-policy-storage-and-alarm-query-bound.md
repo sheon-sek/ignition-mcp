@@ -275,6 +275,18 @@ Alarms were activated before the measurements. Query repetitions: 3 per form.
 | `system.alarm.acknowledge(ids, note, user)` on the returned event ids | 3 ids acknowledged, 0 left unacknowledged, state afterwards `Cleared, Acknowledged` |
 | median query time | exact 0 ms, root wildcard 1 ms, unfiltered 0 ms |
 
+The policy-read gate, measured in the same run (`phase4-live-g4a` run
+[35640303173](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640303173),
+both Gateway rows, no drift):
+
+| Gate step | Live result (8.3.8 / 8.3.9) |
+|---|---|
+| companion length Tag `RuntimeTargetPolicyLength` | `Good`, declared byte length **283** = the applied document's byte length |
+| policy gate outcome | `served`, the document's SHA-256 equals the applied document's SHA-256, value byte length equals the declared length |
+| gated read cost | 6 ms / 3 ms |
+| configured maximum | `IgnitionMcpPolicyMaxBytes` = 32768 |
+| deliberately oversize pair (`OversizePolicyProbe`) | declared byte length **39967** > cap → gate `oversize`, `materialized: false` — the value Tag was never read |
+
 `phase4-live-g4a` run
 [35636981286](https://github.com/sheon-sek/ignition-mcp/actions/runs/35636981286)
 (commit `ca8fd33`) reproduced every fact above on both Gateway rows with no drift

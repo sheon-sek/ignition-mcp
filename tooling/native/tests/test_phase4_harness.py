@@ -83,28 +83,37 @@ class _StubMcp:
         return self.reports[name]
 
 
-def _with_gate_measurements(
-    report: dict[str, Any], *, gate_state: str = "served", declared: int | None = None,
-    materialized: bool | None = None,
+def _with_gate(
+    report: dict[str, Any], *, include_gate: bool = True, served_document: bool = True,
+    gate_state: str = "served", declared: int | None = None, materialized: bool | None = None,
 ) -> dict[str, Any]:
-    """Add the gate measurements the handler produces to a recorded report.
+    """Return the report with the gate measurements the current handler produces.
 
-    Every number here comes from the recorded report's own policy read; the
-    committed fixture is replaced by the full live recording after the next run.
+    Every number comes from the report's own policy read (or from the explicit
+    override a variant test passes), and any gate measurement already present is
+    replaced, so the variant tests and the default stub share one construction.
+    The committed recorded report is asserted directly by
+    `test_recorded_policy_probe_carries_the_gate_measurements`.
     """
     document = json.loads(json.dumps(report))
+    document["measurements"] = [
+        entry for entry in document["measurements"] if not str(entry.get("name", "")).startswith("tag.gatedRead.")
+    ]
+    if not include_gate:
+        return document
     policy_read = next(m for m in document["measurements"] if m["name"] == "tag.readBlocking.policy")
     item = policy_read["items"][0]
     length = item["valueByteLength"] if declared is None else declared
-    served = gate_state == "served"
+    served = gate_state == "served" and served_document
     document["measurements"].insert(2, {
         "name": "tag.gatedRead.policy", "ok": True, "elapsedMs": 1, "label": "policy",
         "cap": policy_document.POLICY_MAX_BYTES, "lengthQuality": "Good", "declaredLength": length,
         "materialized": served if materialized is None else materialized, "gate": gate_state,
         "quality": item["quality"], "valueLength": item["valueLength"],
-        "valueByteLength": item["valueByteLength"], "valueSha256": item["valueSha256"],
-        "valueText": item.get("valueText", ""),
-        "lengthMatchesValue": length == item["valueByteLength"],
+        "valueByteLength": item["valueByteLength"] if served_document else 0,
+        "valueSha256": item["valueSha256"] if served_document else "",
+        "valueText": item.get("valueText", "") if served_document else "",
+        "lengthMatchesValue": served_document and length == item["valueByteLength"],
     })
     document["measurements"].insert(3, {
         "name": "tag.gatedRead.oversize", "ok": True, "elapsedMs": 1, "label": "oversize",
@@ -120,7 +129,7 @@ def _with_gate_measurements(
 @pytest.fixture()
 def stub_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     reports = {
-        "policy_probe": _with_gate_measurements(_fixture("policy-probe.json")),
+        "policy_probe": _with_gate(_fixture("policy-probe.json")),
         "alarm_probe": _fixture("alarm-probe.json"),
     }
     _StubMcp.reports = reports
@@ -218,7 +227,7 @@ def test_policy_read_fails_closed_when_the_gate_refuses_the_document(
 ) -> None:
     """An over-cap declared length must fail closed without reading the value."""
     _StubMcp.reports = {
-        "policy_probe": _with_gate_measurements(
+        "policy_probe": _with_gate(
             _fixture("policy-probe.json"),
             declared=policy_document.OVERSIZE_POLICY_BYTES,
             gate_state="oversize",
@@ -229,7 +238,40 @@ def test_policy_read_fails_closed_when_the_gate_refuses_the_document(
     config = _config(tmp_path, policy_read_deadline_seconds=0.0)
     with pytest.raises(driver.StageFailure) as caught:
         driver.stage_policy_read(config)
-    assert "size gate refused the document" in str(caught.value)
+    assert "refused an oversize document" in str(caught.value)
+
+
+def test_policy_read_retries_a_gate_that_cannot_read_its_length_tag(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The provider-startup case: an unreadable companion Tag is not a deliberate
+    refusal, so the read path repairs with a re-import instead of failing."""
+    unserved = _with_gate(_fixture("policy-probe.json"), served_document=False)
+    for entry in unserved["measurements"]:
+        if entry["name"] == "tag.readBlocking.policy":
+            entry["items"] = [{
+                "quality": "Bad_NotFound", "valueType": "NoneType",
+                "valueLength": 0, "valueByteLength": 0, "valueSha256": "", "valuePrefix": "",
+            }]
+            entry["jsonKeys"] = []
+            entry["jsonKind"] = ""
+    blocked = json.loads(json.dumps(unserved))
+    for entry in blocked["measurements"]:
+        if entry["name"] == "tag.gatedRead.policy":
+            entry["gate"] = "blocked"
+            entry["lengthQuality"] = "Bad_NotFound"
+            entry["reason"] = "declared length is not readable"
+    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+        config = _config(
+            tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+            policy_read_deadline_seconds=30.0,
+        )
+        driver.stage_policy_provision(config)
+        _StubMcp.sequences = {"policy_probe": [blocked, stub_mcp["policy_probe"]]}
+        facts = driver.stage_policy_read(config)["facts"]
+    assert facts["policyReadAttempts"] == 2
+    assert facts["policyReadRepairImports"] == 1
+    assert facts["policyGatedReadServedAndVerified"] is True
 
 
 def test_policy_read_reports_a_stale_fixture_as_drift_not_failure(
@@ -238,7 +280,7 @@ def test_policy_read_reports_a_stale_fixture_as_drift_not_failure(
     # A served document whose report predates the gate is drift, not a hang and
     # not a hard failure: the live workflow's drift check catches it.
     _StubMcp.reports = {
-        "policy_probe": _fixture("policy-probe.json"),
+        "policy_probe": _with_gate(_fixture("policy-probe.json"), include_gate=False),
         "alarm_probe": _fixture("alarm-probe.json"),
     }
     facts = driver.stage_policy_read(_config(tmp_path))["facts"]
@@ -294,7 +336,9 @@ def test_policy_read_repairs_a_provider_that_serves_no_tags(
     with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
         driver.stage_policy_provision(config)
-        _StubMcp.sequences = {"policy_probe": [unserved, stub_mcp["policy_probe"]]}
+        _StubMcp.sequences = {
+        "policy_probe": [_with_gate(unserved, served_document=False), stub_mcp["policy_probe"]],
+    }
         record = driver.stage_policy_read(config)
     facts = record["facts"]
     assert facts["policyReadAttempts"] == 2
