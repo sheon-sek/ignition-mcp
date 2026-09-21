@@ -253,6 +253,88 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `MCP_CI_AUDIT` log held both rows (attempt + result) for the call's
     correlation ID with `actor` equal to the policy's Service identity.
 - **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
+
+### Ticket #8 — Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
+
+- Fixture-first coverage: 37 recorded-Jython fixtures
+  (`tooling/native/jython_runner/fixtures/alarm_{shelve,unshelve}-*.json`) driven by
+  `tooling/native/jython_runner/tests/test_alarm_{shelve,unshelve}.py` cover the
+  policy gate (missing, oversize, length mismatch, unparseable, malformed,
+  explicit-null `auditProfile`, invalid `alarmShelveMaxSeconds`, and a
+  Tag-shaped allowlist entry), the Alarm path input grammar (wildcard, empty
+  array, over the hard maximum), the Target allowlist at a segment boundary, the
+  reserved provider under an explicit `*`, the deployment shelve cap and the D12
+  24 h hard maximum, a whole-batch Preflight refusal, the `required`/`off` audit
+  paths, a raised dispatch, a failed Observed read and an over-limit shelved view.
+  The D29 launcher gained the `system.alarm` namespace and a `shelved-paths`
+  result kind.
+- Contracts: `contracts/tools/runtime/alarm_shelve.contract.json` and
+  `alarm_unshelve.contract.json` (CONTROL, not destructive, FAST, 1..100 exact
+  Alarm paths; `timeoutSeconds` required, 1..86400, lowerable by the policy),
+  `contracts/schemas/alarm-shelve.output.schema.json` and
+  `alarm-unshelve.output.schema.json`. Both Tools join the `operator` and `full`
+  profiles (`readonly` and `configurator` unchanged), the CONTROL inventory in
+  `tooling/contracts/lint.py` carries them, and `BUNDLE_VERSION` goes
+  0.3.0 → 0.4.0 (D21 MINOR). The harness `phase4-operator` Server Config selects
+  its profile's explicit Tool list, now 16 Tools.
+- Handlers: the ticket #6 gated two-step policy read, an all-items Preflight
+  (Alarm path grammar, reserved provider, Target allowlist), one native call per
+  item (`system.alarm.shelve([path], seconds)` / `system.alarm.unshelve([path])`)
+  with per-item outcomes and no rollback, and the `alarm_shelved_list` view of
+  the exact paths as Observed state.
+- Local rehearsal: `tests/harness/phase4-live/rehearse_local.py` — all nine stages
+  against the recorded Gateway, `drift: {}`.
+- Live (run
+  [35660890483](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890483),
+  workflow `Phase 4 Live Gateway G4a`, both rows green with `drift: {}` — 8.3.8
+  `2026071409` required and 8.3.9 `2026082511` candidate; the first
+  characterization of the same cases is run
+  [35659773936](https://github.com/sheon-sek/ignition-mcp/actions/runs/35659773936),
+  whose payloads the recorded fixtures hold), at bundle SHA-256
+  `9a0760d8…`:
+  - a Gateway with no Runtime Target Policy refuses both Alarm Mutations with
+    `operation_disabled` (`declaredLengthUnavailable`) before anything executes;
+  - the deployed `operator` inventory is exactly the 16 Tools of
+    `contracts/profiles/operator.yaml`;
+  - the allowlisted shelve of the run's own exact Alarm path
+    (`prov:default:/tag:mcp_p4_<run>/Exact:/alm:ProbeHi`, the pattern the ticket #6
+    `alarm_probe` measured) executed, and both the Tool's Observed state and an
+    independent `alarm_shelved_list` read reported it shelved, with
+    `user = usr:gateway-script` and an expiration one hour out (`expired: false`);
+  - Runtime audit ran in `best_effort`, `auditRecorded=true`, and the
+    `MCP_CI_AUDIT` log held both rows (attempt + result) for the call's
+    correlation ID with `actor` equal to the policy's Service identity;
+  - a duration of 7200 s against a 3600 s policy cap was refused with
+    `invalid_argument` / `durationOverPolicyCap` (cap 3600, hard maximum 86400),
+    86401 s was refused by the D12 hard maximum before the policy was read, and
+    the target stayed unshelved after both;
+  - a wildcard target was refused with `invalid_argument` / `wildcardPath`, and a
+    sibling Alarm root that only shares a string prefix was refused with
+    `permission_denied` / `targetNotAllowlisted`, with the shelved view unchanged;
+  - a batch mixing an allowlisted and a refused path was rejected whole, with the
+    allowlisted path still unshelved (the Preflight executed nothing);
+  - the allowlisted unshelve executed and both the Tool's Observed state and
+    `alarm_shelved_list` reported the path unshelved; the sibling and wildcard
+    refusals held for the unshelve as well.
+- The live run also confirms the native signature assumptions: an exact,
+  provider-qualified Alarm source pattern is what `system.alarm.shelve` accepts and
+  what `getShelvedPaths()` answers with, and the shelving identity is the Gateway
+  script user, not a caller-supplied one (D12 forbids a forged acknowledgement or
+  shelving identity).
+- Recorded fixtures: the Alarm bodies under
+  `tests/fixtures/recorded/gateway-8.3/phase4/` are run 35659773936's payloads,
+  with provenance recorded and `__ALARM_ROOT__` / `__CORRELATION__` templated
+  (both are run-scoped; the fake substitutes the run's values). The two Ticket #6
+  probe recordings stay byte-frozen.
+- Frozen gates, green on the same head (`fec1d1b`): CI
+  [35660890362](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890362),
+  Phase 0 G0
+  [35660890375](https://github.com/sheon-sek/ignition-mcp/actions/runs/35660890375),
+  and on the previous head Phase 3 G3
+  [35659773888](https://github.com/sheon-sek/ignition-mcp/actions/runs/35659773888) —
+  the Runtime `readonly` inventory is unchanged by this ticket, so the G1–G3 rows
+  keep their exact 13-Tool read inventory.
+
 ### Ticket #15 — REST `config_resource_create`, `config_resource_delete` and `config_resource_rename` (milestone 4c)
 
 - Fixture-first coverage: `packages/ignition-rest-mcp/tests/test_phase4_config_resource_create_delete_rename.py`
