@@ -326,3 +326,4 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 5 | `5b03c04` | full validation suite green (288 tests) |
 | 6 | `eac3b5a` | full validation suite green (328 tests; executor claimed-state semantics tightened to plan 7.6 during test iteration) |
 | 7 | `6e7035f` | full validation suite green (360 tests) |
+| 8 | `a81ba12` | full validation suite green (370 tests) |

@@ -40,6 +40,10 @@ uv build --package ignition-rest-mcp
 uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
 uv run --no-sync python -m tooling.native.cli build --project-dir packages/ignition-runtime-bundle/project --output dist/runtime.zip
 
+# Deterministic release artifacts (CI builds twice and `cmp`s all three files)
+uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+uv run --no-sync python -m tooling.native.cli release --project-dir packages/ignition-runtime-bundle/project --out-dir dist/release --source-revision "$(git rev-parse HEAD)" --evidence-dir tests/compatibility/evidence
+
 # After editing a contracts/schemas source that is published as a Runtime Text Resource
 uv run --no-sync python -m tooling.native.sync_schemas
 

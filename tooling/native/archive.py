@@ -5,11 +5,13 @@ from __future__ import annotations
 import io
 import os
 from pathlib import Path
+import re
 import tempfile
 import tokenize
 import zipfile
 
 from .constants import HANDLER, NATIVE_BINDING_PENDING_COMMENT, PROMPT_HANDLER
+from .project import SOURCE_REVISION_TOKEN
 from .jsonio import load_json_object
 from .project import validate_project
 from .validation import ValidationError, require
@@ -27,14 +29,36 @@ def pending_native_bindings(files: dict[str, bytes]) -> list[str]:
     return sorted(pending)
 
 
-def build_project(project_dir: str | Path, output: str | Path, *, allow_unbound_scaffold: bool = False) -> dict[str, bytes]:
+def stamp_source_revision(files: dict[str, bytes], source_revision: str | None) -> dict[str, bytes]:
+    """Deterministic build-time stamping of the bundle source-revision token.
+
+    The source tree is never modified; substitution happens only in the final
+    archive construction path. The default stamp is the literal UNSTAMPED.
+    """
+
+    revision = "UNSTAMPED" if source_revision is None else source_revision
+    require(revision == "UNSTAMPED" or re.fullmatch(r"[0-9a-f]{40}", revision) is not None,
+            "source_revision", "must be a 40-hex-lowercase git SHA or None (UNSTAMPED)")
+    stamped: dict[str, bytes] = {}
+    for name, data in files.items():
+        if SOURCE_REVISION_TOKEN in data:
+            data = data.replace(b'"' + SOURCE_REVISION_TOKEN + b'"', b'"' + revision.encode("ascii") + b'"')
+            require(SOURCE_REVISION_TOKEN not in data, name, "stamped archive still contains the raw token")
+        stamped[name] = data
+    return stamped
+
+
+def build_project(
+    project_dir: str | Path, output: str | Path, *, allow_unbound_scaffold: bool = False,
+    source_revision: str | None = None,
+) -> dict[str, bytes]:
     project_root = Path(project_dir).resolve()
     output_path = Path(output).absolute()
     require(output_path.suffix.lower() == ".zip", output_path, "output must use .zip extension")
     require(project_root != output_path.resolve() and project_root not in output_path.resolve().parents, output_path, "output ZIP must be outside project source")
     require(type(allow_unbound_scaffold) is bool, output_path, "allow_unbound_scaffold must be an explicit boolean")
 
-    files = validate_project(project_root)
+    files = stamp_source_revision(validate_project(project_root), source_revision)
     pending = pending_native_bindings(files)
     if pending and not allow_unbound_scaffold:
         raise ValidationError("Native MCP response binding pending in {}; production build refused".format(", ".join(pending)))
