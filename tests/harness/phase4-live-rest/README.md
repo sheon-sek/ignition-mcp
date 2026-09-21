@@ -84,6 +84,10 @@ observe:
 | `tag-import-non-allowlisted-path-is-permission-denied` | D30 §7 for a destination path the Target allowlist does not name |
 | `tag-import-non-allowlisted-path-creates-nothing` | …and that path holds none of the source Tags |
 | `tag-import-invisible-artifact-is-not-found` | D30 §6: a Tag export another principal owns answers `not_found` |
+| `tag-import-under-the-allowlisted-prefix-applies` | D30 §1/D08: the allowlisted entry is a path *prefix*, so a destination below it is authorized |
+| `tag-import-prefix-destination-serves-every-source-tag` | …and an independent export of that nested destination serves the source Tags |
+| `tag-import-reserved-policy-provider-is-permission-denied` | D30 §1: the Runtime Target Policy's provider is reserved |
+| `tag-import-reserved-policy-provider-says-which-rule` | …and the error names the reserved-provider rule, not the Target allowlist |
 | `inventory-gate-off-exact` | with the class disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
 
@@ -109,6 +113,15 @@ Tool-scoped; see `docs/development/phase-4.md`). That is the code both
 `config_resource_*`, `project_import` and `tag_config_import` answer; the frozen Phase 3 machinery the G3
 harness drives keeps its recorded `operation_disabled` because the code is declared per
 operation.
+
+The Tag import cases also pin the two Target rules that are this Tool's alone
+(D30 §1): the allowlisted entry is a provider-qualified path *prefix* that matches at
+segment boundaries, so the nested destination the cases import into is authorized by the
+entry for its parent; and the Runtime Target Policy's own provider is reserved, so an
+import addressed to it is refused by provider before the allowlist is consulted. The
+second case runs against a deployment whose Target allowlist does not name that provider
+either, and asserts the message, so a run tells a reserved-provider refusal from an
+ordinary allowlist denial.
 
 The deployment this driver runs against enables the config mutation class, the
 sensitive exports (the Project cases read their Precondition token from
