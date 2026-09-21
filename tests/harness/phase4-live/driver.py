@@ -414,6 +414,7 @@ def stage_alarm(config: Config) -> dict[str, Any]:
     facts: dict[str, Any] = {}
     raw: dict[str, Any] = {}
     client = mcp_client.McpClient(config.mcp_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
     tools = client.tools_list()
     if "alarm_probe" not in tools:
         raise StageFailure(f"alarm_probe is not discoverable; tools/list = {sorted(tools)}")

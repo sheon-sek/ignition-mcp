@@ -63,7 +63,24 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 		}
 
 	def configure(alarm):
-		return qualityList(system.tag.configure(providerRoot, [fixtureTree(alarm)], "o"))
+		detail = {}
+		codes = qualityList(system.tag.configure(providerRoot, [fixtureTree(alarm)], "o"))
+		detail["qualityCodes"] = codes
+		detail["folderFallbackUsed"] = False
+		if allGood(codes):
+			return detail
+		# Some builds are happier creating the folder first and then the tree
+		# under it; record which form worked instead of assuming one.
+		folderCodes = qualityList(system.tag.configure(
+			providerRoot, [{"name": rootName, "tagType": "Folder", "enabled": True}], "o",
+		))
+		childCodes = qualityList(system.tag.configure(
+			providerRoot + relativeRoot, fixtureTree(alarm)["tags"], "o",
+		))
+		detail["folderFallbackUsed"] = True
+		detail["folderQualityCodes"] = folderCodes
+		detail["qualityCodes"] = childCodes
+		return detail
 
 	def fixturePaths():
 		return [
@@ -224,9 +241,10 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 		for alternative in alternatives:
 			entry = {"label": alternative["label"], "mode": alternative["alarm"]["mode"]}
 			try:
-				codes = configure(alternative["alarm"])
-				entry["qualityCodes"] = codes
-				entry["configured"] = allGood(codes)
+				detail = configure(alternative["alarm"])
+				entry["qualityCodes"] = detail["qualityCodes"]
+				entry["folderFallbackUsed"] = detail["folderFallbackUsed"]
+				entry["configured"] = allGood(detail["qualityCodes"])
 			except (Exception, JavaException) as exc:
 				entry["configured"] = False
 				entry["error"] = text(type(exc).__name__) + ": " + text(exc)

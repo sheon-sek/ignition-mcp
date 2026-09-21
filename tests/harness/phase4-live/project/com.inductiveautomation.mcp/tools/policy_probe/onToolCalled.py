@@ -25,7 +25,10 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 		items = []
 		for result in results:
 			value = result.value
-			valueText = text(value) if isinstance(value, basestring) else ""
+			# Jython exposes Java strings differently from CPython; coerce with
+			# unicode() instead of isinstance() so the recorded value text is the
+			# tag's own string whatever the interop type turns out to be.
+			valueText = text(value)
 			item = {
 				"quality": text(result.quality),
 				"valueType": text(type(value).__name__),
@@ -139,14 +142,19 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 		return {"available": True, "present": value is not None}
 
 	def scopeNamespaces():
-		names = sorted([text(name) for name in dir(system)])
-		return {
-			"namespaces": names,
-			"hasConfig": "config" in names,
-			"hasAlarm": "alarm" in names,
-			"hasFile": "file" in names,
-			"hasTag": "tag" in names,
-		}
+		names = []
+		try:
+			names = sorted([text(name) for name in dir(system)])
+		except (Exception, JavaException):
+			names = []
+		detail = {"namespaces": names[:120]}
+		for key in ("config", "alarm", "file", "tag", "util"):
+			attribute = "has" + key[0].upper() + key[1:]
+			try:
+				detail[attribute] = getattr(system, key) is not None
+			except (Exception, JavaException):
+				detail[attribute] = False
+		return detail
 
 	def projectName():
 		return {"projectName": text(system.util.getProjectName())}
