@@ -39,6 +39,13 @@ CURRENT_REST_READ_TOOLS = [
 CURRENT_REST_STORAGE_TOOLS = frozenset({"artifact_list", "artifact_info", "operation_diagnose"})
 CURRENT_REST_SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
 SENSITIVE_EXPORT_GATE = "IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"
+#: Phase 4 milestone 4c: the REST Mutation Tools implemented so far, with the
+#: deployment gate and mutation class each one needs.
+CURRENT_REST_MUTATION_TOOLS = {
+    "config_resource_update": ("CONFIG_MUTATION", "ignition.config", "IGNITION_MCP_CONFIG_MUTATION_ENABLED"),
+}
+REST_MUTATION_CLASSES = frozenset({"CONFIG_MUTATION", "CONTROL_MUTATION", "ADMIN_MUTATION"})
+REFUSED_RESOURCE_TYPES_CONTRACT = "contracts/shared/refused-resource-types.json"
 EXPECTED_ARTIFACT_KINDS = ("project_archive", "project_export", "tag_config_export")
 EXPECTED_SENSITIVITY_CLASSES = ("INTERNAL", "CONFIDENTIAL", "RESTRICTED")
 EXPECTED_RETENTION_CLASSES = ("EPHEMERAL", "EXPORT", "RECOVERY")
@@ -158,8 +165,64 @@ def lint_contracts(root: str | Path) -> None:
         path.name[: -len(".contract.json")]
         for path in (root_path / "tools/rest").glob("*.contract.json")
     )
-    if rest_inventory != sorted(CURRENT_REST_READ_TOOLS):
-        raise ContractError("REST Tool contract inventory drift (Phase 3 freeze; zero mutation Tools)")
+    expected_rest_inventory = sorted([*CURRENT_REST_READ_TOOLS, *CURRENT_REST_MUTATION_TOOLS])
+    if rest_inventory != expected_rest_inventory:
+        raise ContractError("REST Tool contract inventory drift")
+
+    declared_mutation_classes = _load(root_path / "shared/mutation-classes.json").get("classes", {})
+    if not isinstance(declared_mutation_classes, dict):
+        raise ContractError("mutation-classes: classes must be an object")
+    for tool_name, (mutation_class, scope, gate) in CURRENT_REST_MUTATION_TOOLS.items():
+        tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
+        if tool.get("name") != tool_name or tool.get("server") != "ignition-rest":
+            raise ContractError(f"{tool_name}: REST mutation contract drift")
+        if tool.get("operationKind") != "mutation" or tool.get("mutationClass") != mutation_class:
+            raise ContractError(f"{tool_name}: mutation class drift")
+        if mutation_class not in REST_MUTATION_CLASSES or mutation_class not in declared_mutation_classes:
+            raise ContractError(f"{tool_name}: undeclared mutation class")
+        if tool.get("permissionClass") != "CONFIG" or tool.get("requiredScope") != scope:
+            raise ContractError(f"{tool_name}: mutation scope drift")
+        if tool.get("deploymentGate") != gate or tool.get("audited") is not True:
+            raise ContractError(f"{tool_name}: mutation gate/audit drift")
+        if not isinstance(tool.get("destructive"), bool):
+            raise ContractError(f"{tool_name}: destructive must be declared as a boolean")
+        if tool.get("capabilityId") != tool_name:
+            raise ContractError(f"{tool_name}: a mutation contract must be capability-backed")
+        precondition = tool.get("preconditionToken")
+        if not isinstance(precondition, dict) or precondition.get("kind") != "resource_signature":
+            raise ContractError(f"{tool_name}: mutation must declare its Precondition token")
+        if precondition.get("enforcedBy") != "gateway":
+            raise ContractError(f"{tool_name}: a Gateway-enforced token must say so")
+        if tool.get("refusedResourceTypes", {}).get("unclassified") != "refused":
+            raise ContractError(f"{tool_name}: unclassified resource types must be refused")
+        if tool.get("fixedKnobs", {}).get("allowInvalidReferences") != "false":
+            raise ContractError(f"{tool_name}: allowInvalidReferences is fixed false (D30)")
+        output_schema = tool.get("outputSchema")
+        if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
+            raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
+
+    refused_types = _load(root_path / "shared/refused-resource-types.json")
+    if refused_types.get("decision") != "D30":
+        raise ContractError("refused-resource-types: the owning decision is D30")
+    allowed = refused_types.get("allowed")
+    refused = refused_types.get("refused")
+    if not isinstance(allowed, list) or not isinstance(refused, list):
+        raise ContractError("refused-resource-types: allowed and refused must be lists")
+    refused_names: list[str] = []
+    for entry in refused:
+        if (
+            not isinstance(entry, dict)
+            or not isinstance(entry.get("resourceType"), str)
+            or not isinstance(entry.get("category"), str)
+        ):
+            raise ContractError("refused-resource-types: every refusal needs a type and a D30 category")
+        refused_names.append(entry["resourceType"])
+    if len(set(allowed)) != len(allowed) or len(set(refused_names)) != len(refused_names):
+        raise ContractError("refused-resource-types: a resource type is classified twice")
+    if set(allowed) & set(refused_names):
+        raise ContractError("refused-resource-types: a resource type is both allowed and refused")
+    if "com.inductiveautomation.mcp/server-config" not in refused_names:
+        raise ContractError("refused-resource-types: the MCP server-config resource must be refused")
 
     for tool_name in CURRENT_REST_STORAGE_TOOLS:
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")

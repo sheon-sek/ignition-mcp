@@ -24,6 +24,7 @@ PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 RESOURCE_TYPE_PREFIX = "/data/api/v1/resources/type/"
+RESOURCE_COLLECTION_PREFIX = "/data/api/v1/resources/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +37,9 @@ class ConfigResourceCapability:
     list_path: str | None
     find_path_template: str | None
     singleton_path: str | None
+    #: The collection path an update is dispatched to. Present only when the
+    #: Gateway documents ``PUT`` for this type; Phase 4 never writes otherwise.
+    update_path: str | None = None
 
     @property
     def singleton(self) -> bool:
@@ -219,6 +223,7 @@ def _resource_type_inventory(
         list_path = f"/data/api/v1/resources/list/{resource_type}"
         find_path = f"/data/api/v1/resources/find/{resource_type}/{{name}}"
         singleton_path = f"/data/api/v1/resources/singleton/{resource_type}"
+        collection_path = f"{RESOURCE_COLLECTION_PREFIX}{resource_type}"
         result[resource_type] = ConfigResourceCapability(
             resource_type=resource_type,
             module=module,
@@ -228,6 +233,7 @@ def _resource_type_inventory(
             list_path=list_path if ("GET", list_path) in endpoints else None,
             find_path_template=find_path if ("GET", find_path) in endpoints else None,
             singleton_path=singleton_path if ("GET", singleton_path) in endpoints else None,
+            update_path=collection_path if ("PUT", collection_path) in endpoints else None,
         )
     return dict(sorted(result.items()))
 
@@ -261,6 +267,8 @@ def _semantic_capabilities(
         for item in resource_types.values()
     ):
         semantic.add("config_resource_get")
+    if any(item.update_path is not None for item in resource_types.values()):
+        semantic.add("config_resource_update")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
     # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
     # capability only gates internal machinery and future Phase 4 exposure (D08/D26).

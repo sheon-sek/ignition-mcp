@@ -128,12 +128,14 @@ def is_verified_principal(value: object) -> bool:
     return type(value) is VerifiedPrincipal
 
 
-def principal_from_token(settings: Settings, token: AccessToken | None) -> Principal:
+def principal_from_token(settings: Settings, token: AccessToken | None) -> VerifiedPrincipal:
     """Derive the safe principal key from a *verified* access token (never from
     caller-supplied strings — the token must come from auth.py verification).
 
     ``auth=none`` is one trust domain (the configured service identity); each named
     static token is its own, keyed by the token name (D07 Phase 4 amendment).
+    Every path mints a :class:`VerifiedPrincipal`, so the mutation chain can accept
+    the result of this function directly.
     """
 
     if settings.auth_mode == "jwt" and token is not None:
@@ -160,5 +162,7 @@ def principal_from_token(settings: Settings, token: AccessToken | None) -> Princ
     return VerifiedPrincipal._mint(key="unauthenticated", scopes=frozenset(), auth_mode=settings.auth_mode)
 
 
-def current_principal(settings: Settings) -> Principal:
+def current_principal(settings: Settings) -> VerifiedPrincipal:
+    """The current request's Mutation principal, minted from its verified credential."""
+
     return principal_from_token(settings, get_access_token())

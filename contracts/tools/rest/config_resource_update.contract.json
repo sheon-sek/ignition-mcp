@@ -1,0 +1,89 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_update",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "expectedSignature": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "source": "config_resource_get.signature"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 512
+    },
+    "collection": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 128
+    },
+    "config": {
+      "type": "object",
+      "required": false,
+      "default": null
+    },
+    "enabled": {
+      "type": "boolean",
+      "required": false,
+      "default": null
+    },
+    "description": {
+      "type": "string",
+      "required": false,
+      "default": null,
+      "maxLength": 1024
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-update.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/find/<catalog-resourceType>/{name}",
+    "GET /data/api/v1/resources/singleton/<catalog-resourceType>",
+    "PUT /data/api/v1/resources/<catalog-resourceType>"
+  ],
+  "capabilityId": "config_resource_update",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "resource_signature",
+    "parameter": "expectedSignature",
+    "source": "config_resource_get.signature",
+    "enforcedBy": "gateway",
+    "alsoReadComparedBeforeDispatch": true,
+    "raceWindowDocumented": true
+  },
+  "targetId": {
+    "form": "<resourceType>/<name>, or <resourceType> for a singleton",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true
+  },
+  "refusedResourceTypes": {
+    "contract": "contracts/shared/refused-resource-types.json",
+    "errorCode": "permission_denied",
+    "unclassified": "refused"
+  },
+  "fixedKnobs": {
+    "allowInvalidReferences": "false"
+  },
+  "boundedInputBytes": 262144,
+  "verification": "bounded re-read of the changed resource (Observed state)"
+}

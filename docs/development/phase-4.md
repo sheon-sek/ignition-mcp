@@ -144,4 +144,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
-- None yet.
+- **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy.** D30 §7 maps "target not
+  allowlisted" to `permission_denied`; the shared D08 layer answers `operation_disabled`
+  (`safety/policy.py::evaluate_deployment_policy`, pinned by
+  `packages/ignition-rest-mcp/tests/test_phase3_safety_executor.py:487` and asserted against a live
+  Gateway by `tests/harness/phase3-live/driver.py:696`). Ticket #14 implemented the D30 §5 Refused
+  resource type rule exactly — `permission_denied`, evaluated inside the chain, even under `*` — and
+  left the shared Target-allowlist layer on the frozen Phase 3 code so no G3 artifact changes.
+  Unifying the two needs a D30 §7 amendment or a G3 driver change; both are owner-visible, so
+  neither was made here.
+- **Ticket #14 — no 8.3.9 OpenAPI document is committed.** `contracts/shared/refused-resource-types.json`
+  classifies the 8.3.8 document's 57 resource types (39 allowed, 18 refused), and every unclassified
+  type is refused, so an 8.3.9-only type is refused at runtime on the candidate Gateway. The
+  classification test discovers documents by `docs/ignition-*-openapi/openapi.min.json`, so
+  committing an 8.3.9 export fails the test until its types are classified. Producing that export
+  needs a live Gateway, which only CI has.

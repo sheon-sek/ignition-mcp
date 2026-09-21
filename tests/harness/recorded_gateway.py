@@ -40,7 +40,38 @@ _OPENAPI_OPERATIONS = (
     ("post", "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider"),
     ("post", "/data/api/v1/resources/ignition/audit-profile"),
     ("post", "/data/api/v1/resources/ignition/database-connection"),
+    # Phase 4 ticket #14: the config-resource update surface. The Gateway documents
+    # one collection path per resource type for POST (create) and PUT (modify).
+    ("get", "/data/api/v1/resources/type/ignition/audit-profile"),
+    ("get", "/data/api/v1/resources/names/ignition/audit-profile"),
+    ("get", "/data/api/v1/resources/list/ignition/audit-profile"),
+    ("get", "/data/api/v1/resources/find/ignition/audit-profile/{name}"),
+    ("put", "/data/api/v1/resources/ignition/audit-profile"),
+    ("get", "/data/api/v1/resources/type/ignition/api-token"),
+    ("get", "/data/api/v1/resources/names/ignition/api-token"),
+    ("get", "/data/api/v1/resources/list/ignition/api-token"),
+    ("get", "/data/api/v1/resources/find/ignition/api-token/{name}"),
+    ("put", "/data/api/v1/resources/ignition/api-token"),
 )
+
+#: Path segments under ``/data/api/v1/resources/`` that name an operation rather
+#: than a resource type, so a collection path can never be confused with them.
+_RESERVED_RESOURCE_SEGMENTS = frozenset({
+    "copy", "delete", "move", "rename", "datafile", "names", "list", "find", "singleton", "type",
+})
+
+
+def _resource_type_segment(path: str) -> str | None:
+    """The exact ``<module>/<typeId>`` a collection path addresses, or ``None``."""
+
+    prefix = "/data/api/v1/resources/"
+    if not path.startswith(prefix):
+        return None
+    remainder = path[len(prefix):]
+    parts = remainder.split("/")
+    if len(parts) != 2 or not all(parts) or parts[0] in _RESERVED_RESOURCE_SEGMENTS:
+        return None
+    return remainder
 
 
 def _fixture(path: str) -> Any:
@@ -201,6 +232,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
             self._json(200, {"name": "phase3-runtime"})
             return
+        if path.startswith("/data/api/v1/resources/"):
+            payload = server.read_resource(
+                path,
+                urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query),
+            )
+            if payload is None:
+                self._json(404, {"message": "No recorded resource", "status": "404"})
+                return
+            self._json(200, payload)
+            return
         if path == "/data/api/v1/tags/export":
             self._json(200, {"path": "", "tags": [{"name": "Status", "tagType": "Boolean"}]})
             return
@@ -351,6 +392,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         self._json(404, {"message": "No recorded response", "status": "404"})
 
+    def do_PUT(self) -> None:  # noqa: N802
+        server: Any = self.server
+        body = self._read_body()
+        server.requests.append({"method": "PUT", "path": self.path, "headers": dict(self.headers), "body": body})
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if self.headers.get("X-Ignition-API-Token") != API_TOKEN:
+            self._json(403, _fixture("http/forbidden.json"))
+            return
+        resource_type = _resource_type_segment(path)
+        if resource_type is None or resource_type not in server.resources:
+            self._json(404, {"message": "No recorded response", "status": "404"})
+            return
+        status, payload = server.apply_resource_update(resource_type, body)
+        self._json(status, payload)
+
 
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
@@ -365,6 +421,7 @@ class _Server(http.server.ThreadingHTTPServer):
         runtime_resources: tuple[str, ...],
         source_revision: str,
         bundle_version: str,
+        resources: dict[str, dict[str, dict[str, Any]]] | None = None,
     ) -> None:
         super().__init__(("127.0.0.1", 0), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -378,6 +435,120 @@ class _Server(http.server.ThreadingHTTPServer):
         self.runtime_resources = runtime_resources
         self.source_revision = source_revision
         self.bundle_version = bundle_version
+        #: config resource state: resource type -> name -> resource document.
+        self.resources: dict[str, dict[str, dict[str, Any]]] = resources or {}
+        self.signature_serial = 0
+        #: Modelled (not recorded) Gateway rejection: when set, every resource PUT
+        #: answers 200 with ``success=false`` and this ``problem`` message, the
+        #: documented shape for a change the Gateway refused to apply.
+        self.update_problem: str | None = None
+
+    # ------------------------------------------------------- config resources
+
+    def next_signature(self) -> str:
+        self.signature_serial += 1
+        return f"sig-{self.signature_serial}"
+
+    def _resource(self, resource_type: str, name: str) -> dict[str, Any] | None:
+        return (self.resources.get(resource_type) or {}).get(name)
+
+    def read_resource(self, path: str, query: dict[str, list[str]]) -> dict[str, Any] | None:
+        """The recorded read behavior for one config-resource path (``None`` = 404)."""
+
+        for verb in ("find", "singleton"):
+            prefix = f"/data/api/v1/resources/{verb}/"
+            if not path.startswith(prefix):
+                continue
+            remainder = path[len(prefix):]
+            if verb == "singleton":
+                entries = self.resources.get(remainder)
+                if not entries or len(entries) != 1:
+                    return None
+                return next(iter(entries.values()))
+            resource_type, _, name = remainder.rpartition("/")
+            if not resource_type or not name:
+                return None
+            return self._resource(resource_type, name)
+        for verb in ("names", "list"):
+            prefix = f"/data/api/v1/resources/{verb}/"
+            if not path.startswith(prefix):
+                continue
+            entries = self.resources.get(path[len(prefix):])
+            if entries is None:
+                return None
+            return _resource_collection(entries, query, names_only=verb == "names")
+        return None
+
+    def apply_resource_update(self, resource_type: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway resource PUT: validate all, then change all."""
+
+        try:
+            changes = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return 400, {"message": "Invalid request body", "status": "400"}
+        if not isinstance(changes, list) or not changes:
+            return 400, {"message": "Invalid request body", "status": "400"}
+        entries = self.resources[resource_type]
+        for change in changes:
+            if (
+                not isinstance(change, dict)
+                or not isinstance(change.get("name"), str)
+                or not change["name"].strip()
+            ):
+                return 400, {"message": "Invalid request body", "status": "400"}
+            current = entries.get(change["name"])
+            if current is None:
+                return 404, {"message": f"No resource named {change['name']}", "status": "404"}
+            if change.get("signature") != current.get("signature"):
+                return 409, {
+                    "message": "Signature mismatch: the resource changed after it was read",
+                    "status": "409",
+                }
+        if self.update_problem is not None:
+            return 200, {"success": False, "problem": {"message": self.update_problem, "stacktrace": []}}
+        applied: list[dict[str, Any]] = []
+        for change in changes:
+            current = entries[change["name"]]
+            for key in ("config", "enabled", "description"):
+                if key in change:
+                    current[key] = change[key]
+            current["signature"] = self.next_signature()
+            applied.append({
+                "name": change["name"],
+                "type": resource_type.rsplit("/", 1)[-1],
+                "collection": current.get("collection", ""),
+                "newSignature": current["signature"],
+            })
+        return 200, {"success": True, "changes": applied}
+
+
+def _resource_collection(
+    entries: dict[str, dict[str, Any]], query: dict[str, list[str]], *, names_only: bool,
+) -> dict[str, Any]:
+    limit = int(_first(query, "limit", "100"))
+    offset = int(_first(query, "offset", "0"))
+    search = _first(query, "search", "").lower()
+    matching = sorted(name for name in entries if not search or search in name.lower())
+    window = matching[offset:offset + limit]
+    items = (
+        [{"name": name, "enabled": bool(entries[name].get("enabled", True))} for name in window]
+        if names_only
+        else [entries[name] for name in window]
+    )
+    return {
+        "items": items,
+        "metadata": {
+            "total": float(len(entries)),
+            "matching": float(len(matching)),
+            "limit": limit,
+            "offset": offset,
+        },
+    }
+
+
+def _first(query: dict[str, list[str]], key: str, default: str) -> str:
+    values = query.get(key)
+    return values[0] if values else default
 
 
 class RecordedGateway:
@@ -420,6 +591,54 @@ class RecordedGateway:
     @property
     def imports(self) -> list[str]:
         return self._server.imports
+
+    # ------------------------------------------------------- config resources
+
+    def seed_resource(
+        self,
+        resource_type: str,
+        name: str,
+        *,
+        config: dict[str, Any] | None = None,
+        enabled: bool = True,
+        description: str = "",
+        collection: str = "",
+    ) -> dict[str, Any]:
+        """Publish one config resource, returning the stored document."""
+
+        document: dict[str, Any] = {
+            "type": resource_type.rsplit("/", 1)[-1],
+            "name": name,
+            "enabled": enabled,
+            "description": description,
+            "collection": collection,
+            "signature": self._server.next_signature(),
+            "config": config if config is not None else {},
+        }
+        self._server.resources.setdefault(resource_type, {})[name] = document
+        return document
+
+    def resource(self, resource_type: str, name: str) -> dict[str, Any]:
+        return self._server.resources[resource_type][name]
+
+    def signature(self, resource_type: str, name: str) -> str:
+        return str(self.resource(resource_type, name)["signature"])
+
+    def change_resource_out_of_band(
+        self, resource_type: str, name: str, **fields: Any,
+    ) -> str:
+        """Change a resource without the MCP server, as another operator would; the
+        stored signature moves, so a token read before the change is now stale."""
+
+        document = self.resource(resource_type, name)
+        document.update(fields)
+        document["signature"] = self._server.next_signature()
+        return str(document["signature"])
+
+    def refuse_updates_with(self, problem: str | None) -> None:
+        """Model a Gateway that answers 200 with ``success=false`` for every PUT."""
+
+        self._server.update_problem = problem
 
     def restart(self) -> None:
         """Apply an accepted shared certificate as the recorded Gateway restart did."""
