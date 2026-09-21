@@ -401,6 +401,7 @@ jobs:
               find "$EVIDENCE_DIR/gateway-logs" -type l -delete 2>/dev/null || true
               sudo chown -R "$(id -u):$(id -g)" "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
             fi
+          fi
           # metrics scraped live in its own step (g3diag R6: this ran after the
           # server had already stopped, so the file was always empty)
 
