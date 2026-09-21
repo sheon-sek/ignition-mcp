@@ -1,0 +1,427 @@
+{
+  "accepted": "AboveValue+ackModeManual",
+  "alarmName": "ProbeHi",
+  "bracketRoot": "[default]mcp_p4_35641086552",
+  "conclusion": "measured",
+  "cycleResults": [
+    {
+      "activeCount": 1,
+      "clearedCount": 1,
+      "cycle": 0,
+      "ok": true
+    },
+    {
+      "activeCount": 2,
+      "clearedCount": 2,
+      "cycle": 1,
+      "ok": true
+    },
+    {
+      "activeCount": 3,
+      "clearedCount": 3,
+      "cycle": 2,
+      "ok": true
+    }
+  ],
+  "cycles": 3,
+  "exactSourcePattern": "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi",
+  "expectedActive": 64,
+  "measurements": [
+    {
+      "count": 1,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.exact.source",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.exact.sourceWithState",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi"
+      ],
+      "states": [
+        "ActiveUnacked"
+      ]
+    },
+    {
+      "count": 1,
+      "elapsedMs": 3,
+      "maxElapsedMs": 3,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.sibling.source",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/ExactSibling:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.exact.tagPathOnly",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": 1,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.exact.bracketTagPath",
+      "ok": true,
+      "patterns": [
+        "[default]mcp_p4_35641086552/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.exact.bareTagPath",
+      "ok": true,
+      "patterns": [
+        "mcp_p4_35641086552/Exact"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.folder.tagPathOnly",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Fold"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.folder.partialLeaf",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Fold/Chi"
+      ],
+      "states": []
+    },
+    {
+      "count": 2,
+      "elapsedMs": 0,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.folder.trailingWildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Fold/*"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": 1,
+      "maxElapsedMs": 1,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.almName.wildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:*"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": 3,
+      "maxElapsedMs": 1,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.root.trailingWildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:mcp_p4_35641086552/*"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": 2,
+      "maxElapsedMs": 0,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.root.bareWildcard",
+      "ok": true,
+      "patterns": [
+        "*mcp_p4_35641086552*"
+      ],
+      "states": []
+    },
+    {
+      "count": 64,
+      "elapsedMs": 2,
+      "maxElapsedMs": 1,
+      "medianElapsedMs": 0,
+      "minElapsedMs": 0,
+      "name": "queryStatus.system.unfiltered",
+      "ok": true,
+      "patterns": [],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": 0,
+      "name": "queryStatus.exact.sourceForm",
+      "ok": true
+    },
+    {
+      "count": 1,
+      "elapsedMs": 0,
+      "name": "queryStatus.exact.count",
+      "ok": true
+    },
+    {
+      "count": 3,
+      "elapsedMs": 6,
+      "eventMethods": [
+        "EMPTY",
+        "__class__",
+        "__copy__",
+        "__deepcopy__",
+        "__delattr__",
+        "__doc__",
+        "__ensure_finalizer__",
+        "__eq__",
+        "__format__",
+        "__getattribute__",
+        "__hash__",
+        "__init__",
+        "__iter__",
+        "__ne__",
+        "__new__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__repr__",
+        "__setattr__",
+        "__str__",
+        "__subclasshook__",
+        "__unicode__",
+        "ackData",
+        "acked",
+        "acknowledge",
+        "active",
+        "activeData",
+        "builder",
+        "class",
+        "clear",
+        "cleared",
+        "clearedData",
+        "contains",
+        "count",
+        "displayPath",
+        "displayPathOrSource",
+        "equals",
+        "extend",
+        "extension",
+        "forEach",
+        "get",
+        "getAckData",
+        "getActiveData",
+        "getClass",
+        "getClearedData",
+        "getCount",
+        "getDisplayPath",
+        "getDisplayPathOrSource",
+        "getExtension",
+        "getId",
+        "getLabel",
+        "getLastEventState",
+        "getName",
+        "getNonNull",
+        "getNotes",
+        "getOrDefault",
+        "getOrElse",
+        "getPriority",
+        "getProperties",
+        "getSource"
+      ],
+      "events": [
+        {
+          "containsIsActive": "True",
+          "getDisplayPath": "",
+          "getId": "2ba7f30f-57c6-4bec-a4e8-ce53a34f2ab9",
+          "getLabel": "ProbeHi",
+          "getName": "ProbeHi",
+          "getNotes": "ignition-mcp phase4 probe",
+          "getPriority": "High",
+          "getSource": "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi",
+          "getState": "Cleared, Unacknowledged",
+          "isAcked": "False",
+          "isActive": "error: TypeError",
+          "isCleared": "True",
+          "isShelved": "False"
+        },
+        {
+          "containsIsActive": "True",
+          "getDisplayPath": "",
+          "getId": "6d5aebb3-3ba7-41b4-959a-a4377070d08b",
+          "getLabel": "ProbeHi",
+          "getName": "ProbeHi",
+          "getNotes": "ignition-mcp phase4 probe",
+          "getPriority": "High",
+          "getSource": "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi",
+          "getState": "Cleared, Unacknowledged",
+          "isAcked": "False",
+          "isActive": "error: TypeError",
+          "isCleared": "True",
+          "isShelved": "False"
+        },
+        {
+          "containsIsActive": "True",
+          "getDisplayPath": "",
+          "getId": "e6a09b74-4610-4a19-9094-a42d0e4c68be",
+          "getLabel": "ProbeHi",
+          "getName": "ProbeHi",
+          "getNotes": "ignition-mcp phase4 probe",
+          "getPriority": "High",
+          "getSource": "prov:default:/tag:mcp_p4_35641086552/Exact:/alm:ProbeHi",
+          "getState": "Cleared, Unacknowledged",
+          "isAcked": "False",
+          "isActive": "error: TypeError",
+          "isCleared": "True",
+          "isShelved": "False"
+        }
+      ],
+      "name": "queryStatus.exact.eventDetail",
+      "ok": true
+    },
+    {
+      "attempted": 3,
+      "elapsedMs": 3,
+      "name": "alarm.acknowledge.exact",
+      "ok": true,
+      "remaining": [],
+      "statesAfter": [
+        "Cleared, Acknowledged"
+      ]
+    }
+  ],
+  "noiseCount": 60,
+  "probe": "alarm_probe",
+  "providerRoot": "[default]",
+  "qualifiedRoot": "prov:default:/tag:mcp_p4_35641086552",
+  "repeats": 3,
+  "rootName": "mcp_p4_35641086552",
+  "schemaVersion": 1,
+  "shapeResults": [
+    {
+      "accepted": true,
+      "activation": {
+        "count": 64,
+        "reached": true,
+        "waitedMs": 6
+      },
+      "configured": true,
+      "folderFallbackUsed": false,
+      "label": "AboveValue+ackModeManual",
+      "mode": "AboveValue",
+      "qualityCodes": [
+        "Good"
+      ],
+      "writeQualityCodes": [
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good",
+        "Good"
+      ]
+    }
+  ]
+}

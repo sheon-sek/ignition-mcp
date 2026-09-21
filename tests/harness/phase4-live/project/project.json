@@ -1,0 +1,6 @@
+{
+  "title": "Ignition MCP Phase 4 Target Policy Probe",
+  "description": "CI-only probe project for Phase 4 ticket #6 (Runtime Target Policy storage and exact-path alarm query characterization). Not a product artifact.",
+  "enabled": true,
+  "inheritable": false
+}

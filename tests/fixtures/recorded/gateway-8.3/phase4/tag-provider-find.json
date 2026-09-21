@@ -1,0 +1,58 @@
+{
+  "attributes": {
+    "enabled": true,
+    "lastModification": {
+      "actor": "api-token:ignition-mcp-ci:172.18.0.1",
+      "timestamp": "2026-09-21T18:53:37Z"
+    },
+    "lastModificationSignature": "ac22e7344a0150047e5eb1781f15cb2b584abb2b7a4cb2b7029cb0ec02e8e79b",
+    "uuid": "a49e3c02-2382-4954-b03c-4f0aa425c07d"
+  },
+  "collection": "core",
+  "collections": [
+    "core"
+  ],
+  "config": {
+    "profile": {
+      "allowBackfill": false,
+      "enableTagReferenceStore": false,
+      "type": "STANDARD"
+    },
+    "settings": {
+      "defaultDatasourceName": null,
+      "editPermissions": null,
+      "readOnly": false,
+      "readPermissions": null,
+      "valuePersistence": null,
+      "writePermissions": null
+    }
+  },
+  "data": [
+    "config.json"
+  ],
+  "description": "ignition-mcp Runtime Target Policy provider (deployment-owned)",
+  "enabled": true,
+  "healthchecks": {
+    "status": {
+      "name": "tags.provider.IgnitionMCPPolicy.status",
+      "result": {
+        "healthy": true,
+        "message": "Running",
+        "time": 1790016817626
+      }
+    }
+  },
+  "metrics": {
+    "tagCount": {
+      "metric": {
+        "type": "gauge",
+        "value": 6
+      },
+      "name": "tags.provider.IgnitionMCPPolicy.tagCount"
+    }
+  },
+  "name": "IgnitionMCPPolicy",
+  "signature": "8c2f889f7bdf3bd5ba1f9256cedf0742fc57663efd2f9b1e0e8c26baf365d088",
+  "type": "ignition/tag-provider",
+  "version": 1
+}
