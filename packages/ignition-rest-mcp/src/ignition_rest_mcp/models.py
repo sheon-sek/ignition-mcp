@@ -171,6 +171,40 @@ class CapabilitiesResource(StrictModel):
     moduleVersions: dict[str, str]
 
 
+class ArtifactDownload(StrictModel):
+    path: str = Field(pattern=r"^/artifacts/[A-Za-z0-9._-]+$")
+
+
+class ArtifactRefModel(StrictModel):
+    """contracts/shared/artifact-ref.schema.json (D17). Owner principal is internal."""
+
+    artifactId: str = Field(min_length=1, max_length=128)
+    mediaType: str = Field(min_length=1)
+    sizeBytes: int = Field(ge=0)
+    sha256: str = Field(pattern="^[0-9a-f]{64}$")
+    kind: str = Field(pattern="^(project_archive|project_export|tag_config_export)$")
+    filename: str = Field(min_length=1, max_length=255)
+    sensitivity: str = Field(pattern="^(INTERNAL|CONFIDENTIAL|RESTRICTED)$")
+    retentionClass: str = Field(pattern="^(EPHEMERAL|EXPORT|RECOVERY)$")
+    createdAt: str = Field(min_length=1)
+    expiresAt: str | None
+    download: ArtifactDownload
+
+
+class ProjectExportResult(StrictModel):
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    artifact: ArtifactRefModel
+
+
+class TagConfigExportResult(StrictModel):
+    correlationId: str
+    provider: str = Field(min_length=1, max_length=256)
+    path: str = Field(max_length=1024)
+    artifact: ArtifactRefModel
+
+
 class OpenApiInfoResource(StrictModel):
     state: str
     generation: int = Field(ge=0)

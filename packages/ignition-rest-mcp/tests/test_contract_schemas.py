@@ -15,6 +15,8 @@ from ignition_rest_mcp.models import (
     GatewayDiagnoseResult,
     GatewayInfoResult,
     ProjectListResult,
+    ProjectExportResult,
+    TagConfigExportResult,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -46,6 +48,8 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (AuditQueryResult, "audit-query.output.schema.json"),
         (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
         (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
+        (ProjectExportResult, "project-export.output.schema.json"),
+        (TagConfigExportResult, "tag-config-export.output.schema.json"),
     )
     for model, schema_name in cases:
         _assert_shape_matches(model.model_json_schema(), _contract_schema(schema_name))

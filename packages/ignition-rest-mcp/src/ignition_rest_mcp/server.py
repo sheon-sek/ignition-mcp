@@ -35,10 +35,16 @@ from ignition_rest_mcp.models import (
     GatewayInfoResult,
     OpenApiInfoResource,
     ProjectListResult,
+    ProjectExportResult,
+    TagConfigExportResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.runtime import RuntimeState
+from ignition_rest_mcp.services.exports import (
+    project_export as project_export_service,
+    tag_config_export as tag_config_export_service,
+)
 from ignition_rest_mcp.services.gateway import (
     capabilities_resource,
     gateway_diagnose as diagnose_service,
@@ -113,7 +119,7 @@ def create_server(settings: Settings) -> FastMCP:
         janitor: asyncio.Task[None] | None = None
         try:
             await registry.refresh()
-            _apply_visibility(mcp, registry.snapshot)
+            _apply_visibility(mcp, registry.snapshot, settings)
             LOGGER.info(
                 "Capability registry initialized",
                 extra={
@@ -122,7 +128,9 @@ def create_server(settings: Settings) -> FastMCP:
                     "registryGeneration": registry.snapshot.generation,
                 },
             )
-            watcher = asyncio.create_task(_watch_capabilities(mcp, registry, settings.watcher_interval_seconds))
+            watcher = asyncio.create_task(
+                _watch_capabilities(mcp, registry, settings.watcher_interval_seconds, settings),
+            )
             retention = asyncio.create_task(_retention_loop(storage, records, audit_sink, settings))
             prober = asyncio.create_task(_probe_loop(storage, settings))
             janitor = asyncio.create_task(_artifact_janitor_loop(artifacts, settings))
@@ -369,6 +377,47 @@ def create_server(settings: Settings) -> FastMCP:
             ),
         )
 
+    @mcp.tool(
+        name="project_export",
+        description="Export one Ignition Project into a server-held artifact (sensitive export; deployment-gated).",
+        output_schema=ProjectExportResult.model_json_schema(),
+        tags={"read", "capability:project_export", "sensitive-export"},
+    )
+    async def project_export(projectName: str) -> ProjectExportResult:
+        return await _invoke(
+            "project_export", "ARTIFACT",
+            lambda context: project_export_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                settings_gate_on=settings.sensitive_exports_enabled,
+                project_name=projectName, gateway_id="",
+                deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+            audited=True,
+        )
+
+    @mcp.tool(
+        name="tag_config_export",
+        description=(
+            "Export bulk Tag configuration (JSON only) into a server-held artifact "
+            "(sensitive export; deployment-gated)."
+        ),
+        output_schema=TagConfigExportResult.model_json_schema(),
+        tags={"read", "capability:tag_config_export", "sensitive-export"},
+    )
+    async def tag_config_export(
+        provider: str, path: str = "", recursive: bool = True, includeUdts: bool = False,
+    ) -> TagConfigExportResult:
+        return await _invoke(
+            "tag_config_export", "ARTIFACT",
+            lambda context: tag_config_export_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                settings_gate_on=settings.sensitive_exports_enabled,
+                provider=provider, path=path, recursive=recursive, include_udts=includeUdts,
+                gateway_id="", deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+            audited=True,
+        )
+
     @mcp.resource(
         "ignition://gateway/capabilities",
         name="gateway-capabilities",
@@ -453,13 +502,15 @@ def _startup_audit_sink(storage: Storage) -> Any:
     return SqliteAuditSink(storage.audit)
 
 
-async def _watch_capabilities(mcp: FastMCP, registry: CapabilityRegistry, interval: float) -> None:
+async def _watch_capabilities(
+    mcp: FastMCP, registry: CapabilityRegistry, interval: float, settings: Settings,
+) -> None:
     while True:
         await asyncio.sleep(interval)
         try:
             if await registry.fingerprint_changed():
                 await registry.refresh()
-            _apply_visibility(mcp, registry.snapshot)
+            _apply_visibility(mcp, registry.snapshot, settings)
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -535,7 +586,10 @@ async def _artifact_janitor_loop(artifacts: LocalArtifactStore, settings: Settin
             )
 
 
-def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
+SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
+
+
+def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Settings) -> None:
     gated = {
         "gateway_info": "gateway_info",
         "project_list": "project_list",
@@ -547,10 +601,16 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",
+        "project_export": "project_export",
+        "tag_config_export": "tag_config_export",
     }
     usable = snapshot.state in {"READY", "STALE"}
     for tool_name, capability in gated.items():
-        if usable and capability in snapshot.semantic_capabilities:
+        # Sensitive exports (D08 deny-by-default; D17): discovery requires BOTH the
+        # Gateway capability and the deployment gate; the service repeats the gate
+        # at call time so a stale tools/list can never bypass it.
+        gate_blocks = tool_name in SENSITIVE_EXPORT_TOOLS and not settings.sensitive_exports_enabled
+        if usable and not gate_blocks and capability in snapshot.semantic_capabilities:
             mcp.enable(names={tool_name}, components={"tool"})
         else:
             mcp.disable(names={tool_name}, components={"tool"})

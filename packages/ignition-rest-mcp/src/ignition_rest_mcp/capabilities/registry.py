@@ -18,6 +18,8 @@ PROJECT_LIST_PATH = "/data/api/v1/projects/list"
 AUDIT_QUERY_PATH = "/data/api/v1/audit/log/{name}"
 ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
+PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
+TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
 RESOURCE_TYPE_PREFIX = "/data/api/v1/resources/type/"
 
 
@@ -238,6 +240,8 @@ def _semantic_capabilities(
         "audit_query": AUDIT_QUERY_PATH,
         "alarm_pipeline_list": ALARM_PIPELINE_LIST_PATH,
         "alarm_pipeline_status": ALARM_PIPELINE_STATUS_PATH,
+        "project_export": PROJECT_EXPORT_PATH,
+        "tag_config_export": TAG_CONFIG_EXPORT_PATH,
     }
     for capability, path in exact.items():
         if ("GET", path) in endpoints:

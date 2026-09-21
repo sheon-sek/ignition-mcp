@@ -218,6 +218,12 @@ class LocalArtifactStore:
     def _object_path(self, artifact_id: str) -> Path:
         return self._objects / artifact_id[:2] / artifact_id
 
+    def staged_path(self, writer: "LocalWriter") -> str:
+        """Filesystem location of a writer's staged bytes (for validators and the
+        D16 fingerprint pass; the file is still private-staged)."""
+
+        return str(self._staging_path(writer.artifact_id))
+
     def _staging_path(self, artifact_id: str) -> Path:
         return self._staging / f"{artifact_id}.part"
 

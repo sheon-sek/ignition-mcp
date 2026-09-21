@@ -4,12 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Any, cast
+from typing import Any, Protocol, cast
 
 import httpx
 
 from ignition_rest_mcp.errors import GatewayError, map_http_error
 from ignition_rest_mcp.operation import OperationContext
+
+
+class ArtifactSink(Protocol):
+    async def write(self, chunk: bytes) -> None: ...
+
 
 # OpenAPI is internal metadata, not an MCP output. Still impose a finite ceiling.
 OPENAPI_LIMIT_BYTES = 16 * 1024 * 1024
@@ -78,6 +83,47 @@ class GatewayClient:
                             )
                         body.extend(chunk)
                     return bytes(body)
+        except Exception as error:
+            if isinstance(error, GatewayError):
+                raise
+            raise map_http_error(error) from error
+
+    async def stream_get_to(
+        self, path: str, *, params: dict[str, Any] | None = None,
+        sink: "ArtifactSink", limit_bytes: int, deadline_seconds: float,
+        context: OperationContext | None = None,
+    ) -> int:
+        """Transport-only streamed GET feeding an async sink under a byte cap and an
+        elapsed deadline. Binary bodies never materialize whole in memory (D17).
+
+        Raises the same typed GatewayError mapping as the other transports; partial
+        delivery is the caller's problem to discard (an aborted sink publishes
+        nothing). Returns the number of bytes delivered to the sink.
+        """
+
+        if limit_bytes < 1:
+            raise GatewayError("internal_error", "stream limit must be positive")
+        headers = {"X-Correlation-ID": context.correlation_id} if context else {}
+        delivered = 0
+        try:
+            async with asyncio.timeout(deadline_seconds):
+                async with self._client.stream(
+                    "GET", path, params=params, headers=headers,
+                    timeout=httpx.Timeout(deadline_seconds),
+                ) as response:
+                    response.raise_for_status()
+                    if response.headers.get("content-encoding", "identity").lower() != "identity":
+                        raise GatewayError("schema_mismatch", "Gateway ignored identity content encoding")
+                    async for chunk in response.aiter_bytes():
+                        delivered += len(chunk)
+                        if delivered > limit_bytes:
+                            raise GatewayError(
+                                "limit_exceeded",
+                                f"Gateway stream requires at least {delivered} bytes; limit is "
+                                f"{limit_bytes} bytes",
+                            )
+                        await sink.write(chunk)
+                    return delivered
         except Exception as error:
             if isinstance(error, GatewayError):
                 raise
