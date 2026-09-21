@@ -196,6 +196,6 @@ Unchanged: D01, D03, D04, D08, D11–D17, and every architectural principle they
 
 The original D01–D26 architecture / implementation decision backlog is now complete.
 
-**G0, G1 and G2 are closed** (see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md) and [Phase 2](../development/phase-2.md) runbooks for evidence). Current work is **Phase 3 / G3 in progress** on branch `feature/phase-3-artifact-project-foundations`; see the [Phase 3 runbook](../development/phase-3.md). Do not begin Phase 4 without a separate user-directed feature branch.
+**G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence. Phase 4 starts only on a new user-directed feature branch.
 
 Treat D01–D28 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

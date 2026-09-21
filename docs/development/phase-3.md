@@ -1,6 +1,6 @@
 # Phase 3 — Artifact / Project / diagnostics / deployment foundations
 
-Status: **PLANNED** — plan approved by Codex review (4 rounds); implementation not started.
+Status: **G3 CLOSED**. Live evidence and final validation are recorded below.
 
 Branch: `feature/phase-3-artifact-project-foundations`.
 
@@ -301,6 +301,20 @@ G3 closes only when all are true:
 - 8.3.8 required and 8.3.9 candidate rows produce schema-valid evidence; no tuple is `SUPPORTED`;
 - all CI commands green; G0/G1/G2 workflows still pass on the branch head.
 
+## Results
+
+The first complete dual-row behavior run was [35594408385](https://github.com/sheon-sek/ignition-mcp/actions/runs/35594408385). Every G3 check passed on both rows, but a shell syntax error in the post-run diagnostics step left the workflow red. Commit `c3f6955` fixed that diagnostics-only error. Final run [35595061842](https://github.com/sheon-sek/ignition-mcp/actions/runs/35595061842) passed both matrix jobs and supplied the committed evidence rows:
+
+- [8.3.8 required row](../../tests/compatibility/evidence/g3-8.3.8-mcp-2026021307/README.md): Gate `VERIFIED`, native binding `VERIFIED_WITH_LIMITATION`, stable Project fingerprint `pcf1:f2a6639cbbd9e89f9e8a7e990df1fe1024146cf40e30a87c67602d44d111fdfb`.
+- [8.3.9 candidate row](../../tests/compatibility/evidence/g3-8.3.9-mcp-2026021307/README.md): Gate `VERIFIED_WITH_LIMITATION`, native binding `UNVERIFIED_LIMITATION`, the same stable Project fingerprint.
+- Both rows deployed the same deterministic Runtime ZIP, SHA-256 `4ecbb3ca4b5b0d127e735080e774e5baf5b659f7d798929b1048980d101085a7`.
+
+The final run proved the exact gate-on and gate-off REST inventories with zero mutation Tools, the unchanged 13-Tool Runtime inventory, `setup-native doctor|plan|verify`, Project and Tag exports, GET/HEAD integrity and parity, artifact metadata lookup, exact-ID operation diagnosis, stable `pcf1` fingerprints, principal and target denials before dispatch, audit phase ordering, and Project transactions ending in `NO_CHANGE`, `COMMITTED`, and `CONFLICTED`. The committed transaction re-export matched the candidate. The conflict used real external drift and did not dispatch an import. Recovery artifacts and the owner-accepted `phase3-live` environment deviation are recorded in both rows.
+
+Three live findings shaped the implementation. The Native MCP endpoint authenticates with `X-Ignition-API-Token`. A server that omits the Prompts capability can reject `prompts/list` with JSON-RPC `-32600`, which `setup-native` treats as not applicable only when the selected profile expects no Prompts. The reachability and round-trip probes also exposed two Gateway behaviors: a plain GET returns HTTP 415 but proves the MCP endpoint is alive, and Ignition rewrites `project.json` on import, so transaction candidates edit the Named Query `query.sql` payload that the Gateway preserves. The local rehearsal caught two harness defects before another CI run: `import_dispatched` defaulted incorrectly on non-dispatching terminal states, and Python's `sqlite3` returned tuple rows because no row factory was configured.
+
+D16's single-writer rule remains an operator obligation across hosts. The process lock prevents two writers sharing one data directory, but operators must configure one active Project writer per Gateway and the same stable `IGNITION_MCP_GATEWAY_ID` on every replica that targets it.
+
 Phase 3 ends at G3. Phase 4 starts only on a new user-directed feature branch.
 
 ## Open questions
@@ -329,8 +343,11 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 8 | `a81ba12` | full validation suite green (370 tests) |
 | 9 | `40ecc81` | full validation suite green (compat validator + double-release cmp added) |
 | 10 | `5c4bd26` | full validation suite green (509 tests; verified per handoff checklist; structural scan CLI exclusion + compensating GET-only test added) |
+| 11 | `a1ada74` plus fixes through `c3f6955`; evidence `03f98a6` | final live run `35595061842` green on both rows; six-row compatibility set and full validation suite green (526 tests) |
 
-## Handoff status (2026-09-21, context-window boundary — continue from here in a fresh omp)
+## Archived implementation handoff (2026-09-21)
+
+This section preserves the context-boundary brief used during implementation. G3 is now closed; the Results and Execution log sections above are authoritative.
 
 Binding inputs for the continuing agent: this runbook (execute slices strictly in order),
 `/tmp/claude-1000/-home-sheon-Projects-ignition-mcp-2/4166e223-c7f6-496c-9193-7924c6d66e51/scratchpad/omp-brief.txt`
@@ -362,7 +379,7 @@ inputs (code-separation scan + installed-wheel test, real release manifest passe
 UNKNOWN(incomplete)-vs-UNTESTED(no-row) mapping, exact inventory (superset = FAIL).
 Commit subject: `feat(cli): setup-native doctor/plan/verify (read-only, manifest-driven)`.
 
-### Remaining: Slice 11 then 12
+### Work that remained at this handoff
 
 **Status (slice 11 scaffolding committed):** `tests/harness/phase3-live/`
 (docker-compose, `driver.py`, `inventory_gate_off.py`, `harness_common.py`,
