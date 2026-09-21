@@ -24,6 +24,7 @@ ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
+TAG_CONFIG_IMPORT_PATH = "/data/api/v1/tags/import"
 PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
@@ -334,6 +335,12 @@ def _semantic_capabilities(
     # `project_import` Tool is gated on this capability (D08/D26).
     if ("POST", PROJECT_IMPORT_PATH) in endpoints:
         semantic.add("project_import")
+    # `tag_config_import` (D26 ticket #17) creates Tags from a JSON Tag export. Its
+    # route is the only thing that decides whether the Tool is exposed: the import it
+    # sends is the documented one, and the export it verifies against is separately
+    # gated by `tag_config_export`.
+    if ("POST", TAG_CONFIG_IMPORT_PATH) in endpoints:
+        semantic.add("tag_config_import")
     if ("GET", DESIGNERS_PATH) in endpoints:
         semantic.add("designer_sessions")
     if ("GET", PROJECT_FIND_PATH) in endpoints:

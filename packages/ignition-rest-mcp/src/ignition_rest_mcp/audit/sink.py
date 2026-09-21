@@ -32,6 +32,7 @@ SAFE_AUDIT_FIELDS: dict[str, frozenset[str]] = {
     "config_resource_delete": frozenset({"resourceType", "name", "collection"}),
     "config_resource_rename": frozenset({"resourceType", "name", "collection"}),
     "project_import": frozenset({"projectName"}),
+    "tag_config_import": frozenset({"provider", "path"}),
 }
 
 

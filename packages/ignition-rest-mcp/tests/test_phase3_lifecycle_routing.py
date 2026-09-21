@@ -58,7 +58,7 @@ def test_every_registered_tool_routes_through_the_single_invoke() -> None:
     # operation-record paths are pinned in the test_phase4_config_resource_* and
     # test_phase4_project_import modules because a CONFIG-scope credential is needed
     # to reach them.
-    assert len(tools) == 21, "registered REST Tool functions drifted from the routed inventory"
+    assert len(tools) == 22, "registered REST Tool functions drifted from the routed inventory"
     for node in tools:
         calls = {
             call.func.id

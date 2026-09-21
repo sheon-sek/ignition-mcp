@@ -44,6 +44,18 @@ RENAME_PATH = f"/data/api/v1/resources/rename/{RESOURCE_TYPE}/"
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 RENAME_SOURCES = ("MCP_CI_AUDIT_RENAME_SOURCE", "MCP_CI_AUDIT_RENAME_SOURCE_2")
+#: The Tag surface the #17 cases need: a disposable provider, the source Tags it is
+#: provisioned with, and the paths the driver exports from and imports into.
+TAG_PROVIDER_PATH = "/data/api/v1/resources/ignition/tag-provider"
+TAG_PROVIDER_FIND_PATH = "/data/api/v1/resources/find/ignition/tag-provider/"
+TAG_IMPORT_PATH = "/data/api/v1/tags/import"
+TAG_EXPORT_PATH = "/data/api/v1/tags/export"
+TAG_PROVIDER_READY_DEADLINE_SECONDS = 180.0
+TAG_IMPORT_ATTEMPTS = 6
+#: The Tag names the source document holds, which the live cases assert are served at
+#: the destination afterwards.
+TAG_SOURCE_NAMES = ("Folder", "Int", "Inner", "Text", "Sibling")
+
 REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/type/{RESOURCE_TYPE}"),
     ("GET", f"/data/api/v1/resources/find/{RESOURCE_TYPE}/{{name}}"),
@@ -54,10 +66,14 @@ REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}"),
     ("PUT", f"/data/api/v1/resources/{SINGLETON_TYPE}"),
     ("DELETE", f"/data/api/v1/resources/{SINGLETON_TYPE}/{{signature}}"),
+    ("POST", TAG_PROVIDER_PATH),
+    ("POST", TAG_IMPORT_PATH),
+    ("GET", TAG_EXPORT_PATH),
 })
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OPENAPI_BYTES = 16 * 1_048_576
 PROJECT_LIST_PATH = "/data/api/v1/projects/list"
+
 
 
 class ProvisionError(RuntimeError):
@@ -74,11 +90,12 @@ def _request(
     allowed_error_statuses: frozenset[int] = frozenset(),
     max_response_bytes: int = MAX_RESPONSE_BYTES,
     timeout: float = 20.0,
+    content_type: str = "application/json",
 ) -> tuple[int, Any]:
     url = base_url.rstrip("/") + path
     headers = {"X-Ignition-API-Token": token, "Accept": "application/json"}
     if body is not None:
-        headers["Content-Type"] = "application/json"
+        headers["Content-Type"] = content_type
     request = Request(url, data=body, headers=headers, method=method)
     try:
         with urlopen(request, timeout=timeout) as response:  # noqa: S310 - loopback CI Gateway
@@ -187,7 +204,173 @@ def _project_names(base_url: str, token: str) -> set[str]:
     }
 
 
-def provision(base_url: str, token: str, *, project: str, control_project: str) -> dict[str, Any]:
+def _source_document() -> bytes:
+    """The JSON Tag document the ``tag_config_import`` cases export and import.
+
+    A folder with a nested folder and a sibling Tag, so the cases cover a created
+    folder, a created leaf, a nested created leaf and a neighbouring Tag the import
+    must leave exactly as it found it.
+    """
+
+    return json.dumps({"tags": [
+        {"name": "Folder", "tagType": "Folder", "tags": [
+            {"name": "Int", "tagType": "AtomicTag", "valueSource": "memory",
+             "dataType": "Int4", "value": 7, "enabled": True},
+            {"name": "Inner", "tagType": "Folder", "tags": [
+                {"name": "Text", "tagType": "AtomicTag", "valueSource": "memory",
+                 "dataType": "String", "value": "p4-rest", "enabled": True},
+            ]},
+        ]},
+        {"name": "Sibling", "tagType": "AtomicTag", "valueSource": "memory",
+         "dataType": "String", "value": "keep", "enabled": True},
+    ]}, separators=(",", ":")).encode("utf-8")
+
+
+def _tag_import_detail(payload: Any) -> str | None:
+    """The failure one Tag import response reports, or ``None``.
+
+    The committed 8.3.8 OpenAPI describes a list of non-Good QualityCodes while live
+    8.3.8/8.3.9 answer a summary object; anything unrecognized counts as a failure, so
+    provisioning fails closed.
+    """
+
+    if payload is None or payload == []:
+        return None
+    if isinstance(payload, list):
+        return str(payload)
+    if isinstance(payload, dict):
+        failures = payload.get("failures")
+        if payload.get("failureCount") == 0 and failures in (None, []):
+            return None
+    return str(payload)[:400]
+
+
+def _tag_names(payload: Any) -> set[str]:
+    names: set[str] = set()
+    stack: list[Any] = [payload]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+        children = node.get("tags")
+        if isinstance(children, list):
+            stack.extend(children)
+    return names
+
+
+def _create_tag_provider(base_url: str, token: str, name: str) -> int:
+    body = json.dumps([{
+        "name": name,
+        "description": "Disposable Phase 4 CI Tag provider",
+        "enabled": True,
+        "config": {"profile": {"type": "STANDARD"}, "settings": {}},
+    }], separators=(",", ":")).encode("utf-8")
+    status, _ = _request(
+        base_url, token, "POST", TAG_PROVIDER_PATH, body=body,
+        allowed_error_statuses=frozenset({409}),
+    )
+    if status not in {200, 201, 409}:
+        raise ProvisionError(f"creating the Tag provider {name} returned unexpected HTTP {status}")
+    return status
+
+
+def _await_tag_provider(base_url: str, token: str, name: str) -> dict[str, Any]:
+    """A freshly created provider answers 404 to both its own read and an export until
+    it is running, so nothing may be imported before both answer 200."""
+
+    deadline = time.monotonic() + TAG_PROVIDER_READY_DEADLINE_SECONDS
+    attempts = 0
+    last = ""
+    while time.monotonic() < deadline:
+        attempts += 1
+        find_status, _ = _request(
+            base_url, token, "GET", TAG_PROVIDER_FIND_PATH + name,
+            allowed_error_statuses=frozenset({404, 500}),
+        )
+        export_status, _ = _request(
+            base_url, token, "GET", f"{TAG_EXPORT_PATH}?provider={name}&type=json",
+            allowed_error_statuses=frozenset({404, 500}),
+        )
+        if find_status == 200 and export_status == 200:
+            return {"ready": True, "attempts": attempts}
+        last = f"find={find_status} export={export_status}"
+        time.sleep(2.0)
+    raise ProvisionError(f"the Tag provider {name} never became readable ({last})")
+
+
+def _import_source_tags(base_url: str, token: str, provider: str, path: str) -> dict[str, Any]:
+    """Publish the source document, retrying the freshly-created-provider failure.
+
+    The recorded 8.3.8 run showed a new Tag provider answering ``/tags/import`` with
+    ``Bad 776 TagPath.getPathLength() ... cleanPath is null`` while it was still
+    starting, so one attempt is not evidence of anything. ``MergeOverwrite`` is used
+    here because this is the harness writing its own fixture, not the Tool: the Tool
+    always sends ``Abort`` (D30 §4) and the driver is what exercises that.
+    """
+
+    document = _source_document()
+    last: dict[str, Any] = {}
+    for attempt in range(1, TAG_IMPORT_ATTEMPTS + 1):
+        status, payload = _request(
+            base_url, token, "POST",
+            f"{TAG_IMPORT_PATH}?provider={provider}&path={path}&type=json&collisionPolicy=MergeOverwrite",
+            body=document, content_type="application/octet-stream",
+            allowed_error_statuses=frozenset({500}),
+        )
+        detail = _tag_import_detail(payload) if status == 200 else f"HTTP {status}: {str(payload)[:200]}"
+        last = {"attempts": attempt, "status": status, "failureDetail": detail}
+        if detail is None:
+            return last
+        time.sleep(3.0)
+    raise ProvisionError(f"importing the source Tags never succeeded: {last}")
+
+
+def _exported_names(base_url: str, token: str, provider: str, path: str) -> set[str]:
+    status, payload = _request(
+        base_url, token, "GET", f"{TAG_EXPORT_PATH}?provider={provider}&path={path}&type=json",
+        allowed_error_statuses=frozenset({404, 500}),
+    )
+    if status != 200:
+        raise ProvisionError(f"exporting {provider}:{path} returned HTTP {status}")
+    return _tag_names(payload)
+
+
+def provision_tags(base_url: str, token: str, *, provider: str, source_path: str) -> dict[str, Any]:
+    """The Tag surface the #17 cases address: a disposable provider holding the source
+    Tags, and the proof that the Gateway serves them before any live case runs."""
+
+    create_status = _create_tag_provider(base_url, token, provider)
+    readiness = _await_tag_provider(base_url, token, provider)
+    import_result = _import_source_tags(base_url, token, provider, source_path)
+    served = _exported_names(base_url, token, provider, source_path)
+    missing = sorted(set(TAG_SOURCE_NAMES) - served)
+    if missing:
+        raise ProvisionError(f"the source Tags are not served at {provider}:{source_path}: {missing}")
+    return {
+        "name": provider,
+        "createStatus": create_status,
+        "readiness": readiness,
+        "sourcePath": source_path,
+        "sourceTags": sorted(served),
+        "import": import_result,
+    }
+
+
+def provision(
+    base_url: str,
+    token: str,
+    *,
+    project: str,
+    control_project: str,
+    tag_provider: str = "",
+    tag_source_path: str = "",
+) -> dict[str, Any]:
     readiness = await_required_endpoints(base_url, token)
     projects = _project_names(base_url, token)
     missing = sorted({project, control_project} - projects)
@@ -233,6 +416,11 @@ def provision(base_url: str, token: str, *, project: str, control_project: str) 
             ),
         },
         "readiness": readiness,
+        "tagProvider": (
+            provision_tags(base_url, token, provider=tag_provider, source_path=tag_source_path)
+            if tag_provider and tag_source_path
+            else None
+        ),
         "projects": {
             "target": {"name": project, "present": project in projects, "allowlisted": True},
             "control": {"name": control_project, "present": control_project in projects,
@@ -248,10 +436,13 @@ def main() -> int:
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--project", required=True)
     parser.add_argument("--control-project", required=True)
+    parser.add_argument("--tag-provider", default="")
+    parser.add_argument("--tag-source-path", default="")
     args = parser.parse_args()
     report = provision(
         args.gateway_url, args.api_token,
         project=args.project, control_project=args.control_project,
+        tag_provider=args.tag_provider, tag_source_path=args.tag_source_path,
     )
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -262,6 +453,8 @@ def main() -> int:
         "projects": sorted(
             item["name"] for item in report["projects"].values() if item["present"]
         ),
+        "tagProvider": (report["tagProvider"] or {}).get("name"),
+        "tagSourceTags": (report["tagProvider"] or {}).get("sourceTags"),
     }, sort_keys=True))
     return 0
 

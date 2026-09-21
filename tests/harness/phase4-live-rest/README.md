@@ -1,8 +1,8 @@
 # Phase 4 REST live harness (milestone 4c)
 
 Live proof for the REST Mutation Tools — `config_resource_update`,
-`config_resource_create`, `config_resource_delete`, `config_resource_rename` and
-`project_import` — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
+`config_resource_create`, `config_resource_delete`, `config_resource_rename`,
+`project_import` and `tag_config_import` — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
 on pull requests in the trusted repository, under the `phase4-live` GitHub
 environment.
 
@@ -15,7 +15,7 @@ observe:
 
 | Case | Expectation |
 |---|---|
-| `inventory-agent-exact` | with the class enabled, the config-scoped credential sees exactly the read inventory plus the five Mutation Tools |
+| `inventory-agent-exact` | with the class enabled, the config-scoped credential sees exactly the read inventory plus the six Mutation Tools |
 | `inventory-reader-exact` | the read-only credential sees exactly the read inventory: D07 discovery still filters every Mutation Tool |
 | `allowlisted-update-applies` | an allowlisted change returns structured success |
 | `update-moves-the-signature` | the Resource signature moved, so the caller has a fresh Precondition token |
@@ -73,6 +73,17 @@ observe:
 | `project-import-non-allowlisted-project-is-permission-denied` | D30 §7 for a Project the Target allowlist does not name |
 | `project-import-non-allowlisted-project-changes-nothing` | …and that Project is untouched |
 | `project-import-invisible-artifact-is-not-found` | D30 §6: an archive another principal owns answers `not_found` |
+| `tag-import-source-is-not-empty` | the source export `provision.py` published holds the source Tags |
+| `tag-import-reports-no-missing-tag` | the bounded re-export of the destination shows every Tag the document declares |
+| `tag-import-destination-serves-every-source-tag` | a *second*, independently downloaded export of the destination serves them too |
+| `tag-import-observed-state-names-the-imported-tags` | the Observed state carries one path per imported Tag (D30 §6) |
+| `tag-import-observed-state-is-relative-to-the-target` | …and they are provider-relative paths under the import path |
+| `tag-import-leaves-the-source-path-untouched` | D30 §4: `Abort` creates Tags, so nothing outside the Target changed |
+| `tag-import-into-an-occupied-destination-is-conflict` | D11's collision policy, sent as `Abort` and refused as `conflict` |
+| `tag-import-conflict-changes-nothing` | …and the refused re-import changed nothing |
+| `tag-import-non-allowlisted-path-is-permission-denied` | D30 §7 for a destination path the Target allowlist does not name |
+| `tag-import-non-allowlisted-path-creates-nothing` | …and that path holds none of the source Tags |
+| `tag-import-invisible-artifact-is-not-found` | D30 §6: a Tag export another principal owns answers `not_found` |
 | `inventory-gate-off-exact` | with the class disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
 
@@ -85,15 +96,24 @@ live, recorded in `tests/harness/phase3-live/driver.py`). If a round trip ever m
 the driver writes the per-entry diff of the candidate against the Gateway's re-export into
 `observations.json` before it fails, so one run is enough to diagnose it.
 
+The Tag import cases export the source Tags with `tag_config_export` and import that
+artifact, so the content is real Gateway state and the bytes dispatched are the bytes
+the export produced. `provision.py` publishes the source Tags itself, with
+`MergeOverwrite` — this is the harness writing its own fixture, not the Tool: the Tool
+always sends `Abort` (D30 §4), and the collision case above is what proves it live. The
+import goes to a *destination* path, so the cases also show that the source path is
+untouched.
+
 The driver asserts exactly one Target-denial code, `permission_denied` (D30 §7,
 Tool-scoped; see `docs/development/phase-4.md`). That is the code both
-`config_resource_*` and `project_import` answer; the frozen Phase 3 machinery the G3
+`config_resource_*`, `project_import` and `tag_config_import` answer; the frozen Phase 3 machinery the G3
 harness drives keeps its recorded `operation_disabled` because the code is declared per
 operation.
 
 The deployment this driver runs against enables the config mutation class, the
 sensitive exports (the Project cases read their Precondition token from
-`project_export`), artifact upload, and the D16 Project writer with an explicit
+`project_export`, and the Tag cases take their import document from
+`tag_config_export`), artifact upload, and the D16 Project writer with an explicit
 `IGNITION_MCP_GATEWAY_ID`. Those gates decide the inventory the driver asserts, so the
 read inventory here includes the two sensitive-export Tools.
 
@@ -107,7 +127,10 @@ read inventory here includes the two sensitive-export Tools.
   fixture mutation happens before the capability exists. The name the create case
   publishes is deliberately not provisioned. It also confirms the two disposable
   Projects the import cases address are installed and listed, so a missing Project
-  fails before the driver runs.
+  fails before the driver runs, and creates the disposable Tag provider the Tag import
+  cases use (waiting until it is readable, then importing the source Tags with
+  `MergeOverwrite` and verifying the Gateway serves them, retrying the
+  freshly-created-provider failure the recorded 8.3.8 run showed).
 - `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
   `tests/harness/recorded_gateway.py` and runs both driver modes with the same

@@ -344,6 +344,35 @@ class TagConfigExportResult(StrictModel):
     artifact: ArtifactRefModel
 
 
+class TagImportObservedState(StrictModel):
+    """The bounded re-export's comparison (D30 §6 Observed state, D10 bounded).
+
+    Both lists hold the provider-relative Tag paths the import document declares: the
+    ones the re-export of the same provider and path showed, and the ones it did not.
+    """
+
+    present: list[str] = Field(max_length=500)
+    missing: list[str] = Field(max_length=500)
+
+
+class TagConfigImportResult(StrictModel):
+    """D11/D30: a Tag config import creates Tags only, and its verification is the
+    bounded re-export of the same provider and path.
+
+    Only a satisfied outcome is a result: the Gateway claimed the import succeeded and
+    the re-export showed every Tag the document declares. A claimed success that does
+    not is ``recovery_required`` — an error whose message names the Tags the re-export
+    was not showing — so ``missing`` is empty on every result this Tool returns.
+    """
+
+    correlationId: str
+    provider: str = Field(min_length=1, max_length=256)
+    path: str = Field(max_length=1024)
+    #: The READY Tag export the import consumed (D17/D30 §6).
+    artifact: ArtifactRefModel
+    observedState: TagImportObservedState
+
+
 class OpenApiInfoResource(StrictModel):
     state: str
     generation: int = Field(ge=0)

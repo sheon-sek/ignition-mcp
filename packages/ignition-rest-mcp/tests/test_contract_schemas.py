@@ -22,6 +22,7 @@ from ignition_rest_mcp.models import (
     ProjectExportResult,
     ProjectImportResult,
     TagConfigExportResult,
+    TagConfigImportResult,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -57,6 +58,7 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (ProjectExportResult, "project-export.output.schema.json"),
         (ProjectImportResult, "project-import.output.schema.json"),
         (TagConfigExportResult, "tag-config-export.output.schema.json"),
+        (TagConfigImportResult, "tag-config-import.output.schema.json"),
         (ArtifactListResult, "artifact-list.output.schema.json"),
         (ArtifactInfoResult, "artifact-info.output.schema.json"),
         (OperationDiagnoseResult, "operation-diagnose.output.schema.json"),

@@ -95,7 +95,8 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Gateway whose document has no create route exposes no create Tool, and the
-    same holds for delete and rename: the D04 capability is what gates discovery."""
+    same holds for delete, rename and a Tag import: the D04 capability is what gates
+    discovery."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
@@ -105,6 +106,9 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
         paths = document["paths"]
         paths[f"/data/api/v1/resources/type/{PROFILE}"] = {"get": {}}
         paths[f"/data/api/v1/resources/find/{PROFILE}/{{name}}"] = {"get": {}}
+        # The recorded base document advertises the Tag import route, which is a
+        # mutation: a document with no mutation route at all is the case here.
+        paths.pop("/data/api/v1/tags/import", None)
 
         async def read_only_openapi(self: Any) -> bytes:
             return json.dumps({"paths": paths}).encode("utf-8")

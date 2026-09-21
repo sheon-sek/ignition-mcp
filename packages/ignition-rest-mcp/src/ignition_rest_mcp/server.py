@@ -51,6 +51,7 @@ from ignition_rest_mcp.models import (
     ProjectImportResult,
     StorageDiagnostics,
     TagConfigExportResult,
+    TagConfigImportResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.observability.metrics import Metrics
@@ -79,6 +80,9 @@ from ignition_rest_mcp.services.gateway import (
 )
 from ignition_rest_mcp.services.project_import import (
     project_import as project_import_service,
+)
+from ignition_rest_mcp.services.tag_config_import import (
+    tag_config_import as tag_config_import_service,
 )
 from ignition_rest_mcp.services.readonly import (
     alarm_pipeline_list as alarm_pipeline_list_service,
@@ -524,6 +528,33 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="tag_config_import",
+        description=(
+            "Import a JSON Tag export artifact under a provider-qualified path through Native "
+            "REST, creating Tags only (the collision policy is always Abort), and verify it with "
+            "a bounded re-export of the same provider and path (deployment-gated)."
+        ),
+        output_schema=TagConfigImportResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:tag_config_import"},
+    )
+    async def tag_config_import(
+        artifactId: str, provider: str, path: str = "",
+    ) -> TagConfigImportResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> TagConfigImportResult:
+            return await tag_config_import_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(),
+                settings, context,
+                principal=principal, artifact_id=artifactId, provider=provider, path=path,
+            )
+
+        return await _invoke(
+            "tag_config_import", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
@@ -916,6 +947,7 @@ DEPLOYMENT_GATED_TOOLS = {
     "config_resource_delete": "config_mutation_enabled",
     "config_resource_rename": "config_mutation_enabled",
     "project_import": "config_mutation_enabled",
+    "tag_config_import": "config_mutation_enabled",
 }
 
 
@@ -933,6 +965,7 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "config_resource_delete": "config_resource_delete",
         "config_resource_rename": "config_resource_rename",
         "project_import": "project_import",
+        "tag_config_import": "tag_config_import",
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",

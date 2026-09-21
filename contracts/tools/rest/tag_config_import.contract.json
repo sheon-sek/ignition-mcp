@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_config_import",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "ARTIFACT",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "artifactId": {
+      "type": "string",
+      "required": true,
+      "maxLength": 128,
+      "source": "tag_config_export.artifact.artifactId",
+      "note": "the data-plane upload route accepts Project archives only, so a JSON Tag export artifact is always produced by tag_config_export"
+    },
+    "provider": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 256,
+      "note": "a Tag provider name; '[' and ']' are refused, because the Target identity is the provider-qualified path"
+    },
+    "path": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 1024,
+      "note": "the '/'-separated destination path the document's Tags are created under; empty means the provider root. Empty, '.' and '..' segments are refused, so one Gateway path has exactly one Target identity"
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-config-import.output.schema.json",
+  "nativeRequirements": [
+    "POST /data/api/v1/tags/import",
+    "GET /data/api/v1/tags/export"
+  ],
+  "capabilityId": "tag_config_import",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "none",
+    "policy": "D30 §2: a Tag import takes no Precondition token, and D11's Phase 4 amendment makes the collision policy its concurrency rule instead — 'Abort' is always sent, so an import creates Tags and never overwrites one. A destination that already holds a Tag the document declares is a `conflict` that dispatches nothing, both checked by the Tool against the Gateway before dispatch and refused by the Gateway itself inside the race window."
+  },
+  "targetId": {
+    "form": "[<provider>]<path>: the provider-qualified destination the import creates Tags under, in Ignition Tag-path form",
+    "resolution": "one exact Target per call, built from the validated provider and path; the empty path is the provider root, '[<provider>]'",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "artifactInput": {
+    "kinds": [
+      "tag_config_export"
+    ],
+    "state": "READY",
+    "mediaType": "application/json",
+    "visibility": "the same Mutation principal that owns the artifact, or ignition.admin (D30 §6); anything else answers not_found, exactly as a missing artifact does",
+    "validation": "the artifact was JSON-validated before it became READY (tag_config_export parses it against an 8 MiB ceiling), and the import side re-reads it under the same byte ceiling and re-parses it, so an unparseable or oversize document fails with nothing dispatched",
+    "otherKindDisposition": "invalid_argument",
+    "kindNote": "D11/D30: the document is a JSON Tag export, which is exactly the artifact kind tag_config_export publishes. No data-plane ingress can produce one: POST /artifacts accepts project_archive only."
+  },
+  "fixedKnobs": {
+    "collisionPolicy": "Abort"
+  },
+  "fixedKnobsNote": "D30 §4: the caller cannot choose the collision policy. 'Abort' keeps the import inside the Target the deployment allowlisted: it creates Tags only, and one existing Tag refuses the whole import instead of changing it. Existing Tags change only through the Runtime plane's tag_update, with a Tag config fingerprint.",
+  "documentRule": "The artifact is the Gateway's own JSON Tag export, read the way the Gateway reads it: the document's root is the export wrapper and is not itself imported (live-proven — the Runtime plane imports a `{\"tags\": [...]}` document and its entries land under the import path), so a document that declares `tags` contributes those nodes under the import path, and a node's non-empty `name` is one path segment with `tags` as its children. A document with no `tags` contributes its own node. The bounded re-export is normalized to the same provider-relative namespace: its root is either the provider root (which names nothing) or the node at the import path, and the import path is the prefix either way.",
+  "udtRule": "D30 §6: Tag CONFIG Mutations reach UDT definitions only through an explicit `_types_` Target. A document that declares Tag paths under `_types_` is therefore refused with invalid_argument unless the import path itself is the `_types_` subtree, which is what makes the Target explicit.",
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit Gateway rejection is final for this Tool — a 4xx, or a 2xx carrying the Gateway's own refusal. Ignition reports a refused import inside the documented 200 as a failure report (the recorded 8.3.8/8.3.9 answer is `{\"failureCount\": n, \"failures\": [...], \"successCount\": 0}`; the committed OpenAPI documents a list of non-Good QualityCodes). A collision refusal is mapped to `conflict` (D30 §7), any other reported failure to `upstream_error`, and no read-back may turn either into a success: a destination holding the document's Tags may have been imported by another writer.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (a 2xx reporting zero failures) and the bounded re-export shows every Tag the document declares"
+    ],
+    "partialApplication": "a report of some successes and some failures is not a claim and not a refusal: the Gateway did not refuse the call, so the bounded re-export establishes the state, and an import that created only some of the document is recovery_required rather than a success",
+    "uninterpretableResponse": "a 2xx body this server cannot read is not a claim of success either: the outcome is unresolved, which the executor reports as recovery_required / outcome_unknown, and nothing is replayed",
+    "ambiguousAttribution": "an ambiguous dispatch (possibly sent with no response, or a 5xx) is reconciled only by the bounded re-export, and a re-export showing the intended Tags never confirms it — another writer may have created the same Tags — so it is outcome_unknown; a re-export showing none of them is not_applied",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "a bounded re-export of the same provider and path, compared with the Tag paths the document declares, reported as Observed state. The claimed success is confirmed only when the re-export shows every declared Tag; a declared Tag it does not show makes the call recovery_required, whose message names up to five of them."
+}

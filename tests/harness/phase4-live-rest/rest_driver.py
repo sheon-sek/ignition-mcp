@@ -74,7 +74,8 @@ CREATE_TOOL = "config_resource_create"
 DELETE_TOOL = "config_resource_delete"
 RENAME_TOOL = "config_resource_rename"
 IMPORT_TOOL = "project_import"
-MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL)
+TAG_IMPORT_TOOL = "tag_config_import"
+MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL)
 REFUSED_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
 #: An allowed *singleton* (its documented change item carries no name).
@@ -102,6 +103,14 @@ DEFAULT_CONTROL_PROJECT = "MCP_CI_IMPORT_CONTROL"
 #: verbatim (the same edit the G3 live transaction case uses).
 IMPORT_QUERY_RE = re.compile(r"^ignition/named-query/.+/query\.sql$")
 IMPORT_MARKER_PREFIX = "mcp-p4-import"
+
+#: The Tag import cases (#17): the provider ``provision.py`` creates, the path its
+#: source Tags are provisioned at, the destination the Target allowlist names, and a
+#: second destination it deliberately does not.
+DEFAULT_TAG_PROVIDER = "MCP_CI_TAGS"
+DEFAULT_TAG_SOURCE_PATH = "source"
+DEFAULT_TAG_TARGET_PATH = "target"
+DEFAULT_TAG_CONTROL_PATH = "target_not_allowed"
 
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
@@ -437,6 +446,153 @@ async def project_import_cases(
     return cases, observations
 
 
+def _tag_names(payload: bytes) -> set[str]:
+    """Every Tag name one exported document holds *below its root*.
+
+    The driver's independent view of an export: the Tool reports exact Tag paths as its
+    Observed state, and these names are what a *separate* export of the destination
+    serves, so the two are compared without trusting either one's encoding of the other.
+    The document's own root is the requested path node (or the provider root), so it is
+    skipped: what matters is the Tags the export contains.
+    """
+
+    try:
+        document = json.loads(payload)
+    except (ValueError, UnicodeDecodeError) as error:
+        raise DriverError(f"the Tag export body is not JSON: {error}") from error
+    names: set[str] = set()
+    stack: list[Any] = []
+    if isinstance(document, dict) and isinstance(document.get("name"), str) and document.get("name"):
+        stack.extend(document.get("tags") or [])
+    else:
+        stack.append(document)
+    while stack:
+        node = stack.pop()
+        if isinstance(node, list):
+            stack.extend(node)
+            continue
+        if not isinstance(node, dict):
+            continue
+        name = node.get("name")
+        if isinstance(name, str) and name:
+            names.add(name)
+        children = node.get("tags")
+        if isinstance(children, list):
+            stack.extend(children)
+    return names
+
+
+async def _tag_names_at(
+    agent: "Session", artifacts: "Artifacts", token: str, provider: str, path: str,
+) -> set[str] | None:
+    """The Tag names the Gateway serves at one path (``None`` = it serves no such path)."""
+
+    exported = await agent.call("tag_config_export", {
+        "provider": provider, "path": path, "recursive": True, "includeUdts": False,
+    })
+    if exported.get("isError"):
+        # A path that does not exist is exactly what a denied import must leave behind.
+        return None
+    body = structured(exported)
+    payload = await artifacts.download(str(body["artifact"]["download"]["path"]), token)
+    return _tag_names(payload)
+
+
+async def tag_import_cases(
+    *,
+    agent: "Session",
+    reader: "Session",
+    rest_url: str,
+    agent_token: str,
+    provider: str,
+    source_path: str,
+    target_path: str,
+    control_path: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The Tag config import cases (ticket #17).
+
+    ``provision.py`` published the source Tags and the MCP Module published the export
+    artifact, so the import's content is real Gateway state and the bytes it dispatched
+    are the bytes ``tag_config_export`` produced.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    artifacts = Artifacts(rest_url)
+    try:
+        source = structured(await agent.call("tag_config_export", {
+            "provider": provider, "path": source_path, "recursive": True, "includeUdts": False,
+        }))
+        source_payload = await artifacts.download(
+            str(source["artifact"]["download"]["path"]), agent_token,
+        )
+        declared = _tag_names(source_payload)
+        observations["tagSourceNames"] = sorted(declared)
+        _check(cases, "tag-import-source-is-not-empty", True, bool(declared))
+        if not declared:
+            observations["tagImportAborted"] = "the source export held no Tags"
+            return cases, observations
+
+        imported = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": source["artifact"]["artifactId"], "provider": provider, "path": target_path,
+        })
+        body = imported.get("structuredContent") if not imported.get("isError") else None
+        observations["tagImportResult"] = body if isinstance(body, dict) else error_envelope(imported)
+        if not isinstance(body, dict):
+            observations["tagImportAborted"] = "the create case did not return a result"
+            return cases, observations
+        observed = body.get("observedState")
+        _check(cases, "tag-import-reports-no-missing-tag",
+               [], observed.get("missing") if isinstance(observed, dict) else None)
+
+        # Independent evidence: a second export of the destination, downloaded here.
+        served = await _tag_names_at(agent, artifacts, agent_token, provider, target_path)
+        observations["tagTargetNames"] = sorted(served or ())
+        _check(cases, "tag-import-destination-serves-every-source-tag", True, declared <= (served or set()))
+        present = observed.get("present") if isinstance(observed, dict) else None
+        _check(cases, "tag-import-observed-state-names-the-imported-tags", len(declared), len(present or []))
+        _check(cases, "tag-import-observed-state-is-relative-to-the-target", True,
+               all(str(path).startswith(f"{target_path}/") for path in (present or [])))
+        # 'Abort' keeps the mutation inside its Target: the source path is untouched.
+        source_after = await _tag_names_at(agent, artifacts, agent_token, provider, source_path)
+        _check(cases, "tag-import-leaves-the-source-path-untouched", sorted(declared),
+               sorted(source_after or ()))
+
+        # D30 §4/D11: the same artifact into the same destination collides.
+        collision = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": source["artifact"]["artifactId"], "provider": provider, "path": target_path,
+        })
+        _check(cases, "tag-import-into-an-occupied-destination-is-conflict", "conflict",
+               _envelope_code(collision))
+        after = await _tag_names_at(agent, artifacts, agent_token, provider, target_path)
+        _check(cases, "tag-import-conflict-changes-nothing", sorted(served or ()), sorted(after or ()))
+
+        # A destination the Target allowlist does not name (D30 §7).
+        denied = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": source["artifact"]["artifactId"], "provider": provider, "path": control_path,
+        })
+        _check(cases, "tag-import-non-allowlisted-path-is-permission-denied", TARGET_DENIAL_CODE,
+               _envelope_code(denied))
+        control = await _tag_names_at(agent, artifacts, agent_token, provider, control_path)
+        observations["tagControlNames"] = sorted(control or ())
+        _check(cases, "tag-import-non-allowlisted-path-creates-nothing", True,
+               not (control or set()) & declared)
+
+        # ... and an artifact owned by another principal (D30 §6).
+        reader_export = structured(await reader.call("tag_config_export", {
+            "provider": provider, "path": source_path, "recursive": True, "includeUdts": False,
+        }))
+        invisible = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": reader_export["artifact"]["artifactId"], "provider": provider,
+            "path": target_path,
+        })
+        _check(cases, "tag-import-invisible-artifact-is-not-found", "not_found",
+               _envelope_code(invisible))
+    finally:
+        await artifacts.aclose()
+    return cases, observations
+
+
 async def run_gate_on(
     *,
     rest_url: str,
@@ -453,6 +609,10 @@ async def run_gate_on(
     unallowlisted_renamed: str,
     project: str = DEFAULT_PROJECT,
     control_project: str = DEFAULT_CONTROL_PROJECT,
+    tag_provider: str = DEFAULT_TAG_PROVIDER,
+    tag_source_path: str = DEFAULT_TAG_SOURCE_PATH,
+    tag_target_path: str = DEFAULT_TAG_TARGET_PATH,
+    tag_control_path: str = DEFAULT_TAG_CONTROL_PATH,
     raw_dir: Path,
 ) -> dict[str, Any]:
     """The live cases that need the CONFIG_MUTATION class enabled."""
@@ -744,6 +904,22 @@ async def run_gate_on(
             import_observations = {}
         cases.extend(import_cases)
         observations.update(import_observations)
+
+        # --------------------------------------------------- tag config import (#17)
+        try:
+            tag_cases, tag_observations = await tag_import_cases(
+                agent=agent, reader=reader, rest_url=rest_url, agent_token=agent_token,
+                provider=tag_provider, source_path=tag_source_path,
+                target_path=tag_target_path, control_path=tag_control_path,
+            )
+        except (DriverError, ProbeError) as error:
+            tag_cases = [{
+                "case": "tag-import-section", "expected": "no driver error",
+                "observed": str(error), "ok": False,
+            }]
+            tag_observations = {}
+        cases.extend(tag_cases)
+        observations.update(tag_observations)
     finally:
         await reader.aclose()
         await agent.aclose()
@@ -803,7 +979,10 @@ async def _run(args: argparse.Namespace) -> int:
             created_name=args.created_name, rename_source=args.rename_source,
             rename_source_2=args.rename_source_2, renamed_name=args.renamed_name,
             unallowlisted_renamed=args.unallowlisted_renamed,
-            project=args.project, control_project=args.control_project, raw_dir=args.raw_dir,
+            project=args.project, control_project=args.control_project,
+            tag_provider=args.tag_provider, tag_source_path=args.tag_source_path,
+            tag_target_path=args.tag_target_path, tag_control_path=args.tag_control_path,
+            raw_dir=args.raw_dir,
         )
     else:
         mode = await run_gate_off(
@@ -839,6 +1018,10 @@ def main() -> int:
     parser.add_argument("--unallowlisted-renamed", default=UNALLOWLISTED_RENAMED)
     parser.add_argument("--project", default=DEFAULT_PROJECT)
     parser.add_argument("--control-project", default=DEFAULT_CONTROL_PROJECT)
+    parser.add_argument("--tag-provider", default=DEFAULT_TAG_PROVIDER)
+    parser.add_argument("--tag-source-path", default=DEFAULT_TAG_SOURCE_PATH)
+    parser.add_argument("--tag-target-path", default=DEFAULT_TAG_TARGET_PATH)
+    parser.add_argument("--tag-control-path", default=DEFAULT_TAG_CONTROL_PATH)
     parser.add_argument("--observations", required=True, type=Path)
     parser.add_argument("--raw-dir", required=True, type=Path)
     args = parser.parse_args()

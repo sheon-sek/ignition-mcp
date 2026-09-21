@@ -108,6 +108,27 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
             "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
         ),
     },
+    "tag_config_import": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        #: D11's Phase 4 amendment: the import creates Tags only (D26 ticket #17).
+        "destructive": False,
+        #: D30 §2/D11: the collision policy is this Tool's concurrency rule, not a
+        #: caller-supplied Precondition token.
+        "precondition": {"kind": "none"},
+        #: D30 §4: the caller can never choose a collision policy.
+        "fixedKnobs": {"collisionPolicy": "Abort"},
+        #: D30 §5 governs config-resource Mutations; a Tag import's Target is a
+        #: provider-qualified path, not a config resource.
+        "refusedResourceTypes": False,
+        #: D03 request-schema validation governs the config-resource write bodies; this
+        #: Tool sends a Tag export document, gated by its own byte cap and JSON parse.
+        "requestSchemaValidation": False,
+        #: No pre-dispatch read can attribute a created Tag to this call, so a claimed
+        #: success is the only thing the bounded re-export can confirm.
+        "recoveredSuccess": "unreachable for this Tool",
+    },
 }
 REST_MUTATION_CLASSES = frozenset({"CONFIG_MUTATION", "CONTROL_MUTATION", "ADMIN_MUTATION"})
 PRECONDITION_KINDS = frozenset({"resource_signature", "project_fingerprint", "none"})

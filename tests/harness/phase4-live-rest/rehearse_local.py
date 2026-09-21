@@ -40,7 +40,12 @@ from rest_driver import (  # noqa: E402
     CREATED_RESOURCE,
     DEFAULT_CONTROL_PROJECT,
     DEFAULT_PROJECT,
+    DEFAULT_TAG_CONTROL_PATH,
+    DEFAULT_TAG_PROVIDER,
+    DEFAULT_TAG_SOURCE_PATH,
+    DEFAULT_TAG_TARGET_PATH,
     RENAMED_RESOURCE,
+    TAG_IMPORT_TOOL,
     RENAME_SOURCE,
     RENAME_SOURCE_2,
     REFUSED_NAME,
@@ -56,6 +61,13 @@ RESOURCE_TYPE = "ignition/audit-profile"
 #: Target allowlist does not name. Both are provisioned live by the workflow.
 PROJECT = DEFAULT_PROJECT
 CONTROL_PROJECT = DEFAULT_CONTROL_PROJECT
+#: The Tag surface the #17 cases address: the provider the live Gateway creates (and
+#: whose source Tags ``provision.py`` publishes), the path they are published at, and
+#: the destination the Target allowlist names.
+TAG_PROVIDER = DEFAULT_TAG_PROVIDER
+TAG_SOURCE_PATH = DEFAULT_TAG_SOURCE_PATH
+TAG_TARGET_PATH = DEFAULT_TAG_TARGET_PATH
+TAG_CONTROL_PATH = DEFAULT_TAG_CONTROL_PATH
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
@@ -80,6 +92,8 @@ MUTATION_TARGETS = {
     ),
     # D30 §6: the Target of the Project import is the Project itself.
     "project_import": (PROJECT,),
+    # D30 §3/#17: the Target of a Tag import is the provider-qualified destination path.
+    TAG_IMPORT_TOOL: (f"[{TAG_PROVIDER}]{TAG_TARGET_PATH}",),
 }
 
 
@@ -165,6 +179,23 @@ def _project_archive(marker: str) -> bytes:
     return buffer.getvalue()
 
 
+def _source_tags() -> list[dict[str, Any]]:
+    """The same source Tag document ``provision.py`` publishes on the live Gateway."""
+
+    return [
+        {"name": "Folder", "tagType": "Folder", "tags": [
+            {"name": "Int", "tagType": "AtomicTag", "valueSource": "memory",
+             "dataType": "Int4", "value": 7, "enabled": True},
+            {"name": "Inner", "tagType": "Folder", "tags": [
+                {"name": "Text", "tagType": "AtomicTag", "valueSource": "memory",
+                 "dataType": "String", "value": "p4-rest", "enabled": True},
+            ]},
+        ]},
+        {"name": "Sibling", "tagType": "AtomicTag", "valueSource": "memory",
+         "dataType": "String", "value": "keep", "enabled": True},
+    ]
+
+
 def _seed(gateway: RecordedGateway) -> None:
     gateway.seed_resource(
         RESOURCE_TYPE, ALLOWLISTED,
@@ -195,6 +226,12 @@ def _seed(gateway: RecordedGateway) -> None:
         config={"profile": {"type": "basic-token"}, "settings": {"tokenHash": "<redacted>"}},
         description="Disposable CI-only API token",
     )
+    # The Tag provider the #17 cases address: its state is the source document
+    # ``provision.py`` imports into ``source`` on the live Gateway, so an export of that
+    # path serves the same Tags here as it does there.
+    gateway.seed_tags(TAG_PROVIDER, [
+        {"name": TAG_SOURCE_PATH, "tagType": "Folder", "tags": _source_tags()},
+    ])
 
 
 def main() -> int:
@@ -218,7 +255,10 @@ def main() -> int:
                 created_name=CREATED_RESOURCE, rename_source=RENAME_SOURCE,
                 rename_source_2=RENAME_SOURCE_2, renamed_name=RENAMED_RESOURCE,
                 unallowlisted_renamed=UNALLOWLISTED_RENAMED,
-                project=PROJECT, control_project=CONTROL_PROJECT, raw_dir=args.raw_dir,
+                project=PROJECT, control_project=CONTROL_PROJECT,
+                tag_provider=TAG_PROVIDER, tag_source_path=TAG_SOURCE_PATH,
+                tag_target_path=TAG_TARGET_PATH, tag_control_path=TAG_CONTROL_PATH,
+                raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(

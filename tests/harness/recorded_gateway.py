@@ -375,7 +375,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, payload)
             return
         if path == "/data/api/v1/tags/export":
-            provider = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("provider", [""])[0]
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            provider = query.get("provider", [""])[0]
             if provider == server.policy_provider:
                 if not server.policy_provider_created:
                     self._json(404, {"message": "No tag provider", "status": "404"})
@@ -383,6 +384,22 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._send(200, json.dumps(
                     _fixture("phase4/tag-export.json"), separators=(",", ":"),
                 ).encode("utf-8"), "application/octet-stream")
+                return
+            if provider in server.tags:
+                # Phase 4 ticket #17: a modelled provider exports its own state, so an
+                # import the Tool dispatched is visible to the bounded re-export that
+                # verifies it.
+                document = server.export_tags(
+                    provider,
+                    _first(query, "path", ""),
+                    recursive=_first(query, "recursive", "true") != "false",
+                    include_udts=_first(query, "includeUdts", "true") != "false",
+                )
+                if document is None:
+                    self._json(404, {"message": "No such tag path", "status": "404"})
+                    return
+                self._send(200, json.dumps(document, separators=(",", ":")).encode("utf-8"),
+                           "application/octet-stream")
                 return
             self._json(200, {"path": "", "tags": [{"name": "Status", "tagType": "Boolean"}]})
             return
@@ -564,6 +581,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return
                 self._json(200, _fixture("phase4/tag-import-merge.json"))
                 return
+            if provider in server.tags:
+                # Phase 4 ticket #17: a modelled provider applies the documented
+                # transition against its own state, so the Tool's collision check and
+                # its bounded re-export both see the same Tags the Gateway serves.
+                status, payload = server.apply_tag_import(
+                    provider,
+                    _first(query, "path", ""),
+                    body,
+                    collision_policy=collision_policy,
+                )
+                self._json(status, payload)
+                return
             document = json.loads(body)
             if isinstance(document, list):
                 self._json(200, _fixture("phase2/tag-import-bare-array.json"))
@@ -650,6 +679,24 @@ class _Server(http.server.ThreadingHTTPServer):
         self.policy_provider_created = False
         self.policy_tags_imported = False
         self.policy_import_flaked = False
+        #: Modelled Tag state, keyed by provider: the provider root node in the
+        #: recorded JSON export shape (``{"name": "", "tagType": "Provider", "tags": [...]}``).
+        #: Seed it through :meth:`RecordedGateway.seed_tags`; the tag routes answer
+        #: from it exactly as the recorded Gateway answers from its own Tag state.
+        self.tags: dict[str, dict[str, Any]] = {}
+        #: Tag imports the fixture actually applied (provider, path, Tag names), the
+        #: observation a test asserts alongside the recorded requests.
+        self.tag_imports: list[dict[str, Any]] = []
+        #: Which wire shape the import route answers a reported failure with: the
+        #: summary object live 8.3.8/8.3.9 return, or the list of non-Good QualityCodes
+        #: the committed OpenAPI documents.
+        self.tag_import_wire_shape = "summary"
+        #: When set, the import route applies only the first N nodes of the document
+        #: and reports the rest as failures — a partial application.
+        self.tag_import_partial: int | None = None
+        #: Modelled, not recorded: the import route reports a clean success and creates
+        #: nothing, so only the bounded re-export can tell the difference.
+        self.tag_import_lies = False
         #: config resource state: resource type -> (name, collection) -> document.
         #: Keying by collection as well as name is what makes the fixture able to
         #: tell two resources with one name in different collections apart. Seed it
@@ -714,6 +761,139 @@ class _Server(http.server.ThreadingHTTPServer):
         self.projects[name] = _gateway_import(self.projects.get(name), body)
         self.imports.append(name)
         return 200, {"message": f"Project {name} imported"}
+
+    # ---------------------------------------------------------------- tags
+
+    def seed_tags(self, provider: str, tags: list[dict[str, Any]]) -> dict[str, Any]:
+        """Publish one modelled provider's top-level Tag nodes.
+
+        The document is the recorded JSON export shape, so an export of the provider
+        at an empty path answers exactly what ``seed_tags`` published.
+        """
+
+        root: dict[str, Any] = {"name": "", "tagType": "Provider", "tags": _tag_nodes(tags)}
+        self.tags[provider] = root
+        return root
+
+    def tag_node(self, provider: str, path: str) -> dict[str, Any] | None:
+        """The node one modelled provider holds at ``path`` (``None`` = no such path)."""
+
+        root = self.tags.get(provider)
+        if root is None:
+            return None
+        node = root
+        for segment in _tag_segments(path):
+            child = _tag_child(node, segment)
+            if child is None:
+                return None
+            node = child
+        return node
+
+    def tag_folder(self, provider: str, path: str) -> dict[str, Any]:
+        """The node at ``path``, creating the folders along it as an import would."""
+
+        root = self.tags.setdefault(provider, {"name": "", "tagType": "Provider", "tags": []})
+        node = root
+        for segment in _tag_segments(path):
+            child = _tag_child(node, segment)
+            if child is None:
+                child = {"name": segment, "tagType": "Folder"}
+                node.setdefault("tags", []).append(child)
+            node = child
+        return node
+
+    def apply_tag_write(self, provider: str, path: str, tags: list[dict[str, Any]]) -> None:
+        """Create or replace Tags without any Gateway dispatch, as another writer would."""
+
+        target = self.tag_folder(provider, path)
+        for node in tags:
+            existing = _tag_child(target, str(node.get("name")))
+            if existing is None:
+                target.setdefault("tags", []).append(_tag_copy(node))
+            else:
+                existing.clear()
+                existing.update(_tag_copy(node))
+
+    def export_tags(
+        self, provider: str, path: str, *, recursive: bool, include_udts: bool,
+    ) -> dict[str, Any] | None:
+        """One modelled provider's JSON export at ``path`` (``None`` = no such path).
+
+        ``recursive=False`` keeps the immediate children and drops their own children;
+        ``include_udts=False`` drops the ``_types_`` node, which is the folder the
+        recorded export carries the provider's UDT definitions under.
+        """
+
+        node = self.tag_node(provider, path)
+        if node is None:
+            return None
+        exported = _tag_copy(node)
+        if not recursive:
+            for child in exported.get("tags") or []:
+                if isinstance(child, dict):
+                    child.pop("tags", None)
+        if not include_udts:
+            _drop_tag(exported, "_types_")
+        return exported
+
+    def apply_tag_import(
+        self, provider: str, path: str, body: bytes, *, collision_policy: str,
+    ) -> tuple[int, Any]:
+        """Apply one recorded Tag import against a modelled provider's state.
+
+        The recorded transition: the document's Tag nodes are created under ``path``,
+        and ``Abort`` refuses the whole import when any of them already exists there
+        (D30 §4). The write hooks model the same boundaries the config-resource routes
+        model, keyed by ``"tag_import"``: a competing writer at dispatch time
+        (``write_race``), an ambiguous status that applies nothing (``write_status``),
+        and a reported failure inside a 200 (``write_problem``).
+        """
+
+        if race := self.write_race.pop("tag_import", None):
+            self.apply_tag_write(race["provider"], race["path"], race["tags"])
+        if (status := self.write_status.get("tag_import")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        if (problem := self.write_problem.get("tag_import")) is not None:
+            return 200, _tag_import_failures([problem], self.tag_import_wire_shape)
+        document = _decode_tag_document(body)
+        if document is None:
+            return 400, _INVALID_BODY
+        incoming = _incoming_tag_nodes(document)
+        if self.tag_import_lies:
+            #: Modelled, not recorded: a Gateway that reports a clean import and
+            #: creates nothing. The bounded re-export is what has to catch it.
+            return 200, _tag_import_success(len(incoming), self.tag_import_wire_shape)
+        target = self.tag_folder(provider, path)
+        collisions = [
+            node for node in incoming
+            if _tag_child(target, str(node.get("name"))) is not None
+        ]
+        if collisions and collision_policy == "Abort":
+            messages = [
+                f"Tag '[{provider}]{_join_tag_path(path, str(node.get('name')))}' already exists,"
+                " and 'abort' collision policy has been specified"
+                for node in collisions
+            ]
+            return 200, _tag_import_failures(
+                messages, self.tag_import_wire_shape, sub_code=527,
+            )
+        applied: list[str] = []
+        for index, node in enumerate(incoming):
+            if self.tag_import_partial is not None and index >= self.tag_import_partial:
+                break
+            target.setdefault("tags", []).append(_tag_copy(node))
+            applied.append(str(node.get("name")))
+        if applied:
+            self.tag_imports.append({"provider": provider, "path": path, "names": applied})
+        if len(applied) < len(incoming):
+            messages = [
+                f"Tag '[{provider}]{_join_tag_path(path, str(node.get('name')))}' was not imported"
+                for node in incoming[len(applied):]
+            ]
+            return 200, _tag_import_failures(
+                messages, self.tag_import_wire_shape, success_count=len(applied),
+            )
+        return 200, _tag_import_success(len(incoming), self.tag_import_wire_shape)
 
     # ------------------------------------------------------- config resources
 
@@ -1058,6 +1238,110 @@ def _first(query: dict[str, list[str]], key: str, default: str) -> str:
     return values[0] if values else default
 
 
+def _tag_copy(node: dict[str, Any]) -> dict[str, Any]:
+    """A deep copy of one Tag node, so a caller cannot mutate the fixture's state."""
+
+    return json.loads(json.dumps(node))
+
+
+def _tag_nodes(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [_tag_copy(node) for node in nodes]
+
+
+def _tag_segments(path: str) -> list[str]:
+    return [segment for segment in path.split("/") if segment]
+
+
+def _join_tag_path(path: str, name: str) -> str:
+    return f"{path}/{name}" if path else name
+
+
+def _tag_child(node: dict[str, Any], name: str) -> dict[str, Any] | None:
+    children = node.get("tags")
+    if not isinstance(children, list):
+        return None
+    for child in children:
+        if isinstance(child, dict) and child.get("name") == name:
+            return child
+    return None
+
+
+def _drop_tag(node: dict[str, Any], name: str) -> None:
+    children = node.get("tags")
+    if isinstance(children, list):
+        node["tags"] = [
+            child for child in children
+            if not (isinstance(child, dict) and child.get("name") == name)
+        ]
+
+
+def _decode_tag_document(body: bytes) -> dict[str, Any] | None:
+    """The Tag document one import body carries, or ``None`` for an unusable body."""
+
+    try:
+        document = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(document, dict):
+        return None
+    if "tags" in document and not isinstance(document["tags"], list):
+        return None
+    return dict(document)
+
+
+def _incoming_tag_nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
+    """The Tag nodes one import document places under the target path.
+
+    The root is the export wrapper — live-proven: a ``{"tags": [...]}`` document
+    imports its entries, not itself — so a provider-root document contributes its
+    children and a document with no ``tags`` contributes its own node.
+    """
+
+    children = document.get("tags")
+    if isinstance(children, list) and children:
+        return [
+            child for child in children
+            if isinstance(child, dict) and isinstance(child.get("name"), str) and child.get("name")
+        ]
+    name = document.get("name")
+    return [document] if isinstance(name, str) and name else []
+
+
+def _tag_import_success(count: int, shape: str) -> Any:
+    """A successful import in one of the two observed wire shapes."""
+
+    if shape == "list":
+        return []
+    return {"failureCount": 0, "failures": [], "successCount": count}
+
+
+def _tag_import_failures(
+    messages: list[str], shape: str, *, success_count: int = 0, sub_code: int = 776,
+) -> Any:
+    """A reported import failure in one of the two observed wire shapes.
+
+    The summary object is what live 8.3.8/8.3.9 answer (recorded in
+    ``phase4/tag-import-abort.json`` for the ``Abort`` collision refusal, whose
+    ``qualitySubCode`` is 527, and in ``phase4/tag-import-provider-not-ready.json``
+    for a provider that is still starting, whose sub-code is 776); the list of non-Good
+    QualityCodes is what the committed 8.3.8 OpenAPI documents.
+    """
+
+    if shape == "list":
+        return [
+            {"level": "Bad", "userCode": sub_code, "diagnosticMessage": message}
+            for message in messages
+        ]
+    return {
+        "failureCount": len(messages),
+        "failures": [
+            {"diagnosticMessage": message, "quality": "Bad", "qualitySubCode": sub_code}
+            for message in messages
+        ],
+        "successCount": success_count,
+    }
+
+
 class RecordedGateway:
     """Context-managed replay of recorded Gateway behavior on an ephemeral port."""
 
@@ -1144,6 +1428,73 @@ class RecordedGateway:
         """Model another writer importing ``entries`` at dispatch time (D30 §2's race)."""
 
         self._server.write_race["import"] = dict(entries)
+
+    # ------------------------------------------------------------------ tags
+
+    @property
+    def tag_imports(self) -> list[dict[str, Any]]:
+        """The Tag imports the fixture actually applied (provider, path, Tag names)."""
+
+        return self._server.tag_imports
+
+    def seed_tags(self, provider: str, tags: list[dict[str, Any]]) -> None:
+        """Publish a Tag provider holding ``tags`` as its top-level nodes."""
+
+        self._server.seed_tags(provider, tags)
+
+    def tags(self, provider: str, path: str = "") -> dict[str, Any] | None:
+        """The Tag node the fixture holds at ``path`` (``None`` = absent)."""
+
+        return self._server.tag_node(provider, path)
+
+    def change_tags_out_of_band(self, provider: str, path: str, tags: list[dict[str, Any]]) -> None:
+        """Create Tags without the MCP server, as another operator would; the Tool's
+        collision check and its re-export both see them."""
+
+        self._server.apply_tag_write(provider, path, _tag_nodes(tags))
+
+    def fail_tag_imports_with(self, status: int = 500) -> None:
+        """Model a Gateway that answers the Tag import with ``status`` and applies
+        nothing — the ambiguous dispatch boundary of D08."""
+
+        self._server.write_status["tag_import"] = status
+
+    def refuse_tag_imports_with(self, problem: str | None = None) -> None:
+        """Model a Gateway that reports a failed import inside a 200 response."""
+
+        self._server.write_problem["tag_import"] = (
+            problem if problem is not None else "the import was refused"
+        )
+
+    def partial_tag_imports_with(self, applied: int) -> None:
+        """Model a Gateway that imports ``applied`` nodes of the document and reports
+        the rest as failures — the partial application D30 §2 does not call a claim."""
+
+        self._server.tag_import_partial = applied
+
+    def claim_tag_imports_without_applying(self) -> None:
+        """Model a Gateway that answers a clean success and creates nothing.
+
+        Modelled, not recorded: it is the case D30 §2's verification exists for, where
+        the claim stands and the observed state does not.
+        """
+
+        self._server.tag_import_lies = True
+
+    def race_tag_import_with(self, provider: str, path: str, tags: list[dict[str, Any]]) -> None:
+        """Model another writer creating ``tags`` under ``path`` at dispatch time."""
+
+        self._server.write_race["tag_import"] = {
+            "provider": provider, "path": path, "tags": _tag_nodes(tags),
+        }
+
+    def answer_tag_import_failures_with(self, shape: str) -> None:
+        """Which wire shape the import route reports failures with: the summary object
+        live 8.3.8/8.3.9 answer, or the QualityCode list the 8.3.8 OpenAPI documents."""
+
+        if shape not in {"summary", "list"}:
+            raise ValueError("shape must be 'summary' or 'list'")
+        self._server.tag_import_wire_shape = shape
 
     # ------------------------------------------------------- config resources
 
