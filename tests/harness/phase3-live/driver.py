@@ -86,11 +86,18 @@ class Stage:
         self.observations = observations
         self.current = "identity"
 
-    def check(self, name: str, ok: bool, detail: object = "") -> None:
+    def record(self, name: str, ok: bool, detail: object = "") -> None:
         entry = {"name": name, "status": "PASS" if ok else "FAIL", "detail": detail}
         self.observations["checks"].append(entry)
         print(f"[{self.current}] {entry['status']:<4} {name}: "
-              f"{json.dumps(detail, default=str, sort_keys=True)[:300]}")
+              f"{json.dumps(detail, default=str, sort_keys=True)[:3000]}")
+
+    def fail(self, name: str, detail: object = "") -> None:
+        """Record a failure without raising (used by the fatal path)."""
+        self.record(name, False, detail)
+
+    def check(self, name: str, ok: bool, detail: object = "") -> None:
+        self.record(name, ok, detail)
         if not ok:
             raise ProbeError(f"check failed in stage {self.current}: {name}")
 
@@ -418,7 +425,17 @@ class Driver:
                 except ValueError:
                     payload = {"raw": text[:2000]}
             reports[command] = payload
-            self.stage.check(f"{command}-exit-zero", code == 0 and isinstance(payload, dict), {"exitCode": code})
+            # Persist the report before asserting, so a FAIL still carries the
+            # machine-readable diagnosis in observations.
+            self.observations["setupNative"] = {
+                "doctor": reports.get("doctor"), "plan": reports.get("plan"),
+                "verify": reports.get("verify"),
+            }
+            self.stage.check(f"{command}-exit-zero", code == 0 and isinstance(payload, dict),
+                             {"exitCode": code, "failedChecks": [
+                                 c for c in (payload or {}).get("checks", [])
+                                 if isinstance(c, dict) and c.get("status") not in ("PASS", "SKIP", "NOT_APPLICABLE", "UNKNOWN")
+                             ] if isinstance(payload, dict) else {"raw": str(payload)[:1500]}})
         plan_report = reports.get("plan") or {}
         actions = plan_report.get("actions", []) if isinstance(plan_report, dict) else []
         blocked = [a for a in actions if isinstance(a, dict) and a.get("action") == "BLOCKED"]
@@ -802,10 +819,10 @@ class Driver:
             self.observations["disposableProject"] = project
         except (ProbeError, GatewayError, httpx.HTTPError, ValueError, OSError) as error:
             fatal = f"{type(error).__name__}: {str(error)[:400]}"
-            self.stage.check(f"stage-{self.stage.current}-fatal", False, fatal)
+            self.stage.fail(f"stage-{self.stage.current}-fatal", fatal)
         except Exception as error:  # record the stage honestly, never a secret
             fatal = type(error).__name__
-            self.stage.check(f"stage-{self.stage.current}-fatal", False, fatal)
+            self.stage.fail(f"stage-{self.stage.current}-fatal", fatal)
         return await self._finish(fatal)
 
     async def _finish(self, fatal: str | None) -> int:

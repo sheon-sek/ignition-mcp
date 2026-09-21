@@ -274,9 +274,9 @@ jobs:
             --jwt-private-key artifacts/jwt/private.pem \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
-            $([[ "${{ matrix.d27_tuple }}" == "true" ]] && echo --expect-d27-tuple)
+            $([[ "${{ matrix.d27_tuple }}" == "true" ]] && echo --expect-d27-tuple) \
+            > "$EVIDENCE_DIR/driver.log" 2>&1
           rc=$?
-          set -e
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
 
