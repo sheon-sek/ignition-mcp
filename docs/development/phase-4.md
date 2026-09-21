@@ -372,6 +372,25 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   - Contract/schema/lint alignment: `transaction.dispatchBoundary` declares the durable
     vocabulary and the restart rule, `transaction.importDispatched` declares the field's
     semantics, and three contract-lint drift cases require both to stay declared.
+  - Verified on the fix head `653f7b9` (merge of `origin/p4/rest` at `603e0f6`, so the
+    lane's #17/#18 work is under the fix): the full `AGENTS.md` command block is green
+    (878 pytest cases, ruff, mypy strict, `tooling.contracts.lint`, the workflows check,
+    both deterministic Runtime builds and the release, and `sync_schemas` leaving the tree
+    clean) and the local live rehearsal against the recorded Gateway is **82/82 cases**.
+    The pushed branch ran CI
+    [35666670814](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670814),
+    Phase 3 Live Gateway G3
+    [35666670824](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670824) —
+    **both Gateway rows success, so the frozen G3 behavior and its evidence still replay**
+    — and Phase 4 Live Gateway REST mutation
+    [35666670831](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670831) —
+    **82/82 live cases, 0 failures on 8.3.8 (`2026071409`, required) and on 8.3.9
+    (`2026082511`, candidate)**, including all 13 Project import cases
+    (`project-import-commits` `COMMITTED`, `project-import-reports-the-dispatch` true,
+    `project-import-no-change-dispatches-nothing` false, and
+    `project-import-stale-fingerprint-is-conflict` `conflict`). Draft PR
+    [#31](https://github.com/sheon-sek/ignition-mcp/pull/31) (base `p4/rest`) carries the
+    fix; the doc head re-ran the same three workflows green.
 - **The first live attempt failed both rows, and the fix is in the harness.** Run
   [35658093734](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093734) on
   the code head returned `RECOVERY_REQUIRED` for the commit case: the candidate archive
