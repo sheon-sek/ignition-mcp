@@ -1,6 +1,6 @@
 {
   "title": "Phase 4 Runtime Operator",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "permissions": {
     "type": "AllOf",
     "securityLevels": [

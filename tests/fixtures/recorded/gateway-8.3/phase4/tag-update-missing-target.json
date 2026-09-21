@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"not_found\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_update\", \"items\": [{\"code\": \"not_found\", \"index\": 0, \"path\": \"__MISSING__\", \"reason\": \"targetMissing\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target's Tag config fingerprint must match the token from its own tag_get_config read, and every target must exist; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

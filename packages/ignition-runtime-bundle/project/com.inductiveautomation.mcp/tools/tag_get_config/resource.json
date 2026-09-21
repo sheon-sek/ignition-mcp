@@ -3,15 +3,40 @@
   "version": 1,
   "restricted": false,
   "overridable": false,
-  "files": ["onToolCalled.py"],
+  "files": [
+    "onToolCalled.py"
+  ],
   "attributes": {
     "title": "tag_get_config",
-    "description": "Read bounded Tag configuration with system.tag.getConfiguration. The internal UDT definition namespace is reserved for udt_type_* tools.",
+    "description": "Read bounded Tag configuration with system.tag.getConfiguration, plus the Tag config fingerprint (D30 2, `tcf1:`) of exactly the configuration the read returned: the Precondition token tag_update compares. The internal UDT definition namespace is reserved for udt_type_* tools.",
     "parameters": [
-      {"name": "path", "description": "Absolute provider-qualified Tag, Folder, or UDT instance path outside _types_.", "type": "string", "required": true},
-      {"name": "recursive", "description": "Whether to include descendants. Default false.", "type": "boolean", "required": false, "default": false},
-      {"name": "overridesOnly", "description": "For UDT members on supported Ignition versions, return only overridden properties. Default false.", "type": "boolean", "required": false, "default": false},
-      {"name": "maxResults", "description": "Maximum configuration nodes after recursive expansion, 1..200. Default 50.", "type": "integer", "required": false, "default": 50}
+      {
+        "name": "path",
+        "description": "Absolute provider-qualified Tag, Folder, or UDT instance path outside _types_.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "recursive",
+        "description": "Whether to include descendants. Default false.",
+        "type": "boolean",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "overridesOnly",
+        "description": "For UDT members on supported Ignition versions, return only overridden properties. Default false.",
+        "type": "boolean",
+        "required": false,
+        "default": false
+      },
+      {
+        "name": "maxResults",
+        "description": "Maximum configuration nodes after recursive expansion, 1..200. Default 50.",
+        "type": "integer",
+        "required": false,
+        "default": 50
+      }
     ]
   }
 }

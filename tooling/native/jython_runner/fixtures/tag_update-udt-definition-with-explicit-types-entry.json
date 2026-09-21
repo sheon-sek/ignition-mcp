@@ -1,0 +1,158 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_update",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "expectedFingerprint": "tcf1:b940164ed74e960833931d8b63f14abcd1d16ef5e7317eb9add3074346e44e33",
+        "config": {
+          "documentation": "phase4-updated"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 206
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_update\":[\"[default]IgnitionMCP_CI\",\"[default]_types_/IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI/ProbeType",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "name": "ProbeType",
+            "path": "[default]_types_/IgnitionMCP_CI/ProbeType",
+            "tagType": "UdtType",
+            "tags": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_update",
+        "actionTarget": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI",
+        [
+          {
+            "documentation": "phase4-updated",
+            "name": "ProbeType"
+          }
+        ],
+        "MergeOverwrite"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_update",
+        "actionTarget": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI/ProbeType",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "documentation": "phase4-updated",
+            "name": "ProbeType",
+            "path": "[default]_types_/IgnitionMCP_CI/ProbeType",
+            "tagType": "UdtType",
+            "tags": {
+              "$ignition": "null"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

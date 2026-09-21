@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_get_config",
+  "parameterOrder": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "maxResults"
+  ],
+  "arguments": {
+    "path": "[default]TextTarget",
+    "recursive": false,
+    "overridesOnly": false,
+    "maxResults": 50
+  },
+  "calls": [
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]TextTarget",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "documentation": "K\u00e4lte \u2013 12 \u00b0C\tready",
+            "name": "TextTarget",
+            "path": "[default]TextTarget",
+            "tagType": "AtomicTag",
+            "value": "phase4-initial"
+          }
+        ]
+      }
+    }
+  ]
+}

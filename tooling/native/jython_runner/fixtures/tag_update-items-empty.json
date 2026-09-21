@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_update",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": []
+  },
+  "calls": []
+}

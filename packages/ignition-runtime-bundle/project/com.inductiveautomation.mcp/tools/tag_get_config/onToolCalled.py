@@ -74,6 +74,56 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		body = value[closing + 1:]
 		return "_types_" not in [segment for segment in body.split("/") if segment]
 
+	# D30 2: the Tag config fingerprint. Repo-defined, versioned `tcf1` and
+	# deterministic: SHA-256 over the canonical JSON text of the D28-encoded
+	# configuration this read returns. The rule and its golden vectors are the
+	# shared contract contracts/shared/tag-config-fingerprint.json, and tag_update
+	# recomputes it over its own default read of one exact target path.
+	FINGERPRINT_PREFIX = "tcf1:"
+
+	def quoteJsonString(value):
+		# Only " and \ are escaped, and a control character is always the
+		# six-character \u00xx form, so the Python copy of this rule agrees with
+		# this one byte for byte.
+		parts = ['"']
+		for character in value:
+			if character == '"':
+				parts.append('\\"')
+			elif character == "\\":
+				parts.append("\\\\")
+			elif character < " ":
+				parts.append("\\u%04x" % ord(character))
+			else:
+				parts.append(character)
+		parts.append('"')
+		return "".join(parts)
+
+	def canonicalJson(value):
+		# Object keys sort by code point; an integer keeps its exact decimal
+		# form and a float its shortest round-trip form.
+		if value is None:
+			return "null"
+		if isinstance(value, bool):
+			return "true" if value else "false"
+		if isinstance(value, basestring):
+			return quoteJsonString(value)
+		if isinstance(value, (int, long)):
+			return unicode(value)
+		if isinstance(value, float):
+			return repr(value)
+		if isinstance(value, (list, tuple)):
+			return "[" + ",".join([canonicalJson(child) for child in value]) + "]"
+		if isinstance(value, dict):
+			keys = sorted(value.keys())
+			return "{" + ",".join([quoteJsonString(unicode(key)) + ":" + canonicalJson(value[key]) for key in keys]) + "}"
+		raise TypeError("Unsupported canonical JSON value: " + unicode(type(value)))
+
+	def tagConfigFingerprint(value):
+		from java.security import MessageDigest
+		digest = MessageDigest.getInstance("SHA-256")
+		digest.update(canonicalJson(value).encode("utf-8"))
+		return FINGERPRINT_PREFIX + digest.digest().tostring().encode("hex")
+
 	stage = "validation"
 	try:
 		if not validPath(path):
@@ -93,11 +143,13 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		nativeConfiguration = system.tag.getConfiguration(path, bool(recursive), bool(overridesOnly))
 		stage = "result_normalization"
 		configuration = jsonValue(nativeConfiguration)
+		stage = "fingerprint"
+		fingerprint = tagConfigFingerprint(encodeNulls(configuration))
 		stage = "result_count"
 		count = countNodes(configuration)
 		if count > maxResults:
 			return toolError("limit_exceeded", "Tag configuration exceeds maxResults; use a narrower path or disable recursive retrieval.")
-		domain = {"path": path, "recursive": bool(recursive), "overridesOnly": bool(overridesOnly), "configuration": configuration, "summary": {"returned": count, "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
+		domain = {"path": path, "recursive": bool(recursive), "overridesOnly": bool(overridesOnly), "fingerprint": fingerprint, "configuration": configuration, "summary": {"returned": count, "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
 		stage = "serialization"
 		encoded = system.util.jsonEncode(domain)

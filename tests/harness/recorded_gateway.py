@@ -222,6 +222,38 @@ def _alarm_body(server: Any, path: str) -> dict[str, Any]:
     return document
 
 
+#: The run-scoped values a recorded ticket #10 refusal body carries. The refusal
+#: bodies come from a live run (or are modelled until the first one), and the paths
+#: and fingerprints are the run's own, so they are templated.
+_TAG_UPDATE_TEMPLATES = (
+    ("__TARGET__", "writeTarget"),
+    ("__TEXT_TARGET__", "textTarget"),
+    ("__SIBLING__", "siblingTarget"),
+    ("__MISSING__", "missingTarget"),
+    ("__UDT__", "udtTarget"),
+)
+
+
+def _tag_update_body(server: Any, arguments: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_update` refusal carries."""
+    from tooling.contracts.lint import encode_nulls, tag_config_fingerprint
+
+    text = json.dumps(body)
+    for placeholder, key in _TAG_UPDATE_TEMPLATES:
+        text = text.replace(placeholder, server.tag_update_paths.get(key, ""))
+    paths = _tag_update_paths(arguments)
+    expected = ""
+    for item in arguments.get("items") or []:
+        if isinstance(item, dict) and item.get("path") == (paths[0] if paths else None):
+            expected = str(item.get("expectedFingerprint", ""))
+    observed = tag_config_fingerprint(encode_nulls(server.tag_config.get(paths[0], []))) if paths else ""
+    text = text.replace("__OBSERVED_FINGERPRINT__", observed).replace("__EXPECTED_FINGERPRINT__", expected)
+    # A refusal carries a correlation ID like any other Tool Error; a replay has no
+    # run of its own, so it answers with the same fixed one the other replayed Tools do.
+    text = text.replace("__CORRELATION__", "recorded-replay")
+    return json.loads(text)
+
+
 def _zip_entries(data: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         return {entry.filename: archive.read(entry.filename) for entry in archive.infolist()}
@@ -350,6 +382,131 @@ def _tag_read_replay(server: Any, arguments: dict[str, Any]) -> dict[str, Any] |
         "items": items,
         "summary": {"requested": len(paths), "succeeded": len(items), "failed": 0},
         "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _tag_config_fingerprint(configuration: list[Any]) -> str:
+    from tooling.contracts.lint import encode_nulls, tag_config_fingerprint
+
+    return tag_config_fingerprint(encode_nulls(configuration))
+
+
+def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """The recorded `tag_get_config` domain for a path the fake models, else None."""
+    path = arguments.get("path")
+    if not isinstance(path, str) or path not in server.tag_config:
+        return None
+    configuration = server.tag_config[path]
+    recursive = bool(arguments.get("recursive", False))
+    overrides_only = bool(arguments.get("overridesOnly", False))
+    limit = arguments.get("maxResults")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = 50
+    return {
+        "path": path,
+        "recursive": recursive,
+        "overridesOnly": overrides_only,
+        "fingerprint": _tag_config_fingerprint(configuration),
+        "configuration": configuration,
+        "summary": {"returned": len(configuration) if recursive else 1, "limit": limit},
+        "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _tag_update_paths(arguments: dict[str, Any]) -> list[str]:
+    return [
+        str(item.get("path", ""))
+        for item in (arguments.get("items") or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _served_allowlist(server: Any, tool: str) -> list[str]:
+    """The allowlist the policy Tag currently serves for one Tool, if any."""
+    try:
+        document = json.loads(server.policy_value)
+        entries = (document.get("allowlists") or {}).get(tool)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    return [str(entry) for entry in entries] if isinstance(entries, list) else []
+
+
+def _tag_update_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_update` refusal, or the modelled merge, these arguments ask for.
+
+    The selection mirrors the shipped handler's own order — policy gate, input,
+    reserved provider, allowlist (with D30 6's `_types_` rule), existence, then the
+    Precondition token — so the rehearsal exercises the branches the live Gateway
+    answers in the same order.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    paths = [str(item.get("path", "")) for item in items]
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if any(path.startswith("[IgnitionMCPPolicy]") for path in paths):
+        return "reserved-provider-refusal", paths
+    entries = _served_allowlist(server, "tag_update")
+    for path in paths:
+        if "_types_" in path and not any("_types_" in entry for entry in entries):
+            return "udt-not-allowlisted", paths
+    if any("IgnitionMCP_CI2" in path for path in paths):
+        return "sibling-denial", paths
+    if any(path not in server.tag_config for path in paths):
+        return "missing-target", paths
+    for item in items:
+        path = str(item.get("path", ""))
+        actual = _tag_config_fingerprint(server.tag_config.get(path, []))
+        if item.get("expectedFingerprint") != actual:
+            return "stale-fingerprint", paths
+    return "allowlisted", paths
+
+
+def _apply_tag_update(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Merge the requested properties the way MergeOverwrite leaves them.
+
+    Only the driver's own merge is modelled: the item's properties are merged into
+    the node's top-level configuration, a property the read did not carry is added,
+    and the observed half of the result is the post-merge state.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    server.tag_update_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    succeeded = 0
+    for item in items:
+        path = str(item.get("path", ""))
+        node = dict((server.tag_config.get(path) or [{}])[0])
+        for key, value in (item.get("config") or {}).items():
+            node[str(key)] = value
+        node["name"] = path.rsplit("/", 1)[-1]
+        server.tag_config[path] = [node]
+        results.append({
+            "path": path,
+            "status": "executed",
+            "nativeOutcome": {
+                "code": 192, "name": "Good", "level": "Good", "good": True,
+                "diagnosticMessage": {"$ignition": "null"},
+            },
+        })
+        observed.append({
+            "path": path,
+            "status": "ok",
+            "fingerprint": _tag_config_fingerprint(server.tag_config[path]),
+            "configuration": server.tag_config[path],
+        })
+        succeeded += 1
+    return {
+        "content": [{"type": "text", "text": "recorded replay"}],
+        "isError": False,
+        "structuredContent": {
+            "items": results,
+            "observed": observed,
+            "summary": {
+                "requested": len(items), "succeeded": succeeded, "failed": 0, "outcomeUnknown": 0,
+                "notExecuted": 0, "auditMode": "best_effort", "auditRecorded": True,
+            },
+            "meta": {"correlationId": "recorded-replay"},
+        },
     }
 
 
@@ -583,6 +740,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     )
                 self._json(200, document)
                 return
+            if action_filter.startswith("ignition-mcp.tag_update") and server.tag_update_correlation_id:
+                document = json.loads(json.dumps(_fixture("phase4/audit-log-config.json")))
+                for row in document["items"]:
+                    row["actionTarget"] = str(row["actionTarget"]).replace(
+                        "__TARGET__", server.tag_update_paths.get("writeTarget", ""),
+                    )
+                    row["actionValue"] = str(row["actionValue"]).replace(
+                        "__CORRELATION__", server.tag_update_correlation_id,
+                    )
+                self._json(200, document)
+                return
             if server.tag_write_correlation_id:
                 document = json.loads(json.dumps(_fixture("phase4/audit-log.json")))
                 for row in document["items"]:
@@ -668,6 +836,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     operator_tools = [
                         str(item["name"]) for item in _fixture("phase4/tools-list-operator.json")["tools"]
                     ]
+                elif str(path).endswith("phase4-configurator"):
+                    # Read from the contract, exactly as the live workflow's Server
+                    # Config is written from it (D09's explicit lists).
+                    profile = json.loads(
+                        (ROOT / "contracts/profiles/configurator.yaml").read_text(encoding="utf-8")
+                    )
+                    operator_tools = [str(name) for name in profile["tools"]]
                 else:
                     operator_tools = list(server.runtime_tools)
                 self._json(200, {
@@ -732,6 +907,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         }
                 elif tool == "tag_fixture_probe":
                     report = json.loads(json.dumps(_fixture("phase4/tag-fixture-probe.json")))
+                    # Ticket #10: the fake serves the fixture Tags' configuration
+                    # from the recorded body, so `tag_get_config` and `tag_update`
+                    # then agree on one state exactly as the live Gateway does.
+                    seeded = json.loads(json.dumps(_fixture("phase4/tag-config.json")))
+                    for path, configuration in seeded.items():
+                        server.tag_config.setdefault(path, configuration)
                     for entry in report.get("initialValues") or []:
                         if isinstance(entry, dict) and isinstance(entry.get("path"), str):
                             raw = str(entry.get("value"))
@@ -742,6 +923,31 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "isError": False,
                         "structuredContent": report,
                     }
+                elif tool == "tag_get_config":
+                    domain = _tag_config_domain(server, tool_arguments)
+                    if domain is None:
+                        result = {
+                            "content": [{"type": "text", "text": json.dumps({
+                                "code": "not_found",
+                                "message": "The Tag configuration read found no such path.",
+                                "correlationId": "recorded-replay",
+                            })},
+                            ],
+                            "isError": True,
+                        }
+                    else:
+                        result = {
+                            "content": [{"type": "text", "text": "recorded replay"}],
+                            "isError": False,
+                            "structuredContent": domain,
+                        }
+                elif tool == "tag_update":
+                    case, _paths = _tag_update_case(server, tool_arguments)
+                    if case == "allowlisted":
+                        result = _apply_tag_update(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-update-{case}.json")))
+                        result = _tag_update_body(server, tool_arguments, body)
                 elif tool == "tag_write":
                     case, _paths = _tag_write_case(server, tool_arguments)
                     body = json.loads(json.dumps(_fixture(f"phase4/tag-write-{case}.json")))
@@ -931,6 +1137,7 @@ class _Server(http.server.ThreadingHTTPServer):
         port: int = 0,
         audit_profile: str = "",
         alarm_root: str = "",
+        tag_update_paths: dict[str, str] | None = None,
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -967,8 +1174,23 @@ class _Server(http.server.ThreadingHTTPServer):
         self.shelved_paths: dict[str, dict[str, Any]] = {}
         self.alarm_correlation_id = ""
         self.alarm_root = alarm_root
+        #: The Tag CONFIG Mutation paths of a ticket #10 run. The driver passes them
+        #: through `RecordedGateway(tag_update_paths=...)`, and a recorded refusal
+        #: body templates them because they are the run's own.
+        self.tag_update_paths: dict[str, str] = dict(tag_update_paths or {})
+        #: The correlation ID the modelled `tag_update` result carried, so the audit
+        #: log can answer for it the way the recorded `tag_write` rows do.
+        self.tag_update_correlation_id = ""
         self.policy_value = ""
         self.write_probe_value = "phase4-write-probe-value"
+        #: Ticket #10: the Tag configuration the fake serves, keyed by exact path.
+        #: `tag_get_config` answers from it and `tag_update` merges into it, so a
+        #: local rehearsal can follow a change from one Tool to the other. The
+        #: fingerprints are derived with the contracts linter's own copy of the D30
+        #: rule (`tooling.contracts.lint`), which is the definition the shipped
+        #: handler implements; a rehearsal is never evidence, and the live run
+        #: re-reads everything through a real Gateway.
+        self.tag_config: dict[str, list[Any]] = {}
         #: config resource state: resource type -> (name, collection) -> document.
         #: Keying by collection as well as name is what makes the fixture able to
         #: tell two resources with one name in different collections apart. Seed it
@@ -1345,6 +1567,7 @@ class RecordedGateway:
         audit_profile: str = "",
         alarm_root: str = "",
         policy_provider_unready_reads: int = 0,
+        tag_update_paths: dict[str, str] | None = None,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -1358,6 +1581,7 @@ class RecordedGateway:
             port,
             audit_profile,
             alarm_root,
+            tag_update_paths,
         )
         self._server.policy_provider_unready_reads = policy_provider_unready_reads
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)

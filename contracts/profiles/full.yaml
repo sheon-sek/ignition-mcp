@@ -22,6 +22,7 @@
     "database_query",
     "tag_write",
     "alarm_shelve",
-    "alarm_unshelve"
+    "alarm_unshelve",
+    "tag_update"
   ]
 }

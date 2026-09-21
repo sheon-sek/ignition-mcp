@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, cast
@@ -113,7 +115,7 @@ CURRENT_RUNTIME_READ_TOOLS = [
 ]
 #: Phase 4 milestone 4a (D30). Milestone 4b adds the CONFIG Tag Mutations.
 CURRENT_RUNTIME_CONTROL_TOOLS = ["tag_write", "alarm_shelve", "alarm_unshelve"]
-CURRENT_RUNTIME_CONFIG_TOOLS: list[str] = []
+CURRENT_RUNTIME_CONFIG_TOOLS = ["tag_update"]
 CURRENT_RUNTIME_MUTATION_TOOLS = CURRENT_RUNTIME_CONTROL_TOOLS + CURRENT_RUNTIME_CONFIG_TOOLS
 CURRENT_RUNTIME_TOOLS = CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_MUTATION_TOOLS
 #: `readonly` never changes (D09); each mutation-capable profile is the READ
@@ -126,6 +128,27 @@ EXPECTED_PROFILE_TOOLS = {
 }
 RESERVED_POLICY_PROVIDER = "IgnitionMCPPolicy"
 RUNTIME_TARGET_POLICY_SCHEMA = "contracts/shared/runtime-target-policy.schema.json"
+#: D30 §2: the Tag config fingerprint is repo-defined, so its definition — the
+#: canonical-JSON rule, the token form and the golden vectors — is a committed
+#: shared contract that both the reader (`tag_get_config`) and every Tag CONFIG
+#: Mutation cite.
+TAG_CONFIG_FINGERPRINT_CONTRACT = "contracts/shared/tag-config-fingerprint.json"
+TAG_CONFIG_FINGERPRINT_VERSION = "tcf1"
+TAG_CONFIG_FINGERPRINT_HEX_LENGTH = 64
+#: The read a Precondition-token compare is taken from, in both planes' words:
+#: the default `tag_get_config` read of one exact target path.
+TAG_CONFIG_FINGERPRINT_READ = "system.tag.getConfiguration(path, false, false)"
+#: Phase 4 milestone 4b: the Runtime CONFIG Mutations implemented so far, with the
+#: per-Tool facts the contract must state (D30 §2, §3, §6).
+CURRENT_RUNTIME_CONFIG_MUTATIONS: dict[str, dict[str, Any]] = {
+    "tag_update": {
+        "destructive": False,
+        "precondition": {"kind": "tag_config_fingerprint", "enforcedBy": "handler_read_compare"},
+        "collisionPolicy": "MergeOverwrite",
+    },
+}
+RUNTIME_PRECONDITION_KINDS = frozenset({"tag_config_fingerprint"})
+RUNTIME_PRECONDITION_ENFORCERS = frozenset({"handler_read_compare"})
 #: The fields the shipped Jython reader requires of every Runtime Target Policy,
 #: whatever Tool reads it. `auditProfile` and `alarmShelveMaxSeconds` are
 #: validated when present.
@@ -134,6 +157,185 @@ REQUIRED_POLICY_FIELDS = ("schemaVersion", "allowlists", "serviceIdentity", "aud
 
 class ContractError(ValueError):
     pass
+
+
+def quote_json_string(value: str) -> str:
+    """The one string rule of the Tag config fingerprint's canonical JSON.
+
+    Only `"`, `\\` and the control characters are escaped, and a control character
+    is always the six-character `\\u00xx` form: two implementations of this rule
+    (Python 3 here, Jython 2.7 in the handler) then produce identical bytes for
+    every string, and no escaping shortcut can make one of them disagree.
+    """
+
+    parts = ['"']
+    for character in value:
+        if character == '"':
+            parts.append('\\"')
+        elif character == "\\":
+            parts.append("\\\\")
+        elif character < " ":
+            parts.append("\\u%04x" % ord(character))
+        else:
+            parts.append(character)
+    parts.append('"')
+    return "".join(parts)
+
+
+def canonical_json(value: Any) -> str:
+    """Canonical JSON text for the Tag config fingerprint (D30 §2).
+
+    Object keys sort by code point, there is no insignificant whitespace, an
+    integer keeps its exact decimal form, a float uses the interpreter's shortest
+    round-trip form, and a string follows :func:`quote_json_string`. The handler's
+    Jython copy of this function has to agree byte for byte, so the golden vectors
+    in `contracts/shared/tag-config-fingerprint.json` are recomputed here on every
+    lint and re-run against the shipped handler by the D29 fixture suite.
+    """
+
+    if value is None:
+        return "null"
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    if isinstance(value, str):
+        return quote_json_string(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ContractError("canonical JSON has no representation for a non-finite number")
+        return repr(value)
+    if isinstance(value, list):
+        return "[" + ",".join(canonical_json(child) for child in value) + "]"
+    if isinstance(value, dict):
+        for key in value:
+            if not isinstance(key, str):
+                raise ContractError("canonical JSON object keys must be strings")
+        return "{" + ",".join(
+            f"{quote_json_string(key)}:{canonical_json(value[key])}" for key in sorted(value)
+        ) + "}"
+    raise ContractError(f"canonical JSON has no representation for {type(value).__name__}")
+
+
+def encode_nulls(value: Any) -> Any:
+    """D28 `ignition-null-v1`, as the Runtime handlers and this lint both read it.
+
+    A null becomes the reserved-key object, an object that carries a literal
+    `$ignition` key is escaped with sorted entries, and everything else is
+    traversed. The handler's Jython copy of this function has to agree with this
+    one, which is what the golden vectors' `nativeConfiguration` -> `configuration`
+    step checks.
+    """
+
+    if value is None:
+        return {"$ignition": "null"}
+    if isinstance(value, dict):
+        if "$ignition" in value:
+            return {"$ignition": "object", "entries": [[key, encode_nulls(child)] for key, child in sorted(value.items())]}
+        return {key: encode_nulls(child) for key, child in value.items()}
+    if isinstance(value, list):
+        return [encode_nulls(child) for child in value]
+    return value
+
+
+def tag_config_fingerprint(encoded_configuration: Any) -> str:
+    """`tcf1:<sha256>` over the canonical JSON of an encoded Tag configuration."""
+    text = canonical_json(encoded_configuration)
+    return f"{TAG_CONFIG_FINGERPRINT_VERSION}:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _check_tag_config_fingerprint(document: dict[str, Any]) -> None:
+    """D30 §2: the repo-defined Tag config fingerprint and its golden vectors."""
+
+    if document.get("decision") != "D30" or document.get("name") != "tag_config_fingerprint":
+        raise ContractError("tag-config-fingerprint: the owning decision is D30")
+    version = document.get("version")
+    if version != TAG_CONFIG_FINGERPRINT_VERSION or document.get("prefix") != f"{version}:":
+        raise ContractError("tag-config-fingerprint: version and prefix drift")
+    if document.get("tokenForm") != f"{version}:<{TAG_CONFIG_FINGERPRINT_HEX_LENGTH} lowercase hexadecimal characters>":
+        raise ContractError("tag-config-fingerprint: token form drift")
+    read_shape = document.get("readShape")
+    if not isinstance(read_shape, dict) or read_shape.get("call") != TAG_CONFIG_FINGERPRINT_READ:
+        raise ContractError(
+            "tag-config-fingerprint: the compared read must be the default tag_get_config read"
+        )
+    canonical = document.get("canonicalJson")
+    if not isinstance(canonical, dict) or set(canonical) != {
+        "keys", "whitespace", "strings", "integers", "floats", "null", "booleans",
+    }:
+        raise ContractError("tag-config-fingerprint: the canonical-JSON rule must be stated in full")
+    for key in ("coverage", "raceWindow", "definition"):
+        if not isinstance(document.get(key), str) or not document[key].strip():
+            raise ContractError(f"tag-config-fingerprint: {key} must be documented")
+    if "D30" not in str(document.get("raceWindow")):
+        raise ContractError("tag-config-fingerprint: the race window must cite D30 §2")
+    if "notASecret" not in document:
+        raise ContractError("tag-config-fingerprint: a fingerprint is a Precondition token, never a credential")
+    vectors = document.get("goldenVectors")
+    if not isinstance(vectors, list) or not vectors:
+        raise ContractError("tag-config-fingerprint: D30 §2 requires a golden vector")
+    names: list[str] = []
+    for vector in vectors:
+        if not isinstance(vector, dict):
+            raise ContractError("tag-config-fingerprint: every golden vector is an object")
+        name = vector.get("name")
+        if not isinstance(name, str) or not name:
+            raise ContractError("tag-config-fingerprint: every golden vector needs a name")
+        names.append(name)
+        if not isinstance(vector.get("documentation"), str) or not vector["documentation"].strip():
+            raise ContractError(f"tag-config-fingerprint: vector {name} needs documentation")
+        configuration = vector.get("configuration")
+        if not isinstance(configuration, list) or not configuration:
+            raise ContractError(f"tag-config-fingerprint: vector {name} needs a configuration")
+        if encode_nulls(vector.get("nativeConfiguration")) != configuration:
+            raise ContractError(
+                f"tag-config-fingerprint: vector {name} configures a native read that D28 does not encode "
+                "into its own configuration"
+            )
+        expected = tag_config_fingerprint(configuration)
+        if vector.get("fingerprint") != expected:
+            raise ContractError(
+                f"tag-config-fingerprint: vector {name} fingerprint drift: "
+                f"{vector.get('fingerprint')!r} != {expected!r}"
+            )
+        if vector.get("canonicalJson") != canonical_json(configuration):
+            raise ContractError(f"tag-config-fingerprint: vector {name} canonical text drift")
+    if len(set(names)) != len(names):
+        raise ContractError("tag-config-fingerprint: a golden vector is named twice")
+
+
+def _check_additive_output_fields(
+    tool: dict[str, Any], tool_name: str, repo_root: Path, fingerprint_contract: dict[str, Any]
+) -> None:
+    """D30 §2's additive READ fields must be in the schema and be required."""
+
+    fields = tool.get("additiveOutputFields")
+    if fields is None:
+        return
+    if not isinstance(fields, list) or not fields:
+        raise ContractError(f"{tool_name}: additiveOutputFields must be a non-empty list")
+    output_schema_path = tool.get("outputSchema")
+    if not isinstance(output_schema_path, str):
+        raise ContractError(f"{tool_name}: additiveOutputFields needs an outputSchema")
+    schema = _load(repo_root / output_schema_path)
+    properties = schema.get("properties", {})
+    required = schema.get("required", [])
+    for field in fields:
+        if not isinstance(field, dict):
+            raise ContractError(f"{tool_name}: an additive output field must be declared with its facts")
+        name = field.get("name")
+        if not isinstance(name, str) or not name:
+            raise ContractError(f"{tool_name}: an additive output field needs a name")
+        if name not in properties or name not in required:
+            raise ContractError(f"{tool_name}: the additive field {name!r} must be required by the output schema")
+        if field.get("definition") != TAG_CONFIG_FINGERPRINT_CONTRACT:
+            raise ContractError(f"{tool_name}: the additive field {name!r} must cite {TAG_CONFIG_FINGERPRINT_CONTRACT}")
+        if field.get("definitionVersion") != fingerprint_contract["version"]:
+            raise ContractError(f"{tool_name}: the additive field {name!r} definition version drift")
+        if field.get("additive") is not True:
+            raise ContractError(f"{tool_name}: D30 §2 makes {name!r} an additive change")
 
 
 def _load(path: Path) -> dict[str, Any]:
@@ -182,11 +384,26 @@ def _check_runtime_mutation(tool: dict[str, Any], tool_name: str, repo_root: Pat
 
 
 def _check_input_bounds(tool: dict[str, Any], tool_name: str) -> None:
-    """D10's numeric budgets are declared by the contract the handler implements."""
+    """D10's numeric budgets are declared by the contract the handler implements.
+
+    Every Runtime Mutation must state D10's 20-item project default inside the
+    100-item hard ceiling where its caller can read it: in the `inputBounds` block
+    a Tool that also carries byte ceilings and a deployment override, or in the
+    bounded parameter's own `default` and `maxItems`. The richer block is checked
+    in full when it is declared, and `_check_runtime_mutation` keeps every
+    contract of this ticket's Tools to it.
+    """
 
     bounds = tool.get("inputBounds")
     if not isinstance(bounds, dict):
-        raise ContractError(f"{tool_name}: D10 requires declared inputBounds")
+        for name, spec in tool.get("parameters", {}).items():
+            if isinstance(spec, dict) and isinstance(spec.get("maxItems"), int):
+                if spec.get("maxItems") == 100 and spec.get("default") == 20:
+                    return
+                raise ContractError(
+                    f"{tool_name}: {name} must declare D10's 20-item default and 100-item hard ceiling"
+                )
+        raise ContractError(f"{tool_name}: D10 requires declared item bounds")
     if bounds.get("defaultItems") != 20 or bounds.get("hardItems") != 100:
         raise ContractError(
             f"{tool_name}: D10 fixes the 20-item project default and the 100-item hard ceiling"
@@ -201,6 +418,58 @@ def _check_input_bounds(tool: dict[str, Any], tool_name: str) -> None:
         value = bounds.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
             raise ContractError(f"{tool_name}: inputBounds.{key} must be a positive byte ceiling")
+
+
+def _check_runtime_config_mutation(
+    tool: dict[str, Any], tool_name: str, fingerprint_contract: dict[str, Any]
+) -> None:
+    """The D30 §2, §3 and §6 facts a Runtime CONFIG Mutation must declare."""
+
+    spec = CURRENT_RUNTIME_CONFIG_MUTATIONS[tool_name]
+    precondition = tool.get("preconditionToken")
+    if not isinstance(precondition, dict) or precondition.get("kind") not in RUNTIME_PRECONDITION_KINDS:
+        raise ContractError(f"{tool_name}: D30 §2 requires the Precondition token to be declared")
+    if precondition.get("kind") != spec["precondition"]["kind"]:
+        raise ContractError(f"{tool_name}: Precondition token kind drift")
+    if precondition.get("enforcedBy") != spec["precondition"]["enforcedBy"]:
+        raise ContractError(f"{tool_name}: D30 §2 says a Tag config fingerprint is read-compared by the handler")
+    if precondition.get("enforcedBy") not in RUNTIME_PRECONDITION_ENFORCERS:
+        raise ContractError(f"{tool_name}: a Precondition token must say what enforces it")
+    if precondition.get("parameter") != "items[].expectedFingerprint":
+        raise ContractError(f"{tool_name}: D30 §2 takes the fingerprint per target")
+    if precondition.get("source") != "tag_get_config.fingerprint":
+        raise ContractError(f"{tool_name}: the fingerprint comes from the caller's own tag_get_config read")
+    if precondition.get("definition") != TAG_CONFIG_FINGERPRINT_CONTRACT:
+        raise ContractError(f"{tool_name}: the fingerprint definition must be {TAG_CONFIG_FINGERPRINT_CONTRACT}")
+    if precondition.get("definitionVersion") != fingerprint_contract["version"]:
+        raise ContractError(f"{tool_name}: the fingerprint definition version drift")
+    if precondition.get("mismatchCode") != "conflict":
+        raise ContractError(f"{tool_name}: a stale fingerprint fails with conflict before anything dispatches")
+    if precondition.get("raceWindowDocumented") is not True:
+        raise ContractError(f"{tool_name}: D30 §2 requires the Precondition race window to be documented")
+    if tool.get("collisionPolicy") != spec["collisionPolicy"]:
+        raise ContractError(f"{tool_name}: the handler fixes the Gateway collision policy (D30 §4)")
+    if tool.get("neverCreatesTarget") != "not_found":
+        raise ContractError(f"{tool_name}: a missing target fails with not_found instead of being created")
+    udt = tool.get("udtDefinitionTargets", "")
+    if not isinstance(udt, str) or "explicit" not in udt or "_types_" not in udt or "does not" not in udt:
+        raise ContractError(
+            f"{tool_name}: D30 §6 allows a UDT definition target only under an explicit _types_ allowlist entry"
+        )
+    refused_keys = tool.get("refusedConfigKeys")
+    if not isinstance(refused_keys, dict):
+        raise ContractError(f"{tool_name}: the Tool must declare the configuration keys it refuses")
+    for key, rule in refused_keys.items():
+        if not isinstance(key, str) or not isinstance(rule, str) or not rule:
+            raise ContractError(f"{tool_name}: a refused configuration key must state its rule")
+    for required in ("value", "tags", "name"):
+        if required not in refused_keys:
+            raise ContractError(
+                f"{tool_name}: {required!r} must be declared: a value write is CONTROL's, a child is its "
+                "own target with its own fingerprint, and a name change is tag_rename's"
+            )
+    if not isinstance(tool.get("targetPath"), dict):
+        raise ContractError(f"{tool_name}: the Tool must declare its target path rules")
 
 
 def lint_contracts(root: str | Path) -> None:
@@ -251,6 +520,9 @@ def lint_contracts(root: str | Path) -> None:
     if compatibility.get("supportedRequiresVerifiedNativeResponseBinding") is not True:
         raise ContractError("SUPPORTED compatibility requires verified native response binding")
 
+    fingerprint_contract = _load(root_path / "shared/tag-config-fingerprint.json")
+    _check_tag_config_fingerprint(fingerprint_contract)
+
     for tool_name in CURRENT_RUNTIME_READ_TOOLS:
         tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
         if tool.get("name") != tool_name:
@@ -264,6 +536,7 @@ def lint_contracts(root: str | Path) -> None:
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
+        _check_additive_output_fields(tool, tool_name, repo_root, fingerprint_contract)
 
     for tool_name in CURRENT_RUNTIME_CONTROL_TOOLS:
         tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
@@ -281,7 +554,10 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: Runtime CONFIG mutation contract drift")
         if not isinstance(tool.get("destructive"), bool):
             raise ContractError(f"{tool_name}: a CONFIG mutation must declare destructive explicitly")
+        if tool.get("destructive") is not CURRENT_RUNTIME_CONFIG_MUTATIONS[tool_name]["destructive"]:
+            raise ContractError(f"{tool_name}: destructive declaration drift (D08/D26)")
         _check_runtime_mutation(tool, tool_name, repo_root)
+        _check_runtime_config_mutation(tool, tool_name, fingerprint_contract)
 
     declared_mutations = sorted(
         path.name[: -len(".contract.json")]
@@ -303,7 +579,10 @@ def lint_contracts(root: str | Path) -> None:
         # Mutation contract names must be part of that document's schema.
         for mutation_name in CURRENT_RUNTIME_MUTATION_TOOLS:
             mutation = _load(root_path / f"tools/runtime/{mutation_name}.contract.json")
-            field = mutation["inputBounds"]["hardItemsPolicyField"]
+            mutation_bounds = mutation.get("inputBounds")
+            if not isinstance(mutation_bounds, dict):
+                continue
+            field = mutation_bounds["hardItemsPolicyField"]
             if field not in policy_schema.get("properties", {}):
                 raise ContractError(
                     f"{mutation_name}: {field} must be a Runtime Target Policy document field"

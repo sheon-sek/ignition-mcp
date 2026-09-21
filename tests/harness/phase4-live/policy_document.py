@@ -299,8 +299,68 @@ def alarm_policy_sha256(**overrides: Any) -> str:
     return hashlib.sha256(alarm_policy_json(**overrides).encode("utf-8")).hexdigest()
 
 
+# --------------------------------------------------------------------------- #
+# Ticket #10 (`tag_update`) live fixtures
+#
+# The Tag CONFIG Mutation runs on the `configurator` profile, so it installs its
+# own document over the same reserved provider: the Tag allowlist the ticket #7
+# fixture Tags already live under, the audit profile the D18 modes name, and — as
+# a second state — an explicit `_types_` entry for the UDT-definition case.
+# --------------------------------------------------------------------------- #
+
+#: The Tag the positive update merges into, and the paths its refusals target.
+TAG_UPDATE_TARGET = TAG_FIXTURE_PATH
+TAG_UPDATE_TEXT_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/TextTarget"
+#: A UDT definition path. D30 6 lets a Tag CONFIG Mutation reach it only through an
+#: explicit `_types_` entry, and the refusals happen before any read, so the
+#: definition itself never has to exist for the live cases to be conclusive.
+UDT_NAMESPACE = "_types_"
+TAG_UPDATE_UDT_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/ProbeType"
+#: The properties the positive update merges: a description and engineering units
+#: are configuration, not a value write, and both must show in the re-read.
+TAG_UPDATE_CONFIG = {"documentation": "phase4-updated", "engUnits": "kPa"}
+TAG_UPDATE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_UPDATE_TYPES_ALLOWLIST = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",
+    f"[{TAG_FIXTURE_PROVIDER}]_types_/{TAG_FIXTURE_ROOT}",
+)
+
+
+def tag_update_policy(
+    *, allowlist: tuple[str, ...] = TAG_UPDATE_ALLOWLIST, audit_mode: str = "best_effort",
+) -> dict[str, Any]:
+    """The policy the ticket #10 live cases run against.
+
+    Shape-identical to the ticket #7 document with this Tool's own allowlist key,
+    so the shipped reader validates one document shape for every Tag Mutation.
+    """
+    document = json.loads(json.dumps(POLICY))
+    document["allowlists"]["tag_update"] = list(allowlist)
+    document["auditMode"] = audit_mode
+    document["auditProfile"] = AUDIT_PROFILE_NAME
+    return document
+
+
+def tag_update_policy_json(**overrides: Any) -> str:
+    return json.dumps(tag_update_policy(**overrides), sort_keys=True, separators=(",", ":"))
+
+
+def tag_update_policy_sha256(**overrides: Any) -> str:
+    return hashlib.sha256(tag_update_policy_json(**overrides).encode("utf-8")).hexdigest()
+
+
+def tag_update_tag_document_bytes(**overrides: Any) -> bytes:
+    """Tag import document that updates the policy and its length companion."""
+    document = {"tags": policy_tags(tag_update_policy_json(**overrides))}
+    return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
 def alarm_policy_byte_length(**overrides: Any) -> int:
     return len(alarm_policy_json(**overrides).encode("utf-8"))
+
+
+def tag_update_policy_byte_length(**overrides: Any) -> int:
+    return len(tag_update_policy_json(**overrides).encode("utf-8"))
 
 
 def alarm_policy_tag_document_bytes(**overrides: Any) -> bytes:

@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_get_config",
+  "parameterOrder": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "maxResults"
+  ],
+  "arguments": {
+    "path": "[default]Instance",
+    "recursive": false,
+    "overridesOnly": false,
+    "maxResults": 50
+  },
+  "calls": [
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]Instance",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "name": "Instance",
+            "parameters": {
+              "$ignition": "literal",
+              "Depth": 3
+            },
+            "path": "[default]Instance",
+            "tagType": "UdtInstance",
+            "typeId": "ProbeType"
+          }
+        ]
+      }
+    }
+  ]
+}

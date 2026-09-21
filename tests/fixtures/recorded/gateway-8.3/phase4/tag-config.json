@@ -1,0 +1,50 @@
+{
+  "[default]IgnitionMCP_CI/Nested/Inner": [
+    {
+      "dataType": "Int4",
+      "defaultValue": 0,
+      "enabled": true,
+      "name": "Inner",
+      "path": "[default]IgnitionMCP_CI/Nested/Inner",
+      "tagType": "AtomicTag",
+      "value": 0,
+      "valueSource": "memory"
+    }
+  ],
+  "[default]IgnitionMCP_CI/TextTarget": [
+    {
+      "dataType": "String",
+      "defaultValue": "phase4-initial",
+      "enabled": true,
+      "name": "TextTarget",
+      "path": "[default]IgnitionMCP_CI/TextTarget",
+      "tagType": "AtomicTag",
+      "value": "phase4-initial",
+      "valueSource": "memory"
+    }
+  ],
+  "[default]IgnitionMCP_CI/WriteTarget": [
+    {
+      "dataType": "Int4",
+      "defaultValue": 0,
+      "enabled": true,
+      "name": "WriteTarget",
+      "path": "[default]IgnitionMCP_CI/WriteTarget",
+      "tagType": "AtomicTag",
+      "value": 0,
+      "valueSource": "memory"
+    }
+  ],
+  "[default]IgnitionMCP_CI2/WriteTarget": [
+    {
+      "dataType": "Int4",
+      "defaultValue": 0,
+      "enabled": true,
+      "name": "WriteTarget",
+      "path": "[default]IgnitionMCP_CI2/WriteTarget",
+      "tagType": "AtomicTag",
+      "value": 0,
+      "valueSource": "memory"
+    }
+  ]
+}
