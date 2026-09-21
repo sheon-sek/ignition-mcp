@@ -228,7 +228,30 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - The bundle bump renamed the release artifact, which the Phase 3 G3 row pinned by
   version; that row now resolves the ZIP and manifest the release step just built,
   so the frozen G0–G3 workflows keep passing on a bumped bundle.
-- Live: see the run below.
+- Live ([run 35653953120](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653953120),
+  workflow `Phase 4 Live Gateway G4a`, both rows green with `drift: {}` — 8.3.8
+  `2026071409` required and 8.3.9 candidate):
+  - a Gateway with no Runtime Target Policy refuses the Mutation with
+    `operation_disabled` (`declaredLengthUnavailable`), before anything executes;
+  - the `MCP_CI_AUDIT` profile is provisioned and the policy document is
+    installed through Native REST and confirmed by a Tool-handler read of the
+    served Tag (SHA-256 `75c25bc7…` on both rows);
+  - the deployed `operator` inventory is exactly the 14 Tools of
+    `contracts/profiles/operator.yaml`, `tag_write` included;
+  - the allowlisted batch (4 items, one of them a path inside the allowlisted
+    prefix that does not exist) returned 3 Good and 1 `Bad_NotFound` Native
+    outcome, 0 `outcome_unknown`, and Observed state equal to what was written;
+  - `[default]IgnitionMCP_CI2` — a sibling that only shares a string prefix — was
+    refused with `permission_denied` / `targetNotAllowlisted` and left at its
+    pre-value;
+  - a batch mixing an allowlisted and a refused item was rejected whole, with the
+    allowlisted target still at its pre-value (the Preflight executed nothing);
+  - under an explicit `*` allowlist the reserved provider was refused with
+    `permission_denied` / `reservedProvider`, its Tag value was unchanged and the
+    policy document itself was unclobbered;
+  - Runtime audit ran in `best_effort`, `auditRecorded=true`, and the
+    `MCP_CI_AUDIT` log held both rows (attempt + result) for the call's
+    correlation ID with `actor` equal to the policy's Service identity.
 - **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
 
 ## Open questions
@@ -274,5 +297,5 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **The reserved-provider refusal is `permission_denied`, and it precedes the allowlist check per item.** D30 §7 maps "target not allowlisted, or a Refused resource type" to `permission_denied`; the reserved provider is the same class of refusal, so `tag_write` answers `permission_denied` with `details.items[].reason = "reservedProvider"`. Because the check runs before the allowlist for each item, a reserved target is refused identically under a prefix allowlist and under an explicit `*`, which is exactly what the live case proves.
 - **An unattributable Native outcome list is a whole-batch `outcome_unknown`.** `system.tag.writeBlocking` answers one QualityCode per path. If the count does not match, no item can be attributed positionally, so the Tool returns `outcome_unknown` for the batch (with `requested`/`returned` in the details) instead of guessing a prefix. Per-item `outcome_unknown` is reserved for an item whose own Native outcome is present but indeterminate (a null QualityCode).
 - **Live proof of the Runtime `required` audit mode is left to G4 close (#23).** Ticket #7 fixture-covers the `required` path (audit profile missing, attempt write failed, and the success shape), and its live stage runs `best_effort` with the audit rows read back from the profile. The G4 acceptance item "audit failure (`required` mode) proven live on both Planes" needs a policy state whose `auditMode` is `required`; the harness can install one with `install_tag_write_policy(audit_mode="required")`, but doing it in this ticket would spend a live run on a case the ticket does not require.
-- **`tag_write` live evidence (ticket #7).** See the ticket #7 entry under Results.
+- **`tag_write` live evidence (ticket #7).** `phase4-live-g4a` run 35653953120, both Gateway rows green (`drift: {}`); the per-case results are in the ticket #7 entry under Results, and the served policy equals what `apply` wrote. The Runtime audit path is verified end to end: `system.util.audit(action=…, actionTarget=…, actionValue=…, auditProfile=…, actor=…)` recorded both rows, so the pinned Module accepts that keyword form.
 
