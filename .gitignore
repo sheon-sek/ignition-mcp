@@ -35,7 +35,7 @@ htmlcov/
 # Commit project source, contracts, tests and build logic; do not commit dist/.
 
 # ── Test / runtime artifacts ───────────────────────────────────
-artifacts/
+/artifacts/
 backup/
 *.log
 

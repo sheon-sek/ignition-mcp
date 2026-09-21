@@ -36,6 +36,16 @@ def _settings(**changes: object) -> Settings:
         "retention_interval_seconds": 300.0,
         "retention_batch_rows": 500,
         "storage_probe_interval_seconds": 30.0,
+        "artifact_max_bytes": 268_435_456,
+        "artifact_total_bytes": 1_073_741_824,
+        "artifact_max_count": 1000,
+        "artifact_min_free_bytes": 104_857_600,
+        "artifact_min_free_ratio": 0.05,
+        "artifact_export_ttl_hours": 24,
+        "artifact_recovery_ttl_days": 7,
+        "artifact_staging_deadline_seconds": 900.0,
+        "artifact_cleanup_interval_seconds": 300.0,
+        "artifact_cleanup_batch": 50,
     }
     values.update(changes)
     return Settings(**values)  # type: ignore[arg-type]
@@ -112,6 +122,16 @@ def test_relative_data_dir_rejected() -> None:
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("artifact_max_bytes", 0),
+        ("artifact_total_bytes", -5),
+        ("artifact_max_count", 0),
+        ("artifact_min_free_bytes", 0),
+        ("artifact_min_free_ratio", 1.0),
+        ("artifact_export_ttl_hours", 0),
+        ("artifact_recovery_ttl_days", 0),
+        ("artifact_staging_deadline_seconds", 0),
+        ("artifact_cleanup_interval_seconds", 0),
+        ("artifact_cleanup_batch", 0),
         ("tool_timeout_seconds", 31),
         ("tool_timeout_seconds", 0),
         ("query_timeout_seconds", 121),

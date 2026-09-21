@@ -13,6 +13,7 @@ from pydantic import BaseModel
 from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
+from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
 from ignition_rest_mcp.auth import build_auth, current_principal
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -89,12 +90,16 @@ def create_server(settings: Settings) -> FastMCP:
             raise error
         records = OperationRecordStore(storage.state)
         audit_sink = _startup_audit_sink(storage)
+        artifacts = LocalArtifactStore(storage.state, data_dir, quotas_from_settings(settings))
+        artifacts.prepare()
+        await artifacts.reconcile(batch=settings.artifact_cleanup_batch, deadline_seconds=HARD_ARTIFACT_DEADLINE_SECONDS)
         state.client = client
         state.registry = registry
         state.metrics = metrics
         state.storage = storage
         state.records = records
         state.audit_sink = audit_sink
+        state.artifacts = artifacts
         interrupted = await records.mark_interrupted_stale(HARD_ARTIFACT_DEADLINE_SECONDS)
         if interrupted:
             LOGGER.warning(
@@ -104,6 +109,7 @@ def create_server(settings: Settings) -> FastMCP:
         watcher: asyncio.Task[None] | None = None
         retention: asyncio.Task[None] | None = None
         prober: asyncio.Task[None] | None = None
+        janitor: asyncio.Task[None] | None = None
         try:
             await registry.refresh()
             _apply_visibility(mcp, registry.snapshot)
@@ -118,14 +124,15 @@ def create_server(settings: Settings) -> FastMCP:
             watcher = asyncio.create_task(_watch_capabilities(mcp, registry, settings.watcher_interval_seconds))
             retention = asyncio.create_task(_retention_loop(storage, records, audit_sink, settings))
             prober = asyncio.create_task(_probe_loop(storage, settings))
+            janitor = asyncio.create_task(_artifact_janitor_loop(artifacts, settings))
             yield
         finally:
             try:
-                for task in (watcher, retention, prober):
+                for task in (watcher, retention, prober, janitor):
                     if task is not None:
                         task.cancel()
                 await asyncio.gather(*(
-                    task for task in (watcher, retention, prober) if task is not None
+                    task for task in (watcher, retention, prober, janitor) if task is not None
                 ), return_exceptions=True)
                 await registry.aclose()
             finally:
@@ -141,6 +148,7 @@ def create_server(settings: Settings) -> FastMCP:
                         state.storage = None
                         state.records = None
                         state.audit_sink = None
+                        state.artifacts = None
 
     mcp = FastMCP(
         name="ignition-rest",
@@ -501,6 +509,27 @@ async def _probe_loop(storage: Storage, settings: Settings) -> None:
                     extra={"event": "storage_health", "outcome": "healthy" if healthy else "unhealthy"},
                     )
         previous = results
+
+
+async def _artifact_janitor_loop(artifacts: LocalArtifactStore, settings: Settings) -> None:
+    passes = 0
+    while True:
+        await asyncio.sleep(settings.artifact_cleanup_interval_seconds)
+        passes += 1
+        try:
+            await artifacts.cleanup_expired()
+            if passes % 4 == 0:
+                # Reconciliation converges orphan sweeps in bounded periodic passes.
+                await artifacts.reconcile(
+                    batch=settings.artifact_cleanup_batch, deadline_seconds=HARD_ARTIFACT_DEADLINE_SECONDS,
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception(
+                "Artifact janitor pass failed",
+                extra={"event": "artifact_janitor", "outcome": "error"},
+            )
 
 
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot) -> None:

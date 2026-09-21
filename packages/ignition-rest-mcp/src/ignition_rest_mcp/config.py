@@ -40,6 +40,16 @@ class Settings:
     retention_interval_seconds: float
     retention_batch_rows: int
     storage_probe_interval_seconds: float
+    artifact_max_bytes: int
+    artifact_total_bytes: int
+    artifact_max_count: int
+    artifact_min_free_bytes: int
+    artifact_min_free_ratio: float
+    artifact_export_ttl_hours: int
+    artifact_recovery_ttl_days: int
+    artifact_staging_deadline_seconds: float
+    artifact_cleanup_interval_seconds: float
+    artifact_cleanup_batch: int
     jwt_jwks_uri: str | None = None
     jwt_public_key: str | None = None
     jwt_issuer: str | None = None
@@ -76,6 +86,20 @@ class Settings:
             retention_interval_seconds=float(os.getenv("IGNITION_MCP_RETENTION_INTERVAL_SECONDS", "300")),
             retention_batch_rows=int(os.getenv("IGNITION_MCP_RETENTION_BATCH_ROWS", "500")),
             storage_probe_interval_seconds=float(os.getenv("IGNITION_MCP_STORAGE_PROBE_INTERVAL_SECONDS", "30")),
+            artifact_max_bytes=int(os.getenv("IGNITION_MCP_ARTIFACT_MAX_BYTES", "268435456")),
+            artifact_total_bytes=int(os.getenv("IGNITION_MCP_ARTIFACT_TOTAL_BYTES", "1073741824")),
+            artifact_max_count=int(os.getenv("IGNITION_MCP_ARTIFACT_MAX_COUNT", "1000")),
+            artifact_min_free_bytes=int(os.getenv("IGNITION_MCP_ARTIFACT_MIN_FREE_BYTES", "104857600")),
+            artifact_min_free_ratio=float(os.getenv("IGNITION_MCP_ARTIFACT_MIN_FREE_RATIO", "0.05")),
+            artifact_export_ttl_hours=int(os.getenv("IGNITION_MCP_ARTIFACT_EXPORT_TTL_HOURS", "24")),
+            artifact_recovery_ttl_days=int(os.getenv("IGNITION_MCP_ARTIFACT_RECOVERY_TTL_DAYS", "7")),
+            artifact_staging_deadline_seconds=float(
+                os.getenv("IGNITION_MCP_ARTIFACT_STAGING_DEADLINE_SECONDS", "900")
+            ),
+            artifact_cleanup_interval_seconds=float(
+                os.getenv("IGNITION_MCP_ARTIFACT_CLEANUP_INTERVAL_SECONDS", "300")
+            ),
+            artifact_cleanup_batch=int(os.getenv("IGNITION_MCP_ARTIFACT_CLEANUP_BATCH", "50")),
             jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
             jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
             jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
@@ -157,6 +181,29 @@ class Settings:
             raise ConfigurationError("Retention and storage-probe intervals must be positive")
         if not 0 < self.retention_batch_rows <= 10_000:
             raise ConfigurationError("Retention batch size must be >0 and <=10000 rows")
+        self._validate_artifact_quotas()
+
+    def _validate_artifact_quotas(self) -> None:
+        # D17: storage must be finite; 0/negative/unlimited is rejected everywhere.
+        for name, value in (
+            ("IGNITION_MCP_ARTIFACT_MAX_BYTES", self.artifact_max_bytes),
+            ("IGNITION_MCP_ARTIFACT_TOTAL_BYTES", self.artifact_total_bytes),
+            ("IGNITION_MCP_ARTIFACT_MAX_COUNT", self.artifact_max_count),
+            ("IGNITION_MCP_ARTIFACT_MIN_FREE_BYTES", self.artifact_min_free_bytes),
+            ("IGNITION_MCP_ARTIFACT_EXPORT_TTL_HOURS", self.artifact_export_ttl_hours),
+            ("IGNITION_MCP_ARTIFACT_RECOVERY_TTL_DAYS", self.artifact_recovery_ttl_days),
+            ("IGNITION_MCP_ARTIFACT_CLEANUP_BATCH", self.artifact_cleanup_batch),
+        ):
+            if int(value) <= 0:
+                raise ConfigurationError(f"{name} must be a finite positive value")
+        if self.artifact_max_bytes > self.artifact_total_bytes:
+            raise ConfigurationError("ARTIFACT_MAX_BYTES must not exceed ARTIFACT_TOTAL_BYTES")
+        if not 0.0 <= self.artifact_min_free_ratio < 1.0:
+            raise ConfigurationError("IGNITION_MCP_ARTIFACT_MIN_FREE_RATIO must be in [0, 1)")
+        if self.artifact_staging_deadline_seconds <= 0:
+            raise ConfigurationError("IGNITION_MCP_ARTIFACT_STAGING_DEADLINE_SECONDS must be positive")
+        if self.artifact_cleanup_interval_seconds <= 0:
+            raise ConfigurationError("IGNITION_MCP_ARTIFACT_CLEANUP_INTERVAL_SECONDS must be positive")
 
     def budget_deadline_seconds(self, budget_class: str) -> float:
         return {

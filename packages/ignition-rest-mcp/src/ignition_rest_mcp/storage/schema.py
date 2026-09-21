@@ -29,6 +29,32 @@ STATE_DDL: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS operation_records_started ON operation_records(started_at);
     """,
+    # 2: D17 artifact metadata (Slice 2)
+    """
+    CREATE TABLE IF NOT EXISTS artifacts (
+        artifact_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        state TEXT NOT NULL,
+        filename TEXT NOT NULL,
+        media_type TEXT NOT NULL,
+        size_bytes INTEGER NOT NULL DEFAULT 0,
+        sha256 TEXT NOT NULL DEFAULT '',
+        sensitivity TEXT NOT NULL,
+        retention_class TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        expires_at TEXT,
+        owner_principal TEXT NOT NULL,
+        gateway_id TEXT NOT NULL DEFAULT '',
+        project_name TEXT NOT NULL DEFAULT '',
+        correlation_id TEXT NOT NULL,
+        transaction_id TEXT NOT NULL DEFAULT '',
+        retention_lock INTEGER NOT NULL DEFAULT 0,
+        reserved_bytes INTEGER NOT NULL DEFAULT 0,
+        staging_deadline_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS artifacts_state_expiry ON artifacts(state, expires_at);
+    CREATE INDEX IF NOT EXISTS artifacts_owner ON artifacts(owner_principal, state);
+    """,
 ]
 
 AUDIT_DDL: list[str] = [

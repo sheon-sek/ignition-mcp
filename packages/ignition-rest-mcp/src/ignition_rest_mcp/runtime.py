@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from ignition_rest_mcp.artifacts.local import LocalArtifactStore
 from ignition_rest_mcp.audit.sink import SqliteAuditSink
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -20,6 +21,7 @@ class RuntimeState:
     storage: Storage | None = None
     records: OperationRecordStore | None = None
     audit_sink: SqliteAuditSink | None = None
+    artifacts: LocalArtifactStore | None = None
 
     def require_client(self) -> GatewayClient:
         if self.client is None:
@@ -50,3 +52,8 @@ class RuntimeState:
         if self.audit_sink is None:
             raise RuntimeError("Audit sink is not initialized")
         return self.audit_sink
+
+    def require_artifacts(self) -> LocalArtifactStore:
+        if self.artifacts is None:
+            raise RuntimeError("Artifact store is not initialized")
+        return self.artifacts

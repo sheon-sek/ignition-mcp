@@ -318,3 +318,5 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | Slice | Commit | Validation |
 |---|---|---|
 | 0 | `a9f7110` | full validation suite green |
+| 1 | `6cdb56b` | full validation suite green (162 tests) |
+| 1+ | `3663017` | owner/planner doc commit: phase3-live environment created (no protection rules, owner-accepted deviation recorded) |
