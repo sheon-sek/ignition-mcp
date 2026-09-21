@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_shelve",
+  "parameterOrder": [
+    "paths",
+    "timeoutSeconds"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:MCP_P4_1/Exact:/alm:ProbeHi"
+    ],
+    "timeoutSeconds": 86401
+  },
+  "calls": []
+}

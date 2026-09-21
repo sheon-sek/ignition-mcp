@@ -1,0 +1,38 @@
+{
+  "content": [
+    {
+      "text": "recorded replay",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "items": [
+      {
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "status": "executed"
+      }
+    ],
+    "meta": {
+      "correlationId": "recorded-alarm-correlation"
+    },
+    "observed": [
+      {
+        "expiration": "2026-09-22T01:00:00Z",
+        "expired": false,
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "shelved": true,
+        "status": "ok",
+        "user": "ignition-mcp-service"
+      }
+    ],
+    "summary": {
+      "auditMode": "best_effort",
+      "auditRecorded": true,
+      "executed": 1,
+      "outcomeUnknown": 0,
+      "requested": 1,
+      "timeoutSeconds": 3600
+    }
+  }
+}

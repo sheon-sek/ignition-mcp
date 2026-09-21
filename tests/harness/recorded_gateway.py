@@ -203,6 +203,25 @@ def _fixture(path: str) -> Any:
     return json.loads((FIXTURES / path).read_text(encoding="utf-8"))
 
 
+def _alarm_body(server: Any, path: str) -> dict[str, Any]:
+    """One recorded Alarm body with the run-unique Alarm root substituted in.
+
+    The Alarm fixture is run-unique on a live Gateway, so a recorded body carries
+    either the ``__ALARM_ROOT__`` placeholder (the replayed Tool results) or the
+    root of the run it was recorded from (the probe report, whose many nested
+    patterns all name that root).
+    """
+    text = (FIXTURES / path).read_text(encoding="utf-8")
+    if "__ALARM_ROOT__" in text:
+        return json.loads(text.replace("__ALARM_ROOT__", server.alarm_root or "__ALARM_ROOT__"))
+    document = json.loads(text)
+    recorded_root = document.get("rootName") if isinstance(document, dict) else None
+    if server.alarm_root and isinstance(recorded_root, str) and recorded_root and recorded_root != server.alarm_root:
+        text = text.replace(recorded_root, server.alarm_root)
+        document = json.loads(text)
+    return document
+
+
 def _zip_entries(data: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         return {entry.filename: archive.read(entry.filename) for entry in archive.infolist()}
@@ -315,6 +334,84 @@ def _tag_write_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[s
     if any("IgnitionMCP_CI2" in path for path in paths):
         return ("preflight-refusal" if len(paths) > 1 else "sibling-denial"), paths
     return "allowlisted-batch", paths
+
+
+def _installed_shelve_cap(server: Any) -> int:
+    """The shelve cap the policy Tag currently served carries, defaulting to the D12 hard max."""
+    try:
+        document = json.loads(server.policy_value)
+        cap = document.get("alarmShelveMaxSeconds")
+    except (TypeError, ValueError):
+        return 86400
+    return int(cap) if isinstance(cap, int) and not isinstance(cap, bool) else 86400
+
+
+def _alarm_mutation_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(path) for path in arguments.get("paths") or []]
+
+
+def _alarm_mutation_case(server: Any, tool: str, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded Alarm Mutation body the fake replays for these arguments.
+
+    The case selection mirrors the shipped Tool's own refusal order, so the
+    rehearsal exercises the same branches the live Gateway answers: the policy
+    gate, the input grammar, the allowlist and the (shelve-only) duration bounds.
+    """
+    paths = _alarm_mutation_paths(arguments)
+    if not server.policy_provider_created:
+        return "no-policy", paths
+    if any("*" in path for path in paths):
+        return "wildcard-refusal", paths
+    if any("_sibling" in path for path in paths):
+        return ("preflight-refusal" if len(paths) > 1 else "sibling-denial"), paths
+    if tool == "alarm_shelve":
+        seconds = arguments.get("timeoutSeconds")
+        if seconds == 86401:
+            return "hard-max-refusal", paths
+        if isinstance(seconds, int) and not isinstance(seconds, bool) and seconds > _installed_shelve_cap(server):
+            return "cap-refusal", paths
+    return "allowlisted", paths
+
+
+def _apply_alarm_mutation_case(server: Any, tool: str, case: str, body: dict[str, Any]) -> None:
+    """Model the shelving state an executed Alarm Mutation leaves behind."""
+    structured = body.get("structuredContent") or {}
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    if correlation:
+        server.alarm_correlation_id = correlation
+    if case != "allowlisted":
+        return
+    for item in structured.get("observed") or []:
+        if not isinstance(item, dict) or item.get("status") != "ok":
+            continue
+        path = str(item.get("path", ""))
+        if not path:
+            continue
+        if tool == "alarm_shelve" and item.get("shelved") is True:
+            server.shelved_paths[path] = {
+                "user": item.get("user"),
+                "expiration": item.get("expiration"),
+                "expired": bool(item.get("expired")),
+            }
+        if tool == "alarm_unshelve":
+            server.shelved_paths.pop(path, None)
+
+
+def _alarm_shelved_list_result(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The `alarm_shelved_list` domain for the shelving state the fake models."""
+    limit = arguments.get("maxResults")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = 100
+    items = [
+        {"path": path, "user": entry.get("user"), "expiration": entry.get("expiration"),
+         "expired": bool(entry.get("expired"))}
+        for path, entry in sorted(server.shelved_paths.items())
+    ]
+    return {
+        "items": items,
+        "summary": {"returned": len(items), "limit": limit},
+        "meta": {"correlationId": "recorded-replay"},
+    }
 
 
 def _apply_tag_write_case(server: Any, case: str, body: dict[str, Any]) -> None:
@@ -441,6 +538,18 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             })
             return
         if path.startswith("/data/api/v1/audit/log/"):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            action_filter = (query.get("actionFilter") or [""])[0]
+            if action_filter.startswith("ignition-mcp.alarm") and server.alarm_correlation_id:
+                tool = action_filter.rsplit(".", 1)[-1]
+                document = json.loads(json.dumps(_fixture("phase4/audit-log-alarm.json")))
+                for row in document["items"]:
+                    row["action"] = str(row["action"]).replace("__ACTION__", action_filter)
+                    row["actionValue"] = str(row["actionValue"]).replace("__TOOL__", tool).replace(
+                        "__CORRELATION__", server.alarm_correlation_id,
+                    )
+                self._json(200, document)
+                return
             if server.tag_write_correlation_id:
                 document = json.loads(json.dumps(_fixture("phase4/audit-log.json")))
                 for row in document["items"]:
@@ -605,12 +714,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     body = json.loads(json.dumps(_fixture(f"phase4/tag-write-{case}.json")))
                     _apply_tag_write_case(server, case, body)
                     result = body
-                elif tool in {"policy_probe", "alarm_probe"}:
-                    fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
+                elif tool in {"alarm_shelve", "alarm_unshelve"}:
+                    case, _paths = _alarm_mutation_case(server, tool, tool_arguments)
+                    body = _alarm_body(server, f"phase4/{tool.replace('_', '-')}-{case}.json")
+                    _apply_alarm_mutation_case(server, tool, case, body)
+                    result = body
+                elif tool == "alarm_shelved_list":
                     result = {
                         "content": [{"type": "text", "text": "recorded replay"}],
                         "isError": False,
-                        "structuredContent": _fixture(fixture),
+                        "structuredContent": _alarm_shelved_list_result(server, tool_arguments),
+                    }
+                elif tool in {"policy_probe", "alarm_probe"}:
+                    fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
+                    report = _fixture(fixture) if tool == "policy_probe" else _alarm_body(server, fixture)
+                    result = {
+                        "content": [{"type": "text", "text": "recorded replay"}],
+                        "isError": False,
+                        "structuredContent": report,
                     }
                 else:
                     self._json(200, {
@@ -767,6 +888,7 @@ class _Server(http.server.ThreadingHTTPServer):
         policy_provider: str = "",
         port: int = 0,
         audit_profile: str = "",
+        alarm_root: str = "",
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -790,6 +912,13 @@ class _Server(http.server.ThreadingHTTPServer):
         self.audit_profile = audit_profile
         self.tag_state: dict[str, Any] = {}
         self.tag_write_correlation_id = ""
+        #: Ticket #8: the shelving state a replayed Alarm Mutation leaves behind,
+        #: plus the correlation ID the recorded result carried so the audit log can
+        #: answer for it. `alarm_root` is the run-unique Alarm root the driver used,
+        #: substituted for `__ALARM_ROOT__` in the recorded Alarm bodies.
+        self.shelved_paths: dict[str, dict[str, Any]] = {}
+        self.alarm_correlation_id = ""
+        self.alarm_root = alarm_root
         self.policy_value = ""
         self.write_probe_value = "phase4-write-probe-value"
         #: config resource state: resource type -> (name, collection) -> document.
@@ -1166,6 +1295,7 @@ class RecordedGateway:
         policy_provider: str = "",
         port: int = 0,
         audit_profile: str = "",
+        alarm_root: str = "",
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -1178,6 +1308,7 @@ class RecordedGateway:
             policy_provider,
             port,
             audit_profile,
+            alarm_root,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         if audit_profile:

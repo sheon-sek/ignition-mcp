@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "name": "alarm_unshelve",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONTROL",
+  "mutationClass": "CONTROL_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "paths": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "itemType": "string",
+      "itemMinLength": 1,
+      "itemMaxLength": 2048,
+      "exactAlarmPathsOnly": true
+    }
+  },
+  "outputSchema": "contracts/schemas/alarm-unshelve.output.schema.json",
+  "nativeRequirements": ["system.tag.readBlocking", "system.alarm.unshelve", "system.alarm.getShelvedPaths", "system.util.audit"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "system.alarm.unshelve reports no per-item result, so the item's own dispatch is its outcome; alarm_shelved_list state for the exact paths is the Observed state and never decides success",
+  "alarmPathForm": "rendered alarm path: provider-qualified with no * (for example prov:default:/tag:Folder/Tag:/alm:AlarmName); a pattern without * matches only the source it spells out, so an exact path cannot widen to a subtree",
+  "noOverloadedTimeout": "the public unshelve operation is its own Tool; a shelve duration of zero is never a caller-visible unshelve (D12)",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "alarm_unshelve",
+    "allowlistMatch": "provider-qualified alarm path prefix matched at a segment boundary (/ or :); an explicit * allows every alarm path",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "any alarm path that names the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "itemOutcomeUnknownScope": "only items whose own dispatch did not report back",
+  "nullEncoding": "ignition-null-v1"
+}

@@ -1,7 +1,15 @@
 {
   "tools": [
     {
+      "name": "alarm_shelve",
+      "description": "recorded replay"
+    },
+    {
       "name": "alarm_shelved_list",
+      "description": "recorded replay"
+    },
+    {
+      "name": "alarm_unshelve",
       "description": "recorded replay"
     },
     {

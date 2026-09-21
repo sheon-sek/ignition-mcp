@@ -19,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PROJECT = REPO_ROOT / "packages/ignition-runtime-bundle/project"
 EVIDENCE = REPO_ROOT / "tests/compatibility/evidence"
 HANDLER_MEMBER = "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
+#: D21 makes `BUNDLE_VERSION` the single identity source, so the tests read it
+#: rather than pinning a version: a D21 MINOR bump per released milestone would
+#: otherwise churn every assertion here.
+BUNDLE_VERSION = (PROJECT.parent / "BUNDLE_VERSION").read_text(encoding="utf-8").strip()
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -47,20 +51,21 @@ class ReleaseTest(unittest.TestCase):
         out = Path(tempfile.mkdtemp())
         paths = release(project_dir=PROJECT, out_dir=out, source_revision=SHA_B,
                         evidence_dir=EVIDENCE, repo_root=REPO_ROOT)
-        self.assertEqual(paths["zip"].name, "ignition-runtime-bundle-0.3.0.zip")
+        self.assertEqual(paths["zip"].name, f"ignition-runtime-bundle-{BUNDLE_VERSION}.zip")
         digest = paths["sha256"].read_text(encoding="ascii")
         import hashlib
 
         expected = hashlib.sha256(paths["zip"].read_bytes()).hexdigest()
-        self.assertEqual(digest, f"{expected}  ignition-runtime-bundle-0.3.0.zip\n")
+        self.assertEqual(digest, f"{expected}  ignition-runtime-bundle-{BUNDLE_VERSION}.zip\n")
         manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
         self.assertEqual(manifest["sourceRevision"], SHA_B)
         self.assertEqual(manifest["artifact"]["sha256"], expected)
-        self.assertEqual(manifest["bundleVersion"], "0.3.0")
+        self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        # The committed evidence rows certify bundle 0.2.0, so a 0.3.0 release
-        # carries no tuple until Phase 4 produces its own rows (D21 exact tuples).
+        # The committed evidence rows certify an earlier bundle, so a Phase 4
+        # release carries no tuple until Phase 4 produces its own rows (D21 exact
+        # tuples).
         self.assertEqual(manifest["testedTuples"], [])
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)
@@ -114,7 +119,7 @@ class ReleaseTest(unittest.TestCase):
         project = _copy_project(parent)
         manifest_path = project / "project.json"
         doc = json.loads(manifest_path.read_text(encoding="utf-8"))
-        doc["description"] = doc["description"].replace("bundle=0.3.0", "bundle=0.1.0")
+        doc["description"] = doc["description"].replace(f"bundle={BUNDLE_VERSION}", "bundle=0.1.0")
         manifest_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         with self.assertRaises(ValidationError) as caught:
             validate_project(project)
@@ -153,7 +158,7 @@ class ReleaseTest(unittest.TestCase):
         # the stamped project.json/BUNDLE_VERSION siblings must exist for validation
         shutil.copy(PROJECT.parent / "BUNDLE_VERSION", unpacked.parent / "BUNDLE_VERSION")
         validate_project(unpacked)
-        self.assertEqual(len(files), 35)
+        self.assertEqual(len(files), 39)
 
 
 if __name__ == "__main__":

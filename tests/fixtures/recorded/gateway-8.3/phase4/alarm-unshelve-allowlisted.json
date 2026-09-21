@@ -1,0 +1,34 @@
+{
+  "content": [
+    {
+      "text": "recorded replay",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "items": [
+      {
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "status": "executed"
+      }
+    ],
+    "meta": {
+      "correlationId": "recorded-alarm-correlation"
+    },
+    "observed": [
+      {
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "shelved": false,
+        "status": "ok"
+      }
+    ],
+    "summary": {
+      "auditMode": "best_effort",
+      "auditRecorded": true,
+      "executed": 1,
+      "outcomeUnknown": 0,
+      "requested": 1
+    }
+  }
+}

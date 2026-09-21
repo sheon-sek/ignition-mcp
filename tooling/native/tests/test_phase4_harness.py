@@ -47,6 +47,10 @@ mcp_client = _load("phase4_mcp_client", PHASE4 / "mcp_client.py")
 #: Captured before `stub_mcp` patches `driver.mcp_client.McpClient`, so the stub
 #: can still speak to the recorded Gateway fake for the ticket #7 Tools.
 REAL_MCP_CLIENT = mcp_client.McpClient
+#: The run-unique Alarm root this module's driver config uses. The recorded Alarm
+#: bodies carry it as `__ALARM_ROOT__` (or as the root of the run that recorded
+#: the probe report), and the fake substitutes it on the way out.
+ALARM_ROOT = "MCP_P4_1"
 
 
 def _fixture(name: str) -> Any:
@@ -157,9 +161,16 @@ def _with_gate(
 
 @pytest.fixture()
 def stub_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    # The recorded probe report names the root of the run it was recorded from,
+    # while the stages under test use this module's Alarm root: substitute it the
+    # way the recorded Gateway fake does, so a fact derived from the report (the
+    # exact Alarm path the shelve cases target) is comparable.
+    alarm_text = (FIXTURES / "alarm-probe.json").read_text(encoding="utf-8")
+    recorded_root = str(json.loads(alarm_text).get("rootName", ""))
+    alarm_report = json.loads(alarm_text.replace(recorded_root, ALARM_ROOT)) if recorded_root else json.loads(alarm_text)
     reports = {
         "policy_probe": _with_gate(_fixture("policy-probe.json")),
-        "alarm_probe": _fixture("alarm-probe.json"),
+        "alarm_probe": alarm_report,
     }
     _StubMcp.reports = reports
     _StubMcp.sequences = {}
@@ -210,11 +221,22 @@ def test_harness_policy_documents_satisfy_the_shipped_schema() -> None:
         policy_document.tag_write_policy(),
         policy_document.tag_write_policy(allowlist=policy_document.WILDCARD_ALLOWLIST),
         policy_document.tag_write_policy(audit_mode="required"),
+        policy_document.alarm_policy(allowlist=policy_document.alarm_allowlist("mcp_p4_1")),
+        policy_document.alarm_policy(allowlist=("prov:default:/tag:mcp_p4_1",), audit_mode="required"),
     ):
         Draft202012Validator(schema).validate(document)
+    # The Ticket #6 characterization document carries wildcard-shaped Alarm
+    # allowlist entries; it stays shape-valid, and the Alarm Tools refuse an entry
+    # they cannot parse, which is what the ticket #8 fixtures pin.
+    Draft202012Validator(schema).validate(policy_document.POLICY)
     # The length companion is what bounds the read, so it must measure bytes.
     assert policy_document.tag_write_policy_byte_length() == len(
         policy_document.tag_write_policy_json().encode("utf-8")
+    )
+    assert policy_document.alarm_policy_byte_length(
+        allowlist=policy_document.alarm_allowlist("mcp_p4_1"),
+    ) == len(
+        policy_document.alarm_policy_json(allowlist=policy_document.alarm_allowlist("mcp_p4_1")).encode("utf-8")
     )
 
 
@@ -454,6 +476,10 @@ def _record_every_stage(evidence: Path, gateway: RecordedGateway) -> dict[str, A
         _config(evidence, base_url=gateway.base_url, api_token=API_TOKEN),
     )
     _record_stage(evidence, "tag-write-no-policy", no_policy)
+    alarm_no_policy = driver.stage_alarm_no_policy(
+        _config(evidence, base_url=gateway.base_url, api_token=API_TOKEN),
+    )
+    _record_stage(evidence, "alarm-no-policy", alarm_no_policy)
     provision = driver.stage_policy_provision(
         _config(evidence, base_url=gateway.base_url, api_token=API_TOKEN),
     )
@@ -473,6 +499,10 @@ def _record_every_stage(evidence: Path, gateway: RecordedGateway) -> dict[str, A
         evidence, "tag-write",
         driver.stage_tag_write(_config(evidence, base_url=gateway.base_url, api_token=API_TOKEN)),
     )
+    _record_stage(
+        evidence, "alarm-shelve",
+        driver.stage_alarm_shelve(_config(evidence, base_url=gateway.base_url, api_token=API_TOKEN)),
+    )
     return alarm
 
 
@@ -483,6 +513,7 @@ def test_summarize_reports_no_drift_and_the_recorded_verdict(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         _record_every_stage(tmp_path, gateway)
     evidence, code = driver.stage_summarize(_config(tmp_path))
@@ -492,7 +523,7 @@ def test_summarize_reports_no_drift_and_the_recorded_verdict(
     assert evidence["verdict"]["exactPathAlarmQuery"]["literalMatchingOnly"] is True
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["chosenLocation"] == "[IgnitionMCPPolicy]RuntimeTargetPolicy"
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["survivesGatewayRestart"] is True
-    assert evidence["tickets"] == ["#6", "#7"]
+    assert evidence["tickets"] == ["#6", "#7", "#8"]
 
 
 def test_summarize_verdict_carries_the_tag_write_result(
@@ -502,6 +533,7 @@ def test_summarize_verdict_carries_the_tag_write_result(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         _record_every_stage(tmp_path, gateway)
     evidence, code = driver.stage_summarize(_config(tmp_path))
@@ -533,6 +565,7 @@ def test_summarize_verdict_carries_the_complete_refusal_rule(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         _record_every_stage(tmp_path, gateway)
     evidence, _code = driver.stage_summarize(_config(tmp_path))
@@ -553,6 +586,7 @@ def test_summarize_detects_a_descendant_matching_regression(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         alarm = _record_every_stage(tmp_path, gateway)
     alarm["facts"]["folderPathExpandsDescendants"] = True
@@ -571,6 +605,7 @@ def test_tag_write_stages_record_the_live_facts(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
         no_policy = driver.stage_tag_write_no_policy(config)["facts"]
@@ -610,6 +645,7 @@ def test_tag_write_refuses_a_deployed_inventory_that_differs_from_the_profile(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
         driver.stage_policy_provision(config)
@@ -638,6 +674,7 @@ def test_tag_write_setup_requires_the_provider_to_serve_the_policy(
         policy_provider=policy_document.POLICY_PROVIDER,
         runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
         driver.stage_policy_provision(config)
@@ -672,6 +709,150 @@ def test_tag_write_case_selector_replays_the_recorded_refusals() -> None:
     for expected, writes in cases.items():
         case, _paths = recorded_gateway._tag_write_case(_Server(), {"writes": writes})
         assert case == expected, (expected, case)
+
+
+def test_alarm_mutation_case_selector_replays_the_recorded_refusals() -> None:
+    """The rehearsal's case selection is what makes the negative cases reachable."""
+
+    class _Server:
+        policy_provider_created = True
+        policy_value = '{"alarmShelveMaxSeconds":3600,"schemaVersion":1}'
+
+    server = _Server()
+    cases = [
+        (("alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1/*"], "timeoutSeconds": 60}), "wildcard-refusal"),
+        (("alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1_sibling/Exact"], "timeoutSeconds": 60}), "sibling-denial"),
+        (("alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1/Exact"], "timeoutSeconds": 86401}), "hard-max-refusal"),
+        (("alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1/Exact"], "timeoutSeconds": 7200}), "cap-refusal"),
+        (("alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1/Exact"], "timeoutSeconds": 3600}), "allowlisted"),
+        (("alarm_unshelve", {"paths": ["prov:default:/tag:mcp_p4_1/Exact"]}), "allowlisted"),
+        (("alarm_unshelve", {"paths": ["prov:default:/tag:mcp_p4_1/*"]}), "wildcard-refusal"),
+    ]
+    for (tool, arguments), expected in cases:
+        case, _paths = recorded_gateway._alarm_mutation_case(server, tool, arguments)
+        assert case == expected, (tool, arguments, expected, case)
+
+    class _NoPolicy:
+        policy_provider_created = False
+
+    case, _paths = recorded_gateway._alarm_mutation_case(
+        _NoPolicy(), "alarm_shelve", {"paths": ["prov:default:/tag:mcp_p4_1/Exact"], "timeoutSeconds": 60},
+    )
+    assert case == "no-policy"
+
+
+def test_alarm_stages_record_the_live_facts(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The two ticket #8 stages derive their facts from the recorded Gateway."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        no_policy = driver.stage_alarm_no_policy(config)["facts"]
+        driver.stage_policy_provision(config)
+        _record_stage(tmp_path, "alarm", driver.stage_alarm(config))
+        facts = driver.stage_alarm_shelve(config)["facts"]
+
+    # No policy on the Gateway: both Alarm Mutations fail closed before executing.
+    assert no_policy["alarmNoPolicyShelveCode"] == "operation_disabled"
+    assert no_policy["alarmNoPolicyUnshelveCode"] == "operation_disabled"
+    assert no_policy["alarmNoPolicyFailsClosed"] is True
+    # The shelve, its Observed state and the audit read-back.
+    assert facts["alarmShelvePathMatchesAlarmFixture"] is True
+    assert facts["alarmShelveOperatorInventoryMatchesProfile"] is True
+    assert facts["alarmShelvePolicyInstalled"] is True
+    assert facts["alarmShelveObservedShelved"] is True
+    assert facts["alarmShelveListShowsExactPath"] is True
+    assert facts["alarmShelveAuditAttemptAndResultRecorded"] is True
+    assert facts["alarmShelveAuditActorIsServiceIdentity"] is True
+    # The duration bounds and both refusals.
+    assert facts["alarmShelveCapRefusalReason"] == "durationOverPolicyCap"
+    assert facts["alarmShelveCapRefusalCap"] == policy_document.ALARM_SHELVE_CAP_SECONDS
+    assert facts["alarmShelveHardMaxRefusalReason"] == "durationOutOfRange"
+    assert facts["alarmShelveWildcardRefusalReason"] == "wildcardPath"
+    assert facts["alarmShelveSiblingDenialReason"] == "targetNotAllowlisted"
+    assert facts["alarmShelvePreflightExecutedNothing"] is True
+    assert facts["alarmShelveRefusalsShelvedNothing"] is True
+    # The unshelve and its refusals.
+    assert facts["alarmUnshelveObservedNotShelved"] is True
+    assert facts["alarmUnshelveExactPathRemoved"] is True
+    assert facts["alarmUnshelveSiblingDenialReason"] == "targetNotAllowlisted"
+    assert facts["alarmUnshelveWildcardRefusalReason"] == "wildcardPath"
+
+
+def test_summarize_verdict_carries_the_alarm_mutation_result(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+    ) as gateway:
+        _record_every_stage(tmp_path, gateway)
+    evidence, code = driver.stage_summarize(_config(tmp_path))
+    assert code == driver.EXIT_OK
+    verdict = evidence["verdict"]["runtimeAlarmMutations"]
+    assert verdict["operatorInventoryMatchesProfile"] is True
+    assert verdict["shelve"]["observedShelved"] is True
+    assert verdict["shelve"]["shelvedListShowsPath"] is True
+    assert verdict["shelve"]["capRefusal"] == {
+        "code": "invalid_argument", "reason": "durationOverPolicyCap",
+        "cap": policy_document.ALARM_SHELVE_CAP_SECONDS,
+    }
+    assert verdict["shelve"]["hardMaxRefusalReason"] == "durationOutOfRange"
+    assert verdict["shelve"]["wildcardRefusalReason"] == "wildcardPath"
+    assert verdict["shelve"]["targetAllowlist"] == {
+        "siblingRefusedAtSegmentBoundary": True, "preflightExecutedNothing": True,
+    }
+    assert verdict["shelve"]["noPolicy"] == {
+        "code": "operation_disabled", "reason": "declaredLengthUnavailable",
+    }
+    assert verdict["shelve"]["audit"]["actorIsServiceIdentity"] is True
+    assert verdict["shelve"]["audit"]["rowsForCorrelation"] == 2
+    assert verdict["unshelve"]["observedNotShelved"] is True
+    assert verdict["unshelve"]["pathRemoved"] is True
+    assert verdict["unshelve"]["siblingRefusalCode"] == "permission_denied"
+    assert verdict["unshelve"]["wildcardRefusalReason"] == "wildcardPath"
+
+
+def test_recorded_alarm_tool_bodies_satisfy_the_shipped_schemas() -> None:
+    """The bodies the rehearsal replays are the shipped Tools' own output, so a
+    schema change that outgrows them has to fail here rather than at live CI."""
+    cases = {
+        "alarm_shelve": ("alarm-shelve-allowlisted",),
+        "alarm_unshelve": ("alarm-unshelve-allowlisted",),
+    }
+    for tool, names in cases.items():
+        contract = json.loads(
+            (ROOT / f"contracts/tools/runtime/{tool}.contract.json").read_text(encoding="utf-8")
+        )
+        schema = json.loads((ROOT / contract["outputSchema"]).read_text(encoding="utf-8"))
+        validator = Draft202012Validator(schema)
+        for name in names:
+            body = _fixture(f"{name}.json")
+            assert body["isError"] is False
+            validator.validate(body["structuredContent"])
+        # The refusals carry the canonical D06 error shape instead.
+        for name in sorted(path.stem for path in FIXTURES.glob(f"{tool.replace('_', '-')}-*.json")):
+            body = _fixture(f"{name}.json")
+            if body["isError"]:
+                error = json.loads(body["content"][0]["text"])
+                assert set(error) <= {"code", "message", "correlationId", "details"}
+                assert error["code"] in {
+                    "invalid_argument", "permission_denied", "operation_disabled",
+                }, name
+
+
+def test_phase4_live_workflow_verifies_the_alarm_mutations() -> None:
+    text = WORKFLOW.read_text(encoding="utf-8")
+    assert "driver.py alarm-no-policy" in text
+    assert "driver.py alarm-shelve" in text
+    assert "Refuse the Alarm Mutations while no Runtime Target Policy exists" in text
 
 
 def _marker_document(config: Any, **overrides: Any) -> dict[str, Any]:

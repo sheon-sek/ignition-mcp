@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:alarm-unshelve:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "items": {"type": "array", "maxItems": 100, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "executed"}}, "required": ["path", "status"]},
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "outcome_unknown"}}, "required": ["path", "status"]}
+    ]}},
+    "observed": {"type": "array", "maxItems": 100, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "ok"}, "shelved": {"const": true}, "user": {"$ref": "#/$defs/nullableString"}, "expiration": {"$ref": "#/$defs/nullableString"}, "expired": {"type": "boolean"}}, "required": ["path", "status", "shelved", "user", "expiration", "expired"]},
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "ok"}, "shelved": {"const": false}}, "required": ["path", "status", "shelved"]},
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "error"}, "error": {"$ref": "#/$defs/observed_error"}}, "required": ["path", "status", "error"]}
+    ]}},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"requested": {"type": "integer", "minimum": 1, "maximum": 100}, "executed": {"type": "integer", "minimum": 0}, "outcomeUnknown": {"type": "integer", "minimum": 0}, "auditMode": {"enum": ["best_effort", "required", "off"]}, "auditRecorded": {"type": "boolean"}}, "required": ["requested", "executed", "outcomeUnknown", "auditMode", "auditRecorded"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  },
+  "required": ["items", "observed", "summary", "meta"],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "nullableString": {"oneOf": [{"type": "string"}, {"$ref": "#/$defs/null"}]},
+    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
+  }
+}

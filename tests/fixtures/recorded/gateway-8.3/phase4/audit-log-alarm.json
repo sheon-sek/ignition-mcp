@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "action": "__ACTION__",
+      "actionTarget": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+      "actionValue": "tool=__TOOL__ phase=result correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=executed executed=1 outcomeUnknown=0",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "result": "",
+      "statusCode": 0,
+      "timestamp": 1789000000000
+    },
+    {
+      "action": "__ACTION__",
+      "actionTarget": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+      "actionValue": "tool=__TOOL__ phase=attempt correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=attempt requested=1 timeoutSeconds=3600",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "result": "",
+      "statusCode": 0,
+      "timestamp": 1789000000000
+    }
+  ],
+  "metadata": {
+    "limit": 100,
+    "matching": 2.0,
+    "offset": 0,
+    "total": 2.0
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_unshelve",
+  "parameterOrder": [
+    "paths"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:MCP_P4_1/Exact:/alm:ProbeHi"
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 260,
+              "name": "Bad_NotFound",
+              "level": "Error",
+              "good": false,
+              "diagnosticMessage": "Path not found."
+            },
+            "value": 0
+          }
+        ]
+      }
+    }
+  ]
+}

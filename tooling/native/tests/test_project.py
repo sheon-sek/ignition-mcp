@@ -42,7 +42,7 @@ class RuntimeProjectTest(unittest.TestCase):
     def test_runtime_handlers_have_no_pending_binding_marker(self) -> None:
         files = validate_project(PROJECT)
         handlers = [value for name, value in files.items() if name.endswith("/onToolCalled.py")]
-        self.assertEqual(len(handlers), 14)
+        self.assertEqual(len(handlers), 16)
         for handler in handlers:
             self.assertNotIn(b"NATIVE_BINDING_PENDING", handler)
 
@@ -58,7 +58,9 @@ class RuntimeProjectTest(unittest.TestCase):
                 resource = json.loads(payload)
                 titles.append(resource["attributes"]["title"])
         expected = [
+        "alarm_shelve",
         "alarm_shelved_list",
+        "alarm_unshelve",
         "bundle_info",
         "database_query",
         "database_query_list",

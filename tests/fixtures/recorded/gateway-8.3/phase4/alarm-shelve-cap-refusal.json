@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"invalid_argument\", \"correlationId\": \"recorded-alarm-correlation\", \"details\": {\"cap\": 3600, \"hardMaximum\": 86400, \"reason\": \"durationOverPolicyCap\", \"requested\": 7200}, \"message\": \"timeoutSeconds exceeds the deployment's shelve cap; nothing was shelved.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

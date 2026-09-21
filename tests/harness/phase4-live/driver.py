@@ -863,12 +863,16 @@ def served_policy_sha(config: Config, client: mcp_client.McpClient) -> str:
     return gateway_rest.sha256_text(value) if isinstance(value, str) else ""
 
 
-def install_tag_write_policy(
-    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+def install_policy(
+    config: Config, client: mcp_client.McpClient, *, document: bytes, expected_sha256: str,
     deadline_seconds: float = 150.0,
 ) -> dict[str, Any]:
-    document = policy_document.tag_write_tag_document_bytes(allowlist=allowlist)
-    expected = policy_document.tag_write_policy_sha256(allowlist=allowlist)
+    """Import a policy Tag document until a Tool handler reads it back served.
+
+    An accepted `/tags/import` is not proof that the running provider serves the
+    Tags (ticket #6 recorded both startup failures), so the install is confirmed
+    with the same handler-scope read the shipped mutation performs.
+    """
     started = time.monotonic()
     attempts: list[dict[str, Any]] = []
     while True:
@@ -891,11 +895,35 @@ def install_tag_write_policy(
             "servedSha256": served,
             "servedError": served_error[:400],
         })
-        if served == expected:
+        if served == expected_sha256:
             return {"ok": True, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
         if time.monotonic() - started >= deadline_seconds:
             return {"ok": False, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
         time.sleep(3.0)
+
+
+def install_tag_write_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    return install_policy(
+        config, client,
+        document=policy_document.tag_write_tag_document_bytes(allowlist=allowlist),
+        expected_sha256=policy_document.tag_write_policy_sha256(allowlist=allowlist),
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def install_alarm_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    shelve_cap: int = policy_document.ALARM_SHELVE_CAP_SECONDS, deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    return install_policy(
+        config, client,
+        document=policy_document.alarm_policy_tag_document_bytes(allowlist=allowlist, shelve_cap=shelve_cap),
+        expected_sha256=policy_document.alarm_policy_sha256(allowlist=allowlist, shelve_cap=shelve_cap),
+        deadline_seconds=deadline_seconds,
+    )
 
 
 def stage_tag_write_no_policy(config: Config) -> dict[str, Any]:
@@ -1136,6 +1164,227 @@ def stage_tag_write(config: Config) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Stages: ticket #8 (`alarm_shelve` and `alarm_unshelve`)
+# --------------------------------------------------------------------------- #
+
+def alarm_paths(config: Config) -> dict[str, str]:
+    """The exact Alarm paths the ticket #8 cases use, under the run's Alarm root."""
+    return policy_document.alarm_paths(config.root_name, config.alarm_provider)
+
+
+def shelved_paths(client: mcp_client.McpClient) -> list[str]:
+    """The shelved Alarm paths the *read* Tool reports, as an independent cross-check."""
+    structured = expect_structured(client, "alarm_shelved_list", {"maxResults": 500})
+    return [str(item.get("path", "")) for item in structured.get("items") or []]
+
+
+def stage_alarm_no_policy(config: Config) -> dict[str, Any]:
+    """A Gateway with no Runtime Target Policy must refuse both Alarm Mutations."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    client = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    paths = alarm_paths(config)
+    shelve = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["exact"]], "timeoutSeconds": 60,
+    })
+    unshelve = expect_tool_error(client, "alarm_unshelve", {"paths": [paths["exact"]]})
+    raw["shelveNoPolicy"] = bounded(shelve)
+    raw["unshelveNoPolicy"] = bounded(unshelve)
+    facts["alarmNoPolicyShelveCode"] = str(shelve.get("code", ""))
+    facts["alarmNoPolicyShelveReason"] = str((shelve.get("details") or {}).get("reason", ""))
+    facts["alarmNoPolicyUnshelveCode"] = str(unshelve.get("code", ""))
+    facts["alarmNoPolicyUnshelveReason"] = str((unshelve.get("details") or {}).get("reason", ""))
+    facts["alarmNoPolicyFailsClosed"] = (
+        facts["alarmNoPolicyShelveCode"] == "operation_disabled"
+        and facts["alarmNoPolicyUnshelveCode"] == "operation_disabled"
+    )
+    if not facts["alarmNoPolicyFailsClosed"]:
+        raise StageFailure(
+            "a missing Runtime Target Policy must fail both Alarm Mutations closed: "
+            f"{json.dumps({'shelve': shelve, 'unshelve': unshelve})[:600]}"
+        )
+    return {
+        "stage": "alarm-no-policy",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_alarm_shelve(config: Config) -> dict[str, Any]:
+    """The ticket #8 live cases: allowlisted shelve/unshelve and their refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = alarm_paths(config)
+    # The Alarm fixture the ticket #6 stage built is the target of the shelve, so
+    # the pattern this stage uses must be the one the probe measured.
+    alarm = load_stage(config, "alarm")
+    exact_pattern = str((alarm.get("facts") or {}).get("exactPathSourcePattern", ""))
+    facts["alarmShelvePathMatchesAlarmFixture"] = exact_pattern == paths["exact"]
+    if not facts["alarmShelvePathMatchesAlarmFixture"]:
+        raise StageFailure(
+            f"the measured Alarm pattern moved: {exact_pattern!r} != {paths['exact']!r}"
+        )
+
+    client = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    inventory = sorted(client.tools_list())
+    expected_inventory = sorted(profile_tools("operator"))
+    facts["alarmShelveOperatorInventoryMatchesProfile"] = inventory == expected_inventory
+    if not facts["alarmShelveOperatorInventoryMatchesProfile"]:
+        raise StageFailure(
+            f"the deployed operator inventory does not equal contracts/profiles/operator.yaml: "
+            f"{inventory} != {expected_inventory}"
+        )
+
+    imported = install_alarm_policy(
+        config, client, allowlist=policy_document.alarm_allowlist(config.root_name),
+    )
+    raw["installAlarmPolicy"] = bounded(imported, 20_000)
+    facts["alarmShelvePolicyInstalled"] = imported["ok"]
+    facts["alarmShelvePolicyServedSha256"] = imported["servedSha256"]
+    if not imported["ok"]:
+        raise StageFailure(
+            "the running provider never served the Alarm policy document: "
+            f"{json.dumps(imported['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    before = shelved_paths(client)
+
+    # Case 1: the allowlisted exact Alarm path, for one hour (the policy cap).
+    shelved = expect_structured(client, "alarm_shelve", {
+        "paths": [paths["exact"]], "timeoutSeconds": policy_document.ALARM_SHELVE_CAP_SECONDS,
+    })
+    raw["allowlistedShelve"] = bounded(shelved, 40_000)
+    summary = shelved.get("summary") or {}
+    observed = shelved.get("observed") or [{}]
+    first = observed[0]
+    facts["alarmShelveExecuted"] = summary.get("executed")
+    facts["alarmShelveOutcomeUnknown"] = summary.get("outcomeUnknown")
+    facts["alarmShelveTimeoutSeconds"] = summary.get("timeoutSeconds")
+    facts["alarmShelveObservedShelved"] = first.get("shelved") is True
+    facts["alarmShelveObservedUserPresent"] = bool(first.get("user")) and first.get("user") != {
+        "$ignition": "null"
+    }
+    facts["alarmShelveObservedExpirationPresent"] = bool(first.get("expiration")) and first.get("expiration") != {
+        "$ignition": "null"
+    }
+    facts["alarmShelveAuditMode"] = str(summary.get("auditMode", ""))
+    facts["alarmShelveAuditRecorded"] = summary.get("auditRecorded")
+    if not facts["alarmShelveObservedShelved"]:
+        raise StageFailure(f"the allowlisted shelve did not take effect: {json.dumps(shelved)[:800]}")
+    correlation = str((shelved.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = gateway_rest.audit_rows(
+        config.base_url, config.api_token, config.audit_profile, action="ignition-mcp.alarm_shelve",
+    )
+    matching = [row for row in rows if correlation and correlation in str(row.get("actionValue", ""))]
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(matching, 20_000)}
+    facts["alarmShelveAuditRowsForCorrelation"] = len(matching)
+    facts["alarmShelveAuditAttemptAndResultRecorded"] = len(matching) >= 2
+    facts["alarmShelveAuditActorIsServiceIdentity"] = bool(matching) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in matching
+    )
+    facts["alarmShelveListShowsExactPath"] = paths["exact"] in shelved_paths(client)
+    if not facts["alarmShelveListShowsExactPath"]:
+        raise StageFailure("alarm_shelved_list does not report the shelved exact path")
+
+    # Case 2: a duration above the deployment cap is refused before dispatch, and
+    # the target stays unshelved.
+    cap = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["nested"]], "timeoutSeconds": policy_document.ALARM_SHELVE_CAP_SECONDS * 2,
+    })
+    raw["capRefusal"] = bounded(cap)
+    cap_details = cap.get("details") or {}
+    facts["alarmShelveCapRefusalCode"] = str(cap.get("code", ""))
+    facts["alarmShelveCapRefusalReason"] = str(cap_details.get("reason", ""))
+    facts["alarmShelveCapRefusalCap"] = cap_details.get("cap")
+    if not (facts["alarmShelveCapRefusalCode"] == "invalid_argument"
+            and facts["alarmShelveCapRefusalReason"] == "durationOverPolicyCap"):
+        raise StageFailure(f"the policy shelve cap was not enforced: {json.dumps(cap)[:600]}")
+
+    # Case 3: a duration above the D12 hard maximum is refused whatever the policy says.
+    hard = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["nested"]], "timeoutSeconds": 86401,
+    })
+    raw["hardMaxRefusal"] = bounded(hard)
+    facts["alarmShelveHardMaxRefusalReason"] = str((hard.get("details") or {}).get("reason", ""))
+    after_duration_refusals = shelved_paths(client)
+    facts["alarmShelveDurationRefusalsShelvedNothing"] = paths["nested"] not in after_duration_refusals
+
+    # Case 4: a wildcard target is forbidden (D12) and reaches no native call.
+    wildcard = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["wildcard"]], "timeoutSeconds": 60,
+    })
+    raw["wildcardRefusal"] = bounded(wildcard)
+    wildcard_details = (wildcard.get("details") or {}).get("items") or [{}]
+    facts["alarmShelveWildcardRefusalCode"] = str(wildcard.get("code", ""))
+    facts["alarmShelveWildcardRefusalReason"] = str(wildcard_details[0].get("reason", ""))
+
+    # Case 5: a sibling root that only shares a string prefix is refused.
+    sibling = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["sibling"]], "timeoutSeconds": 60,
+    })
+    raw["siblingDenial"] = bounded(sibling)
+    sibling_details = (sibling.get("details") or {}).get("items") or [{}]
+    facts["alarmShelveSiblingDenialCode"] = str(sibling.get("code", ""))
+    facts["alarmShelveSiblingDenialReason"] = str(sibling_details[0].get("reason", ""))
+    if not (facts["alarmShelveSiblingDenialCode"] == "permission_denied"
+            and facts["alarmShelveSiblingDenialReason"] == "targetNotAllowlisted"):
+        raise StageFailure(f"the segment-boundary sibling was not refused: {json.dumps(sibling)[:600]}")
+
+    # Case 6: one refused item rejects the whole batch (D30 §3 Preflight).
+    whole = expect_tool_error(client, "alarm_shelve", {
+        "paths": [paths["nested"], paths["sibling"]], "timeoutSeconds": 60,
+    })
+    raw["preflightRefusal"] = bounded(whole)
+    facts["alarmShelvePreflightRefusalItems"] = len((whole.get("details") or {}).get("items") or [])
+    after_refusals = shelved_paths(client)
+    facts["alarmShelvePreflightExecutedNothing"] = (
+        paths["nested"] not in after_refusals and paths["sibling"] not in after_refusals
+    )
+    if not facts["alarmShelvePreflightExecutedNothing"]:
+        raise StageFailure("a refused Preflight shelved part of its batch")
+    raw["shelvedBeforeAllowlistedShelve"] = bounded(before)
+
+    # Case 7: unshelve the allowlisted path and confirm it is gone.
+    unshelved = expect_structured(client, "alarm_unshelve", {"paths": [paths["exact"]]})
+    raw["allowlistedUnshelve"] = bounded(unshelved, 40_000)
+    unshelve_summary = unshelved.get("summary") or {}
+    unshelve_observed = (unshelved.get("observed") or [{}])[0]
+    facts["alarmUnshelveExecuted"] = unshelve_summary.get("executed")
+    facts["alarmUnshelveAuditMode"] = str(unshelve_summary.get("auditMode", ""))
+    facts["alarmUnshelveObservedNotShelved"] = unshelve_observed.get("shelved") is False
+    after = shelved_paths(client)
+    facts["alarmUnshelveExactPathRemoved"] = paths["exact"] not in after
+    if not (facts["alarmUnshelveObservedNotShelved"] and facts["alarmUnshelveExactPathRemoved"]):
+        raise StageFailure(f"the allowlisted unshelve did not take effect: {json.dumps(unshelved)[:800]}")
+
+    # Case 8: unshelve obeys the same Target allowlist.
+    unshelve_sibling = expect_tool_error(client, "alarm_unshelve", {"paths": [paths["sibling"]]})
+    raw["unshelveSiblingDenial"] = bounded(unshelve_sibling)
+    unshelve_details = (unshelve_sibling.get("details") or {}).get("items") or [{}]
+    facts["alarmUnshelveSiblingDenialCode"] = str(unshelve_sibling.get("code", ""))
+    facts["alarmUnshelveSiblingDenialReason"] = str(unshelve_details[0].get("reason", ""))
+
+    # Case 9: unshelve forbids wildcards too (D12).
+    unshelve_wildcard = expect_tool_error(client, "alarm_unshelve", {"paths": [paths["wildcard"]]})
+    raw["unshelveWildcardRefusal"] = bounded(unshelve_wildcard)
+    unshelve_wildcard_details = (unshelve_wildcard.get("details") or {}).get("items") or [{}]
+    facts["alarmUnshelveWildcardRefusalCode"] = str(unshelve_wildcard.get("code", ""))
+    facts["alarmUnshelveWildcardRefusalReason"] = str(unshelve_wildcard_details[0].get("reason", ""))
+    return {
+        "stage": "alarm-shelve",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Stage: summarize
 # --------------------------------------------------------------------------- #
 
@@ -1160,6 +1409,8 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
         load_stage(config, "tag-write-no-policy"),
         load_stage(config, "tag-write-setup"),
         load_stage(config, "tag-write"),
+        load_stage(config, "alarm-no-policy"),
+        load_stage(config, "alarm-shelve"),
     ])
 
     facts: dict[str, Any] = {}
@@ -1225,11 +1476,59 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
             },
             "operatorInventoryMatchesProfile": facts.get("tagWriteOperatorInventoryMatchesProfile"),
         },
+        "runtimeAlarmMutations": {
+            "shelve": {
+                "pathMatchesAlarmFixture": facts.get("alarmShelvePathMatchesAlarmFixture"),
+                "executed": facts.get("alarmShelveExecuted"),
+                "observedShelved": facts.get("alarmShelveObservedShelved"),
+                "shelvedListShowsPath": facts.get("alarmShelveListShowsExactPath"),
+                "capRefusal": {
+                    "code": facts.get("alarmShelveCapRefusalCode"),
+                    "reason": facts.get("alarmShelveCapRefusalReason"),
+                    "cap": facts.get("alarmShelveCapRefusalCap"),
+                },
+                "hardMaxRefusalReason": facts.get("alarmShelveHardMaxRefusalReason"),
+                "wildcardRefusalReason": facts.get("alarmShelveWildcardRefusalReason"),
+                "targetAllowlist": {
+                    "siblingRefusedAtSegmentBoundary": (
+                        facts.get("alarmShelveSiblingDenialCode") == "permission_denied"
+                        and facts.get("alarmShelveSiblingDenialReason") == "targetNotAllowlisted"
+                    ),
+                    "preflightExecutedNothing": facts.get("alarmShelvePreflightExecutedNothing"),
+                },
+                "noPolicy": {
+                    "code": facts.get("alarmNoPolicyShelveCode"),
+                    "reason": facts.get("alarmNoPolicyShelveReason"),
+                },
+                "audit": {
+                    "mode": facts.get("alarmShelveAuditMode"),
+                    "recorded": facts.get("alarmShelveAuditRecorded"),
+                    "rowsForCorrelation": facts.get("alarmShelveAuditRowsForCorrelation"),
+                    "actorIsServiceIdentity": facts.get("alarmShelveAuditActorIsServiceIdentity"),
+                },
+            },
+            "unshelve": {
+                "executed": facts.get("alarmUnshelveExecuted"),
+                "observedNotShelved": facts.get("alarmUnshelveObservedNotShelved"),
+                "pathRemoved": facts.get("alarmUnshelveExactPathRemoved"),
+                "siblingRefusalCode": facts.get("alarmUnshelveSiblingDenialCode"),
+                "wildcardRefusalReason": facts.get("alarmUnshelveWildcardRefusalReason"),
+                "noPolicy": {
+                    "code": facts.get("alarmNoPolicyUnshelveCode"),
+                    "reason": facts.get("alarmNoPolicyUnshelveReason"),
+                },
+                "auditMode": facts.get("alarmUnshelveAuditMode"),
+            },
+            "operatorInventoryMatchesProfile": facts.get("alarmShelveOperatorInventoryMatchesProfile"),
+        },
     }
     evidence = {
         "schemaVersion": 1,
-        "tickets": ["#6", "#7"],
-        "title": "Characterize the Runtime Target Policy and the exact-path alarm query bound, and verify tag_write live",
+        "tickets": ["#6", "#7", "#8"],
+        "title": (
+            "Characterize the Runtime Target Policy and the exact-path alarm query bound, "
+            "and verify tag_write, alarm_shelve and alarm_unshelve live"
+        ),
         "identity": identity(config),
         "stages": stages,
         "facts": facts,
@@ -1254,7 +1553,7 @@ def build_config(argv: list[str]) -> Config:
         "stage",
         choices=[
             "tag-write-no-policy", "policy-provision", "policy-read", "alarm",
-            "tag-write-setup", "tag-write", "summarize",
+            "tag-write-setup", "tag-write", "alarm-no-policy", "alarm-shelve", "summarize",
         ],
     )
     parser.add_argument("--base-url", default=os.environ.get("P4_BASE_URL", "http://127.0.0.1:8093"))
@@ -1349,6 +1648,14 @@ def main(argv: list[str] | None = None) -> int:
         elif stage == "tag-write":
             record = stage_tag_write(config)
             write_stage(config, "tag-write", record)
+            code = EXIT_OK
+        elif stage == "alarm-no-policy":
+            record = stage_alarm_no_policy(config)
+            write_stage(config, "alarm-no-policy", record)
+            code = EXIT_OK
+        elif stage == "alarm-shelve":
+            record = stage_alarm_shelve(config)
+            write_stage(config, "alarm-shelve", record)
             code = EXIT_OK
         else:
             record, code = stage_summarize(config)

@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_shelve",
+  "parameterOrder": [
+    "paths",
+    "timeoutSeconds"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:MCP_P4_1/Exact:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi"
+    ],
+    "timeoutSeconds": 60
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 260
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -13,8 +13,9 @@ prove the negative half of a behavior: "the policy Tag was never read", "no
 write was dispatched", instead of only its positive half.
 
 Only recorded state crosses the boundary (``system.tag.*``, ``system.config.*``,
-``system.util.audit``). Deterministic helpers (``system.util.jsonDecode``,
-``jsonEncode``, ``getLogger``) are real implementations in this process.
+``system.alarm.*``, ``system.util.audit``). Deterministic helpers
+(``system.util.jsonDecode``, ``jsonEncode``, ``getLogger``) are real
+implementations in this process.
 """
 
 from __future__ import print_function
@@ -135,6 +136,39 @@ class _RecordedResource(object):
         self.signature = recorded.get("signature")
 
 
+class _ShelvedPath(object):
+    """A recorded `system.alarm.getShelvedPaths` entry.
+
+    The handler reads `.getPath()`, `.getUser()`, `.getExpiration()` and
+    `.isExpired()`, which is the shape `alarm_shelved_list` already consumes.
+    """
+
+    def __init__(self, recorded):
+        self.path = recorded.get("path")
+        self.user = recorded.get("user")
+        self.expiration = recorded.get("expiration")
+        self.expired = recorded.get("expired", False)
+
+    def getPath(self):
+        return self.path
+
+    def getUser(self):
+        return self.user
+
+    def getExpiration(self):
+        return self.expiration
+
+    def isExpired(self):
+        return self.expired
+
+
+class _ShelvedPaths(ArrayList):
+    def __init__(self, recorded):
+        ArrayList.__init__(self)
+        for item in recorded["items"]:
+            self.add(_ShelvedPath(item))
+
+
 def _raise_recorded(entry):
     message = "recorded native failure: " + str(entry.get("target"))
     detail = (entry.get("result") or {}).get("message")
@@ -186,6 +220,8 @@ class _Recorder(object):
             return _RecordedResults(result)
         if kind == "resource":
             return _RecordedResource(result)
+        if kind == "shelved-paths":
+            return _ShelvedPaths(result)
         if kind == "missing":
             return None
         raise _RecordedError("unsupported recorded result kind for " + target + ": " + str(kind))
@@ -218,6 +254,20 @@ class _Config(object):
         return self.recorder.take("system.config.getResource", args, kwargs)
 
 
+class _Alarm(object):
+    def __init__(self, recorder):
+        self.recorder = recorder
+
+    def shelve(self, *args, **kwargs):
+        return self.recorder.take("system.alarm.shelve", args, kwargs)
+
+    def unshelve(self, *args, **kwargs):
+        return self.recorder.take("system.alarm.unshelve", args, kwargs)
+
+    def getShelvedPaths(self, *args, **kwargs):
+        return self.recorder.take("system.alarm.getShelvedPaths", args, kwargs)
+
+
 class _Util(object):
     def __init__(self, recorder):
         self.recorder = recorder
@@ -242,6 +292,7 @@ class _System(object):
     def __init__(self, recorder):
         self.tag = _Tag(recorder)
         self.config = _Config(recorder)
+        self.alarm = _Alarm(recorder)
         self.util = _Util(recorder)
 
 

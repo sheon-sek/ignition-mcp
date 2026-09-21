@@ -17,6 +17,11 @@ Ephemeral CI-owned evidence for the facts Phase 4 milestone 4a depends on:
    executes nothing, the reserved policy provider under an explicit `*`, the
    missing-policy fail-closed case, the Runtime audit rows, and the exact
    operator inventory.
+4. **`alarm_shelve` and `alarm_unshelve` end to end** (issue #8). The same
+   shipped bundle: an allowlisted shelve of the run's exact Alarm path confirmed
+   through `alarm_shelved_list`, the deployment shelve cap below the D12 24 h
+   hard maximum, the wildcard and segment-boundary refusals, a Preflight that
+   shelves nothing, the missing-policy refusals, and the matching unshelve.
 
 The harness provisions an exact-patch Ignition Gateway (8.3.8 required row,
 8.3.9 compatibility candidate), installs the checksum-pinned official MCP Module
@@ -86,6 +91,8 @@ uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label 
 uv run --no-sync python tests/harness/phase4-live/driver.py alarm
 uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-setup
 uv run --no-sync python tests/harness/phase4-live/driver.py tag-write
+uv run --no-sync python tests/harness/phase4-live/driver.py alarm-no-policy
+uv run --no-sync python tests/harness/phase4-live/driver.py alarm-shelve
 uv run --no-sync python tests/harness/phase4-live/driver.py summarize
 ```
 

@@ -1,0 +1,379 @@
+def onToolCalled(builder, paths, timeoutSeconds):
+	from java.lang import Boolean, Number, Exception as JavaException
+	from java.util import UUID, Date, Map, List
+	correlationId = unicode(UUID.randomUUID())
+	logger = system.util.getLogger("IgnitionMCP.Runtime.AlarmShelve")
+
+	# D30 1: the Runtime Target Policy is a deployment-owned document outside the
+	# bundle. Ticket #6 characterized its storage and its bounded read: the small
+	# companion length Tag is read first so an over-cap document is never
+	# materialized, because a Tag value has no native size limit.
+	POLICY_PROVIDER = "IgnitionMCPPolicy"
+	POLICY_LENGTH_PATH = "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+	POLICY_PATH = "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+	POLICY_MAX_BYTES = 32768
+	POLICY_READ_TIMEOUT_MS = 5000
+	# D30 1 (#6 recommendation): the Runtime plane cannot write the policy, and
+	# that is a product rule. An Alarm path that names the reserved provider is
+	# refused by the same rule, before Preflight, whatever the allowlist says.
+	RESERVED_PROVIDER = "IgnitionMCPPolicy"
+	ALLOWLIST_KEY = "alarm_shelve"
+	WILDCARD = "*"
+	AUDIT_ACTION = "ignition-mcp.alarm_shelve"
+	AUDIT_MODES = ("best_effort", "required", "off")
+	# D12 Phase 4 amendment: an explicit duration, 1 s minimum and a 24 h hard
+	# maximum the deployment may lower and never raise.
+	MIN_DURATION_SECONDS = 1
+	HARD_MAX_DURATION_SECONDS = 86400
+	# D10 alarm path ceiling, as alarm_status applies it to the same language.
+	PATH_MAX_LENGTH = 2048
+	HARD_MAX_PATHS = 100
+	# alarm_shelved_list's own output ceiling; the Observed read uses it to stay
+	# bounded and reports an error item rather than materializing more.
+	SHELVED_READ_LIMIT = 500
+	OUTPUT_MAX_BYTES = 262144
+
+	def toolError(code, message, details):
+		error = {"code": code, "message": message, "correlationId": correlationId}
+		if details is not None:
+			error["details"] = details
+		logger.warn("correlationId=" + correlationId + " code=" + code + " " + message)
+		return {"content": builder.text(system.util.jsonEncode(error)), "isError": True}
+
+	def text(value):
+		return "" if value is None else unicode(value)
+
+	def boundedText(value, limit):
+		rendered = text(value)
+		if len(rendered) > limit:
+			return rendered[:limit] + "..."
+		return rendered
+
+	def encodeNulls(value):
+		# D28 ignition-null-v1: escape reserved-key objects to avoid collisions.
+		if value is None:
+			return {"$ignition": "null"}
+		if isinstance(value, dict):
+			if "$ignition" in value:
+				return {"$ignition": "object", "entries": [[key, encodeNulls(child)] for key, child in sorted(value.items())]}
+			return dict((key, encodeNulls(child)) for key, child in value.items())
+		if isinstance(value, (list, tuple)):
+			return [encodeNulls(child) for child in value]
+		return value
+
+	def optionalText(value):
+		return None if value is None else unicode(value)
+
+	def jsonValue(value):
+		if value is None:
+			return None
+		if isinstance(value, Date):
+			return unicode(value.toInstant().toString())
+		return unicode(value)
+
+	def qualityIsGood(value):
+		if value is None:
+			return False
+		if hasattr(value, "isGood"):
+			return bool(value.isGood())
+		return unicode(value).find("Good") == 0
+
+	def alarmPathProblem(value):
+		# D12: mutation targets are exact Alarm paths. A pattern without * matches
+		# only the source it spells out (ticket #6), so "no wildcard" is what makes
+		# a target exact, and a provider-qualified path is the rendered form
+		# alarm_shelved_list reports for the same shelving.
+		if not isinstance(value, basestring):
+			return "pathNotText"
+		path = value.strip()
+		if path == "":
+			return "pathEmpty"
+		if len(path) > PATH_MAX_LENGTH:
+			return "pathOverLength"
+		if "*" in path:
+			return "wildcardPath"
+		for character in path:
+			if character.isspace():
+				return "pathWhitespace"
+		if not path.startswith("prov:"):
+			return "pathNotProviderQualified"
+		remainder = path[len("prov:"):]
+		if remainder == "" or remainder.startswith(":") or remainder.startswith("/"):
+			return "pathNotProviderQualified"
+		return None
+
+	def normalizeEntries(entries):
+		# D30 1: allowlist entries are provider-qualified alarm path prefixes
+		# matched at segment boundaries; * must be written explicitly.
+		if not isinstance(entries, (list, tuple, List)):
+			return None
+		normalized = []
+		for entry in entries:
+			if not isinstance(entry, basestring):
+				return None
+			entry = entry.strip()
+			if entry == WILDCARD:
+				normalized.append(WILDCARD)
+				continue
+			if alarmPathProblem(entry) is not None:
+				return None
+			normalized.append(entry)
+		return normalized
+
+	def matchesAllowlist(path, entries):
+		# A segment boundary in an Alarm path is either separator, so
+		# .../Exact never matches .../ExactSibling.
+		for entry in entries:
+			if entry == WILDCARD:
+				return True
+			if path == entry:
+				return True
+			if path.startswith(entry) and path[len(entry)] in ("/", ":"):
+				return True
+		return False
+
+	def hasKey(document, key):
+		# An explicit JSON null must be refused, not read as "absent": the policy
+		# document contract says a null-valued property is simply omitted.
+		try:
+			if hasattr(document, "has_key"):
+				return bool(document.has_key(key))
+			return key in document
+		except (Exception, JavaException):
+			return False
+
+	def policyProblem(document):
+		if not isinstance(document, (dict, Map)):
+			return "policyMalformed"
+		if document.get("schemaVersion") != 1:
+			return "policySchemaVersion"
+		allowlists = document.get("allowlists")
+		if not isinstance(allowlists, (dict, Map)):
+			return "policyAllowlists"
+		for key in allowlists:
+			# The document shape is validated for every key, but the *grammar* of
+			# an entry belongs to the Tool that reads it: an Alarm source pattern
+			# and a Tag path prefix are different languages. Each handler therefore
+			# validates its own key strictly and the others only as strings.
+			entries = allowlists.get(key)
+			if not isinstance(entries, (list, tuple, List)):
+				return "policyAllowlists"
+			for entry in entries:
+				if not isinstance(entry, basestring) or not entry.strip():
+					return "policyAllowlists"
+		own = allowlists.get(ALLOWLIST_KEY)
+		if own is not None and normalizeEntries(own) is None:
+			return "policyAllowlists"
+		serviceIdentity = document.get("serviceIdentity")
+		if not (isinstance(serviceIdentity, basestring) and serviceIdentity.strip()):
+			return "policyServiceIdentity"
+		if document.get("auditMode") not in AUDIT_MODES:
+			return "policyAuditMode"
+		if hasKey(document, "auditProfile"):
+			auditProfile = document.get("auditProfile")
+			if not (isinstance(auditProfile, basestring) and auditProfile.strip()):
+				return "policyAuditProfile"
+		if hasKey(document, "alarmShelveMaxSeconds"):
+			shelveCap = document.get("alarmShelveMaxSeconds")
+			if isinstance(shelveCap, bool) or not isinstance(shelveCap, (int, long)) or shelveCap <= 0:
+				return "policyAlarmShelveMaxSeconds"
+		return None
+
+	def readPolicy():
+		# Two-step gated read (ticket #6): declared length first, then the document.
+		lengthRead = system.tag.readBlocking([POLICY_LENGTH_PATH], POLICY_READ_TIMEOUT_MS)
+		if lengthRead is None or len(lengthRead) != 1:
+			return (None, "declaredLengthUnavailable")
+		lengthItem = lengthRead[0]
+		if not qualityIsGood(lengthItem.quality):
+			return (None, "declaredLengthUnavailable")
+		try:
+			declared = long(lengthItem.value)
+		except (Exception, JavaException):
+			return (None, "declaredLengthInvalid")
+		if declared <= 0:
+			return (None, "declaredLengthInvalid")
+		if declared > POLICY_MAX_BYTES:
+			return (None, "declaredLengthOversize")
+		policyRead = system.tag.readBlocking([POLICY_PATH], POLICY_READ_TIMEOUT_MS)
+		if policyRead is None or len(policyRead) != 1:
+			return (None, "policyUnavailable")
+		policyItem = policyRead[0]
+		if not qualityIsGood(policyItem.quality):
+			return (None, "policyUnavailable")
+		policyText = text(policyItem.value)
+		if len(policyText.encode("utf-8")) != declared:
+			return (None, "policyLengthMismatch")
+		try:
+			document = system.util.jsonDecode(policyText)
+		except (Exception, JavaException):
+			return (None, "policyMalformed")
+		problem = policyProblem(document)
+		if problem is not None:
+			return (None, problem)
+		return (document, None)
+
+	def auditProfileAvailable(name):
+		# D30 6: in required mode the handler checks the audit profile before it
+		# executes, and never writes a probe row.
+		try:
+			resource = system.config.getResource(moduleId="ignition", typeId="audit-profile", name=name)
+		except (Exception, JavaException) as exc:
+			logger.warn("correlationId=" + correlationId + " audit profile check failed: " + text(exc))
+			return False
+		if resource is None:
+			return False
+		enabled = None
+		if hasattr(resource, "enabled"):
+			enabled = resource.enabled
+		if enabled is not None and not bool(enabled):
+			return False
+		return True
+
+	def auditWrite(phase, actionTarget, summary):
+		# D18: off records nothing; best_effort and required log failures, and a
+		# failed post-mutation write never turns a success into a failure.
+		if auditMode == "off":
+			return False
+		try:
+			system.util.audit(
+				action=AUDIT_ACTION,
+				actionTarget=boundedText(actionTarget, 512),
+				actionValue=boundedText("tool=" + ALLOWLIST_KEY + " phase=" + phase + " correlationId=" + correlationId + " serviceIdentity=" + serviceIdentity + " " + summary, 1024),
+				auditProfile=auditProfile,
+				actor=serviceIdentity)
+			return True
+		except (Exception, JavaException) as exc:
+			logger.warn("correlationId=" + correlationId + " audit phase=" + phase + " failed: " + text(exc))
+			return False
+
+	stage = "input_validation"
+	dispatched = False
+	try:
+		if not isinstance(paths, (list, tuple, List)) or len(paths) == 0:
+			return toolError("invalid_argument", "paths must be a non-empty array of exact Alarm paths.", {"reason": "pathsNotAnArray"})
+		if len(paths) > HARD_MAX_PATHS:
+			return toolError("limit_exceeded", "paths exceeds the hard limit of 100 items.", {"reason": "pathsOverHardLimit", "requested": len(paths), "limit": HARD_MAX_PATHS})
+		if isinstance(timeoutSeconds, bool) or not isinstance(timeoutSeconds, (int, long)):
+			return toolError("invalid_argument", "timeoutSeconds must be an integer from 1 to 86400.", {"reason": "durationRequired"})
+		if timeoutSeconds < MIN_DURATION_SECONDS or timeoutSeconds > HARD_MAX_DURATION_SECONDS:
+			return toolError("invalid_argument", "timeoutSeconds must be an integer from 1 to 86400; an explicit duration is required and zero is not an unshelve.", {"reason": "durationOutOfRange", "requested": timeoutSeconds, "minimum": MIN_DURATION_SECONDS, "maximum": HARD_MAX_DURATION_SECONDS})
+		exactPaths = []
+		inputProblems = []
+		for index in range(len(paths)):
+			problem = alarmPathProblem(paths[index])
+			if problem is not None:
+				inputProblems.append({"index": index, "path": boundedText(paths[index], 256), "reason": problem})
+				continue
+			exactPaths.append(unicode(paths[index]).strip())
+		if inputProblems:
+			return toolError("invalid_argument", "Every target must be a provider-qualified exact Alarm path with no wildcard; no path was shelved.", {"reason": "preflightInputFailed", "items": inputProblems})
+		stage = "policy_read"
+		policy, policyFailure = readPolicy()
+		if policy is None:
+			return toolError("operation_disabled", "The Runtime Target Policy is missing or unusable; Runtime Mutations stay disabled.", {"reason": policyFailure, "policyPath": POLICY_PATH})
+		allowlists = policy.get("allowlists")
+		entries = normalizeEntries(allowlists.get(ALLOWLIST_KEY))
+		if entries is None:
+			entries = []
+		serviceIdentity = unicode(policy.get("serviceIdentity")).strip()
+		auditMode = unicode(policy.get("auditMode"))
+		auditProfile = policy.get("auditProfile")
+		if auditProfile is not None:
+			auditProfile = unicode(auditProfile).strip()
+		effectiveMaximum = HARD_MAX_DURATION_SECONDS
+		if hasKey(policy, "alarmShelveMaxSeconds"):
+			# D12 Phase 4 amendment: a deployment may lower the cap, never raise it.
+			effectiveMaximum = min(effectiveMaximum, int(policy.get("alarmShelveMaxSeconds")))
+		if timeoutSeconds > effectiveMaximum:
+			return toolError("invalid_argument", "timeoutSeconds exceeds the deployment's shelve cap; nothing was shelved.", {"reason": "durationOverPolicyCap", "requested": timeoutSeconds, "cap": effectiveMaximum, "hardMaximum": HARD_MAX_DURATION_SECONDS})
+		stage = "preflight"
+		policyProblems = []
+		for index in range(len(exactPaths)):
+			path = exactPaths[index]
+			if path.lower().find(RESERVED_PROVIDER.lower()) >= 0:
+				# Refused before the allowlist is consulted, so an explicit *
+				# cannot reach the document's provider.
+				policyProblems.append({"index": index, "path": path, "reason": "reservedProvider", "code": "permission_denied"})
+				continue
+			if not matchesAllowlist(path, entries):
+				policyProblems.append({"index": index, "path": path, "reason": "targetNotAllowlisted", "code": "permission_denied"})
+		if policyProblems:
+			return toolError("permission_denied", "Every target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no path was shelved.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems})
+		if auditMode == "required" and not auditProfileAvailable(auditProfile):
+			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no path was shelved.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
+		stage = "audit_attempt"
+		targetText = ",".join(exactPaths)
+		attemptRecorded = auditWrite("attempt", targetText, "outcome=attempt requested=" + unicode(len(exactPaths)) + " timeoutSeconds=" + unicode(timeoutSeconds))
+		if auditMode == "required" and not attemptRecorded:
+			return toolError("operation_disabled", "The Runtime audit mode is required but the attempt record could not be written; no path was shelved.", {"reason": "auditAttemptFailed"})
+		stage = "dispatch"
+		# D30 3: items execute one at a time with per-item outcomes and no
+		# rollback. system.alarm.shelve reports no per-item result, so one call per
+		# item is what makes an item's outcome attributable at all.
+		dispatched = True
+		items = []
+		executed = 0
+		outcomeUnknown = 0
+		for index in range(len(exactPaths)):
+			path = exactPaths[index]
+			try:
+				system.alarm.shelve([path], int(timeoutSeconds))
+				items.append({"path": path, "status": "executed"})
+				executed += 1
+			except (Exception, JavaException) as itemExc:
+				logger.warn("correlationId=" + correlationId + " item=" + unicode(index) + " shelve outcome is indeterminate: " + text(itemExc))
+				items.append({"path": path, "status": "outcome_unknown"})
+				outcomeUnknown += 1
+		stage = "audit_result"
+		resultRecorded = auditWrite("result", targetText, "outcome=executed executed=" + unicode(executed) + " outcomeUnknown=" + unicode(outcomeUnknown))
+		auditRecorded = bool(attemptRecorded and resultRecorded)
+		stage = "observed_read"
+		observed = []
+		shelvedValues = None
+		try:
+			shelvedValues = system.alarm.getShelvedPaths()
+		except (Exception, JavaException) as observedExc:
+			logger.warn("correlationId=" + correlationId + " shelved-state read failed: " + text(observedExc))
+			shelvedValues = None
+		if shelvedValues is None:
+			observed = [{"path": path, "status": "error", "error": {"code": "upstream_error", "message": "The observed shelved state could not be read.", "correlationId": correlationId}} for path in exactPaths]
+		elif len(shelvedValues) > SHELVED_READ_LIMIT:
+			observed = [{"path": path, "status": "error", "error": {"code": "upstream_error", "message": "The shelved Alarm state exceeds the bounded read limit of 500 entries.", "correlationId": correlationId}} for path in exactPaths]
+		else:
+			shelvedByPath = {}
+			for value in shelvedValues:
+				try:
+					shelvedByPath[unicode(value.getPath())] = value
+				except (Exception, JavaException) as itemExc:
+					logger.warn("correlationId=" + correlationId + " shelved entry could not be read: " + text(itemExc))
+			for path in exactPaths:
+				value = shelvedByPath.get(path)
+				if value is None:
+					# D12: shelving a literal pattern that matches nothing is not a
+					# failure, so an absent entry is reported as Observed state.
+					observed.append({"path": path, "status": "ok", "shelved": False})
+					continue
+				try:
+					observed.append({"path": path, "status": "ok", "shelved": True, "user": jsonValue(value.getUser()), "expiration": jsonValue(value.getExpiration()), "expired": bool(value.isExpired())})
+				except (Exception, JavaException) as itemExc:
+					logger.error("correlationId=" + correlationId + " shelved entry serialization failed: " + text(itemExc))
+					observed.append({"path": path, "status": "error", "error": {"code": "schema_mismatch", "message": "The observed shelving record could not be represented.", "correlationId": correlationId}})
+		stage = "serialization"
+		domain = {
+			"items": items,
+			"observed": observed,
+			"summary": {"requested": len(exactPaths), "executed": executed, "outcomeUnknown": outcomeUnknown, "timeoutSeconds": int(timeoutSeconds), "auditMode": auditMode, "auditRecorded": auditRecorded},
+			"meta": {"correlationId": correlationId},
+		}
+		domain = encodeNulls(domain)
+		encoded = system.util.jsonEncode(domain)
+		if len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
+			return toolError("limit_exceeded", "Structured output exceeds the 256 KiB default limit; shelve fewer paths.", {"reason": "outputOverLimit"})
+		return {"structuredContent": domain}
+	except (Exception, JavaException) as exc:
+		logger.error("correlationId=" + correlationId + " stage=" + stage + " alarm_shelve failed: " + text(exc))
+		if dispatched:
+			# D08: never replay an uncertain mutation; the agent re-reads instead.
+			return toolError("outcome_unknown", "The Alarm shelve may have been dispatched but its outcome could not be established.", {"reason": "dispatchOutcomeUnknown", "stage": stage})
+		return toolError("upstream_error", "The Alarm shelve could not be completed.", {"reason": "handlerFailure", "stage": stage})

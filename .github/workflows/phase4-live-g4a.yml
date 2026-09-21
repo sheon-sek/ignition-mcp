@@ -1,18 +1,21 @@
 name: Phase 4 Live Gateway G4a
 
 # Ticket #6 (milestone 4a) characterization — Runtime Target Policy storage and
-# the exact-path system.alarm.queryStatus bound — plus ticket #7's live
-# verification of the shipped Runtime Bundle deployed with the `operator`
-# profile: an allowlisted Tag write, the Target allowlist refusals, the reserved
-# policy provider under an explicit `*`, the missing-policy fail-closed case and
-# the exact operator inventory. Runs only from pull requests in the trusted
-# repository (no fork execution) and only under the dedicated `phase4-live`
-# GitHub environment. The environment exists WITHOUT protection rules, reusing
-# the owner-accepted deviation recorded for `phase3-live`; the compensating
-# controls are the trusted-repo guard, no repository or environment secrets in
-# this job, localhost/compose-only Gateway endpoints, run-unique Tag paths and
-# the driver-enforced CI marker plus expected-Gateway-identity check that fails
-# closed before any probe call.
+# the exact-path system.alarm.queryStatus bound — plus the live verification of
+# the shipped Runtime Bundle deployed with the `operator` profile: an allowlisted
+# Tag write, the Target allowlist refusals, the reserved policy provider under an
+# explicit `*`, the missing-policy fail-closed case and the exact operator
+# inventory (ticket #7), and the Alarm Mutations: an allowlisted shelve and
+# unshelve confirmed through alarm_shelved_list, the deployment shelve cap and the
+# D12 hard maximum, the wildcard and segment-boundary refusals, a Preflight that
+# shelves nothing, and the Runtime audit rows (ticket #8). Runs only from pull
+# requests in the trusted repository (no fork execution) and only under the
+# dedicated `phase4-live` GitHub environment. The environment exists WITHOUT
+# protection rules, reusing the owner-accepted deviation recorded for
+# `phase3-live`; the compensating controls are the trusted-repo guard, no
+# repository or environment secrets in this job, localhost/compose-only Gateway
+# endpoints, run-unique Tag and Alarm paths and the driver-enforced CI marker plus
+# expected-Gateway-identity check that fails closed before any probe call.
 on:
   pull_request:
     paths:
@@ -247,6 +250,13 @@ jobs:
           uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-no-policy \
             | tee "$EVIDENCE_DIR/driver-tag-write-no-policy.log"
 
+      - name: Refuse the Alarm Mutations while no Runtime Target Policy exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py alarm-no-policy \
+            | tee "$EVIDENCE_DIR/driver-alarm-no-policy.log"
+
       - name: Provision the Runtime Target Policy through Native REST
         shell: bash
         run: |
@@ -296,6 +306,13 @@ jobs:
           set -euo pipefail
           uv run --no-sync python tests/harness/phase4-live/driver.py tag-write \
             | tee "$EVIDENCE_DIR/driver-tag-write.log"
+
+      - name: Verify alarm_shelve and alarm_unshelve live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py alarm-shelve \
+            | tee "$EVIDENCE_DIR/driver-alarm-shelve.log"
 
       - name: Summarize the characterization
         id: summarize

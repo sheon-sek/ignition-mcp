@@ -8,6 +8,8 @@ CI marker the live workflow writes, and runs every driver stage over it:
 * ``policy-provision`` exercises the Native REST Tag provider + Tag import path.
 * ``policy-read`` / ``alarm`` exercise the driver's probe-call and fact-derivation
   code against the recorded probe payloads.
+* ``tag-write`` / ``alarm-no-policy`` / ``alarm-shelve`` exercise the shipped
+  Mutation cases against the recorded Tool bodies.
 * ``summarize`` exercises the drift check and verdict.
 
 The rehearsal runs against ``tests/fixtures/recorded/gateway-8.3/phase4``. Those
@@ -124,17 +126,20 @@ def main(argv: list[str] | None = None) -> int:
             runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
             audit_profile=policy_document.AUDIT_PROFILE_NAME,
             port=driver.EXPECTED_ORIGIN_PORT,
+            alarm_root=ALARM_ROOT,
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH
             stages = [
                 (["tag-write-no-policy"], "tag-write-no-policy"),
+                (["alarm-no-policy"], "alarm-no-policy"),
                 (["policy-provision"], "policy-provision"),
                 (["policy-read", "--label", "before-restart"], "policy-read-before-restart"),
                 (["policy-read", "--label", "after-restart"], "policy-read-after-restart"),
                 (["alarm"], "alarm"),
                 (["tag-write-setup"], "tag-write-setup"),
                 (["tag-write"], "tag-write"),
+                (["alarm-shelve"], "alarm-shelve"),
             ]
             for stage, record in stages:
                 code = run_stage(stage, base_url, mcp_url, work, marker, evidence, args.characterization)

@@ -239,6 +239,76 @@ def audit_profile_resource() -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Ticket #8 (`alarm_shelve`/`alarm_unshelve`) live fixtures
+#
+# The Alarm stage runs after the tag_write stage, so it installs its own policy
+# over the same reserved provider: the alarm allowlists, the audit profile the
+# D18 modes name, and a shelve cap below the D12 24 h hard maximum so the cap
+# refusal is provable on a live Gateway. The ticket #6 fixture above keeps its
+# frozen bytes.
+# --------------------------------------------------------------------------- #
+
+#: D12 Phase 4 amendment: a deployment may lower the 24 h maximum and never raise
+#: it. The alarm stage runs against this cap and asks for twice it.
+ALARM_SHELVE_CAP_SECONDS = 3600
+
+
+def alarm_paths(root_name: str, provider: str = "default") -> dict[str, str]:
+    """The exact Alarm paths the ticket #8 cases use, under one run-unique root.
+
+    `sibling` shares a string prefix with the allowlisted root without sharing a
+    path segment, so it is the segment-boundary refusal case; `wildcard` is the
+    target form D12 forbids.
+    """
+    root = "prov:" + provider + ":/tag:" + root_name
+    return {
+        "root": root,
+        "exact": root + "/Exact:/alm:ProbeHi",
+        "nested": root + "/Fold/ChildA:/alm:ProbeHi",
+        "sibling": root + "_sibling/Exact:/alm:ProbeHi",
+        "wildcard": root + "/*",
+    }
+
+
+def alarm_allowlist(root_name: str, provider: str = "default") -> tuple[str, ...]:
+    """The one Alarm path prefix the ticket #8 allowlist carries."""
+    return ("prov:" + provider + ":/tag:" + root_name,)
+
+
+def alarm_policy(
+    *, allowlist: tuple[str, ...], shelve_cap: int = ALARM_SHELVE_CAP_SECONDS,
+    audit_mode: str = "best_effort",
+) -> dict[str, Any]:
+    """The policy the ticket #8 live cases run against."""
+    return {
+        "schemaVersion": 1,
+        "allowlists": {"alarm_shelve": list(allowlist), "alarm_unshelve": list(allowlist)},
+        "serviceIdentity": SERVICE_IDENTITY,
+        "auditMode": audit_mode,
+        "auditProfile": AUDIT_PROFILE_NAME,
+        "alarmShelveMaxSeconds": shelve_cap,
+    }
+
+
+def alarm_policy_json(**overrides: Any) -> str:
+    return json.dumps(alarm_policy(**overrides), sort_keys=True, separators=(",", ":"))
+
+
+def alarm_policy_sha256(**overrides: Any) -> str:
+    return hashlib.sha256(alarm_policy_json(**overrides).encode("utf-8")).hexdigest()
+
+
+def alarm_policy_byte_length(**overrides: Any) -> int:
+    return len(alarm_policy_json(**overrides).encode("utf-8"))
+
+
+def alarm_policy_tag_document_bytes(**overrides: Any) -> bytes:
+    """Tag import document that updates the policy and its length companion."""
+    document = {"tags": policy_tags(alarm_policy_json(**overrides))}
+    return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
 
 def tag_document_bytes() -> bytes:
     return json.dumps(tag_document(), separators=(",", ":")).encode("utf-8")
