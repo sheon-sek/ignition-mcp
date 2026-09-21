@@ -327,3 +327,108 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 6 | `eac3b5a` | full validation suite green (328 tests; executor claimed-state semantics tightened to plan 7.6 during test iteration) |
 | 7 | `6e7035f` | full validation suite green (360 tests) |
 | 8 | `a81ba12` | full validation suite green (370 tests) |
+
+## Handoff status (2026-09-21, context-window boundary — continue from here in a fresh omp)
+
+Binding inputs for the continuing agent: this runbook (execute slices strictly in order),
+`/tmp/claude-1000/-home-sheon-Projects-ignition-mcp-2/4166e223-c7f6-496c-9193-7924c6d66e51/scratchpad/omp-brief.txt`
+(execution rules 1–7), `AGENTS.md`, and the cited decisions. Branch
+`feature/phase-3-artifact-project-foundations`; never work on main; never merge.
+
+### Done and committed (each ended with the FULL validation suite green)
+
+Slice 0 `a9f7110` contracts/INDEX · 1 `6cdb56b` storage+lifecycle+audit · 2 `dcaf42d` ArtifactStore ·
+3 `c17d1b5` zip_safety+pcf1 (golden vector committed) · 4 `cb0ca2e` HTTP data plane · 5 `5b03c04` streamed
+download + exports · 6 `eac3b5a` D08 chain + executor (structural tests: dispatch_write/VerifiedPrincipal
+confined; zero mutation tools; 16-Tool inventory) · 7 `6e7035f` D16 transactions (all states, restart
+reconcile) · 8 `a81ba12` artifact/diagnose Tools + storage diagnostics · 9 `40ecc81` tooling/compat +
+deterministic release (BUNDLE_VERSION 0.2.0, RESOURCE_SCHEMA_VERSION 1, marker line in project.json,
+__BUNDLE_SOURCE_REVISION__ token stamped at archive time; testedTuples never SUPPORTED).
+
+### UNCOMMITTED — Slice 10 (verification REQUIRED before commit)
+
+`cli/setup_native/` (doctor|plan|verify, no apply/install-module), package pyproject console script
+`ignition-mcp`, README section, `tests/test_phase3_setup_native.py`, `tests/test_phase3_setup_native_wheel.py`
+were produced by a subagent and are NOT yet independently verified. Steps:
+1. Read `cli/setup_native/*` critically; then run the ENTIRE block below. Fix failures.
+2. Confirm: manifest-only inputs (no repo-relative runtime paths), 0600 token-file enforcement, secrets
+   never in output, exit codes 0/1/2/3, plan ends with `No changes have been applied.`, BLOCKED on
+   UNMANAGED_SAME_NAME/MARKER_INVALID, D21 UNKNOWN-vs-UNTESTED mapping, exact inventory (superset=FAIL).
+3. Commit `feat(cli): setup-native doctor/plan/verify (read-only, manifest-driven)`; append
+   `| 9 | 40ecc81 | … |` and `| 10 | … | … |` rows to the Execution log table.
+
+### Remaining: Slice 11 then 12
+
+Slice 11: `tests/harness/phase3-live/` (compose modeled on phase2-live: exact images 8.3.8 required +
+8.3.9 candidate, module checksum-pinned, minimal GATEWAY_MODULES_ENABLED whitelist, bounded diagnostics
+with `timeout` + detached stdin, symlink pruning, unconditional teardown). Deploy the exact
+`release`-built ZIP (record its SHA-256 + manifest in evidence); ignition-rest in `jwt` auth
+(harness-generated RS256 keypair, env IGNITION_MCP_JWT_PUBLIC_KEY PEM, issuer/audience),
+IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true, IGNITION_MCP_DATA_DIR=$RUNNER_TEMP/…,
+CONFIG_MUTATION enabled with operation/target allowlists naming ONLY project_import + the run-unique
+disposable project `mcp_g3_<run_id>_<attempt>`, PROJECT_WRITER_ENABLED=true + GATEWAY_ID.
+In-process driver exercises: doctor/plan/verify, project_export→GET/HEAD integrity+parity,
+artifact_list/info, operation_diagnose same-principal + unknown-ID not_found, fingerprint stability
+(2 exports no change), tag_config_export, authz denials (invalid JWT / read-only JWT / config JWT to
+non-allowlisted project → decision rows, Gateway unchanged), then transactions NO_CHANGE / COMMITTED /
+CONFLICTED (+ recovery lock + audit triples). Add `tooling/compat` evidence GENERATOR writing schema-valid
+`tests/compatibility/evidence/g3-<gateway>-mcp-<build>/` incl. ownerAcceptedDeviations
+["phase3-live-environment-protection"], fingerprintStability, deployedBundleSha256.
+Workflow `.github/workflows/phase3-live-g3.yml`: `pull_request` + trusted-repo job guard + `environment:
+phase3-live` (exists, NO protection rules — owner-accepted deviation, keep; record in evidence).
+Push branch, `gh pr create --draft` (gh is authenticated as sheon-sek; repo
+github.com/sheon-sek/ignition-mcp; LOCAL docker daemon is NOT running — live runs only on GH Actions; a
+user's real Ignition occupies 127.0.0.1:8088 on this machine — never bind/assume it in tests).
+Monitor run; commit resulting evidence rows; never merge.
+
+Slice 12: runbook results (evidence links, run IDs, ZIP SHA-256, lessons), package README ALL new
+IGNITION_MCP_* vars (DATA_DIR mandatory; TOOL/QUERY/ARTIFACT timeouts; AUDIT_*/OPERATION_RECORD_*/
+RETENTION_*/STORAGE_PROBE_*; ARTIFACT_MAX_BYTES/TOTAL_BYTES/MAX_COUNT/MIN_FREE_BYTES/MIN_FREE_RATIO/
+EXPORT_TTL_HOURS/RECOVERY_TTL_DAYS/STAGING_DEADLINE_SECONDS/CLEANUP_INTERVAL_SECONDS/CLEANUP_BATCH/
+UPLOAD_ENABLED; SENSITIVE_EXPORTS_ENABLED; CONFIG/CONTROL/ADMIN_MUTATION_ENABLED; MUTATION_OPERATIONS;
+MUTATION_TARGETS; GATEWAY_ID; PROJECT_WRITER_ENABLED; PROJECT_LOCK_TIMEOUT_SECONDS/
+PROJECT_LOCK_MAX_ENTRIES/PROJECT_RECONCILE_INTERVAL_SECONDS/PROJECT_VERIFICATION_TIMEOUT_SECONDS/
+PROJECT_DESIGNER_POLICY; setup-native: IGNITION_MCP_SETUP_GATEWAY_URL/MCP_URL/GATEWAY_TOKEN/MCP_TOKEN),
+single-writer obligation, data plane, bundle README release artifacts, INDEX resume point → G3 closed,
+final Execution-log rows, draft PR body per brief rule 5.
+
+### Validation command block (run after EVERY slice; slice 9+ adds the last four)
+
+```bash
+uv lock --check
+uvx --from ruff==0.16.8 ruff check .
+uv run --locked --package ignition-rest-mcp --with mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
+uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+uv run --no-sync python -m tooling.contracts.lint
+uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+uv run --no-sync python -m tooling.native.cli build --project-dir packages/ignition-runtime-bundle/project --output dist/runtime.zip
+uv build --package ignition-rest-mcp
+uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+uv run --no-sync python -m tooling.native.cli release --project-dir packages/ignition-runtime-bundle/project --out-dir dist/release-a --source-revision "$(git rev-parse HEAD)" --evidence-dir tests/compatibility/evidence
+uv run --no-sync python -m tooling.native.cli release --project-dir packages/ignition-runtime-bundle/project --out-dir dist/release-b --source-revision "$(git rev-parse HEAD)" --evidence-dir tests/compatibility/evidence
+for f in dist/release-a/*; do cmp "$f" "dist/release-b/$(basename "$f")"; done
+```
+
+### Environment/tooling facts learned (do not rediscover)
+
+- Commit trailer style: end every commit with `Co-Authored-By: open-router/@preset/qwen-38-flash <noreply@oh-my-pi.local>` (repo style uses a Co-Authored-By model-attribution line).
+- This harness session REDACTS literal `Bearer <token>` strings inside tool-call content — in tests build
+  such strings at runtime (`"Bearer " + token`) or they arrive as `***`.
+- chmod on an already-open SQLite file does NOT break its writes — inject storage failures by
+  monkeypatching `SqliteAuditSink.write` or flipping `Database._healthy`/capturing via patched
+  `Database.open`, not file mutation.
+- httpx MockTransport pre-reads streaming request bodies (masks dispatch phase flags); see
+  `_LazyMockTransport` in test_phase3_safety_executor.py.
+- FastMCP in-memory `Client.call_tool(...).data` returns MODEL objects (attribute access), not dicts;
+  expected-failure calls need `raise_on_error=False`.
+- httpx ASGITransport buffers responses: mid-stream disconnect is proven via the `_stream` unit tests +
+  will be proven live in slice 11.
+- `OperationContext` has `auditor`; lifecycle `invoke_tool(..., audited=True)` is the only auditor source
+  for Tools; data-plane routes implement ordering themselves (artifacts/routes.py).
+- Settings gained many required fields; the tests/test_config.py `_settings()` helper must list ALL of
+  them on every future Settings change.
+- Jython runtime bundle untouched so far this phase (slice 10+11 only touch bundle source at slice 11's
+  deployed-ZIP step; bundle files were changed at slice 9: handler marker/revision, 0.2.0).
+
+G3 acceptance stays exactly as the runbook lists it; Phase 3 ends at G3; Phase 4 requires a new
+user-directed branch.
