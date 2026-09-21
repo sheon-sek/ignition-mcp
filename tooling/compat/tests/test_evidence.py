@@ -1,8 +1,8 @@
 """Slice 9 (Phase 3 / G3): compatibility evidence validator.
 
-Real committed G0-G2 evidence must pass read-only (documented legacy forms);
-Phase 3 rules must reject SUPPORTED claims, D27 exception inheritance and
-dishonest outputSchema records.
+Frozen G0-G2 evidence must pass read-only in its documented legacy forms. The
+committed G3 rows must also pass the Phase 3 rules for D27 exact-tuple handling,
+fingerprint stability, and deployment provenance.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from tooling.compat.evidence import tested_tuples_for as bundle_tuples
 REPO_EVIDENCE = Path(__file__).resolve().parents[3] / "tests/compatibility/evidence"
 D27_DIR = "g2-8.3.8-mcp-2026021307"
 NON_D27_DIR = "g2-8.3.9-mcp-2026021307"
+G3_D27_DIR = "g3-8.3.8-mcp-2026021307"
+G3_NON_D27_DIR = "g3-8.3.9-mcp-2026021307"
 
 
 def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
@@ -35,10 +37,15 @@ def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
 class EvidenceTest(unittest.TestCase):
     def test_repository_evidence_passes_readonly(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2"})
-        self.assertEqual(len(rows), 4)
+        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3"})
+        self.assertEqual(len(rows), 6)
         d27 = next(row for row in rows if row.directory == D27_DIR)
         self.assertTrue(d27.is_d27_tuple and d27.d27_exception_applied)
+        g3_d27 = next(row for row in rows if row.directory == G3_D27_DIR)
+        self.assertTrue(g3_d27.is_d27_tuple and g3_d27.d27_exception_applied)
+        g3_candidate = next(row for row in rows if row.directory == G3_NON_D27_DIR)
+        self.assertFalse(g3_candidate.d27_exception_applied)
+        self.assertEqual(g3_candidate.native_response_binding, "UNVERIFIED_LIMITATION")
         legacy_g0 = next(row for row in rows if row.gate == "G0")
         self.assertTrue(legacy_g0.d27_exception_applied)  # d27OutputSchemaExceptionApplied alias
         legacy_g1 = next(row for row in rows if row.gate == "G1")
@@ -116,7 +123,17 @@ class EvidenceTest(unittest.TestCase):
 
     def test_tested_tuples_filter_exact_bundle_and_order(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual(bundle_tuples(rows, "0.2.0"), [])
+        tuples_020 = bundle_tuples(rows, "0.2.0")
+        self.assertEqual(
+            [
+                (item["gate"], item["gatewayVersion"], item["nativeResponseBinding"])
+                for item in tuples_020
+            ],
+            [
+                ("G3", "8.3.8", "VERIFIED_WITH_LIMITATION"),
+                ("G3", "8.3.9", "UNVERIFIED_LIMITATION"),
+            ],
+        )
         tuples_010 = bundle_tuples(rows, "0.1.0")
         self.assertEqual({item["gate"] for item in tuples_010}, {"G1", "G2"})
         self.assertEqual(tuples_010, sorted(

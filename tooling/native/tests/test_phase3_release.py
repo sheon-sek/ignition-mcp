@@ -59,7 +59,16 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["bundleVersion"], "0.2.0")
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        self.assertEqual(manifest["testedTuples"], [])  # no 0.2.0 evidence row exists yet
+        self.assertEqual(
+            [
+                (item["gate"], item["gatewayVersion"], item["nativeResponseBinding"])
+                for item in manifest["testedTuples"]
+            ],
+            [
+                ("G3", "8.3.8", "VERIFIED_WITH_LIMITATION"),
+                ("G3", "8.3.9", "UNVERIFIED_LIMITATION"),
+            ],
+        )
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)
         self.assertNotIn("__BUNDLE_SOURCE_REVISION__", handler)
