@@ -48,6 +48,12 @@ LOGGER = logging.getLogger("ignition_rest_mcp")
 
 SCOPE_TAG_PREFIX = "scope:"
 
+#: D08: a component that can destroy state declares it with this tag, next to its
+#: scope and capability tags. The contract carries the same value as ``destructive``
+#: and the contract test keeps the two in step. Discovery and the guarded executor
+#: both read the declaration; nothing else may assume a Tool is non-destructive.
+DESTRUCTIVE_TAG = "destructive"
+
 #: D07 assigns scope by operation effect. The declared scope therefore names the
 #: operation class of an audited denial; the contract test ties this map to
 #: ``contracts/shared/permission-classes.json``.
@@ -85,6 +91,12 @@ def declared_scope(tags: Iterable[str]) -> str | None:
     return declared[0]
 
 
+def declares_destructive(tags: Iterable[str]) -> bool:
+    """Whether a component declares that it can destroy state (D08)."""
+
+    return DESTRUCTIVE_TAG in tags
+
+
 class ScopeAuthorizationMiddleware(Middleware):
     """D07 enforcement for the Tools and Resources of one deployment."""
 
@@ -108,14 +120,18 @@ class ScopeAuthorizationMiddleware(Middleware):
         call_next: CallNext[mt.CallToolRequestParams, ToolResult],
     ) -> ToolResult:
         name = context.message.name
-        if context.fastmcp_context is None:
-            # Without the server we cannot read the Tool's declared scope: deny
-            # rather than let an unchecked call through.
-            await self._deny_tool(name, None)
         tool = await self._resolve_tool(context, name)
-        if tool is not None and not self._allows(tool.tags):
-            await self._deny_tool(name, declared_scope(tool.tags))
-        # An unknown or capability-disabled Tool keeps FastMCP's own refusal.
+        if tool is None:
+            if context.fastmcp_context is None:
+                # Without the server we cannot read the Tool's declared scope: deny
+                # rather than let an unchecked call through.
+                await self._deny_tool(name, None, destructive=False)
+            # An unknown or capability-disabled Tool keeps FastMCP's own refusal.
+            return await call_next(context)
+        if not self._allows(tool.tags):
+            await self._deny_tool(
+                name, declared_scope(tool.tags), destructive=declares_destructive(tool.tags),
+            )
         return await call_next(context)
 
     # ---------------------------------------------------------------- resources
@@ -146,14 +162,16 @@ class ScopeAuthorizationMiddleware(Middleware):
         # resolves to the configured service identity with ignition.read only.
         return current_principal(self._settings)
 
-    async def _audit_denial(self, tool: str, actor: str, operation_class: str, reason: str) -> str:
+    async def _audit_denial(
+        self, tool: str, actor: str, operation_class: str, reason: str, *, destructive: bool,
+    ) -> str:
         """D18: deny durably, then let the caller's envelope share the correlation ID.
 
         The row is the same ``decision`` shape the guarded executor writes for an
         out-of-scope Mutation, so a denied call is visible to the audit even though
-        it never reaches a handler. Nothing was dispatched, so ``destructive`` is
-        false and no ``attempt`` row exists. A failed write never changes the
-        denial, exactly as on the artifact data plane.
+        it never reaches a handler. ``destructive`` is the Tool's own declaration,
+        not an assumption; nothing was dispatched, so no ``attempt`` row exists. A
+        failed write never changes the denial, exactly as on the artifact data plane.
         """
 
         correlation_id = uuid7()
@@ -169,7 +187,7 @@ class ScopeAuthorizationMiddleware(Middleware):
             actor=actor,
             permission_class=operation_class,
             budget_class="FAST",
-            destructive=False,
+            destructive=destructive,
             started_at=datetime.now(timezone.utc),
         )
         await Auditor(sink, records, context, metrics).decision(allowed=False, reason=reason)
@@ -211,7 +229,7 @@ class ScopeAuthorizationMiddleware(Middleware):
             },
         )
 
-    async def _deny_tool(self, name: str, scope: str | None) -> NoReturn:
+    async def _deny_tool(self, name: str, scope: str | None, *, destructive: bool) -> NoReturn:
         missing = f"missing-scope:{scope}" if scope is not None else "no-declared-scope"
         principal = self._principal()
         # An unresolvable declaration has no effect class to record: that is a
@@ -219,7 +237,9 @@ class ScopeAuthorizationMiddleware(Middleware):
         # caller authorization decision.
         operation_class = SCOPE_PERMISSION_CLASS.get(scope) if scope is not None else None
         correlation_id = (
-            await self._audit_denial(name, principal.key, operation_class, f"authz-scope:{missing}")
+            await self._audit_denial(
+                name, principal.key, operation_class, f"authz-scope:{missing}", destructive=destructive,
+            )
             if operation_class is not None
             else uuid7()
         )

@@ -1,0 +1,20 @@
+services:
+  gateway:
+    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE must be an exact patch tag}
+    pull_policy: never
+    ports:
+      - "127.0.0.1:8088:8088"
+    environment:
+      ACCEPT_IGNITION_EULA: "Y"
+      GATEWAY_ADMIN_USERNAME: "admin"
+      GATEWAY_ADMIN_PASSWORD: "phase4-rest-ci-only-not-a-production-secret"
+      IGNITION_EDITION: "standard"
+      DISABLE_QUICKSTART: "true"
+    volumes:
+      - phase4-rest-gateway-data:/usr/local/bin/ignition/data
+    command: >
+      -n ignition-mcp-phase4-rest-ci
+      -m 1536
+
+volumes:
+  phase4-rest-gateway-data:

@@ -10,6 +10,7 @@ import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from ignition_rest_mcp.capabilities.request_schema import bundle_update_item_schema
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 
@@ -24,6 +25,7 @@ PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 RESOURCE_TYPE_PREFIX = "/data/api/v1/resources/type/"
+RESOURCE_COLLECTION_PREFIX = "/data/api/v1/resources/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +38,12 @@ class ConfigResourceCapability:
     list_path: str | None
     find_path_template: str | None
     singleton_path: str | None
+    #: The collection path an update is dispatched to, present only when the
+    #: Gateway both documents ``PUT`` for this type *and* documents the request
+    #: schema D03 requires: an update route without a schema is never dispatched.
+    update_path: str | None = None
+    #: The self-contained JSON Schema one PUT change item must satisfy.
+    update_request_schema: Mapping[str, Any] | None = None
 
     @property
     def singleton(self) -> bool:
@@ -126,7 +134,7 @@ class CapabilityRegistry:
                 if not isinstance(openapi, dict) or not isinstance(openapi.get("paths"), dict):
                     raise ValueError("OpenAPI paths missing")
                 endpoints = _endpoint_inventory(openapi["paths"])
-                resource_types = _resource_type_inventory(endpoints)
+                resource_types = _resource_type_inventory(endpoints, openapi)
                 semantic = _semantic_capabilities(endpoints, resource_types)
                 module_versions = _module_versions(modules)
                 fingerprint = _fingerprint(gateway_info, module_versions)
@@ -204,7 +212,7 @@ def _endpoint_inventory(paths: dict[str, Any]) -> set[tuple[str, str]]:
 
 
 def _resource_type_inventory(
-    endpoints: set[tuple[str, str]],
+    endpoints: set[tuple[str, str]], openapi: Mapping[str, Any],
 ) -> dict[str, ConfigResourceCapability]:
     result: dict[str, ConfigResourceCapability] = {}
     for method, path in endpoints:
@@ -219,6 +227,12 @@ def _resource_type_inventory(
         list_path = f"/data/api/v1/resources/list/{resource_type}"
         find_path = f"/data/api/v1/resources/find/{resource_type}/{{name}}"
         singleton_path = f"/data/api/v1/resources/singleton/{resource_type}"
+        collection_path = f"{RESOURCE_COLLECTION_PREFIX}{resource_type}"
+        update_schema = (
+            bundle_update_item_schema(dict(openapi), resource_type)
+            if ("PUT", collection_path) in endpoints
+            else None
+        )
         result[resource_type] = ConfigResourceCapability(
             resource_type=resource_type,
             module=module,
@@ -228,6 +242,8 @@ def _resource_type_inventory(
             list_path=list_path if ("GET", list_path) in endpoints else None,
             find_path_template=find_path if ("GET", find_path) in endpoints else None,
             singleton_path=singleton_path if ("GET", singleton_path) in endpoints else None,
+            update_path=collection_path if update_schema is not None else None,
+            update_request_schema=update_schema,
         )
     return dict(sorted(result.items()))
 
@@ -261,6 +277,8 @@ def _semantic_capabilities(
         for item in resource_types.values()
     ):
         semantic.add("config_resource_get")
+    if any(item.update_path is not None for item in resource_types.values()):
+        semantic.add("config_resource_update")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
     # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
     # capability only gates internal machinery and future Phase 4 exposure (D08/D26).

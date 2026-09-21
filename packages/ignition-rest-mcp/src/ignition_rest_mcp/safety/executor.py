@@ -75,6 +75,15 @@ class MutationRequest:
     precondition: Callable[[], Awaitable[None]] | None = None
     audit_fields: dict[str, Any] = field(default_factory=dict)
     target_type: str = ""
+    #: A Target-class policy rule the operation itself declares (D30 §5): it is
+    #: evaluated between the operation allowlist and the Target allowlist, inside
+    #: the deployment policy, and its denial is audited like every other layer.
+    target_policy: Callable[[], PolicyDecision] | None = None
+    #: A Gateway can report a refused change inside a 2xx response (Ignition's
+    #: resource PUT answers ``success=false`` with a ``problem``). Such a response
+    #: is a known rejection, never a claimed success: the classifier turns it into
+    #: the D06 error the caller must see.
+    rejection: Callable[[WriteDispatchResult], GatewayError | None] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +124,10 @@ async def execute_mutation(
         evaluate_deployment_policy(
             settings, request.operation, request.target_id,
             registry.supports(request.operation.capability),
+            # D30 §5: the operation's own Target-class rule (Refused resource
+            # types) is evaluated before the Target allowlist, so it also covers
+            # the fully allowlisted deployment where only it can refuse.
+            target_class=request.target_policy() if request.target_policy is not None else None,
         ),
     ):
         if not decision.allowed:
@@ -207,7 +220,16 @@ async def _interpret(
                              target_id=request.target_id)
         return MutationResult(MutationState.NOT_SENT, dispatch, error)
 
-    if dispatch.outcome is DispatchOutcome.RESPONDED and 200 <= (dispatch.status or 0) < 300:
+    # A Gateway can carry its own refusal inside a 2xx response. That is a known
+    # rejection (the Gateway answered and refused), so it follows the same path as
+    # a 4xx: no claimed success, and no invented outcome_unknown.
+    rejection = (
+        request.rejection(dispatch)
+        if request.rejection is not None and dispatch.outcome is DispatchOutcome.RESPONDED
+        else None
+    )
+
+    if dispatch.outcome is DispatchOutcome.RESPONDED and rejection is None and 200 <= (dispatch.status or 0) < 300:
         try:
             verified = await _verify()
         except asyncio.CancelledError:
@@ -230,7 +252,18 @@ async def _interpret(
                              target_type=target_type, target_id=request.target_id)
         return MutationResult(MutationState.RECOVERY_REQUIRED, dispatch, error)
 
-    if dispatch.outcome is DispatchOutcome.RESPONDED and dispatch.status is not None and 400 <= dispatch.status < 500:
+    if dispatch.outcome is DispatchOutcome.RESPONDED and (
+        rejection is not None or (dispatch.status is not None and 400 <= dispatch.status < 500)
+    ):
+        if request.operation.rejection_is_final:
+            # D30 §2: the Gateway answered and refused. That answer is the result —
+            # no read-back may turn it into a success, because a resource that
+            # happens to show the requested values may have been changed by another
+            # writer, and claiming one is exactly the false success this forbids.
+            error = rejection or _map_status(dispatch.status or 500)
+            await auditor.result("rejected", error_code=error.code, target_type=target_type,
+                                 target_id=request.target_id)
+            return MutationResult(MutationState.REJECTED, dispatch, error)
         try:
             verified = await _verify()
         except asyncio.CancelledError:
@@ -246,7 +279,7 @@ async def _interpret(
             await auditor.result("outcome_unknown", error_code="outcome_unknown",
                                  target_type=target_type, target_id=request.target_id)
             return MutationResult(MutationState.OUTCOME_UNKNOWN, dispatch, error)
-        error = _map_status(dispatch.status)
+        error = rejection or _map_status(dispatch.status or 500)
         await auditor.result("rejected", error_code=error.code, target_type=target_type,
                              target_id=request.target_id)
         return MutationResult(MutationState.REJECTED, dispatch, error)
@@ -293,6 +326,29 @@ def _layer_message(decision: PolicyDecision) -> str:
         return "the operation is not in the deployment allowlist"
     if decision.layer == "target-allowlist":
         return "the target is not in the deployment allowlist"
+    if decision.layer == "target-class":
+        return (
+            "this resource type is refused for generic configuration mutation; "
+            "administer it through its own curated path"
+        )
     if decision.layer == "capability":
         return "the target Gateway does not expose the required capability"
     return "the mutation was denied by policy"
+
+
+def mutation_failure(result: MutationResult) -> GatewayError | None:
+    """The error a caller must see when a mutation did not cleanly apply.
+
+    A verified success (including a recovered one) has none. Every other state is
+    a refusal or an unresolved outcome, and an unresolved outcome is always
+    ``outcome_unknown`` — never a silent success and never a replay licence.
+    """
+
+    if result.state in {MutationState.SUCCEEDED, MutationState.RECOVERED_SUCCESS}:
+        return None
+    if result.error is not None:
+        return result.error
+    return GatewayError(
+        "outcome_unknown",
+        "the mutation did not apply cleanly and its final state is unknown; it was not replayed",
+    )

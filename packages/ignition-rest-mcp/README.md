@@ -34,10 +34,13 @@ empty or whitespace-only value, or setting both variables, is a configuration er
 Every Tool and Resource declares the scope it needs — a `scope:<scope>` tag next to its capability
 tag, mirrored by `requiredScope` in its contract. Authorization is centralized in middleware and
 runs twice (D07): an unauthorized component is filtered out of `tools/list`/`resources/list`, and a
-call to it is refused with `permission_denied` *before* the handler or the Gateway is reached. Each
-refusal is also a durable audit `decision` row (`denied:authz-scope:missing-scope:<scope>`, the
-token name as actor, the Tool's effect class as `operation_class`) sharing one correlation ID with
-the caller's error envelope; a denial is never upgraded to an allow because the audit write failed.
+call to it is refused with `permission_denied` *before* the handler or the Gateway is reached. A
+refused **Tool** call is also a durable audit `decision` row
+(`denied:authz-scope:missing-scope:<scope>`, the token name as actor, the Tool's effect class as
+`operation_class`, and the Tool's declared `destructive` flag) sharing one correlation ID with the
+caller's error envelope; a refused **Resource** read is logged with the same reason but writes no
+audit row, because a Resource denial carries no D06 envelope to share a correlation ID with. A
+denial is never upgraded to an allow because the audit write failed.
 The credential itself never leaves `auth.py`: it is not logged, not audited, not returned in an error,
 and not retained on the verified token. `auth=none` has no principal and stays `ignition.read` only,
 so it can neither read a CONFIG/ADMIN surface nor mutate anything.
@@ -81,13 +84,44 @@ is audited.
 `IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true` (deny by default; enforced in discovery visibility
 and at call time with `operation_disabled`; every attempt including denials is audited).
 
-**Mutation policy (machinery only. Phase 3 exposes zero mutation Tools):**
-`IGNITION_MCP_CONFIG_MUTATION_ENABLED` / `..._CONTROL_...` / `..._ADMIN_...` all default false;
-`IGNITION_MCP_MUTATION_OPERATIONS` is a CSV allowlist (≤100 ids, `*` allowed) and
+**Mutation policy:** `IGNITION_MCP_CONFIG_MUTATION_ENABLED` / `..._CONTROL_...` / `..._ADMIN_...` all
+default false; `IGNITION_MCP_MUTATION_OPERATIONS` is a CSV allowlist (≤100 ids, `*` allowed) and
 `IGNITION_MCP_MUTATION_TARGETS` a JSON object mapping operation id → target list (deny-by-default;
 an operation with no target list allows nothing). Mutations accept only a `VerifiedPrincipal`
 minted by `auth.py` from a just-verified credential; `jwt` takes its scopes from the verified token
 claims and a named static token from its configured scope set, while `auth=none` stays read-only.
+A Tool whose class is disabled is hidden from `tools/list` as well as refused at call time.
+
+**`config_resource_update`** (D30, Phase 4 milestone 4c) is the first REST Mutation Tool. It
+requires scope `ignition.config`, class `CONFIG_MUTATION`, an operation-allowlist entry and a
+Target-allowlist entry. The Target of a config change is the exact `<resourceType>/<name>`, or the
+bare `<resourceType>` for a singleton, always in the **default** configuration collection: the
+Gateway selects a resource by collection as well as by name, so a caller-supplied `collection` is
+refused with `invalid_argument` rather than resolved to a look-alike in another collection, and a
+Target outside the allowlist is `permission_denied` (D30 §7). `*` is still required to allow
+everything. The caller passes the `expectedSignature` it read from `config_resource_get`, which is
+compared against a bounded re-read immediately before dispatch and then sent to the Gateway as its
+native `signature` — a stale token fails with `conflict` and dispatches nothing. The change item is
+validated against the target Gateway's own documented `PUT` request schema (D03), taken from the
+capability snapshot and bundled into a self-contained, deeply immutable JSON Schema at refresh time
+(a holder of the snapshot cannot change the rules a later write is validated against): a value the
+type's schema forbids is `invalid_argument` without a request leaving the server, and a Gateway that
+documents an update route without a usable request schema exposes no update for it at all. An explicit
+Gateway rejection (a 4xx, or a 2xx carrying `success=false` with a `problem`) is the result of the
+call — `conflict` for a signature mismatch — and no read-back can turn it into a success, because a
+resource that happens to show the requested values may have been changed by another writer. A
+success therefore comes only from a claim the Gateway itself made, or from a genuinely ambiguous
+dispatch whose read-back establishes the change; where attribution cannot be established (an
+ambiguous dispatch whose read-back merely matches, with a competing writer possible) the result is
+`outcome_unknown`.
+`allowInvalidReferences=false` is always sent and is not a parameter, and the change body is bounded
+(262144 bytes). The result carries the resource as Observed state plus the new Resource signature for
+the caller's next change. The **Refused resource types** in
+`contracts/shared/refused-resource-types.json` (API tokens, security levels/properties/zones, user
+sources, identity providers, OAuth2 clients, secret providers, system properties, EAM license and
+module administration, and the MCP Module's own `server-config`) are refused with
+`permission_denied` whatever the Target allowlist says; a resource type that is not classified is
+refused too.
 
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,

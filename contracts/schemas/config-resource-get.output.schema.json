@@ -15,11 +15,20 @@
     "resource": {
       "type": "object",
       "additionalProperties": true
+    },
+    "signature": {
+      "description": "The Gateway's Resource signature (D30 Precondition token) for this resource; null when the Gateway reports none.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
     }
   },
   "required": [
     "correlationId",
     "resourceType",
-    "resource"
+    "resource",
+    "signature"
   ]
 }

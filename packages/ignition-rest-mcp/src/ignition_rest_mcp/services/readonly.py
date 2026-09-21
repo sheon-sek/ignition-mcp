@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from pydantic import ValidationError
 
-from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, ConfigResourceCapability
+from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.models import (
@@ -30,28 +30,18 @@ from ignition_rest_mcp.models import (
     ProjectSummary,
 )
 from ignition_rest_mcp.operation import OperationContext
+from ignition_rest_mcp.services.config_resources import (
+    bounded_text,
+    redact,
+    resource_signature,
+    catalog_resource_type,
+)
 
 DEFAULT_PAGE_SIZE = 100
 HARD_PAGE_SIZE = 500
 MAX_OFFSET = 1_000_000
 MAX_SEARCH_LENGTH = 256
 MAX_IDENTIFIER_LENGTH = 512
-
-_SECRET_KEYS = {
-    "password",
-    "passwd",
-    "secret",
-    "clientsecret",
-    "client_secret",
-    "accesstoken",
-    "access_token",
-    "refreshtoken",
-    "refresh_token",
-    "apikey",
-    "api_key",
-    "privatekey",
-    "private_key",
-}
 
 
 P = ParamSpec("P")
@@ -130,7 +120,7 @@ def config_resource_search(
 ) -> ConfigResourceSearchResult:
     _require(registry, "config_resource_search")
     limit, offset = _page_request(limit, offset)
-    query = _bounded_text(query, "query", MAX_SEARCH_LENGTH, allow_empty=True).lower()
+    query = bounded_text(query, "query", MAX_SEARCH_LENGTH, allow_empty=True).lower()
     all_items = [
         ConfigResourceTypeSummary(
             resourceType=item.resource_type,
@@ -166,12 +156,12 @@ async def config_resource_describe(
     resource_type: str,
 ) -> ConfigResourceDescribeResult:
     _require(registry, "config_resource_describe")
-    capability = _resource_type(registry, resource_type)
+    capability = catalog_resource_type(registry, resource_type)
     payload = await _get(client, capability.describe_path, context)
     return ConfigResourceDescribeResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
-        description=_redact(payload),
+        description=redact(payload),
     )
 
 
@@ -187,7 +177,7 @@ async def config_resource_names(
     offset: int,
 ) -> ConfigResourceNamesResult:
     _require(registry, "config_resource_names")
-    capability = _resource_type(registry, resource_type)
+    capability = catalog_resource_type(registry, resource_type)
     if capability.names_path is None:
         raise GatewayError("unsupported_capability", "This resourceType is singleton and has no names collection")
     limit, offset = _page_request(limit, offset)
@@ -218,7 +208,7 @@ async def config_resource_list(
     offset: int,
 ) -> ConfigResourceListResult:
     _require(registry, "config_resource_list")
-    capability = _resource_type(registry, resource_type)
+    capability = catalog_resource_type(registry, resource_type)
     if capability.list_path is None:
         raise GatewayError("unsupported_capability", "This resourceType is singleton and has no list collection")
     limit, offset = _page_request(limit, offset)
@@ -229,7 +219,7 @@ async def config_resource_list(
         params=_collection_params(search, limit, offset),
     )
     raw_items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
-    items = [_redact(item) for item in raw_items]
+    items = [redact(item) for item in raw_items]
     return ConfigResourceListResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
@@ -250,8 +240,8 @@ async def config_resource_get(
     default_if_undefined: bool,
 ) -> ConfigResourceGetResult:
     _require(registry, "config_resource_get")
-    capability = _resource_type(registry, resource_type)
-    collection = _bounded_text(collection, "collection", 128, allow_empty=True)
+    capability = catalog_resource_type(registry, resource_type)
+    collection = bounded_text(collection, "collection", 128, allow_empty=True)
     params: dict[str, Any] = {}
     if collection:
         params["collection"] = collection
@@ -265,7 +255,7 @@ async def config_resource_get(
     else:
         if default_if_undefined:
             raise GatewayError("invalid_argument", "defaultIfUndefined is valid only for singleton resourceType")
-        name = _bounded_text(name, "name", MAX_IDENTIFIER_LENGTH, allow_empty=False)
+        name = bounded_text(name, "name", MAX_IDENTIFIER_LENGTH, allow_empty=False)
         if capability.find_path_template is None:
             raise GatewayError("unsupported_capability", "This resourceType does not expose exact resource lookup")
         path = capability.find_path_template.replace("{name}", quote(name, safe=""))
@@ -273,7 +263,8 @@ async def config_resource_get(
     return ConfigResourceGetResult(
         correlationId=context.correlation_id,
         resourceType=capability.resource_type,
-        resource=_redact(payload),
+        resource=redact(payload),
+        signature=resource_signature(payload),
     )
 
 
@@ -296,7 +287,7 @@ async def audit_query(
     offset: int,
 ) -> AuditQueryResult:
     _require(registry, "audit_query")
-    profile = _bounded_text(profile, "profile", 256, allow_empty=False)
+    profile = bounded_text(profile, "profile", 256, allow_empty=False)
     limit, offset = _page_request(limit, offset)
     params: dict[str, Any] = {"limit": limit, "offset": offset, "maxRecordLimit": HARD_PAGE_SIZE}
     filters = {
@@ -310,7 +301,7 @@ async def audit_query(
         "endTime": end_time,
     }
     for key, raw in filters.items():
-        value_text = _bounded_text(raw, key, MAX_SEARCH_LENGTH, allow_empty=True)
+        value_text = bounded_text(raw, key, MAX_SEARCH_LENGTH, allow_empty=True)
         if value_text:
             params[key] = value_text
     payload = await _get(
@@ -388,7 +379,7 @@ async def alarm_pipeline_status(
     offset: int,
 ) -> AlarmPipelineStatusResult:
     _require(registry, "alarm_pipeline_status")
-    path = _bounded_text(path, "path", MAX_IDENTIFIER_LENGTH, allow_empty=False)
+    path = bounded_text(path, "path", MAX_IDENTIFIER_LENGTH, allow_empty=False)
     limit, offset = _page_request(limit, offset)
     payload = await _get(
         client,
@@ -434,13 +425,6 @@ def _require(registry: CapabilityRegistry, capability: str) -> None:
         )
 
 
-def _resource_type(registry: CapabilityRegistry, value: str) -> ConfigResourceCapability:
-    value = _bounded_text(value, "resourceType", 512, allow_empty=False)
-    if value.startswith("/") or value.endswith("/") or value.count("/") != 1:
-        raise GatewayError("invalid_argument", "resourceType must use exact '<module>/<type>' form")
-    return registry.resource_type(value)
-
-
 def _page_request(limit: int, offset: int) -> tuple[int, int]:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > HARD_PAGE_SIZE:
         raise GatewayError("invalid_argument", f"limit must be an integer from 1 to {HARD_PAGE_SIZE}")
@@ -450,7 +434,7 @@ def _page_request(limit: int, offset: int) -> tuple[int, int]:
 
 
 def _collection_params(search: str, limit: int, offset: int) -> dict[str, Any]:
-    search = _bounded_text(search, "search", MAX_SEARCH_LENGTH, allow_empty=True)
+    search = bounded_text(search, "search", MAX_SEARCH_LENGTH, allow_empty=True)
     params: dict[str, Any] = {"limit": limit, "offset": offset}
     if search:
         params["search"] = search
@@ -521,29 +505,3 @@ def _integer(payload: dict[str, Any], key: str) -> int:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or int(value) != value:
         raise GatewayError("schema_mismatch", f"Gateway response field {key} is invalid")
     return int(value)
-
-
-def _bounded_text(value: str, name: str, maximum: int, *, allow_empty: bool) -> str:
-    if not isinstance(value, str):
-        raise GatewayError("invalid_argument", f"{name} must be a string")
-    value = value.strip()
-    if not allow_empty and not value:
-        raise GatewayError("invalid_argument", f"{name} must be non-empty")
-    if len(value) > maximum:
-        raise GatewayError("limit_exceeded", f"{name} exceeds the {maximum}-character limit")
-    return value
-
-
-def _redact(value: Any, *, key: str = "") -> Any:
-    normalized = key.replace("-", "_").lower()
-    if normalized in _SECRET_KEYS:
-        return "<redacted>"
-    if isinstance(value, dict):
-        if value.get("type") == "Embedded" and isinstance(value.get("data"), dict):
-            data = value["data"]
-            if {"protected", "encrypted_key", "iv", "ciphertext", "tag"}.issubset(data):
-                return {"type": "Embedded", "data": "<redacted>"}
-        return {str(child_key): _redact(child, key=str(child_key)) for child_key, child in value.items()}
-    if isinstance(value, list):
-        return [_redact(child) for child in value]
-    return value
