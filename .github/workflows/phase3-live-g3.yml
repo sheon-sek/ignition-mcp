@@ -57,7 +57,6 @@ jobs:
       JWT_ISSUER: https://ignition-mcp-ci.invalid
       JWT_AUDIENCE: ignition-rest
       EVIDENCE_DIR: artifacts/g3-${{ matrix.gateway_version }}
-      DATA_DIR: ${{ runner.temp }}/ignition-mcp-data
       RELEASE_DIR: dist/release
       GATEWAY_ID: phase3-g3-${{ matrix.gateway_version }}-${{ github.run_id }}
     steps:
@@ -83,7 +82,7 @@ jobs:
             --project-dir packages/ignition-runtime-bundle/project \
             --out-dir "$RELEASE_DIR" --source-revision "$(git rev-parse HEAD)" \
             --evidence-dir tests/compatibility/evidence
-          mkdir -p "$EVIDENCE_DIR" "$DATA_DIR"
+          mkdir -p "$EVIDENCE_DIR" "$RUNNER_TEMP/ignition-mcp-data"
           cp "$RELEASE_DIR"/* "$EVIDENCE_DIR/"
           (cd "$RELEASE_DIR" && sha256sum ignition-runtime-bundle-*.zip > "$OLDPWD/$EVIDENCE_DIR/deployed.sha256")
           cat "$EVIDENCE_DIR/deployed.sha256"
@@ -220,8 +219,7 @@ jobs:
       - name: Start ignition-rest (sensitive exports ON, JWT auth)
         shell: bash
         run: |
-          set -euo pipefail
-          IGNITION_MCP_DATA_DIR="$DATA_DIR" \
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
           IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
           IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
           IGNITION_MCP_DEPLOYMENT_PROFILE=development \
@@ -255,7 +253,7 @@ jobs:
         run: |
           set +e
           mkdir -p "$EVIDENCE_DIR/raw"
-          IGNITION_MCP_DATA_DIR="$DATA_DIR" \
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
           IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
           IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
           IGNITION_MCP_DEPLOYMENT_PROFILE=development \
@@ -288,7 +286,7 @@ jobs:
           set -euo pipefail
           kill "$(cat artifacts/rest-gate-on.pid)" 2>/dev/null || true
           sleep 3
-          IGNITION_MCP_DATA_DIR="$DATA_DIR" \
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
           IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088 \
           IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
           IGNITION_MCP_DEPLOYMENT_PROFILE=development \
