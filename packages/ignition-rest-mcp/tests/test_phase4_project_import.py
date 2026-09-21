@@ -18,10 +18,12 @@ is the whole point of the Tool:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import json
 from pathlib import Path
 import sys
+import time
 from typing import Any
 import zipfile
 
@@ -34,7 +36,9 @@ from ignition_rest_mcp.authorization import scope_tag
 from ignition_rest_mcp.projects.transactions import (
     PROJECT_IMPORT_OPERATION,
     PROJECT_IMPORT_TOOL_OPERATION,
+    ProjectTransactionService,
 )
+from ignition_rest_mcp.safety.executor import DispatchBoundary
 from ignition_rest_mcp.storage.database import Database
 from ignition_rest_mcp.storage.schema import STATE_DDL
 from phase4_fixtures import (
@@ -143,7 +147,7 @@ def _export_paths(gateway: RecordedGateway) -> list[str]:
 
 
 def _transactions(tmp_path: Path) -> list[dict[str, Any]]:
-    columns = ("transaction_id", "state", "import_dispatched", "error_code")
+    columns = ("transaction_id", "state", "import_dispatched", "error_code", "dispatch_boundary")
 
     async def scenario() -> list[dict[str, Any]]:
         db = Database("state", tmp_path / "state.db", STATE_DDL)
@@ -381,9 +385,122 @@ def test_a_gateway_rejection_is_final_even_when_the_project_shows_the_candidate(
     assert [row["phase"] for row in audit_rows(tmp_path) if row["outcome"] == "recovered_success"] == []
 
 
+#: The D30 §2 crash window: the Gateway answered, and the process died before the
+#: transaction wrote its terminal state.
+class _ProcessDied(BaseException):
+    """A simulated process death: nothing after the raise runs, nothing is written."""
+
+
+def _die_once_the_gateway_answered(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Kill the process as soon as the dispatch has been classified and recorded.
+
+    ``_map_mutation`` is the first step after the guarded executor returns — i.e. after
+    the answer was read and durably classified — and it precedes the terminal write, so
+    this is exactly the window the review named.
+    """
+
+    died = {"done": False}
+    original = ProjectTransactionService._map_mutation
+
+    def crashing(self: ProjectTransactionService, mutation: Any) -> Any:
+        if not died["done"]:
+            died["done"] = True
+            raise _ProcessDied("the process died after the answer, before the terminal write")
+        return original(self, mutation)
+
+    monkeypatch.setattr(ProjectTransactionService, "_map_mutation", crashing)
+
+
+def _wait_for_state(tmp_path: Path, state: str, *, timeout: float = 15.0) -> dict[str, Any]:
+    """Wait for the restarted server's reconciliation to settle the transaction row."""
+
+    deadline = time.monotonic() + timeout
+    while True:
+        row = _transactions(tmp_path)[0]
+        if row["state"] == state or time.monotonic() > deadline:
+            return row
+        time.sleep(0.05)
+
+
+def test_a_refusal_survives_a_crash_and_restart_reconciliation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D30 §2 across a crash: the refusal is written down durably before the row can be
+    reconciled, so a restart ends the transaction `NOT_APPLIED` — even though a competing
+    writer had already landed the very candidate this call asked for."""
+
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway)
+        gateway.fail_imports_with(409)
+        gateway.race_import_with(EDITED_ENTRIES)  # a competing writer lands the candidate
+        _die_once_the_gateway_answered(monkeypatch)
+        # The simulated death unwinds the request; the ASGI test client surfaces it as an
+        # exception group when the crashed app shuts down. The durable row below is what
+        # proves the crash landed where it was aimed.
+        with contextlib.suppress(BaseExceptionGroup):
+            with TestClient(server_module.create_server(settings).http_app()) as http:
+                agent = _Session(http, CONFIG_CREDENTIAL)
+                baseline = _current_fingerprint(agent)
+                artifact_id = _upload(http, _zip(EDITED_ENTRIES))
+                with pytest.raises(_ProcessDied):
+                    _import(agent, artifact_id, fingerprint=baseline)
+        exports_before = len(_export_paths(gateway))
+
+        crashed = _transactions(tmp_path)[0]
+        assert crashed["state"] == "IMPORT_SENT"  # the terminal write never happened
+        assert crashed["dispatch_boundary"] == "refused"
+        assert crashed["import_dispatched"] == 1
+        assert crashed["error_code"] == "conflict"
+        assert _entries(gateway.project(PROJECT)) == EDITED_ENTRIES  # the other writer's B
+
+        monkeypatch.undo()
+        with TestClient(server_module.create_server(settings).http_app()):
+            reconciled = _wait_for_state(tmp_path, "NOT_APPLIED")
+
+    assert reconciled["error_code"] == "conflict"
+    assert reconciled["import_dispatched"] == 1
+    assert len(_export_paths(gateway)) == exports_before  # no read-back: a refusal is final
+    assert [row for row in audit_rows(tmp_path) if row["outcome"] == "recovered_success"] == []
+    assert all(row[2] == 0 for row in _artifacts(tmp_path))  # the snapshot is released
+
+
+def test_a_refusal_carried_inside_a_200_is_final(tmp_path: Path) -> None:
+    """The contract's rejection policy: the route can report a refused import inside the
+    2xx it documents. That answer is the result (D30 §2) — and here the competing writer
+    lands the *very* content this call asked for, so reading the Project back would credit
+    that other writer's import to this call."""
+
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway)
+        gateway.refuse_imports_with("the project is busy with another import")
+        gateway.race_import_with(EDITED_ENTRIES)  # a competing writer lands the candidate
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            baseline = _current_fingerprint(agent)
+            artifact_id = _upload(http, _zip(EDITED_ENTRIES))
+            exports_before = len(_export_paths(gateway))
+            result = _import(agent, artifact_id, fingerprint=baseline)
+
+    assert envelope(result)["code"] == "conflict"
+    assert _entries(gateway.project(PROJECT)) == EDITED_ENTRIES  # the other writer's import
+    rows = _transactions(tmp_path)
+    assert [row["state"] for row in rows] == ["NOT_APPLIED"]
+    assert rows[0]["error_code"] == "conflict"
+    assert rows[0]["import_dispatched"] == 1
+    assert rows[0]["dispatch_boundary"] == "refused"
+    # Baseline A and the pre-import re-export A' only: a refusal is never read back.
+    assert len(_export_paths(gateway)) == exports_before + 2
+    assert [row for row in audit_rows(tmp_path) if row["outcome"] == "recovered_success"] == []
+
+
 def test_an_ambiguous_dispatch_that_landed_is_reconciled_to_committed(tmp_path: Path) -> None:
     """D16: C == B after an ambiguous dispatch is a recovered success, and it is the
-    only way to reach one — the import really is in the Gateway afterwards."""
+    only way to reach one — the import really is in the Gateway afterwards.
+
+    `importDispatched` is true here: it answers whether an import request left the
+    server, not whether the Gateway acknowledged it, so a commit recovered from an
+    ambiguous dispatch reports it exactly as a commit the response confirmed does.
+    """
 
     with _seed_gateway() as gateway:
         settings = _settings(tmp_path, gateway)
@@ -646,3 +763,20 @@ def test_the_tool_operation_and_the_frozen_g3_operation_stay_distinct() -> None:
     assert PROJECT_IMPORT_TOOL_OPERATION.rejection_is_final is True
     assert PROJECT_IMPORT_OPERATION.target_denial_code == "operation_disabled"
     assert PROJECT_IMPORT_OPERATION.rejection_is_final is False
+
+
+def test_the_unanswered_class_follows_the_operations_rejection_policy() -> None:
+    """What a row may conclude while the answer is unknown (D30 §2).
+
+    The Tool's refusals are final, so an attempt whose answer was never written down may
+    not be attributed by a later re-export — a refusal would be indistinguishable from an
+    ambiguous boundary. The frozen G3 operation keeps D16's attributable reading, which
+    is what the pre-Phase-4 rows mean.
+    """
+
+    assert ProjectTransactionService._pre_dispatch_boundary(
+        PROJECT_IMPORT_TOOL_OPERATION,
+    ) is DispatchBoundary.UNATTRIBUTABLE
+    assert ProjectTransactionService._pre_dispatch_boundary(
+        PROJECT_IMPORT_OPERATION,
+    ) is DispatchBoundary.ATTRIBUTABLE

@@ -62,12 +62,12 @@ observe:
 | `project-import-commits` | an uploaded archive imports into an existing Project and the D16 transaction ends `COMMITTED` |
 | `project-import-baseline-is-the-callers-read` | the transaction's baseline A is the fingerprint `project_export` reported to the caller |
 | `project-import-verifies-its-own-candidate` | the post-import export C equals the staged candidate B (D16 reconcile) |
-| `project-import-reports-the-dispatch` | the committed transaction reports that it dispatched |
+| `project-import-reports-the-dispatch` | the committed transaction reports `importDispatched: true` — an import request left the server; the field is false only when nothing was sent |
 | `project-export-fingerprint-is-independent` | the fingerprint the server reports for a fresh export equals this harness's own `pcf1` computation |
 | `project-import-content-lands` | that independent fingerprint equals the candidate the import reported |
 | `project-import-marker-is-present` | the entry the candidate carried is in the Project the Gateway now serves |
 | `project-import-of-the-current-content-is-no-change` | re-importing that content is D16's `NO_CHANGE` |
-| `project-import-no-change-dispatches-nothing` | …and nothing was dispatched |
+| `project-import-no-change-dispatches-nothing` | …and nothing was dispatched, so `importDispatched` is false |
 | `project-import-stale-fingerprint-is-conflict` | the pre-commit fingerprint is a stale Precondition token (D30 §2) |
 | `project-import-stale-fingerprint-changes-nothing` | …and the refused import changed nothing |
 | `project-import-non-allowlisted-project-is-permission-denied` | D30 §7 for a Project the Target allowlist does not name |

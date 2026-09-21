@@ -147,6 +147,11 @@ EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES = frozenset({
 })
 EXPECTED_RECOVERY_LOCK_RELEASED_ON = frozenset({"COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"})
 EXPECTED_RECOVERY_LOCK_HELD_ON = frozenset({"OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"})
+#: The durable dispatch classification a restart reconciles from (#16). Every value is a
+#: distinct conclusion about one attempt, and restart recovery acts on all five.
+EXPECTED_DISPATCH_BOUNDARIES = (
+    "not_sent", "refused", "claimed", "attributable", "unattributable",
+)
 
 CURRENT_RUNTIME_TOOLS = [
     "bundle_info",
@@ -354,6 +359,33 @@ def lint_contracts(root: str | Path) -> None:
                 raise ContractError(f"{tool_name}: D30 §7 maps a conflict to the conflict code")
             if surface.get("OUTCOME_UNKNOWN") != "error: outcome_unknown":
                 raise ContractError(f"{tool_name}: an unresolved outcome stays outcome_unknown")
+            # D30 §2 across a restart: the durable dispatch classification is what makes a
+            # known refusal stay NOT_APPLIED, and its vocabulary decides what a restart may
+            # attribute, so the contract declares it exactly (a Tool cannot quietly widen
+            # what a re-export may be credited with).
+            boundaries = transaction.get("dispatchBoundary")
+            if not isinstance(boundaries, dict) or (
+                tuple(boundaries.get("values", ())) != EXPECTED_DISPATCH_BOUNDARIES
+            ):
+                raise ContractError(
+                    f"{tool_name}: the durable dispatch classification must be declared "
+                    "exactly (D30 §2, D16 restart reconciliation)"
+                )
+            if boundaries.get("durable") is not True:
+                raise ContractError(f"{tool_name}: the dispatch classification must be durable")
+            if "NOT_APPLIED" not in str(boundaries.get("restartRule", "")):
+                raise ContractError(
+                    f"{tool_name}: restart reconciliation must state what a recorded "
+                    "refusal becomes"
+                )
+            # D16 `importAttempted` is not this field: `importDispatched` answers whether a
+            # dispatch happened at all, and the schema's own description is the client's
+            # contract, so the declaration is required.
+            dispatched = transaction.get("importDispatched")
+            if not isinstance(dispatched, str) or not dispatched:
+                raise ContractError(
+                    f"{tool_name}: the importDispatched semantics must be declared"
+                )
         rejection = tool.get("rejectionPolicy")
         if not isinstance(rejection, dict) or "D30 §2" not in str(rejection.get("rule", "")):
             raise ContractError(f"{tool_name}: a mutation must declare the D30 §2 rejection policy")

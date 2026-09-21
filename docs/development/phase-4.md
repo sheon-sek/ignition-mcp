@@ -329,6 +329,49 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   outside the Target allowlist `permission_denied` with that Project untouched, and an
   archive another principal owns `not_found`. `provision.json` records the two provisioned
   Projects and the required OpenAPI routes.
+- **Review round 1 (`16-review-1.md`) raised two blockers, both fixed on `p4/rest-fix`
+  (base `p4/rest`).**
+  - *A restart could turn a known refusal into a recovered success.* The row persisted
+    `IMPORT_SENT` before the dispatch and only wrote the answer afterwards, so a process
+    that died once the Gateway had answered and before the terminal write left a row the
+    reconciler read as an ambiguous dispatch: it re-exported, found the candidate B a
+    competing writer had landed, and reported `COMMITTED`. The fix makes the dispatch
+    classification durable. The guarded executor now classifies every answer once, the
+    moment it exists and before any verification or read-back, and hands it to
+    `MutationRequest.on_dispatch_boundary`; the transaction persists it in the new
+    `project_transactions.dispatch_boundary` column (forward-only DDL version 4) together
+    with the raw dispatch outcome, status and error code. The value written before the
+    dispatch depends on the operation: `unattributable` when a refusal is final for it
+    (D30 §2) and `attributable` otherwise, which is exactly what a pre-Phase-4 row meant.
+    Restart reconciliation now acts on the recorded class and never replays an import:
+    `not_sent` and `refused` end `NOT_APPLIED` **without any read-back** (exporting the
+    Project could only misread another writer's identical content as this call's success),
+    `claimed` needs a re-export equal to candidate B and is `RECOVERY_REQUIRED` otherwise,
+    `unattributable` is `NOT_APPLIED` only when the Project still equals baseline A and
+    `OUTCOME_UNKNOWN` otherwise — never `COMMITTED` — and `attributable`, like a row with
+    no recorded class, follows D16's comparison unchanged. Frozen G3 rows carry no class,
+    so every Phase 3 reconciliation branch behaves exactly as before (the five new
+    mapping cases are pinned in `test_phase3_transactions.py`; the process-death window
+    end-to-end, with candidate B present, in `test_phase4_project_import.py`).
+  - *`importDispatched` contradicted its own published description.* The schema and the
+    model documented `false` for a commit recovered from an ambiguous dispatch while the
+    implementation returned `true`. The field's meaning is now declared once and used
+    everywhere: it answers whether an import request left the server — true for a commit
+    the response confirmed and for one recovered from an ambiguous dispatch, false only
+    when nothing was sent (`NO_CHANGE`, or a refusal or non-attempt before any byte left
+    the process). That is also what the frozen G3 evidence already records (`true` on
+    `COMMITTED`, `false` on `CONFLICTED`/`NO_CHANGE`), so no committed evidence changes.
+    The contract declares it (`transaction.importDispatched`) and `tooling.contracts.lint`
+    requires the declaration, the same way it requires the terminal-state surface.
+  - The refusal reader the contract's `rejectionPolicy` already promised is now wired:
+    a refused import reported inside a 200 (`{"success": false, "problem": {...}}`) is a
+    known rejection (`conflict`, the Gateway's own text never reaches the caller) instead
+    of a claim to confirm. Before the fix that response was read as a claim, and with a
+    competing writer landing the identical content it was reported as this call's
+    `COMMITTED`.
+  - Contract/schema/lint alignment: `transaction.dispatchBoundary` declares the durable
+    vocabulary and the restart rule, `transaction.importDispatched` declares the field's
+    semantics, and three contract-lint drift cases require both to stay declared.
 - **The first live attempt failed both rows, and the fix is in the harness.** Run
   [35658093734](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093734) on
   the code head returned `RECOVERY_REQUIRED` for the commit case: the candidate archive
@@ -518,37 +561,47 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   was enough this time (`tagProvider.import.attempts: 1`). **For the owner:** no action
   needed unless `setup-native` should adopt the same retry-and-verify discipline for the
   Runtime Target Policy provider, which #6 already recommends.
-- **Ticket #16 — which artifacts `project_import` consumes.** D30 §6 names a READY
-  `project_archive`; the ticket names "the artifact ID of a READY `project_archive` ...
-  (uploaded through `POST /artifacts` or produced by `project_export`)", and D17 names
-  server-produced exports as a legitimate binary ingress source. Both kinds are
+- **Resolved (#16 review round 1) — which artifacts `project_import` consumes: keep the
+  union.** D30 §6 names a READY `project_archive`; the ticket names "the artifact ID of a
+  READY `project_archive` ... (uploaded through `POST /artifacts` or produced by
+  `project_export`)", and D17 names server-produced exports as a legitimate binary ingress
+  source. The review kept the union of `project_archive` and `project_export`: both are
   `application/zip` Project archives that passed the D15 ZIP gate before they became
-  READY, so both are accepted, the accepted kinds are declared in the Tool's contract
-  (`artifactInput.kinds`), and the linter requires that declaration; every other kind is
-  `invalid_argument`, and an artifact the caller cannot see answers `not_found` first.
-  **For the owner:** confirm the union, or narrow it to `project_archive` (a one-line
-  change in `services/project_import.py` plus the contract and its test).
-- **Ticket #16 — a stale `expectedFingerprint` ends the transaction `CONFLICTED`.** D16
-  defines `CONFLICTED` for the mandatory pre-import re-export finding an external change
-  (`concurrent_modification`, `import_attempted = false`). The D30 §2 token gate detects
-  the same class of event, one step earlier and without a dispatch, so the Tool reuses
-  that state instead of inventing a new one: the transaction ends `CONFLICTED` with the
-  `conflict` code D30 §2/§7 decides, and because D06 routes an execution failure through
-  Tool error semantics the caller receives `conflict` with the state and the
-  `transactionId` named in the message (the operation record carries the transaction id,
-  D19). **For the owner:** confirm, or name a distinct state if the two are meant to be
-  distinguishable in the result rather than in the message.
-- **Ticket #16 — the REST Tool path proves `CONFLICTED` live through the token gate; its
-  A-vs-A' drift variant is fixture-only there.** Landing an external writer between the
-  baseline export and the pre-import re-export deterministically is not possible through
-  this harness: the window is inside one MCP call and a race would make the row flaky.
-  The branch is driven live by the G3 in-process harness (with a hooked client) and, on
-  the Tool path, by the unit fixture (`change_project_after_exports`). The live REST
-  cases prove the same terminal state through the deterministic stale-token gate, which
-  is also what G4's "concurrent modification" means for the REST plane in #14. If a live
-  Tool-path drift case is wanted, #20's fault-injecting proxy can hold the import request
-  open, which would make the window deterministic. **For the owner:** confirm the
-  reading for #23's L5 matrix, or ask for the proxy-based case there.
+  READY, both kinds are declared in the Tool's contract (`artifactInput.kinds`), the
+  linter requires that declaration, every other kind is `invalid_argument`, and an
+  artifact the caller cannot see answers `not_found` first. No narrowing.
+- **Resolved (#16 review round 1) — a stale `expectedFingerprint` ends the transaction
+  `CONFLICTED`.** D16 defines `CONFLICTED` for the mandatory pre-import re-export finding
+  an external change (`concurrent_modification`, `import_attempted = false`). The D30 §2
+  token gate detects the same class of event, one step earlier and without a dispatch, so
+  the Tool reuses that state instead of inventing a new one: the transaction ends
+  `CONFLICTED` with the `conflict` code D30 §2/§7 decides, the release set is D16's, and
+  the caller receives `conflict` with the state and the `transactionId` named in the
+  message (the operation record carries the transaction id, D19), which is what separates
+  the two events. The review confirmed this is the right conservative choice; no distinct
+  state is introduced.
+- **Resolved (#16 review round 1) — the REST Tool path proves `CONFLICTED` live through
+  the token gate; its A-vs-A' drift variant is fixture-only there.** Landing an external
+  writer between the baseline export and the pre-import re-export deterministically is not
+  possible through this harness: the window is inside one MCP call and a race would make
+  the row flaky. The review accepted the fixture-only coverage for the HTTP harness: the
+  branch is driven live by the G3 in-process harness (with a hooked client, and it still
+  is), the unit fixture (`change_project_after_exports`) drives it on the Tool path, and
+  the live REST cases prove the same terminal state through the deterministic stale-token
+  gate. A proxy-based live race belongs to #20's fault-injection work.
+- **Recorded for the owner (#16 fix) — D30 §2 narrows D16's recovered success when a
+  dispatch answer was never recorded.** D16's restart rule recovers `C == B` as a
+  committed transaction; D30 §2 makes an explicit refusal final. A process that dies after
+  the Gateway answered but before the answer was written down leaves a row in which a
+  refusal is indistinguishable from an ambiguous boundary, and the two rules then point in
+  opposite directions. The fix takes the safety rule, because the alternative is crediting
+  a refusal to another writer's identical content: such a row is `NOT_APPLIED` only when
+  the Project still equals baseline A and `OUTCOME_UNKNOWN` otherwise, never `COMMITTED`.
+  A *recorded* ambiguous boundary still recovers a success (`C == B`), in-process and on
+  restart, so D16's recovery rule is intact everywhere the answer is known — including for
+  every phase-3 row, which carries no class and keeps D16's comparison unchanged.
+  **For the owner:** confirm that D30 §2 takes precedence in that unrecorded window, or
+  amend D16 to say an unrecorded answer is attributed by the re-export.
 
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an

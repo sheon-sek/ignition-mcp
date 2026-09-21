@@ -78,7 +78,7 @@
   },
   "fixedKnobsNote": "D16's canonical protocol imports with overwrite. The caller cannot choose it — the Tool always sends it — so an import can never create or merge a Project the Target allowlist did not name.",
   "rejectionPolicy": {
-    "rule": "D30 §2: an explicit Gateway rejection is final for this Tool — a 4xx (mapped by D30 §7, e.g. 409 to `conflict`) or a 2xx carrying a refusal. The attempt ends there, and no read-back may turn it into a success: a Project that happens to show the candidate may have been imported by another writer.",
+    "rule": "D30 §2: an explicit Gateway rejection is final for this Tool — a 4xx (mapped by D30 §7, e.g. 409 to `conflict`) or a 2xx carrying a refusal (`conflict`, and the Gateway's own problem text never reaches the caller). The attempt ends there, and no read-back may turn it into a success: a Project that happens to show the candidate may have been imported by another writer. The refusal is written to the transaction row the moment it is read, before any verification, so a process that dies in that window leaves a row a restart ends `NOT_APPLIED` (see `transaction.dispatchBoundary`).",
     "verificationMaySucceedWhen": [
       "the Gateway claimed success (2xx with no refusal)",
       "the dispatch was genuinely ambiguous (possibly sent with no response, or 5xx) and the post-import export C equals the staged candidate B"
@@ -100,6 +100,27 @@
       "RECOVERY_REQUIRED": "error: outcome_unknown"
     },
     "stateSurfaceRule": "D06 routes an execution failure through Tool error semantics rather than a successful result, so only a satisfied outcome (COMMITTED, or NO_CHANGE when the candidate was semantically equal to the baseline) is returned as data. The terminal state is named in the error message and the transactionId is linked to the caller's operation record (D19), so operation_diagnose follows a refused or unresolved import back to its transaction.",
+    "importDispatched": "True when this call dispatched an import request: the request left the server and the Gateway may have applied it, which covers a commit confirmed by the response and a commit recovered from an ambiguous dispatch. False only when nothing was sent — NO_CHANGE, or a refusal or non-attempt that ended the transaction before any byte left the process. It is never False when the Project may already hold the candidate.",
+    "dispatchBoundary": {
+      "column": "project_transactions.dispatch_boundary: the durable dispatch classification, written before the row can be reconciled",
+      "durable": true,
+      "writtenBy": "the guarded executor classifies every answer the moment it exists and the transaction persists it before any verification or read-back; the pre-dispatch value is written with IMPORT_SENT, so a row whose process died mid-dispatch records that no answer was written down",
+      "values": [
+        "not_sent",
+        "refused",
+        "claimed",
+        "attributable",
+        "unattributable"
+      ],
+      "meaning": {
+        "not_sent": "no byte reached the Gateway: a known non-attempt",
+        "refused": "the Gateway answered and refused, and this Tool makes that answer final (D30 §2)",
+        "claimed": "the Gateway answered without refusing: a claim only a matching re-export confirms",
+        "attributable": "no definite answer (partial send, no response, 5xx), or a refusal this operation does not make final: D16's attribution applies, so a re-export equal to the candidate B is a recovered success",
+        "unattributable": "possibly dispatched while a refusal would be final and no answer was recorded: D30 §2 wins over D16's recovered success, so no re-export may be attributed"
+      },
+      "restartRule": "restart reconciliation acts on the recorded class and never replays an import: `not_sent` and `refused` end the transaction NOT_APPLIED with no read-back at all (a refusal is final, so exporting the Project could only be misread as this call's success), `claimed` requires a re-export equal to the candidate B and is RECOVERY_REQUIRED otherwise, `unattributable` is NOT_APPLIED only when the Project still equals baseline A and is OUTCOME_UNKNOWN otherwise (never COMMITTED), and `attributable` — like a row written before this column existed — follows D16's comparison: C == B is a recovered COMMITTED, C == A is NOT_APPLIED, anything else is OUTCOME_UNKNOWN or RECOVERY_REQUIRED."
+    },
     "recoveryLocks": "the release set and hold set are D16's: a COMMITTED, NO_CHANGE, NOT_APPLIED, CONFLICTED or FAILED_PRE_IMPORT transaction releases the recovery snapshot; OUTCOME_UNKNOWN and RECOVERY_REQUIRED keep it locked and preserve the candidate and the re-export for diagnosis",
     "automaticRetry": "never: no import is replayed, automatically or otherwise (D16, D30)"
   },

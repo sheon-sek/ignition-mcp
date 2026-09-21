@@ -391,6 +391,9 @@ async def project_import_cases(
                body.get("baselineFingerprint"))
         _check(cases, "project-import-verifies-its-own-candidate", body.get("candidateFingerprint"),
                body.get("resultFingerprint"))
+        # importDispatched answers "did an import request leave the server", not "did the
+        # Gateway acknowledge it": a commit (confirmed or recovered) reports true, and only
+        # a call that sent nothing — here the no-op below — reports false.
         _check(cases, "project-import-reports-the-dispatch", True, body.get("importDispatched"))
 
         # Independent evidence: re-export the Project, fingerprint it here, and look for

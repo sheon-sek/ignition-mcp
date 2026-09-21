@@ -198,7 +198,11 @@ class ProjectImportResult(StrictModel):
     #: Re-export C after the import; equal to the candidate on a commit, and absent only
     #: on a no-op, where nothing was imported.
     resultFingerprint: str | None = Field(default=None, pattern="^pcf1:[0-9a-f]{64}$")
-    #: False for ``NO_CHANGE``, and for a commit recovered from an ambiguous dispatch.
+    #: True when this call dispatched an import request: the request left the server and
+    #: the Gateway may have applied it — whether the response confirmed the import or an
+    #: ambiguous dispatch was recovered as a success. False only when nothing was sent:
+    #: ``NO_CHANGE``, or a refusal or non-attempt that ended the transaction before any
+    #: byte left the process. It is never false when the Project may hold the candidate.
     importDispatched: bool
     #: True when the designer-session policy is ``warn`` and a Designer session was open.
     designerWarning: bool
