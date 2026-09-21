@@ -176,7 +176,7 @@ class ShellSyntaxTest(unittest.TestCase):
 
     def test_repository_workflows_have_no_shell_syntax_errors(self) -> None:
         workflows = sorted((REPO / ".github/workflows").glob("*.yml"))
-        self.assertEqual(len(workflows), 6)
+        self.assertEqual(len(workflows), 7)
         for workflow in workflows:
             self.assertEqual(shell_syntax_findings(workflow), [], workflow.name)
 

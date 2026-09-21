@@ -1,0 +1,16 @@
+{
+  "failureCount": 2,
+  "failures": [
+    {
+      "diagnosticMessage": "Cannot invoke \"com.inductiveautomation.ignition.common.tags.model.TagPath.getPathLength()\" because \"cleanPath\" is null",
+      "quality": "Error",
+      "qualitySubCode": 776
+    },
+    {
+      "diagnosticMessage": "Cannot invoke \"com.inductiveautomation.ignition.common.tags.model.TagPath.getPathLength()\" because \"cleanPath\" is null",
+      "quality": "Error",
+      "qualitySubCode": 776
+    }
+  ],
+  "successCount": 0
+}

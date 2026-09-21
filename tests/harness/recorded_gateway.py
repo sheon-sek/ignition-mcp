@@ -57,6 +57,11 @@ _OPENAPI_OPERATIONS = (
     ("get", "/data/api/v1/resources/type/ignition/cobranding"),
     ("get", "/data/api/v1/resources/singleton/ignition/cobranding"),
     ("put", "/data/api/v1/resources/ignition/cobranding"),
+    # Phase 4 ticket #6 characterization: the Native REST write path for the
+    # deployment-owned Runtime Target Policy provider and its Tags.
+    ("post", "/data/api/v1/resources/ignition/tag-provider"),
+    ("get", "/data/api/v1/resources/find/ignition/tag-provider/{name}"),
+    ("get", "/data/api/v1/resources/type/ignition/tag-provider"),
 )
 
 #: Path segments under ``/data/api/v1/resources/`` that name an operation rather
@@ -305,6 +310,16 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "inheritable": bool(document.get("inheritable", False)),
             })
             return
+        if path.startswith("/data/api/v1/resources/find/ignition/tag-provider/"):
+            name = path.rsplit("/", 1)[-1]
+            if name != server.policy_provider:
+                self._json(404, {"message": "No resource", "status": "404"})
+                return
+            if not server.policy_provider_created:
+                self._json(404, {"message": "No resource", "status": "404"})
+                return
+            self._json(200, _fixture("phase4/tag-provider-find.json"))
+            return
         if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
             self._json(200, {"name": "phase3-runtime"})
             return
@@ -319,6 +334,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, payload)
             return
         if path == "/data/api/v1/tags/export":
+            provider = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("provider", [""])[0]
+            if provider == server.policy_provider:
+                if not server.policy_provider_created:
+                    self._json(404, {"message": "No tag provider", "status": "404"})
+                    return
+                self._send(200, json.dumps(
+                    _fixture("phase4/tag-export.json"), separators=(",", ":"),
+                ).encode("utf-8"), "application/octet-stream")
+                return
             self._json(200, {"path": "", "tags": [{"name": "Status", "tagType": "Boolean"}]})
             return
         if path == "/data/api/v1/designers":
@@ -409,6 +433,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "content": [{"type": "text", "text": "tag path is not valid"}],
                         "isError": True,
                     }
+                elif tool in {"policy_probe", "alarm_probe"}:
+                    fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
+                    result = {
+                        "content": [{"type": "text", "text": "recorded replay"}],
+                        "isError": False,
+                        "structuredContent": _fixture(fixture),
+                    }
                 else:
                     self._json(200, {
                         "jsonrpc": "2.0",
@@ -447,7 +478,38 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/data/api/v1/resources/ignition/audit-profile":
             self._json(200, {})
             return
+        if path == "/data/api/v1/resources/ignition/tag-provider":
+            resources = json.loads(body)
+            names = [item.get("name") for item in resources] if isinstance(resources, list) else []
+            if server.policy_provider not in names:
+                self._json(422, {"message": "Unexpected provider name", "status": "422"})
+                return
+            server.policy_provider_created = True
+            self._json(200, _fixture("phase4/tag-provider-create.json"))
+            return
         if path == "/data/api/v1/tags/import":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            provider = query.get("provider", [""])[0]
+            collision_policy = query.get("collisionPolicy", [""])[0]
+            if provider == server.policy_provider:
+                if not server.policy_provider_created:
+                    self._json(404, _fixture("phase2/no-route.json"))
+                    return
+                if not server.policy_tags_imported:
+                    if not server.policy_import_flaked:
+                        # The recorded 8.3.8 run answered the first import while
+                        # the provider was still starting; apply must retry.
+                        server.policy_import_flaked = True
+                        self._json(200, _fixture("phase4/tag-import-provider-not-ready.json"))
+                        return
+                    server.policy_tags_imported = True
+                    self._json(200, _fixture("phase4/tag-import-success.json"))
+                    return
+                if collision_policy == "Abort":
+                    self._json(200, _fixture("phase4/tag-import-abort.json"))
+                    return
+                self._json(200, _fixture("phase4/tag-import-merge.json"))
+                return
             document = json.loads(body)
             if isinstance(document, list):
                 self._json(200, _fixture("phase2/tag-import-bare-array.json"))
@@ -497,9 +559,10 @@ class _Server(http.server.ThreadingHTTPServer):
         runtime_resources: tuple[str, ...],
         source_revision: str,
         bundle_version: str,
-        resources: dict[str, dict[str, dict[str, Any]]] | None = None,
+        policy_provider: str = "",
+        port: int = 0,
     ) -> None:
-        super().__init__(("127.0.0.1", 0), _Handler)
+        super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
         self.projects = {name: _gateway_export(project) for name, project in projects.items()}
         self.imports: list[str] = []
@@ -511,10 +574,15 @@ class _Server(http.server.ThreadingHTTPServer):
         self.runtime_resources = runtime_resources
         self.source_revision = source_revision
         self.bundle_version = bundle_version
+        self.policy_provider = policy_provider
+        self.policy_provider_created = False
+        self.policy_tags_imported = False
+        self.policy_import_flaked = False
         #: config resource state: resource type -> (name, collection) -> document.
         #: Keying by collection as well as name is what makes the fixture able to
-        #: tell two resources with one name in different collections apart.
-        self.resources: dict[str, dict[tuple[str, str], dict[str, Any]]] = resources or {}
+        #: tell two resources with one name in different collections apart. Seed it
+        #: through :meth:`RecordedGateway.seed_resource`.
+        self.resources: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
         self.signature_serial = 0
         #: Modelled (not recorded) Gateway rejection: when set, every resource PUT
         #: answers 200 with ``success=false`` and this ``problem`` message, the
@@ -674,6 +742,8 @@ class RecordedGateway:
         runtime_resources: tuple[str, ...] = (),
         source_revision: str = "UNSTAMPED",
         bundle_version: str = "0.2.0",
+        policy_provider: str = "",
+        port: int = 0,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -683,6 +753,8 @@ class RecordedGateway:
             runtime_resources,
             source_revision,
             bundle_version,
+            policy_provider,
+            port,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 
