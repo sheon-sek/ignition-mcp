@@ -1,0 +1,25 @@
+{
+  "activeTagImport": 200,
+  "databaseConnectUrl": "jdbc:mariadb://db:3306/ignition_mcp_ci",
+  "databaseDriver": "MariaDB",
+  "databaseTranslator": "MYSQL",
+  "initialTagImport": 200,
+  "openapiReadiness": {
+    "endpointCount": 451,
+    "requiredEndpoints": [
+      "GET /data/alarm-notification/api/v1/pipeline",
+      "GET /data/alarm-notification/api/v1/pipelines",
+      "POST /data/api/v1/resources/com.inductiveautomation.historian/historian-provider",
+      "POST /data/api/v1/resources/ignition/audit-profile",
+      "POST /data/api/v1/resources/ignition/database-connection",
+      "POST /data/api/v1/tags/import"
+    ]
+  },
+  "resources": {
+    "com.inductiveautomation.historian/historian-provider": 200,
+    "ignition/audit-profile": 200,
+    "ignition/database-connection": 200
+  },
+  "stage": "provision",
+  "status": "PASS"
+}

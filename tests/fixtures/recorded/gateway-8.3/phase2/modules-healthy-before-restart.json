@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "id": "com.inductiveautomation.mcp",
+      "name": "MCP",
+      "version": "1.3.5-SNAPSHOT (b2026021307)",
+      "installed": true,
+      "healthy": true
+    }
+  ]
+}

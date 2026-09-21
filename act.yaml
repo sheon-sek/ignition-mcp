@@ -1,0 +1,2 @@
+# Managed by local-ci-wizard: act's default runner for this repo.
+default: ubuntu-latest

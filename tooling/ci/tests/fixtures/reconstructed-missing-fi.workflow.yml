@@ -1,0 +1,43 @@
+# Reconstructed from db8c702 (head of failed run 35594408385): the metrics
+# scrape moved into its own step and took the outer `fi` of this block with it.
+# The step never passed `bash -n`: it died with "syntax error: unexpected end of
+# file" in runs 35592969557, 35593736110 and 35594408385.
+name: Reconstructed missing fi
+on: workflow_dispatch
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway || true)"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color > "$EVIDENCE_DIR/docker-compose.log" 2>&1 || true
+          if [[ -n "$cid" ]]; then
+            # Every docker call is hard-bounded (Phase 2 lesson: an unbounded
+            # docker exec hung run 35533572068); cat dereferences symlinked
+            # wrapper logs, the fallback prunes symlinks before upload.
+            timeout 45 docker exec "$cid" cat /usr/local/bin/ignition/logs/wrapper.log > "$EVIDENCE_DIR/gateway-wrapper.log" 2>/dev/null </dev/null || true
+            if [[ ! -s "$EVIDENCE_DIR/gateway-wrapper.log" ]]; then
+              rm -f "$EVIDENCE_DIR/gateway-wrapper.log"
+              mkdir -p "$EVIDENCE_DIR/gateway-logs"
+              timeout 60 docker cp "$cid:/usr/local/bin/ignition/logs/." "$EVIDENCE_DIR/gateway-logs" >/dev/null 2>&1 </dev/null || true
+              find "$EVIDENCE_DIR/gateway-logs" -type l -delete 2>/dev/null || true
+              sudo chown -R "$(id -u):$(id -g)" "$EVIDENCE_DIR/gateway-logs" 2>/dev/null || true
+            fi
+          # metrics scraped live in its own step (g3diag R6: this ran after the
+          # server had already stopped, so the file was always empty)
+
+      - name: Upload G3 evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase3-g3-${{ matrix.gateway_version }}-${{ github.run_id }}
+          path: |
+            ${{ env.EVIDENCE_DIR }}
+            artifacts/g3-evidence
+          if-no-files-found: error
+          retention-days: 14

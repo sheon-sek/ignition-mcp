@@ -1,10 +1,10 @@
-# Ignition MCP Architecture Decisions — D01–D28
+# Ignition MCP Architecture Decisions — D01–D29
 
 **Status:** DECIDED
 
 **Canonical location:** `docs/decisions/` (see D25). This single index replaces the three per-batch index files, which are kept unchanged in `docs/_archive/`.
 
-D01–D28 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
+D01–D29 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
 
 ## Decision index
 
@@ -38,6 +38,7 @@ D01–D28 are binding unless explicitly reopened through a new decision or amend
 | D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 | D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
+| D29 | DECIDED | [Recorded Jython runner for Runtime Tool handlers](D29-recorded-jython-runtime-runner.md) | owner-approved test-only `jython-standalone` 2.7.4 + Java 11, required locally and in CI; adds to D23 L4, does not replace it |
 
 ## Cross-decision amendment
 
@@ -198,4 +199,4 @@ The original D01–D26 architecture / implementation decision backlog is now com
 
 **G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence. Phase 4 starts only on a new user-directed feature branch.
 
-Treat D01–D28 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
+Treat D01–D29 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

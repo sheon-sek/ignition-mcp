@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "id": "com.inductiveautomation.mcp",
+      "name": "MCP",
+      "version": "1.3.5-SNAPSHOT (b2026021307)",
+      "installed": true,
+      "healthy": true
+    },
+    {
+      "id": "com.inductiveautomation.historian",
+      "name": "Historian"
+    },
+    {
+      "id": "com.inductiveautomation.alarm-notification",
+      "name": "Alarm Notification"
+    }
+  ]
+}

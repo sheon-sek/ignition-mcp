@@ -1,0 +1,39 @@
+{
+  "schemaVersion": 1,
+  "operation": "system.tag.query",
+  "parameterOrder": [
+    "provider",
+    "pathPattern",
+    "namePattern",
+    "tagType",
+    "valueSource",
+    "includeUdtMembers",
+    "returnProperties",
+    "maxResults",
+    "continuation"
+  ],
+  "arguments": {
+    "provider": "default",
+    "pathPattern": "Area/*",
+    "namePattern": "",
+    "tagType": "AtomicTag",
+    "valueSource": "",
+    "includeUdtMembers": true,
+    "returnProperties": ["path", "tagType"],
+    "maxResults": 1,
+    "continuation": ""
+  },
+  "result": {
+    "nativeType": "Results",
+    "items": [
+      {
+        "fullPath": {
+          "nativeType": "TagPath",
+          "text": "[default]Area/Pump 1/Running"
+        },
+        "tagType": "AtomicTag"
+      }
+    ],
+    "continuationPoint": "recorded-continuation-2"
+  }
+}

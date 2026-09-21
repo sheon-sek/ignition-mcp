@@ -1,0 +1,13 @@
+{
+  "messages": [],
+  "fieldMessages": [
+    {
+      "fieldName": "driver",
+      "messages": ["Invalid reference: 'PostgreSQL'"]
+    },
+    {
+      "fieldName": "translator",
+      "messages": ["Invalid reference: 'POSTGRESQL'"]
+    }
+  ]
+}

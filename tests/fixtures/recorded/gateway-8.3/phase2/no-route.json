@@ -1,0 +1,5 @@
+{
+  "message": "No route match for path: /v1/resources/com.inductiveautomation.historian/historian-provider",
+  "url": "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider",
+  "status": "404"
+}

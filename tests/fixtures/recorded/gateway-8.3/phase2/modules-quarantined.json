@@ -1,0 +1,12 @@
+{
+  "items": [
+    {
+      "id": "com.inductiveautomation.historian",
+      "certAccepted": false
+    },
+    {
+      "id": "com.inductiveautomation.alarm-notification",
+      "certAccepted": false
+    }
+  ]
+}

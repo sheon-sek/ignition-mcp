@@ -1,0 +1,13 @@
+# Reconstructed from a1ada74 (head of failed run 35586649945): `runner` is not an
+# available context in a job-level `env`, so GitHub rejected the workflow file and
+# the run failed with no jobs at all. Fixed by dd5454d.
+name: Reconstructed runner temp env
+on: workflow_dispatch
+jobs:
+  g3:
+    runs-on: ubuntu-latest
+    env:
+      DATA_DIR: ${{ runner.temp }}/ignition-mcp-data
+    steps:
+      - name: Use the data dir
+        run: echo "$DATA_DIR"

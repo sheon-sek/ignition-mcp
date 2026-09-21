@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "redactions": {
+    "apiTokens": "replaced by recorded:AAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "secrets": "no recorded secret values retained"
+  },
+  "sources": {
+    "mcp/initialize.json": "run 35529974781 raw/runtime-initialize.json",
+    "mcp/prompts-list-invalid-request.json": "run 35588754132 observations.json",
+    "http/forbidden.json": "run 35588029382 observations.json",
+    "http/unsupported-media-type.json": "run 35589554998 observations.json",
+    "phase2/postgresql-missing.json": "run 35522848533 provision.json",
+    "phase2/credential-object-required.json": "run 35523317936 provision.json",
+    "phase2/no-route.json": "runs 35523626639 and 35524729067 provision.json",
+    "phase2/certificate-already-accepted.json": "run 35524417843 provision.json",
+    "phase2/modules-quarantined.json": "module IDs and certificate state from run 35524729067 provision-heal.json",
+    "phase2/modules-healthy-before-restart.json": "healthyModuleIds diagnostic from run 35524729067 provision-heal.json",
+    "phase2/modules-healthy-after-restart.json": "healthyModuleIds from run 35524729067 provision-heal-after-restart.json",
+    "phase2/tag-import-bare-array.json": "run 35527191629 provision.json",
+    "phase2/provision-success.json": "run 35527517320 provision.json",
+    "phase2/openapi-required.json": "requiredEndpoints from run 35527517320 provision.json",
+    "phase2/database-drivers.json": "databaseDriver from run 35527517320 provision.json",
+    "phase2/database-translators.json": "databaseTranslator from run 35527517320 provision.json"
+  }
+}

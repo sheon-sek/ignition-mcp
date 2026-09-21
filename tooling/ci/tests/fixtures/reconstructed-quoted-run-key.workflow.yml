@@ -1,0 +1,21 @@
+name: Reconstructed quoted run key
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - "run": |
+          mkdir -p "$EVIDENCE_DIR"
+          if [[ -n "$cid" ]]; then
+            echo "$cid"
+          # the closing fi was dropped
+      - name: Single quoted key
+        shell: bash
+        'run': |
+          set -euo pipefail
+          echo "single quoted"
+      - name: Explicit key form
+        shell: bash
+        ? run
+        : |
+          echo "explicit key"

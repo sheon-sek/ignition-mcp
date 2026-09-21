@@ -1,0 +1,13 @@
+name: Reconstructed escaped run key
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Escaped key step
+        shell: bash
+        "r\u0075n": |
+          mkdir -p "$EVIDENCE_DIR"
+          if [[ -n "$cid" ]]; then
+            echo "$cid"
+          # the closing fi was dropped

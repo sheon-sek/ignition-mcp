@@ -1,0 +1,11 @@
+{
+  "openapi": "3.0.1",
+  "paths": {
+    "/data/alarm-notification/api/v1/pipeline": {"get": {}},
+    "/data/alarm-notification/api/v1/pipelines": {"get": {}},
+    "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider": {"post": {}},
+    "/data/api/v1/resources/ignition/audit-profile": {"post": {}},
+    "/data/api/v1/resources/ignition/database-connection": {"post": {}},
+    "/data/api/v1/tags/import": {"post": {}}
+  }
+}

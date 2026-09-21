@@ -1,0 +1,11 @@
+{
+  "successCount": 0,
+  "failureCount": 1,
+  "failures": [
+    {
+      "quality": "Error",
+      "qualitySubCode": 776,
+      "diagnosticMessage": "Error importing tags: java.lang.IllegalStateException: Not a JSON Object"
+    }
+  ]
+}
