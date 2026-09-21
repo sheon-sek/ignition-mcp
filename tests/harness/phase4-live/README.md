@@ -69,10 +69,16 @@ the dedicated Tag provider through
 `POST /data/api/v1/resources/ignition/tag-provider`, import the Tag document
 through `POST /data/api/v1/tags/import`, prove the D30 `Abort` collision policy,
 prove the idempotent `MergeOverwrite` update path, and read the document back
-through `GET /data/api/v1/tags/export`. A recorded 8.3.8 run showed that a
-freshly created Tag provider can answer the first import with
-`Bad 776 … cleanPath is null` while it is still starting, so the import is
-retried under a bounded deadline and the attempt count is recorded.
+through `GET /data/api/v1/tags/export`.
+
+`policy-read` verifies that the *running* provider actually serves the policy
+Tag, not just that its config holds it: it probes, and while the probe reports
+anything other than a Good read of the applied document it re-imports
+(idempotently) and probes again under a 240 s deadline. Two recorded 8.3.8
+provider-startup failures motivate that loop — a first import rejected while the
+provider starts (`Bad 776 … cleanPath is null`), and an accepted import whose
+Tags the running provider never serves. Both are recorded under
+`tests/fixtures/recorded/gateway-8.3/phase4/`.
 
 ## Rehearsal
 

@@ -55,6 +55,7 @@ REQUIRED_ROUTES = {
     ("GET", "/data/api/v1/tags/export"),
 }
 PROVIDER_READY_DEADLINE_SECONDS = 120.0
+POLICY_READ_DEADLINE_SECONDS = 240.0
 RAW_LIMIT = 24_000
 EXIT_OK = 0
 EXIT_STAGE_FAILED = 2
@@ -221,7 +222,7 @@ def wait_for_provider(config: Config) -> dict[str, Any]:
 
 
 def import_policy(
-    config: Config, document: bytes, *, deadline_seconds: float = 150.0,
+    config: Config, document: bytes, *, deadline_seconds: float = 150.0, first_policy: str = "Abort",
 ) -> dict[str, Any]:
     """Import the policy Tag document, retrying until the provider accepts it.
 
@@ -234,7 +235,7 @@ def import_policy(
     started = time.monotonic()
     attempts: list[dict[str, Any]] = []
     while True:
-        policy = "Abort" if not attempts else "MergeOverwrite"
+        policy = first_policy if not attempts else "MergeOverwrite"
         status, payload = gateway_rest.import_tags(
             config.base_url, config.api_token, config.provider, document,
             collision_policy=policy,
@@ -350,16 +351,8 @@ def stage_policy_provision(config: Config) -> dict[str, Any]:
 # Stage: policy-read
 # --------------------------------------------------------------------------- #
 
-def stage_policy_read(config: Config) -> dict[str, Any]:
-    facts: dict[str, Any] = {}
-    raw: dict[str, Any] = {}
-    client = mcp_client.McpClient(config.mcp_url, config.api_token)
-    raw["initialize"] = bounded(client.initialize())
-    tools = client.tools_list()
-    facts["tools"] = sorted(tools)
-    if "policy_probe" not in tools:
-        raise StageFailure(f"policy_probe is not discoverable; tools/list = {sorted(tools)}")
-    report = client.structured("policy_probe", {
+def policy_probe_arguments(config: Config) -> dict[str, Any]:
+    return {
         "policyPath": config.policy_path,
         "readTimeoutMs": READ_TIMEOUT_MS,
         "missingPath": f"[{config.provider}]MissingPolicy",
@@ -368,9 +361,11 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         "configModuleId": "ignition",
         "configTypeId": "tag-provider",
         "configName": config.provider,
-    })
-    raw["policyProbe"] = bounded(report)
+    }
 
+
+def derive_policy_read_facts(config: Config, report: dict[str, Any]) -> dict[str, Any]:
+    facts: dict[str, Any] = {}
     policy_read = measurement(report, "tag.readBlocking.policy")
     item = first_item(policy_read)
     facts["policyReadOk"] = bool(policy_read.get("ok"))
@@ -431,6 +426,65 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     project = measurement(report, "system.util.getProjectName")
     facts["handlerProjectName"] = str(project.get("projectName", ""))
 
+    return facts
+
+
+def stage_policy_read(config: Config) -> dict[str, Any]:
+    raw: dict[str, Any] = {}
+    client = mcp_client.McpClient(config.mcp_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    tools = client.tools_list()
+    if "policy_probe" not in tools:
+        raise StageFailure(f"policy_probe is not discoverable; tools/list = {sorted(tools)}")
+    arguments = policy_probe_arguments(config)
+    deadline = time.monotonic() + POLICY_READ_DEADLINE_SECONDS
+    attempts: list[dict[str, Any]] = []
+    repairs = 0
+    facts: dict[str, Any] = {}
+    report: dict[str, Any] = {}
+    while True:
+        report = {}
+        error = ""
+        try:
+            report = client.structured("policy_probe", arguments)
+        except mcp_client.McpError as exc:
+            error = str(exc)
+        facts = derive_policy_read_facts(config, report) if report else {}
+        healthy = bool(facts.get("policyReadQualityIsGood")) and bool(
+            facts.get("policyReadMatchesAppliedDocument")
+        )
+        attempt: dict[str, Any] = {
+            "servedPolicyTag": healthy,
+            "policyReadQuality": str(facts.get("policyReadQuality", "")),
+            "handlerWriteQualityCodes": facts.get("handlerWriteQualityCodes", []),
+            "error": error,
+        }
+        if healthy or time.monotonic() >= deadline:
+            attempts.append(attempt)
+            break
+        # Two recorded 8.3.8 provider-startup failures motivate this loop: the
+        # first /tags/import can be rejected while the provider is starting, and
+        # an accepted import can be written to config while the running provider
+        # serves no Tags at all. Re-import idempotently and probe again; a
+        # config-only write is not enough for `setup-native apply` either.
+        repair = import_policy(
+            config, policy_document.tag_document_bytes(),
+            deadline_seconds=30.0, first_policy="MergeOverwrite",
+        )
+        repairs = repairs + 1
+        attempt["repairImport"] = bounded(repair, 4000)
+        attempts.append(attempt)
+        time.sleep(3.0)
+    facts["tools"] = sorted(tools)
+    facts["policyReadAttempts"] = len(attempts)
+    facts["policyReadRepairImports"] = repairs
+    raw["policyProbe"] = bounded(report)
+    raw["policyProbeAttempts"] = bounded(attempts, 40_000)
+    if not facts.get("policyReadQualityIsGood") or not facts.get("policyReadMatchesAppliedDocument"):
+        raise StageFailure(
+            "the policy Tag was never served by the provider: "
+            + json.dumps(attempts[-1], sort_keys=True)[:800]
+        )
     if config.label == "after-restart":
         previous = config.evidence_dir / "policy-read-before-restart.json"
         before_sha = ""

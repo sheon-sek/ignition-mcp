@@ -75,6 +75,16 @@ produced the same policy facts.
   the other row. `setup-native apply` must therefore poll (or retry) the policy
   import under a deadline instead of assuming one import is enough. Recorded as
   `phase4/tag-import-provider-not-ready.json`.
+- **A second 8.3.8 run showed the other half of the same hazard: an *accepted*
+  import is not proof that the provider serves the Tags.** In
+  `phase4-live-g4a` run 35636395175 the import succeeded, `/tags/export` and
+  `system.tag.getConfiguration` both returned the document, and yet a handler
+  read of the same path answered `Error_Configuration` before the Gateway
+  restart and `Bad_NotFound` afterwards — the running provider served no Tags at
+  all. `apply` (and its `verify`) must therefore confirm a *handler-scope read of
+  the Tag*, not just a config-level read, and repair by re-importing under a
+  bounded deadline; the harness does exactly that and records
+  `policyReadAttempts` / `policyReadRepairImports`.
 - **`Abort` and `MergeOverwrite` are both needed by `apply`.** `Abort` refuses
   the write when the policy Tags already exist (Bad 527 per Tag), so an update
   needs an explicitly chosen collision policy; `MergeOverwrite` of an identical
@@ -258,10 +268,12 @@ also returns no materialized result for the handler to collect.
   `POST /data/api/v1/resources/ignition/tag-provider`, imports the policy with a
   bounded retry loop (the first import on a fresh provider can fail while the
   provider starts), uses `Abort` for a create and `MergeOverwrite` for a
-  deliberate update, and verifies with `GET /data/api/v1/tags/export` plus the
-  provider resource signature. `verify` compares the exported bytes and the
-  signature; the document survives a Gateway restart, so it does not have to be
-  rewritten on every boot.
+  deliberate update, and verifies with a *handler-scope* read of the Tag plus
+  `GET /data/api/v1/tags/export` and the provider resource signature. An
+  accepted import is not proof that the running provider serves the Tags, so
+  `verify` must read the Tag and `apply` must repair by re-importing; the
+  document survives a Gateway restart, so it does not have to be rewritten on
+  every boot.
 - **Ticket #9 (`alarm_acknowledge`) is parked** and its row in the Phase 4 scope
   table must stop being planned work until the owner decides. `alarm_status` and
   `alarm_journal` stay parked for the same class of reason.

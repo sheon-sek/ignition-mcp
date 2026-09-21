@@ -61,6 +61,7 @@ class _StubMcp:
     """Stands in for the live Module-hosted endpoint using recorded payloads."""
 
     reports: dict[str, Any] = {}
+    sequences: dict[str, list[Any]] = {}
 
     def __init__(self, url: str, token: str, **_kwargs: Any) -> None:
         self.url = url
@@ -72,6 +73,9 @@ class _StubMcp:
         return ["alarm_probe", "policy_probe"]
 
     def structured(self, name: str, _arguments: dict[str, Any]) -> dict[str, Any]:
+        sequence = _StubMcp.sequences.get(name)
+        if sequence:
+            return sequence[0] if len(sequence) == 1 else sequence.pop(0)
         return self.reports[name]
 
 
@@ -79,6 +83,7 @@ class _StubMcp:
 def stub_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     reports = {"policy_probe": _fixture("policy-probe.json"), "alarm_probe": _fixture("alarm-probe.json")}
     _StubMcp.reports = reports
+    _StubMcp.sequences = {}
     monkeypatch.setattr(driver.mcp_client, "McpClient", _StubMcp)
     return reports
 
@@ -180,6 +185,33 @@ def test_recorded_alarm_report_shows_events_accumulating_without_acknowledgement
     assert facts["acknowledgeAttempted"] == 3
     assert facts["acknowledgeStatesAfter"] == ["Cleared, Acknowledged"]
     assert facts["exactPathBoundedBasis"]["noAccumulationWithoutAck"] is False
+
+
+def test_policy_read_repairs_a_provider_that_serves_no_tags(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """Recorded 8.3.8: an accepted import can leave the running provider serving
+    no Tags, so the read path must re-import and probe again instead of recording
+    an empty policy read."""
+    unserved = json.loads(json.dumps(_fixture("policy-probe.json")))
+    for entry in unserved["measurements"]:
+        if entry["name"] == "tag.readBlocking.policy":
+            entry["items"] = [{
+                "quality": "Error_Configuration", "valueType": "NoneType",
+                "valueLength": 0, "valueByteLength": 0, "valueSha256": "", "valuePrefix": "",
+            }]
+            entry["jsonKeys"] = []
+            entry["jsonKind"] = ""
+    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        driver.stage_policy_provision(config)
+        _StubMcp.sequences = {"policy_probe": [unserved, stub_mcp["policy_probe"]]}
+        record = driver.stage_policy_read(config)
+    facts = record["facts"]
+    assert facts["policyReadAttempts"] == 2
+    assert facts["policyReadRepairImports"] == 1
+    assert facts["policyReadQualityIsGood"] is True
+    assert facts["policyReadMatchesAppliedDocument"] is True
 
 
 def test_recorded_probe_reports_show_the_policy_surviving_a_restart() -> None:
