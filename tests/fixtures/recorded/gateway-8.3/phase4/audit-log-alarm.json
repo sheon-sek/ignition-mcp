@@ -3,26 +3,26 @@
     {
       "action": "__ACTION__",
       "actionTarget": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
-      "actionValue": "tool=__TOOL__ phase=result correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=executed executed=1 outcomeUnknown=0",
+      "actionValue": "tool=__TOOL__ phase=attempt correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=attempt requested=1 timeoutSeconds=3600",
       "actor": "ignition-mcp-service",
-      "actorHost": "",
+      "actorHost": "Unknown",
       "originatingContext": 0,
-      "originatingSystem": "ignition_runtime",
-      "result": "",
+      "originatingSystem": "",
+      "result": "AuditStatus[0x00000000, Severity=Good, Subcode=NotSpecified]",
       "statusCode": 0,
-      "timestamp": 1789000000000
+      "timestamp": 1790027999876
     },
     {
       "action": "__ACTION__",
       "actionTarget": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
-      "actionValue": "tool=__TOOL__ phase=attempt correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=attempt requested=1 timeoutSeconds=3600",
+      "actionValue": "tool=__TOOL__ phase=result correlationId=a803589c-9d68-476a-8e27-6333055d8d83 serviceIdentity=ignition-mcp-service outcome=executed executed=1 outcomeUnknown=0",
       "actor": "ignition-mcp-service",
-      "actorHost": "",
+      "actorHost": "Unknown",
       "originatingContext": 0,
-      "originatingSystem": "ignition_runtime",
-      "result": "",
+      "originatingSystem": "",
+      "result": "AuditStatus[0x00000000, Severity=Good, Subcode=NotSpecified]",
       "statusCode": 0,
-      "timestamp": 1789000000000
+      "timestamp": 1790027999883
     }
   ],
   "metadata": {

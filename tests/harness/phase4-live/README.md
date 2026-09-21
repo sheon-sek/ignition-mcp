@@ -178,6 +178,12 @@ implementer reads in `evidence.json` cannot drift from the documented rule.
 replays and the handler reports the live run produced, with their run ids
 recorded in `tests/fixtures/recorded/gateway-8.3/provenance.json`.
 
+The Alarm fixture is run-unique on a live Gateway, so the recorded Alarm bodies
+templated the two run-scoped values: `__ALARM_ROOT__` for the Alarm root (also
+substituted into the recorded `alarm_probe` report, which names its own run's
+root) and `__CORRELATION__` for the Runtime correlation ID the audit rows carry.
+Everything else in those bodies is the live payload.
+
 ## Safety
 
 - One origin, checked locally before any request: `http://127.0.0.1:8093`, plus

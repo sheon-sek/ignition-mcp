@@ -14,16 +14,16 @@
       }
     ],
     "meta": {
-      "correlationId": "recorded-alarm-correlation"
+      "correlationId": "a803589c-9d68-476a-8e27-6333055d8d83"
     },
     "observed": [
       {
-        "expiration": "2026-09-22T01:00:00Z",
+        "expiration": "2026-09-21T22:59:59.881Z",
         "expired": false,
         "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
         "shelved": true,
         "status": "ok",
-        "user": "ignition-mcp-service"
+        "user": "usr:gateway-script"
       }
     ],
     "summary": {
