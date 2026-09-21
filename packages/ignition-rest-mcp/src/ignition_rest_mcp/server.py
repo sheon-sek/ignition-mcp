@@ -30,6 +30,7 @@ from ignition_rest_mcp.models import (
     AlarmPipelineCancelResult,
     AlarmPipelineListResult,
     AlarmPipelineStatusResult,
+    ArtifactDeleteResult,
     ArtifactInfoResult,
     ArtifactListResult,
     AuditQueryResult,
@@ -64,6 +65,9 @@ from ignition_rest_mcp.services.exports import (
 )
 from ignition_rest_mcp.services.alarm_pipeline_cancel import (
     alarm_pipeline_cancel as alarm_pipeline_cancel_service,
+)
+from ignition_rest_mcp.services.artifact_delete import (
+    artifact_delete as artifact_delete_service,
 )
 from ignition_rest_mcp.services.artifacts import (
     artifact_info as artifact_info_service,
@@ -587,6 +591,33 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="artifact_delete",
+        description=(
+            "Delete one server-held artifact through the D17 ArtifactStore — the only delete "
+            "path, because D30 drops the artifact HTTP route — verified by a bounded read-back "
+            "of the same identifier (deployment-gated; destructive; only the owning principal "
+            "or ignition.admin; a retention-locked artifact is a conflict)."
+        ),
+        output_schema=ArtifactDeleteResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.config", "storage", "principal-scoped",
+        },
+    )
+    async def artifact_delete(artifactId: str) -> ArtifactDeleteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ArtifactDeleteResult:
+            return await artifact_delete_service(
+                state.require_artifacts(), settings, context,
+                principal=principal, artifact_id=artifactId,
+            )
+
+        return await _invoke(
+            "artifact_delete", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
@@ -980,12 +1011,19 @@ DEPLOYMENT_GATED_TOOLS = {
     "config_resource_rename": "config_mutation_enabled",
     "project_import": "config_mutation_enabled",
     "tag_config_import": "config_mutation_enabled",
+    "artifact_delete": "config_mutation_enabled",
     "alarm_pipeline_cancel": "control_mutation_enabled",
 }
 
 
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Settings) -> None:
-    gated = {
+    #: ``capability`` is the D04 semantic capability a Tool needs, or ``None`` for a
+    #: Tool with no Gateway route at all. A storage-backed Mutation (`artifact_delete`,
+    #: whose HTTP route D30 drops) has none to check, so its discovery is decided by
+    #: its deployment gate alone: an unreachable Gateway must not hide the one path a
+    #: deployment has for collecting its own artifacts, and the D08 chain still repeats
+    #: the class, operation and Target checks at call time.
+    gated: dict[str, str | None] = {
         "gateway_info": "gateway_info",
         "project_list": "project_list",
         "config_resource_search": "config_resource_search",
@@ -1005,12 +1043,14 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "alarm_pipeline_cancel": "alarm_pipeline_cancel",
         "project_export": "project_export",
         "tag_config_export": "tag_config_export",
+        "artifact_delete": None,
     }
     usable = snapshot.state in {"READY", "STALE"}
     for tool_name, capability in gated.items():
         gate = DEPLOYMENT_GATED_TOOLS.get(tool_name)
         gate_blocks = gate is not None and not bool(getattr(settings, gate))
-        if usable and not gate_blocks and capability in snapshot.semantic_capabilities:
+        routed = capability is None or (usable and capability in snapshot.semantic_capabilities)
+        if routed and not gate_blocks:
             mcp.enable(names={tool_name}, components={"tool"})
         else:
             mcp.disable(names={tool_name}, components={"tool"})

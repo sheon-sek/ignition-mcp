@@ -7,7 +7,7 @@ against the same server restarted with ``IGNITION_MCP_CONFIG_MUTATION_ENABLED=fa
 the Gateway's own read routes, exactly as an agent would; it never mutates the
 Gateway directly, so everything it reports is something an agent could observe.
 
-Live cases (tickets #14, #15 and #16):
+Live cases (tickets #14, #15, #16, #17, #18 and #19):
 
 - the effective REST inventory is exact with the class enabled *and* disabled, and
   the config-scoped credential sees the Mutation Tools while the read-only one does
@@ -39,6 +39,12 @@ Live cases (tickets #14, #15 and #16):
   the alarm event is a ``not_found`` that changes nothing. A fresh CI Gateway serves no
   pipeline runs, so the dispatched-and-verified path is proven by the unit fixture and
   the runbook records the limitation.
+- an artifact removal (#19) needs no Gateway call at all: D30 dropped the artifact HTTP
+  route, so the Tool removes its Target from the server's own D17 store. The cases prove
+  the Observed state (absence, confirmed by an independent ``artifact_info`` and
+  ``artifact_list``), the D30 §6 ownership rule in both directions, the CONFIG scope for
+  a read-only credential, both D10 input bounds, the data plane's missing ``DELETE``, and
+  the class gate at discovery and at call time.
 
 The Project cases need the D16 writer enabled (``IGNITION_MCP_PROJECT_WRITER_ENABLED``,
 ``IGNITION_MCP_GATEWAY_ID``), artifact upload and the sensitive exports this driver
@@ -83,12 +89,17 @@ RENAME_TOOL = "config_resource_rename"
 IMPORT_TOOL = "project_import"
 TAG_IMPORT_TOOL = "tag_config_import"
 ALARM_CANCEL_TOOL = "alarm_pipeline_cancel"
-#: Every Phase 4 CONFIG-class REST Mutation Tool (tickets #14–#17). The CONTROL-class
-#: cancel (#18) needs its own scope, so the two lanes are listed separately: the
-#: config credential must never see the cancel, and the operator credential must never
-#: see these.
+#: D26 ticket #19: the artifact removal is a CONFIG-class REST Mutation with no Gateway
+#: route at all (D30 drops the artifact HTTP route), so its discovery follows the class
+#: gate and nothing else.
+ARTIFACT_DELETE_TOOL = "artifact_delete"
+#: Every Phase 4 CONFIG-class REST Mutation Tool (tickets #14–#17 and #19). The
+#: CONTROL-class cancel (#18) needs its own scope, so the two lanes are listed
+#: separately: the config credential must never see the cancel, and the operator
+#: credential must never see these.
 CONFIG_MUTATION_TOOLS = (
     UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL,
+    ARTIFACT_DELETE_TOOL,
 )
 CONTROL_MUTATION_TOOLS = (ALARM_CANCEL_TOOL,)
 MUTATION_TOOLS = CONFIG_MUTATION_TOOLS + CONTROL_MUTATION_TOOLS
@@ -757,6 +768,127 @@ async def alarm_pipeline_cancel_cases(
     return cases, observations
 
 
+async def _artifact_present(session: "Session", artifact_id: str) -> Any:
+    """Whether one artifact is still served to the caller that owns it.
+
+    ``artifact_list`` is the independent read: the identifier is present or it is not,
+    and a refusal the envelope reader cannot parse is reported as itself.
+    """
+
+    result = await session.call("artifact_list", {"kind": "", "limit": 100, "offset": 0})
+    if result.get("isError"):
+        return _refusal_code(result)
+    body = result.get("structuredContent")
+    items = body.get("items") if isinstance(body, dict) else None
+    return any(item.get("artifactId") == artifact_id for item in (items or []))
+
+
+async def artifact_delete_cases(
+    *,
+    agent: "Session",
+    reader: "Session",
+    rest_url: str,
+    agent_token: str,
+    reader_token: str,
+    project: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The artifact removal cases (ticket #19).
+
+    D30 drops the artifact HTTP route, so this Tool is a CONFIG Mutation that dispatches
+    nothing: the cases below prove the whole flow on the server's own store — the
+    artifact disappears from every read path, the remover is the principal that owns it,
+    an artifact another principal owns is invisible, both D10 input bounds hold, and the
+    dropped route really is absent.
+
+    The Target allowlist in this deployment is ``*`` (D30 §3 requires an explicit
+    wildcard to allow all): artifact identifiers are generated at removal time, so a
+    denial case would need a fixed identifier no run can name. The unit fixture pins the
+    Target-allowlist denial; ``docs/development/phase-4.md`` records the limitation.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    artifacts = Artifacts(rest_url)
+    try:
+        exported = structured(await agent.call("project_export", {"projectName": project}))
+        artifact_id = str(exported["artifact"]["artifactId"])
+        observations["artifactDeleteTarget"] = artifact_id
+        _check(cases, "artifact-delete-target-is-served", True,
+               await _artifact_present(agent, artifact_id))
+
+        deleted = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": artifact_id})
+        body = deleted.get("structuredContent") if not deleted.get("isError") else None
+        observations["artifactDeleteResult"] = (
+            body if isinstance(body, dict) else _refusal_code(deleted)
+        )
+        _check(cases, "artifact-delete-removes-the-artifact", True, isinstance(body, dict))
+        if not isinstance(body, dict):
+            observations["artifactDeleteAborted"] = "the removal did not return a result"
+            return cases, observations
+        _check(cases, "artifact-delete-reports-absence", artifact_id, body.get("artifactId"))
+        _check(cases, "artifact-delete-reports-the-kind", "project_export", body.get("kind"))
+        _check(cases, "artifact-delete-observed-state-is-absence", False, body.get("present"))
+
+        # Independent evidence: the metadata read, then the caller's own listing.
+        info = await agent.call("artifact_info", {"artifactId": artifact_id})
+        _check(cases, "artifact-delete-independent-reread-is-not-found", "not_found",
+               _refusal_code(info))
+        _check(cases, "artifact-delete-listing-no-longer-serves-it", False,
+               await _artifact_present(agent, artifact_id))
+
+        # D17: a second removal is not a success and not a second effect.
+        again = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": artifact_id})
+        _check(cases, "artifact-delete-of-an-absent-target-is-not-found", "not_found",
+               _refusal_code(again))
+
+        # D30 §6: the owner is the authorization, and an artifact another principal owns
+        # answers exactly as an unknown identifier does. The removal above was the
+        # caller's own artifact — project_export attributed it to this credential.
+        reader_export = structured(await reader.call("project_export", {"projectName": project}))
+        invisible_id = str(reader_export["artifact"]["artifactId"])
+        invisible = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": invisible_id})
+        _check(cases, "artifact-delete-invisible-artifact-is-not-found", "not_found",
+               _refusal_code(invisible))
+        _check(cases, "artifact-delete-invisible-artifact-survives", True,
+               await _artifact_present(reader, invisible_id))
+
+        # D07: the effect is CONFIG, so the read-only credential never reaches it.
+        reader_upload = await artifacts.upload(
+            _zipped({"project.json": b'{"title":"p4"}'}), reader_token,
+            label="p4-rest-artifact-delete-denied",
+        )
+        denied = await reader.call(ARTIFACT_DELETE_TOOL, {"artifactId": reader_upload})
+        _check(cases, "artifact-delete-reader-credential-is-permission-denied",
+               "permission_denied", _refusal_code(denied))
+        _check(cases, "artifact-delete-denied-call-changes-nothing", True,
+               await _artifact_present(reader, reader_upload))
+
+        # D10: both input bounds, refused before anything is resolved.
+        oversize = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": "a" * 129})
+        _check(cases, "artifact-delete-oversize-identifier-is-invalid-argument",
+               "invalid_argument", _refusal_code(oversize))
+        malformed = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": "../objects/x"})
+        _check(cases, "artifact-delete-malformed-identifier-is-invalid-argument",
+               "invalid_argument", _refusal_code(malformed))
+
+        # D30: the data plane keeps GET, HEAD and POST — this Tool is the only delete path.
+        status = await _delete_route_status(rest_url, agent_token, artifact_id)
+        _check(cases, "artifact-delete-data-plane-route-is-absent", 405, status)
+    finally:
+        await artifacts.aclose()
+    return cases, observations
+
+
+async def _delete_route_status(rest_url: str, token: str, path: str) -> Any:
+    """The status the artifact data plane answers to ``DELETE`` (D30: 405, no route)."""
+
+    async with httpx.AsyncClient(base_url=rest_url, timeout=30.0) as client:
+        response = await client.delete(
+            f"/artifacts/{path}", headers={"Authorization": "Bearer " + token},
+        )
+    return response.status_code
+
+
 async def run_gate_on(
     *,
     rest_url: str,
@@ -1114,6 +1246,21 @@ async def run_gate_on(
             pipeline_observations = {}
         cases.extend(pipeline_cases)
         observations.update(pipeline_observations)
+
+        # ------------------------------------------------------ artifact delete (#19)
+        try:
+            artifact_cases, artifact_observations = await artifact_delete_cases(
+                agent=agent, reader=reader, rest_url=rest_url, agent_token=agent_token,
+                reader_token=reader_token, project=project,
+            )
+        except (DriverError, ProbeError) as error:
+            artifact_cases = [{
+                "case": "artifact-delete-section", "expected": "no driver error",
+                "observed": str(error), "ok": False,
+            }]
+            artifact_observations = {}
+        cases.extend(artifact_cases)
+        observations.update(artifact_observations)
     finally:
         await reader.aclose()
         await agent.aclose()
@@ -1122,7 +1269,12 @@ async def run_gate_on(
 
 
 async def run_gate_off(*, rest_url: str, agent_token: str, raw_dir: Path) -> dict[str, Any]:
-    """The same inventory question with the class disabled, plus the call-time deny."""
+    """The same inventory question with the class disabled, plus the call-time deny.
+
+    Two Tools are refused at call time: the capability-backed update and the artifact
+    removal, which has no Gateway capability to lose and is therefore hidden and
+    refused by the class gate alone.
+    """
 
     cases: list[dict[str, Any]] = []
     agent = Session(rest_url + "/mcp", agent_token, raw_dir)
@@ -1133,7 +1285,8 @@ async def run_gate_off(*, rest_url: str, agent_token: str, raw_dir: Path) -> dic
         executed = "EXECUTED-UNEXPECTED"
         try:
             result = await agent.call(UPDATE_TOOL, {
-                "resourceType": "ignition/audit-profile", "expectedSignature": "sig", "name": "MCP_CI_AUDIT",
+                "resourceType": "ignition/audit-profile", "expectedSignature": "sig",
+                "name": "MCP_CI_AUDIT",
             })
         except ProbeError as error:
             # A component FastMCP disabled is refused at the router: a JSON-RPC
@@ -1149,6 +1302,22 @@ async def run_gate_off(*, rest_url: str, agent_token: str, raw_dir: Path) -> dic
                     # admissible here; EXECUTED-UNEXPECTED is not.
                     executed = f"isError:{str(result.get('content'))[:160]}"
         _check(cases, "disabled-class-call-is-refused", True, executed != "EXECUTED-UNEXPECTED")
+
+        artifact_executed = "EXECUTED-UNEXPECTED"
+        try:
+            artifact_result = await agent.call(ARTIFACT_DELETE_TOOL, {"artifactId": "0" * 32})
+        except ProbeError as error:
+            artifact_executed = f"router-refused: {str(error)[:160]}"
+        else:
+            if artifact_result.get("isError"):
+                try:
+                    artifact_executed = f"isError:{_envelope_code(artifact_result)}"
+                except (DriverError, ProbeError):
+                    artifact_executed = f"isError:{str(artifact_result.get('content'))[:160]}"
+        _check(
+            cases, "disabled-class-artifact-delete-is-refused", True,
+            artifact_executed != "EXECUTED-UNEXPECTED",
+        )
     finally:
         await agent.aclose()
     return {"mode": "gate-off", "cases": cases, "observations": {}}

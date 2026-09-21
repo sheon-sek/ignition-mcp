@@ -105,6 +105,10 @@ MUTATION_TARGETS = {
     "project_import": (PROJECT,),
     # D30 §3/#17: the Target of a Tag import is the provider-qualified destination path.
     TAG_IMPORT_TOOL: (f"[{TAG_PROVIDER}]{TAG_TARGET_PATH}",),
+    # D30 §3/#19: the Target of an artifact removal is the artifact's own storage
+    # identifier, which is generated at removal time — so the deployment writes the
+    # explicit wildcard, and ownership (D30 §6) is what bounds it.
+    "artifact_delete": ("*",),
     # D30 §6/#18: the Target of a pipeline cancel is the exact pipeline path.
     ALARM_CANCEL_TOOL: (PIPELINE,),
 }

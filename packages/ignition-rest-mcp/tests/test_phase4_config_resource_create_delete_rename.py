@@ -41,7 +41,7 @@ from phase4_fixtures import (
     write_requests,
 )
 from phase4_fixtures import Session as Session
-from phase4_fixtures import CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
+from phase4_fixtures import ARTIFACT_DELETE_TOOL, CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
@@ -96,7 +96,8 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
 ) -> None:
     """A Gateway whose document has no create route exposes no create Tool, and the
     same holds for delete, rename and a Tag import: the D04 capability is what gates
-    discovery."""
+    discovery. ``artifact_delete`` is the exception D30 creates — it has no HTTP route
+    to be gated on, so the class gate is its whole discovery rule."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
@@ -118,7 +119,8 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
         with TestClient(server_module.create_server(settings).http_app()) as http:
             names = Session(http, "cfg-secret").tools()
 
-    assert MUTATION_TOOLS.isdisjoint(names)
+    assert (MUTATION_TOOLS - {ARTIFACT_DELETE_TOOL}).isdisjoint(names)
+    assert ARTIFACT_DELETE_TOOL in names
     assert "config_resource_get" in names
 
 

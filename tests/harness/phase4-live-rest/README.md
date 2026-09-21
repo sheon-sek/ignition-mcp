@@ -2,10 +2,10 @@
 
 Live proof for the REST Mutation Tools — `config_resource_update`,
 `config_resource_create`, `config_resource_delete`, `config_resource_rename`,
-`project_import` and `tag_config_import` (CONFIG) and `alarm_pipeline_cancel`
-(CONTROL) — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
-on pull requests in the trusted repository, under the `phase4-live` GitHub
-environment.
+`project_import` and `tag_config_import` (CONFIG), `alarm_pipeline_cancel`
+(CONTROL) and `artifact_delete` (CONFIG) — on disposable CI-owned Gateways. Driven
+by `.github/workflows/phase4-live-rest.yml` on pull requests in the trusted
+repository, under the `phase4-live` GitHub environment.
 
 ## What it proves
 
@@ -97,6 +97,22 @@ observe:
 | `pipeline-cancel-refusals-change-nothing` | the bounded status read serves the same runs before and after every refusal above |
 | `inventory-gate-off-exact` | with the classes disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
+| `disabled-class-artifact-delete-is-refused` | …including the artifact removal, whose discovery has no Gateway capability to lose |
+| `artifact-delete-target-is-served` | the artifact the removal case addresses is served by `artifact_list` first |
+| `artifact-delete-removes-the-artifact` | the owning credential removes its own export through the D17 ArtifactStore |
+| `artifact-delete-reports-absence` | the result names the identifier it removed |
+| `artifact-delete-reports-the-kind` | …and the kind of artifact it removed |
+| `artifact-delete-observed-state-is-absence` | the Observed state a removal leaves is `present: false` |
+| `artifact-delete-independent-reread-is-not-found` | a separate `artifact_info` answers `not_found` |
+| `artifact-delete-listing-no-longer-serves-it` | …and `artifact_list` no longer serves it |
+| `artifact-delete-of-an-absent-target-is-not-found` | removing it again is `not_found`, not a success |
+| `artifact-delete-invisible-artifact-is-not-found` | D30 §6: an artifact another principal owns answers `not_found` |
+| `artifact-delete-invisible-artifact-survives` | …and its owner still sees it |
+| `artifact-delete-reader-credential-is-permission-denied` | the effect is CONFIG, so the read-only credential is refused |
+| `artifact-delete-denied-call-changes-nothing` | …and the artifact it could not remove is still there |
+| `artifact-delete-oversize-identifier-is-invalid-argument` | D10: the identifier bound, refused with the requested length |
+| `artifact-delete-malformed-identifier-is-invalid-argument` | …and a traversal-shaped identifier is refused as input |
+| `artifact-delete-data-plane-route-is-absent` | D30: `DELETE /artifacts/{id}` is HTTP 405 — the Tool is the only delete path |
 
 The candidate archive the import cases upload is the export the Project already had,
 with one SQL comment appended to its first named-query payload. That is the edit the
@@ -137,6 +153,18 @@ not hold. Producing a run needs an Alarm Event notifying through a provisioned p
 which this harness does not provision; the dispatched-and-verified path is proven by the
 unit fixture in `packages/ignition-rest-mcp/tests/test_phase4_alarm_pipeline_cancel.py`,
 and `docs/development/phase-4.md` records the limitation and what would close it.
+
+The artifact removal cases need no Gateway at all, which is the point of the Tool: D30
+dropped the artifact HTTP route, so `artifact_delete` dispatches nothing and its cases
+prove the server's own store — the removal and its Observed state, an independent
+`artifact_info`/`artifact_list` re-read, the ownership rule of D30 §6, the CONFIG scope,
+both D10 input bounds, and the dropped data-plane route. Two of its rules are
+fixture-only and `docs/development/phase-4.md` records them: the **Target-allowlist
+denial**, because artifact identifiers are generated at removal time so this deployment
+must write the explicit `*` (D30 §3), and the **retention-lock `conflict`**, because a
+locked RECOVERY artifact comes from a D16 transaction that ended unresolved and no case
+in this harness produces one. `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py`
+pins both, and the same fixture pins the crash-safe `DELETING` recovery.
 
 ## Layout
 

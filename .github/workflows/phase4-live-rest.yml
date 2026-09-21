@@ -2,11 +2,11 @@ name: Phase 4 Live Gateway REST mutation
 
 # Milestone 4c live proof for the Phase 4 REST Mutation Tools
 # (`config_resource_update`, `config_resource_create`, `config_resource_delete`,
-# `config_resource_rename`, `project_import`, `tag_config_import` and
-# `alarm_pipeline_cancel`): their allowlisted changes and refusals, the D30
-# Precondition tokens and Target rules, and the exact REST inventory per
-# credential with the mutation classes enabled and disabled, against real
-# disposable Gateways.
+# `config_resource_rename`, `project_import`, `tag_config_import`,
+# `alarm_pipeline_cancel` and `artifact_delete`): their allowlisted changes and
+# refusals, the D30 Precondition tokens and Target rules, and the exact REST
+# inventory per credential with the mutation classes enabled and disabled, against
+# real disposable Gateways.
 #
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment. That environment
@@ -270,7 +270,7 @@ jobs:
           IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED=true \
           IGNITION_MCP_PROJECT_WRITER_ENABLED=true \
           IGNITION_MCP_GATEWAY_ID="$GATEWAY_ID" \
-          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel \
+          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete \
           IGNITION_MCP_MUTATION_TARGETS="$(jq -nc \
             --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
             --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
@@ -287,7 +287,8 @@ jobs:
               config_resource_rename: [$rename_source, $rename_source_2, $renamed],
               project_import: [$project],
               tag_config_import: [$tag_target],
-              alarm_pipeline_cancel: [$pipeline]}')" \
+              alarm_pipeline_cancel: [$pipeline],
+              artifact_delete: ["*"]}')" \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
           echo "$!" > artifacts/rest-gate-on.pid

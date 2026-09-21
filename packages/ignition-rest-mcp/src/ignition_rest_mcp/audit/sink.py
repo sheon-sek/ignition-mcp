@@ -34,6 +34,10 @@ SAFE_AUDIT_FIELDS: dict[str, frozenset[str]] = {
     "project_import": frozenset({"projectName"}),
     "tag_config_import": frozenset({"provider", "path"}),
     "alarm_pipeline_cancel": frozenset({"path", "alarmEventId"}),
+    #: Phase 4 ticket #19: the destructiveness of an artifact removal is only auditable
+    #: if the row says what was destroyed. The identifier is the row's target_id, and
+    #: the owning principal is the row's actor — neither is repeated here.
+    "artifact_delete": frozenset({"kind", "sensitivity", "retentionClass"}),
 }
 
 

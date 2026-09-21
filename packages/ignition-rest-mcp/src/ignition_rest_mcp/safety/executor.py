@@ -135,7 +135,7 @@ class MutationResult:
 
 async def preflight_mutation(
     *,
-    registry: CapabilityRegistry,
+    registry: CapabilityRegistry | None,
     settings: Settings,
     context: OperationContext,
     preflight: MutationPreflight,
@@ -150,6 +150,11 @@ async def preflight_mutation(
     transaction exports, stages and fingerprints an archive first — refuses the call
     before that work, and so the audited reason and the caller's error code cannot
     drift between the two callers.
+
+    ``registry`` may be ``None`` only for a local-effect operation
+    (``MutationOperation.gateway_backed`` is ``False``): such an operation has no
+    Gateway route to check, so the capability layer is its declared local subsystem,
+    which the Tool resolved before the chain ran.
     """
 
     auditor = context.auditor
@@ -173,7 +178,7 @@ async def preflight_mutation(
         assert scope.error_code is not None
         raise GatewayError(scope.error_code, _layer_message(scope))
 
-    capability_present = registry.supports(preflight.operation.capability)
+    capability_present = _capability_present(registry, preflight.operation)
     # D30 §5: the operation's own Target-class rule (Refused resource types) is
     # evaluated before the Target allowlist, so it also covers the fully allowlisted
     # deployment where only it can refuse.
@@ -383,6 +388,170 @@ async def _interpret(
     await auditor.result("outcome_unknown", error_code="outcome_unknown", target_type=target_type,
                          target_id=request.target_id)
     return MutationResult(MutationState.OUTCOME_UNKNOWN, dispatch, error)
+
+
+@dataclass(frozen=True, slots=True)
+class LocalMutationRequest:
+    """A Mutation whose effect never reaches the Gateway (D30: `artifact_delete`).
+
+    Everything D08 decides on is the same as for a dispatched Mutation, minus the
+    dispatch: the same principal, scope, class, operation allowlist, Target allowlist,
+    capability layer, Precondition hook, audit phases and bounded verification. The
+    effect is a local callable the Tool owns, so it runs exactly once, and a failure
+    verifies the state instead of replaying anything.
+    """
+
+    operation: MutationOperation
+    principal: VerifiedPrincipal
+    target_id: str
+    effect: Callable[[], Awaitable[None]]
+    verify: Callable[[], Awaitable[VerificationOutcome]]
+    target_type: str = ""
+    additional_target_ids: tuple[str, ...] = ()
+    precondition: Callable[[], Awaitable[None]] | None = None
+    #: A Target-class policy rule the operation declares (D30 §5); evaluated exactly
+    #: where `execute_mutation` evaluates it.
+    target_policy: Callable[[], PolicyDecision] | None = None
+    #: The operation's own explicit refusal of the effect (the D17 retention lock).
+    #: Returning an error means the effect changed nothing, so with
+    #: ``rejection_is_final`` the call ends there — no read-back can turn a refusal
+    #: into a success.
+    refusal: Callable[[GatewayError], GatewayError | None] | None = None
+    #: Read when the decision and attempt rows are written, which is after the
+    #: Precondition hook: a Tool whose Target identity is only known once its
+    #: pre-state is read fills this mapping in there.
+    audit_fields: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def preflight(self) -> MutationPreflight:
+        return MutationPreflight(
+            operation=self.operation, principal=self.principal, target_id=self.target_id,
+            target_type=self.target_type, additional_target_ids=self.additional_target_ids,
+            target_policy=self.target_policy, precondition=self.precondition,
+            audit_fields=dict(self.audit_fields),
+        )
+
+
+async def execute_local_mutation(
+    *, settings: Settings, context: OperationContext, request: LocalMutationRequest,
+) -> MutationResult:
+    """Run the D08 chain exactly once for a Mutation with no Gateway dispatch.
+
+    The order is `execute_mutation`'s, and so are the audit rows: the chain, then
+    `decision` and `attempt` before the effect, then the bounded verification and the
+    `result`. What differs is only where the effect lands — and therefore that an
+    ambiguous transport boundary cannot exist, so a failure is either a refusal the
+    operation recognises or an error the caller sees with the observed state attached.
+    """
+
+    auditor = context.auditor
+    if auditor is None:
+        raise GatewayError("internal_error", "mutation dispatch requires an audited invocation context")
+    target_type = request.target_type or "mutation-target"
+    await preflight_mutation(
+        registry=None, settings=settings, context=context, preflight=request.preflight,
+    )
+
+    fields = dict(request.audit_fields)
+    await auditor.decision(
+        allowed=True, target_type=target_type, target_id=request.target_id, safe_fields=fields,
+    )
+    await auditor.attempt(target_type=target_type, target_id=request.target_id, safe_fields=fields)
+
+    try:
+        await request.effect()
+    except GatewayError as error:
+        refusal = request.refusal(error) if request.refusal is not None else None
+        if refusal is not None:
+            # A refusal the operation recognises means the effect changed nothing (the
+            # local subsystem checked and declined inside its own transaction), so a
+            # read-back can only ever confirm or contradict that — never upgrade it.
+            if request.operation.rejection_is_final:
+                await auditor.result(
+                    "rejected", error_code=refusal.code, target_type=target_type,
+                    target_id=request.target_id,
+                )
+                return MutationResult(MutationState.REJECTED, None, refusal)
+            verified = await _verify_locally(request)
+            if verified is VerificationOutcome.UNCHANGED:
+                await auditor.result(
+                    "rejected", error_code=refusal.code, target_type=target_type,
+                    target_id=request.target_id,
+                )
+                return MutationResult(MutationState.REJECTED, None, refusal)
+            unestablished = GatewayError(
+                refusal.code,
+                f"{refusal.message} (and the bounded read-back did not show the Target "
+                "unchanged, so the final state cannot be established; nothing was replayed)",
+                refusal.status_code,
+            )
+            await auditor.result(
+                "outcome_unknown", error_code="outcome_unknown", target_type=target_type,
+                target_id=request.target_id,
+            )
+            return MutationResult(MutationState.OUTCOME_UNKNOWN, None, unestablished)
+        # Any other failure is the caller's error: the local effect reported no
+        # outcome this operation understands, so nothing is replayed and the call
+        # fails with the code the subsystem raised.
+        await auditor.result(
+            "failed", error_code=error.code, target_type=target_type, target_id=request.target_id,
+        )
+        raise
+
+    verified = await _verify_locally(request)
+    if verified is VerificationOutcome.CONFIRMED:
+        await auditor.result("completed", target_type=target_type, target_id=request.target_id)
+        return MutationResult(MutationState.SUCCEEDED, None, None)
+    if verified is VerificationOutcome.UNCHANGED:
+        unchanged = GatewayError(
+            "internal_error",
+            "the local effect reported no failure but the bounded read-back still shows the "
+            "Target unchanged; nothing was replayed",
+        )
+        await auditor.result(
+            "not_applied", error_code=unchanged.code, target_type=target_type,
+            target_id=request.target_id,
+        )
+        return MutationResult(MutationState.NOT_APPLIED, None, unchanged)
+    unresolved = GatewayError(
+        "outcome_unknown",
+        "the local effect ran but its final state cannot be established; it was not replayed",
+    )
+    await auditor.result(
+        "outcome_unknown", error_code="outcome_unknown", target_type=target_type,
+        target_id=request.target_id,
+    )
+    return MutationResult(MutationState.OUTCOME_UNKNOWN, None, unresolved)
+
+
+async def _verify_locally(request: LocalMutationRequest) -> VerificationOutcome:
+    try:
+        return await request.verify()
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        # A failed read-back establishes nothing, and it is never a replay licence.
+        return VerificationOutcome.INDETERMINATE
+
+
+def _capability_present(registry: CapabilityRegistry | None, operation: MutationOperation) -> bool:
+    """D08's capability layer for one operation.
+
+    A Gateway-backed operation asks the D04 registry whether the route it needs is in
+    the current OpenAPI snapshot. A local-effect operation has no route to ask about:
+    its declared local capability is the subsystem the Tool resolved before the chain
+    ran (a failure there is an `internal_error`), so the layer is satisfied here and the
+    operation's own `__post_init__` keeps the declaration honest.
+    """
+
+    if not operation.gateway_backed:
+        return True
+    if registry is None:
+        raise GatewayError(
+            "internal_error",
+            "a Gateway-backed mutation requires the D04 capability registry; nothing was dispatched",
+        )
+    return registry.supports(operation.capability)
 
 
 def _map_status(status: int) -> GatewayError:

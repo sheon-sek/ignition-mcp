@@ -553,7 +553,15 @@ class LocalArtifactStore:
             pass
 
     async def delete_internal(self, artifact_id: str) -> None:
-        """Internal deletion; retention-locked artifacts are refused (D17)."""
+        """Internal deletion; retention-locked artifacts are refused (D17).
+
+        Durable delete sequence, with the same crash-recoverable split points the
+        create path has: the ``DELETING`` transition and the retention-lock check are
+        one transaction (so a refusal leaves nothing behind), then the object is
+        unlinked and its directory fsynced, then the row is removed. A crash between
+        them leaves the artifact in ``DELETING`` — invisible to every consumer — and
+        ``reconcile`` finishes it.
+        """
 
         validate_artifact_id(artifact_id)
 
@@ -572,6 +580,7 @@ class LocalArtifactStore:
         started = await self._db.run(_start)
         if not started:
             return
+        self._fail_hook("deleting")
         await asyncio.to_thread(self._unlink_object, artifact_id)
 
         def _finish(conn: Any) -> None:

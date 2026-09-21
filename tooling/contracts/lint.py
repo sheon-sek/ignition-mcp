@@ -129,6 +129,33 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: success is the only thing the bounded re-export can confirm.
         "recoveredSuccess": "unreachable for this Tool",
     },
+    "artifact_delete": {
+        #: D30 §6/D26: removing one server-held artifact is a CONFIG operation.
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        #: D30 §6: the artifact is destroyed; D17 makes its absence the Observed state.
+        "destructive": True,
+        #: D30 §2 lists no Precondition token; the artifact's identity is the caller's
+        #: own read, and D17's crash-safe DELETING state is the concurrency rule.
+        "precondition": {"kind": "none"},
+        #: The Tool sends the Gateway nothing at all (D30 dropped the HTTP route).
+        "fixedKnobs": {},
+        #: D30 §5 governs config-resource Mutations; an artifact is not a config resource.
+        "refusedResourceTypes": False,
+        #: D03 request-schema validation governs config-resource write bodies; this Tool
+        #: dispatches no request body to any Gateway route.
+        "requestSchemaValidation": False,
+        #: A removal's post-state is absence, which TTL cleanup, the D16 transaction and
+        #: any `ignition.admin` also produce, so no read-back can attribute it to one call.
+        "recoveredSuccess": "unreachable for this Tool",
+        #: D30 drops the artifact HTTP route, so this Mutation has no D04 capability to
+        #: be gated on and declares the local subsystem its D08 capability layer checks.
+        #: It is the only REST Mutation Tool of that shape; the structural scan in
+        #: test_phase3_safety_structure.py pins the operation's `gateway_backed=False`.
+        "capabilityId": None,
+        "localCapability": "artifact_store",
+    },
     "alarm_pipeline_cancel": {
         #: D12/D26: cancelling a notification pipeline run is a CONTROL operation.
         "mutationClass": "CONTROL_MUTATION",
@@ -309,7 +336,28 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: mutation gate/audit drift")
         if tool.get("destructive") is not spec["destructive"]:
             raise ContractError(f"{tool_name}: destructive declaration drift (D08/D26)")
-        if tool.get("capabilityId") != tool_name:
+        # D04 decides discovery from the Gateway's OpenAPI. A storage-backed Mutation
+        # whose effect never leaves the server (`artifact_delete`, whose HTTP route D30
+        # drops) has no Gateway capability to name, so it declares the local subsystem
+        # its D08 capability layer checks instead of an imaginary route — and it may not
+        # also claim a Gateway capability. Every other REST Mutation stays backed by the
+        # capability that carries its name.
+        expected_capability = spec.get("capabilityId", tool_name)
+        if expected_capability is None:
+            local = tool.get("localCapability")
+            if not isinstance(local, dict) or local.get("name") != spec.get("localCapability"):
+                raise ContractError(
+                    f"{tool_name}: a Mutation with no Gateway route must declare its local capability"
+                )
+            if tool.get("capabilityId") is not None:
+                raise ContractError(
+                    f"{tool_name}: a local-effect Mutation names no Gateway capability"
+                )
+            if not isinstance(local.get("reason"), str) or local.get("discovery") is None:
+                raise ContractError(
+                    f"{tool_name}: a local capability must say why and how it is discovered"
+                )
+        elif tool.get("capabilityId") != expected_capability:
             raise ContractError(f"{tool_name}: a mutation contract must be capability-backed")
         precondition = tool.get("preconditionToken")
         if not isinstance(precondition, dict) or precondition.get("kind") not in PRECONDITION_KINDS:
