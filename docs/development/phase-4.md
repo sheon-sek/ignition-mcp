@@ -605,11 +605,32 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   scans and the live harness moved together.
 - Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **98/98 cases**
   against the recorded Gateway, both deployment gates and all three credentials.
-- Live: run IDs in the ticket report; the artifact cases need no Gateway at all (the
-  Tool has no route), so what the rows add is the end-to-end removal on the real
-  server, the independent `artifact_info`/`artifact_list` re-read, the ownership rule in
-  both directions, the CONFIG scope refusal, both D10 input bounds, the `DELETE
-  /artifacts/{id}` refusal (405, D30), and the class gate at discovery and at call time.
+- Live ([run 35668808837](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808837)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **98/98 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — with the exact
+  inventories unchanged in shape and `artifact_delete` now part of the config lane: the
+  config credential sees the read Tools plus the seven CONFIG Tools, the read-only and
+  CONTROL credentials see neither. The artifact cases need no Gateway at all (the Tool has
+  no route), so what the rows add is the end-to-end removal on the real server — a
+  `project_export` artifact removed with `present: false`, `kind: project_export` and the
+  identifier it removed (`observations.json`: `artifactDeleteResult`) — plus an independent
+  `artifact_info` (`not_found`) and `artifact_list` (no longer served), a second removal
+  answering `not_found`, the D30 §6 ownership rule in both directions (another principal's
+  export is `not_found` and still served to its owner; the owning credential's own export
+  is removed), the CONFIG scope for the read-only credential with the artifact it could not
+  remove still present, both D10 input bounds (`invalid_argument`), the dropped
+  `DELETE /artifacts/{id}` route (405), and the class gate at discovery and at call time
+  (`disabled-class-artifact-delete-is-refused`). No Target-allowlist denial is asserted
+  live: this deployment must write the explicit `*` for a Tool whose identifiers are
+  generated at removal time, which the open questions record.
+- Frozen gates, green on the code head (`51b25b2`): CI
+  [35668808852](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808852), Phase 3
+  Live Gateway G3
+  [35668808791](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808791) and
+  Phase 4 Live Gateway G4a
+  [35668808776](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808776). The
+  head this section was last touched on re-runs the same four workflows; its run IDs are in
+  the ticket report.
 
 ## Open questions
 
