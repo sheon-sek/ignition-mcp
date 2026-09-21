@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:config-resource-rename:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resourceType": {
+      "type": "string",
+      "minLength": 3
+    },
+    "name": {
+      "description": "The name the resource carries after the rename.",
+      "type": "string"
+    },
+    "previousName": {
+      "description": "The name the resource carried before the rename.",
+      "type": "string"
+    },
+    "collection": {
+      "type": "string"
+    },
+    "signature": {
+      "description": "The Resource signature observed at the new name (D30 Precondition token for the caller's next change).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "observedState": {
+      "description": "Bounded re-read of the renamed resource, with embedded secrets redacted.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "correlationId",
+    "resourceType",
+    "name",
+    "previousName",
+    "collection",
+    "signature",
+    "observedState"
+  ]
+}

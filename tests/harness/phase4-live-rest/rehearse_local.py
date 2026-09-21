@@ -37,9 +37,14 @@ sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from rest_driver import (  # noqa: E402
+    CREATED_RESOURCE,
+    RENAMED_RESOURCE,
+    RENAME_SOURCE,
+    RENAME_SOURCE_2,
     REFUSED_NAME,
     REFUSED_TYPE,
     SINGLETON_TYPE,
+    UNALLOWLISTED_RENAMED,
     run_gate_off,
     run_gate_on,
 )
@@ -49,6 +54,25 @@ ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
 AGENT_TOKEN = "phase4-rehearsal-agent"
+#: The same per-Tool Target allowlists the live workflow configures: one entry list
+#: per Mutation Tool, and every name a case addresses that must be allowed.
+MUTATION_TARGETS = {
+    "config_resource_update": (f"{RESOURCE_TYPE}/{ALLOWLISTED}", SINGLETON_TYPE),
+    "config_resource_create": (
+        f"{RESOURCE_TYPE}/{CREATED_RESOURCE}",
+        f"{RESOURCE_TYPE}/{RENAME_SOURCE}",
+        f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
+    ),
+    "config_resource_delete": (
+        f"{RESOURCE_TYPE}/{ALLOWLISTED}",
+        f"{RESOURCE_TYPE}/{CREATED_RESOURCE}",
+    ),
+    "config_resource_rename": (
+        f"{RESOURCE_TYPE}/{RENAME_SOURCE}",
+        f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
+        f"{RESOURCE_TYPE}/{RENAMED_RESOURCE}",
+    ),
+}
 
 
 def _free_port() -> int:
@@ -78,8 +102,8 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         artifact_staging_deadline_seconds=900.0, artifact_cleanup_interval_seconds=3600.0,
         artifact_cleanup_batch=50, artifact_upload_enabled=False, sensitive_exports_enabled=False,
         config_mutation_enabled=mutation_enabled, control_mutation_enabled=False,
-        admin_mutation_enabled=False, mutation_operations=("config_resource_update",),
-        mutation_targets={"config_resource_update": (f"{RESOURCE_TYPE}/{ALLOWLISTED}", SINGLETON_TYPE)},
+        admin_mutation_enabled=False, mutation_operations=tuple(MUTATION_TARGETS),
+        mutation_targets=MUTATION_TARGETS,
         project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=False,
         project_lock_timeout_seconds=10.0, project_lock_max_entries=32,
         project_reconcile_interval_seconds=3600.0, project_verification_timeout_seconds=60.0,
@@ -121,6 +145,15 @@ def _seed(gateway: RecordedGateway) -> None:
         config={"profile": {"type": "local"}, "settings": {}},
         description="Disposable Phase 4 CI audit profile (allowlist control)",
     )
+    # The rename sources: provisioned live, so the rename cases do not depend on the
+    # create Tool working first. The name the create case publishes is deliberately
+    # not seeded.
+    for name in (RENAME_SOURCE, RENAME_SOURCE_2):
+        gateway.seed_resource(
+            RESOURCE_TYPE, name,
+            config={"profile": {"type": "local", "retentionDays": 9}, "settings": {}},
+            description="Disposable Phase 4 CI audit profile (rename source)",
+        )
     # An allowed singleton: its documented change item carries no name.
     gateway.seed_resource(
         SINGLETON_TYPE, "cobranding", config={"enabled": True}, description="CI branding",
@@ -146,7 +179,9 @@ def main() -> int:
                 rest_url=url, reader_token=READER_TOKEN, agent_token=AGENT_TOKEN,
                 resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
                 unallowlisted=UNALLOWLISTED, singleton_type=SINGLETON_TYPE,
-                raw_dir=args.raw_dir,
+                created_name=CREATED_RESOURCE, rename_source=RENAME_SOURCE,
+                rename_source_2=RENAME_SOURCE_2, renamed_name=RENAMED_RESOURCE,
+                unallowlisted_renamed=UNALLOWLISTED_RENAMED, raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(

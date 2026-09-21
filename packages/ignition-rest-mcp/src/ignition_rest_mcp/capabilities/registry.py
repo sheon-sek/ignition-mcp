@@ -10,7 +10,10 @@ import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
-from ignition_rest_mcp.capabilities.request_schema import bundle_update_item_schema
+from ignition_rest_mcp.capabilities.request_schema import (
+    bundle_collection_item_schema,
+    bundle_operation_body_schema,
+)
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 
@@ -44,6 +47,19 @@ class ConfigResourceCapability:
     update_path: str | None = None
     #: The self-contained JSON Schema one PUT change item must satisfy.
     update_request_schema: Mapping[str, Any] | None = None
+    #: The collection path a create is dispatched to, present only when the Gateway
+    #: documents ``POST`` for this type *and* its documented item schema is usable.
+    create_path: str | None = None
+    create_request_schema: Mapping[str, Any] | None = None
+    #: The documented ``DELETE`` route, whose *path* carries the Resource signature:
+    #: ``<collection>/{name}/{signature}`` for a named resource and
+    #: ``<collection>/{signature}`` for a singleton.
+    delete_path_template: str | None = None
+    #: The documented rename route ``.../rename/<resourceType>/{name}`` and its
+    #: request-body schema (D03): the endpoint takes no signature, so the Precondition
+    #: token is enforced by a server-side read-compare (D30 §2).
+    rename_path_template: str | None = None
+    rename_request_schema: Mapping[str, Any] | None = None
 
     @property
     def singleton(self) -> bool:
@@ -228,9 +244,30 @@ def _resource_type_inventory(
         find_path = f"/data/api/v1/resources/find/{resource_type}/{{name}}"
         singleton_path = f"/data/api/v1/resources/singleton/{resource_type}"
         collection_path = f"{RESOURCE_COLLECTION_PREFIX}{resource_type}"
+        rename_path = f"{RESOURCE_COLLECTION_PREFIX}rename/{resource_type}/{{name}}"
+        # D30 §2: every config write needs the Precondition token's read source, so a
+        # write route is exposed only for a type the caller can also read back exactly.
+        lookup_available = ("GET", find_path) in endpoints or ("GET", singleton_path) in endpoints
+        delete_path = (
+            f"{collection_path}/{{name}}/{{signature}}"
+            if ("DELETE", f"{collection_path}/{{name}}/{{signature}}") in endpoints
+            else f"{collection_path}/{{signature}}"
+            if ("DELETE", f"{collection_path}/{{signature}}") in endpoints
+            else None
+        )
         update_schema = (
-            bundle_update_item_schema(dict(openapi), resource_type)
+            bundle_collection_item_schema(dict(openapi), resource_type, "put")
             if ("PUT", collection_path) in endpoints
+            else None
+        )
+        create_schema = (
+            bundle_collection_item_schema(dict(openapi), resource_type, "post")
+            if ("POST", collection_path) in endpoints
+            else None
+        )
+        rename_schema = (
+            bundle_operation_body_schema(dict(openapi), rename_path, "post")
+            if ("POST", rename_path) in endpoints
             else None
         )
         result[resource_type] = ConfigResourceCapability(
@@ -242,8 +279,15 @@ def _resource_type_inventory(
             list_path=list_path if ("GET", list_path) in endpoints else None,
             find_path_template=find_path if ("GET", find_path) in endpoints else None,
             singleton_path=singleton_path if ("GET", singleton_path) in endpoints else None,
-            update_path=collection_path if update_schema is not None else None,
+            update_path=collection_path if update_schema is not None and lookup_available else None,
             update_request_schema=update_schema,
+            create_path=collection_path if create_schema is not None and lookup_available else None,
+            create_request_schema=create_schema,
+            delete_path_template=delete_path if lookup_available else None,
+            rename_path_template=(
+                rename_path if rename_schema is not None and lookup_available else None
+            ),
+            rename_request_schema=rename_schema,
         )
     return dict(sorted(result.items()))
 
@@ -279,6 +323,12 @@ def _semantic_capabilities(
         semantic.add("config_resource_get")
     if any(item.update_path is not None for item in resource_types.values()):
         semantic.add("config_resource_update")
+    if any(item.create_path is not None for item in resource_types.values()):
+        semantic.add("config_resource_create")
+    if any(item.delete_path_template is not None for item in resource_types.values()):
+        semantic.add("config_resource_delete")
+    if any(item.rename_path_template is not None for item in resource_types.values()):
+        semantic.add("config_resource_rename")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
     # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
     # capability only gates internal machinery and future Phase 4 exposure (D08/D26).

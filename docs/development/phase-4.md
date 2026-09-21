@@ -201,6 +201,24 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #15 — a config rename has two Targets, and D30 does not say so.** D30 §6 gives the Target
+  rule for the Runtime Tag operations ("`tag_move` checks the source and the destination, and
+  `tag_rename` checks the new path"); it says nothing about a *config* rename, which both changes the
+  resource at its old `<resourceType>/<name>` and produces one at `<resourceType>/<newName>`. The
+  conservative reading is implemented — **both** names are Targets (D30 §3 Preflight), both are
+  checked and both must be allowlisted (`MutationRequest.additional_target_ids`, with a unit test
+  proving the destination denial and a live case proving it on 8.3.8 and 8.3.9) — and the behaviour
+  is recorded in the Tool's contract (`targetIds`). **For the owner:** confirm the both-names rule, or
+  narrow it to the destination only (the Runtime `tag_rename` reading) if that is what the decision
+  intended.
+- **Ticket #15 — two Gateway behaviours in the recorded fixture are modelled, not recorded.** The
+  fixture answers an existing create target and an occupied rename destination with 409 (the status
+  the committed document responds with elsewhere, and the one D30 §7 maps to `conflict`), and a stale
+  signature in a `DELETE` path with 409 as well. No live Gateway is reachable from the local fixture,
+  so the live cases were written not to need them: every live create collision, rename collision and
+  stale-token case is refused by the server's own pre-dispatch checks. The shape the real Gateway uses
+  for those three refusals is therefore still unverified and should be captured on the next live run
+  (`observations.json` records what the live cases observed).
 - **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy: RESOLVED by a Tool-scoped
   mapping.** D30 §7 maps "target not allowlisted" to `permission_denied`; the Phase 3 machinery
   answers `operation_disabled`, which `test_phase3_safety_executor.py` and the live G3 driver

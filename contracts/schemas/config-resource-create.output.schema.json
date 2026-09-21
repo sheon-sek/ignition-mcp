@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:config-resource-create:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "resourceType": {
+      "type": "string",
+      "minLength": 3
+    },
+    "name": {
+      "type": "string"
+    },
+    "collection": {
+      "type": "string"
+    },
+    "signature": {
+      "description": "The Resource signature the created resource reports (D30 Precondition token for the caller's next change to it).",
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "observedState": {
+      "description": "Bounded re-read of the created resource, with embedded secrets redacted.",
+      "type": "object",
+      "additionalProperties": true
+    }
+  },
+  "required": [
+    "correlationId",
+    "resourceType",
+    "name",
+    "collection",
+    "signature",
+    "observedState"
+  ]
+}

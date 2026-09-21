@@ -41,11 +41,46 @@ CURRENT_REST_STORAGE_TOOLS = frozenset({"artifact_list", "artifact_info", "opera
 CURRENT_REST_SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
 SENSITIVE_EXPORT_GATE = "IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"
 #: Phase 4 milestone 4c: the REST Mutation Tools implemented so far, with the
-#: deployment gate and mutation class each one needs.
-CURRENT_REST_MUTATION_TOOLS = {
-    "config_resource_update": ("CONFIG_MUTATION", "ignition.config", "IGNITION_MCP_CONFIG_MUTATION_ENABLED"),
+#: per-Tool facts the contract must state: mutation class, scope, deployment gate,
+#: whether it is destructive, its Precondition token (D30 §2 — ``none`` for a create),
+#: how the Gateway enforces it, and the knobs the caller may never choose (D30 §4).
+CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
+    "config_resource_update": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": False,
+        "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
+        "fixedKnobs": {"allowInvalidReferences": "false"},
+    },
+    "config_resource_create": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": False,
+        "precondition": {"kind": "none"},
+        "fixedKnobs": {"allowInvalidReferences": "false"},
+    },
+    "config_resource_delete": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": True,
+        "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
+        "fixedKnobs": {"confirm": "never sent"},
+    },
+    "config_resource_rename": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": False,
+        "precondition": {"kind": "resource_signature", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"references": "ABORT"},
+    },
 }
 REST_MUTATION_CLASSES = frozenset({"CONFIG_MUTATION", "CONTROL_MUTATION", "ADMIN_MUTATION"})
+PRECONDITION_KINDS = frozenset({"resource_signature", "none"})
+PRECONDITION_ENFORCERS = frozenset({"gateway", "server_read_compare"})
 REFUSED_RESOURCE_TYPES_CONTRACT = "contracts/shared/refused-resource-types.json"
 EXPECTED_ARTIFACT_KINDS = ("project_archive", "project_export", "tag_config_export")
 EXPECTED_SENSITIVITY_CLASSES = ("INTERNAL", "CONFIDENTIAL", "RESTRICTED")
@@ -173,31 +208,42 @@ def lint_contracts(root: str | Path) -> None:
     declared_mutation_classes = _load(root_path / "shared/mutation-classes.json").get("classes", {})
     if not isinstance(declared_mutation_classes, dict):
         raise ContractError("mutation-classes: classes must be an object")
-    for tool_name, (mutation_class, scope, gate) in CURRENT_REST_MUTATION_TOOLS.items():
+    for tool_name, spec in CURRENT_REST_MUTATION_TOOLS.items():
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
         if tool.get("name") != tool_name or tool.get("server") != "ignition-rest":
             raise ContractError(f"{tool_name}: REST mutation contract drift")
+        mutation_class = spec["mutationClass"]
         if tool.get("operationKind") != "mutation" or tool.get("mutationClass") != mutation_class:
             raise ContractError(f"{tool_name}: mutation class drift")
         if mutation_class not in REST_MUTATION_CLASSES or mutation_class not in declared_mutation_classes:
             raise ContractError(f"{tool_name}: undeclared mutation class")
-        if tool.get("permissionClass") != "CONFIG" or tool.get("requiredScope") != scope:
+        if tool.get("permissionClass") != "CONFIG" or tool.get("requiredScope") != spec["scope"]:
             raise ContractError(f"{tool_name}: mutation scope drift")
-        if tool.get("deploymentGate") != gate or tool.get("audited") is not True:
+        if tool.get("deploymentGate") != spec["gate"] or tool.get("audited") is not True:
             raise ContractError(f"{tool_name}: mutation gate/audit drift")
-        if not isinstance(tool.get("destructive"), bool):
-            raise ContractError(f"{tool_name}: destructive must be declared as a boolean")
+        if tool.get("destructive") is not spec["destructive"]:
+            raise ContractError(f"{tool_name}: destructive declaration drift (D08/D26)")
         if tool.get("capabilityId") != tool_name:
             raise ContractError(f"{tool_name}: a mutation contract must be capability-backed")
         precondition = tool.get("preconditionToken")
-        if not isinstance(precondition, dict) or precondition.get("kind") != "resource_signature":
-            raise ContractError(f"{tool_name}: mutation must declare its Precondition token")
-        if precondition.get("enforcedBy") != "gateway":
-            raise ContractError(f"{tool_name}: a Gateway-enforced token must say so")
+        if not isinstance(precondition, dict) or precondition.get("kind") not in PRECONDITION_KINDS:
+            raise ContractError(f"{tool_name}: D30 §2 requires the Precondition token to be declared")
+        if precondition.get("kind") != spec["precondition"]["kind"]:
+            raise ContractError(f"{tool_name}: Precondition token kind drift")
+        if precondition.get("kind") == "resource_signature":
+            enforcer = precondition.get("enforcedBy")
+            if enforcer not in PRECONDITION_ENFORCERS:
+                raise ContractError(f"{tool_name}: a Precondition token must say what enforces it")
+            if enforcer != spec["precondition"]["enforcedBy"]:
+                raise ContractError(f"{tool_name}: Precondition token enforcer drift")
+            if enforcer == "gateway" and precondition.get("alsoReadComparedBeforeDispatch") is not True:
+                raise ContractError(f"{tool_name}: a Gateway-enforced token must also be read-compared")
+            if precondition.get("raceWindowDocumented") is not True:
+                raise ContractError(f"{tool_name}: the Precondition race window must be documented")
         if tool.get("refusedResourceTypes", {}).get("unclassified") != "refused":
             raise ContractError(f"{tool_name}: unclassified resource types must be refused")
-        if tool.get("fixedKnobs", {}).get("allowInvalidReferences") != "false":
-            raise ContractError(f"{tool_name}: allowInvalidReferences is fixed false (D30)")
+        if tool.get("fixedKnobs") != spec["fixedKnobs"]:
+            raise ContractError(f"{tool_name}: the D30 §4 fixed knobs must be declared exactly")
         target = tool.get("targetId")
         if not isinstance(target, dict) or target.get("denialCode") != "permission_denied":
             raise ContractError(f"{tool_name}: D30 §7 decides permission_denied for a Target denial")
@@ -213,8 +259,12 @@ def lint_contracts(root: str | Path) -> None:
         rejection = tool.get("rejectionPolicy")
         if not isinstance(rejection, dict) or "D30 §2" not in str(rejection.get("rule", "")):
             raise ContractError(f"{tool_name}: a mutation must declare the D30 §2 rejection policy")
+        # D30 §7 maps both a stale Precondition token and a collision to `conflict`,
+        # so every mutation's rejection policy must say so.
         if not re.search(r"conflict", str(rejection.get("rule", ""))):
-            raise ContractError(f"{tool_name}: the rejection policy must state the signature-mismatch mapping")
+            raise ContractError(f"{tool_name}: the rejection policy must state the D30 §7 conflict mapping")
+        if rejection.get("recoveredSuccess") != "unreachable for this Tool":
+            raise ContractError(f"{tool_name}: rejection_is_final forbids a recovered success")
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")

@@ -55,6 +55,14 @@ jobs:
       ALLOWLISTED_RESOURCE: MCP_CI_AUDIT
       # An allowed singleton target: its documented change item carries no name.
       SINGLETON_TYPE: ignition/cobranding
+      # The names the create, delete and rename cases address. Each is either
+      # provisioned or published live, and each must appear in the matching per-Tool
+      # Target allowlist below; the driver is told the same names on its command line.
+      CREATED_RESOURCE: MCP_CI_AUDIT_CREATED
+      RENAME_SOURCE: MCP_CI_AUDIT_RENAME_SOURCE
+      RENAME_SOURCE_2: MCP_CI_AUDIT_RENAME_SOURCE_2
+      RENAMED_RESOURCE: MCP_CI_AUDIT_RENAMED
+      UNALLOWLISTED_RENAMED: MCP_CI_AUDIT_RENAMED_NOT_ALLOWED
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -213,8 +221,18 @@ jobs:
           IGNITION_MCP_PATH=/mcp \
           IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
           IGNITION_MCP_CONFIG_MUTATION_ENABLED=true \
-          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update \
-          IGNITION_MCP_MUTATION_TARGETS="{\"config_resource_update\":[\"$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE\",\"$SINGLETON_TYPE\"]}" \
+          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename \
+          IGNITION_MCP_MUTATION_TARGETS="$(jq -nc \
+            --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
+            --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
+            --arg rename_source "$RESOURCE_TYPE/$RENAME_SOURCE" \
+            --arg rename_source_2 "$RESOURCE_TYPE/$RENAME_SOURCE_2" \
+            --arg renamed "$RESOURCE_TYPE/$RENAMED_RESOURCE" \
+            --arg singleton "$SINGLETON_TYPE" \
+            '{config_resource_update: [$allowlisted, $singleton],
+              config_resource_create: [$created, $rename_source, $rename_source_2],
+              config_resource_delete: [$allowlisted, $created],
+              config_resource_rename: [$rename_source, $rename_source_2, $renamed]}')" \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
           echo "$!" > artifacts/rest-gate-on.pid
@@ -243,6 +261,11 @@ jobs:
             --resource-type "$RESOURCE_TYPE" \
             --allowlisted "$ALLOWLISTED_RESOURCE" \
             --singleton-type "$SINGLETON_TYPE" \
+            --created-name "$CREATED_RESOURCE" \
+            --rename-source "$RENAME_SOURCE" \
+            --rename-source-2 "$RENAME_SOURCE_2" \
+            --renamed-name "$RENAMED_RESOURCE" \
+            --unallowlisted-renamed "$UNALLOWLISTED_RENAMED" \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
             > "$EVIDENCE_DIR/driver-gate-on.log" 2>&1
