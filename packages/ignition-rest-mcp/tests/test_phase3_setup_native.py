@@ -237,6 +237,7 @@ class FakeMcp:
         offline: bool = False,
         deny: bool = False,
         reject_initialize: bool = False,
+        invalid_refusals: bool = False,
     ) -> None:
         self.tools = list(TOOLS) if tools is None else tools
         self.resources = list(RESOURCE_URIS) if resources is None else resources
@@ -256,6 +257,9 @@ class FakeMcp:
         self.offline = offline
         self.deny = deny
         self.reject_initialize = reject_initialize
+        # Live shape (G3 run 35588754132): the module refuses unimplemented list
+        # capabilities with -32600 Invalid Request, not -32601.
+        self.invalid_refusals = invalid_refusals
         self.session_id = "session-77"
         self.requests: list[httpx.Request] = []
         self.methods: list[str] = []
@@ -333,8 +337,9 @@ class FakeMcp:
             body: dict[str, Any] = {"jsonrpc": "2.0", "id": payload.get("id"),
                                     "result": self.result(method, payload.get("params") or {})}
         except _NoMethod as error:
+            code = -32600 if (self.invalid_refusals and error.method.endswith("/list")) else -32601
             body = {"jsonrpc": "2.0", "id": payload.get("id"),
-                    "error": {"code": -32601, "message": f"method not found: {error.method}"}}
+                    "error": {"code": code, "message": f"refused: {error.method}"}}
         text = json.dumps(body)
         if self.sse:
             return httpx.Response(200, content=f"event: message\ndata: {text}\n\n".encode(),
@@ -1029,6 +1034,39 @@ def test_mcp_client_bounds_the_response_body() -> None:
                 await client.tools_list()
 
     asyncio.run(exercise())
+
+
+def test_doctor_treats_invalid_request_list_refusal_as_absent_capability(runner: Runner) -> None:
+    """Live module shape: unadvertised prompts/list answers -32600. With the
+    capability unadvertised and the profile expecting none this is
+    NOT_APPLICABLE (the G1 lesson), not a failure."""
+    code, payload, _ = runner("doctor", make_manifest(), gateway_fake=FakeGateway(),
+                              mcp_fake=FakeMcp(invalid_refusals=True))
+    check = checks_of(payload)["inventory-prompts"]
+    assert code == 0 and check["status"] == "NOT_APPLICABLE", check
+
+
+def test_advertised_prompts_refused_with_invalid_request_still_fails(runner: Runner) -> None:
+    """The -32600 leniency is scoped: an endpoint that advertises prompts but
+    whose prompts/list is refused while the profile expects prompts must FAIL."""
+    manifest = with_profile(make_manifest(), "operator", prompts=["standup"], resources=list(RESOURCE_URIS))
+    code, payload, _ = runner("doctor", manifest, profile="operator", gateway_fake=FakeGateway(),
+                              mcp_fake=FakeMcp(prompts=["standup"], advertise=("tools", "resources", "prompts"),
+                                               invalid_refusals=False))
+    assert code == 0 and checks_of(payload)["inventory-prompts"]["status"] == "PASS"
+    # Now advertise prompts but refuse the list method with -32600 (invalid shape).
+    class _AdvertisedButRefusing(FakeMcp):
+        def result(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+            if method == "prompts/list":
+                raise _NoMethod("prompts/list")
+            return super().result(method, params)
+
+    refusing = _AdvertisedButRefusing(prompts=["standup"], advertise=("tools", "resources", "prompts"),
+                                      invalid_refusals=True)
+    code, payload, _ = runner("doctor", manifest, profile="operator", gateway_fake=FakeGateway(),
+                              mcp_fake=refusing)
+    check = checks_of(payload)["inventory-prompts"]
+    assert code == 1 and check["status"] == "FAIL", check
 
 
 def test_mcp_client_separates_method_not_found_from_other_failures() -> None:

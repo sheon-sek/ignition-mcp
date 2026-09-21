@@ -10,7 +10,7 @@ services:
       GATEWAY_ADMIN_PASSWORD: "phase3-ci-only-not-a-production-secret"
       IGNITION_EDITION: "standard"
       DISABLE_QUICKSTART: "true"
-      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp"
+      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp,com.inductiveautomation.historian,com.inductiveautomation.alarm-notification"
       ACCEPT_MODULE_CERTS: "com.inductiveautomation.mcp"
     volumes:
       - phase3-gateway-data:/usr/local/bin/ignition/data

@@ -27,6 +27,13 @@ MAX_LIST_PAGES = 20
 INITIALIZE_TIMEOUT_SECONDS = 30.0
 ERROR_BODY_SNIPPET = 160
 METHOD_NOT_FOUND = -32601
+INVALID_REQUEST = -32600
+#: The live Gateway module answers unimplemented list capabilities (an empty
+#: Prompt inventory omits the prompts capability — the G1 lesson, proven live in
+#: run 35588754132) with ``-32600 Invalid Request`` rather than ``-32601 Method
+#: not found``.  For list methods both codes mean "this endpoint does not offer
+#: that capability"; anywhere else ``-32600`` stays a hard failure.
+LIST_METHODS = frozenset({"tools/list", "resources/list", "prompts/list"})
 USER_AGENT = "ignition-mcp-setup-native"
 #: An Ignition API token (``name:key``, the key being unpadded Base64URL).  The
 #: Gateway module's MCP endpoint authenticates it through ``X-Ignition-API-Token``
@@ -162,7 +169,7 @@ class McpHttpClient:
         if isinstance(error, dict):
             code = error.get("code")
             detail = json.dumps(error, separators=(",", ":"), sort_keys=True)[:ERROR_BODY_SNIPPET]
-            if code == METHOD_NOT_FOUND:
+            if code == METHOD_NOT_FOUND or (code == INVALID_REQUEST and method in LIST_METHODS):
                 raise McpMethodNotFound(method, detail)
             raise McpProbeError(f"{method} failed: {_redact(detail, self.token or '')}")
         result = response.get("result")
