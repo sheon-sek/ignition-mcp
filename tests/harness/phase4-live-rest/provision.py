@@ -55,6 +55,8 @@ TAG_IMPORT_ATTEMPTS = 6
 #: The Tag names the source document holds, which the live cases assert are served at
 #: the destination afterwards.
 TAG_SOURCE_NAMES = ("Folder", "Int", "Inner", "Text", "Sibling")
+#: The throwaway path the import-convention probe imports the source document into.
+TAG_PROBE_PATH = "convention_probe"
 
 REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/type/{RESOURCE_TYPE}"),
@@ -359,6 +361,66 @@ def provision_tags(base_url: str, token: str, *, provider: str, source_path: str
         "sourcePath": source_path,
         "sourceTags": sorted(served),
         "import": import_result,
+        "convention": probe_import_convention(
+            base_url, token, provider=provider, probe_path=TAG_PROBE_PATH,
+        ),
+    }
+
+
+def _provider_paths(payload: Any) -> list[str]:
+    """Every provider-relative Tag path one *provider-root* export holds.
+
+    Used only by the convention probe below: it reads an export the harness itself
+    requested at the provider root, so the paths it returns are the paths the Gateway
+    really serves — no assumption about the Tool's document rule is involved.
+    """
+
+    paths: list[str] = []
+
+    def walk(nodes: Any, prefix: str) -> None:
+        if not isinstance(nodes, list):
+            return
+        for node in nodes:
+            if not isinstance(node, dict):
+                continue
+            name = node.get("name")
+            if not isinstance(name, str) or not name:
+                continue
+            current = f"{prefix}/{name}" if prefix else name
+            paths.append(current)
+            walk(node.get("tags"), current)
+
+    children = payload.get("tags") if isinstance(payload, dict) else None
+    if isinstance(children, list):
+        walk(children, "")
+    return paths
+
+
+def probe_import_convention(
+    base_url: str, token: str, *, provider: str, probe_path: str,
+) -> dict[str, Any]:
+    """Record where the Gateway really puts a document that names its own root.
+
+    The Tool decides which Tag paths an import declares, and a document exported from a
+    *sub-path* names its own root (``{"name": "source", ...}``), so whether the Gateway
+    imports that root as a Folder or imports its children under the requested path is a
+    live fact, not a preference. This probe imports the same source document into a
+    throwaway path and re-exports the *provider root*, so the recorded paths say exactly
+    what the Gateway did.
+    """
+
+    result = _import_source_tags(base_url, token, provider, probe_path)
+    status, exported = _request(
+        base_url, token, "GET", f"{TAG_EXPORT_PATH}?provider={provider}&type=json",
+        allowed_error_statuses=frozenset({404, 500}),
+    )
+    paths = _provider_paths(exported) if status == 200 else []
+    return {
+        "importPath": probe_path,
+        "import": result,
+        "exportStatus": status,
+        "providerPaths": sorted(paths),
+        "underProbePath": sorted(path for path in paths if path.split("/", 1)[0] == probe_path),
     }
 
 
@@ -455,6 +517,7 @@ def main() -> int:
         ),
         "tagProvider": (report["tagProvider"] or {}).get("name"),
         "tagSourceTags": (report["tagProvider"] or {}).get("sourceTags"),
+        "tagConvention": (report["tagProvider"] or {}).get("convention"),
     }, sort_keys=True))
     return 0
 

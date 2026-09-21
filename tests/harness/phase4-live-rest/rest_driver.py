@@ -539,6 +539,17 @@ async def tag_import_cases(
         body = imported.get("structuredContent") if not imported.get("isError") else None
         observations["tagImportResult"] = body if isinstance(body, dict) else error_envelope(imported)
         if not isinstance(body, dict):
+            # Record the destination and the source as the Gateway serves them *before*
+            # failing: one run is then enough to tell a refused import from a verification
+            # whose document rule does not match the Gateway's.
+            observations["tagAbortedDestination"] = sorted(
+                await _tag_names_at(agent, artifacts, agent_token, provider, target_path) or ()
+            )
+            observations["tagAbortedSource"] = sorted(
+                await _tag_names_at(agent, artifacts, agent_token, provider, source_path) or ()
+            )
+            _check(cases, "tag-import-applies", "a structured result",
+                   observations["tagImportResult"])
             observations["tagImportAborted"] = "the create case did not return a result"
             return cases, observations
         observed = body.get("observedState")
@@ -550,7 +561,9 @@ async def tag_import_cases(
         observations["tagTargetNames"] = sorted(served or ())
         _check(cases, "tag-import-destination-serves-every-source-tag", True, declared <= (served or set()))
         present = observed.get("present") if isinstance(observed, dict) else None
-        _check(cases, "tag-import-observed-state-names-the-imported-tags", len(declared), len(present or []))
+        present_names = {str(path).rsplit("/", 1)[-1] for path in (present or [])}
+        _check(cases, "tag-import-observed-state-covers-the-source-tags", True,
+               declared <= present_names)
         _check(cases, "tag-import-observed-state-is-relative-to-the-target", True,
                all(str(path).startswith(f"{target_path}/") for path in (present or [])))
         # 'Abort' keeps the mutation inside its Target: the source path is untouched.

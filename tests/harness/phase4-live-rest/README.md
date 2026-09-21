@@ -76,7 +76,7 @@ observe:
 | `tag-import-source-is-not-empty` | the source export `provision.py` published holds the source Tags |
 | `tag-import-reports-no-missing-tag` | the bounded re-export of the destination shows every Tag the document declares |
 | `tag-import-destination-serves-every-source-tag` | a *second*, independently downloaded export of the destination serves them too |
-| `tag-import-observed-state-names-the-imported-tags` | the Observed state carries one path per imported Tag (D30 §6) |
+| `tag-import-observed-state-covers-the-source-tags` | the Observed state names every source Tag (D30 §6) |
 | `tag-import-observed-state-is-relative-to-the-target` | …and they are provider-relative paths under the import path |
 | `tag-import-leaves-the-source-path-untouched` | D30 §4: `Abort` creates Tags, so nothing outside the Target changed |
 | `tag-import-into-an-occupied-destination-is-conflict` | D11's collision policy, sent as `Abort` and refused as `conflict` |

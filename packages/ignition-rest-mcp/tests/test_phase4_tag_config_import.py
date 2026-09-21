@@ -59,11 +59,14 @@ CONFIG_PRINCIPAL = "static-token:config-agent"
 READER_PRINCIPAL = "static-token:reader"
 
 #: The Tag paths the source document declares, and therefore the ones the import
-#: creates and the re-export has to show.
+#: creates and the re-export has to show. The document is the export of ``source``, so
+#: its own root node is part of what it declares (the reading the live harness's
+#: convention probe records).
 DECLARED = (
-    f"{TARGET_PATH}/Alpha",
-    f"{TARGET_PATH}/Nested",
-    f"{TARGET_PATH}/Nested/Beta",
+    f"{TARGET_PATH}/source",
+    f"{TARGET_PATH}/source/Alpha",
+    f"{TARGET_PATH}/source/Nested",
+    f"{TARGET_PATH}/source/Nested/Beta",
 )
 
 
@@ -207,11 +210,11 @@ def test_an_allowlisted_import_creates_the_declared_tags_and_reports_the_reexpor
     assert body["observedState"] == {"present": list(DECLARED), "missing": []}
     # The Gateway really created them: they are in the provider's Tag state, and the
     # Tag the document did not select is untouched.
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Nested") is not None
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Nested/Beta")["value"] == "b"
-    assert gateway.tags(PROVIDER, TARGET_PATH)["tagType"] == "Folder"
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source/Nested") is not None
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source/Nested/Beta")["value"] == "b"
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source")["tagType"] == "Folder"
     assert gateway.tag_imports == [
-        {"provider": PROVIDER, "path": TARGET_PATH, "names": ["Alpha", "Nested"]},
+        {"provider": PROVIDER, "path": TARGET_PATH, "names": ["source"]},
     ]
     # The import carries D30 §4's fixed collision policy and the documented content
     # type, and its body is the artifact the caller named.
@@ -225,7 +228,7 @@ def test_an_allowlisted_import_creates_the_declared_tags_and_reports_the_reexpor
     # The bytes dispatched are the artifact's own bytes, not a re-encoding: the
     # re-export the verification read is compared against exactly what was sent.
     assert hashlib.sha256(imports[0]["body"]).hexdigest() == body["artifact"]["sha256"]
-    assert json.loads(imports[0]["body"])["tags"][0]["name"] == "Alpha"
+    assert json.loads(imports[0]["body"])["name"] == "source"
     # The verification read the same provider and path back (D30 §6 Observed state),
     # after the import rather than instead of it.
     exports = _export_requests(gateway)
@@ -289,13 +292,13 @@ def test_a_destination_that_already_holds_a_declared_tag_is_a_conflict(tmp_path:
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
             artifact_id = _artifact(agent)
-            gateway.change_tags_out_of_band(PROVIDER, TARGET_PATH, [_tag("Alpha", value=99)])
+            gateway.change_tags_out_of_band(PROVIDER, TARGET_PATH, [_tag("source", tag_type="Folder")])
             result = _import(agent, artifact_id)
 
     assert envelope(result)["code"] == "conflict"
     assert _import_requests(gateway) == []
     # Nothing was dispatched, so the competing Tag keeps its own value.
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Alpha")["value"] == 99
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source")["tagType"] == "Folder"
 
 
 def test_the_gateway_refusal_of_a_collision_is_final(tmp_path: Path) -> None:
@@ -313,14 +316,16 @@ def test_the_gateway_refusal_of_a_collision_is_final(tmp_path: Path) -> None:
             agent = _Session(http, CONFIG_CREDENTIAL)
             artifact_id = _artifact(agent)
             gateway.race_tag_import_with(PROVIDER, TARGET_PATH, [
-                _tag("Alpha", value=1), _tag("Nested", tag_type="Folder", children=[
-                    _tag("Beta", dataType="String", value="b"),
+                _tag("source", tag_type="Folder", children=[
+                    _tag("Alpha", value=1), _tag("Nested", tag_type="Folder", children=[
+                        _tag("Beta", dataType="String", value="b"),
+                    ]),
                 ]),
             ])
             result = _import(agent, artifact_id)
 
     assert envelope(result)["code"] == "conflict"
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Nested/Beta") is not None
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source/Nested/Beta") is not None
     assert len(_import_requests(gateway)) == 1
     # The executor's own result row says the Gateway refused this call.
     assert "rejected" in _outcomes(tmp_path)
@@ -385,15 +390,17 @@ def test_an_ambiguous_dispatch_whose_tags_are_present_is_outcome_unknown(tmp_pat
             agent = _Session(http, CONFIG_CREDENTIAL)
             artifact_id = _artifact(agent)
             gateway.race_tag_import_with(PROVIDER, TARGET_PATH, [
-                _tag("Alpha", value=1), _tag("Nested", tag_type="Folder", children=[
-                    _tag("Beta", dataType="String", value="b"),
+                _tag("source", tag_type="Folder", children=[
+                    _tag("Alpha", value=1), _tag("Nested", tag_type="Folder", children=[
+                        _tag("Beta", dataType="String", value="b"),
+                    ]),
                 ]),
             ])
             gateway.fail_tag_imports_with(500)
             result = _import(agent, artifact_id)
 
     assert envelope(result)["code"] == "outcome_unknown"
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Alpha") is not None
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source/Alpha") is not None
     assert "outcome_unknown" in _outcomes(tmp_path)
 
 
@@ -403,9 +410,12 @@ def test_a_partial_import_is_recovery_required_and_never_a_success(tmp_path: Pat
 
     with _seed_gateway() as gateway:
         settings = _settings(tmp_path, gateway)
+        document = {"tags": [_tag("Alpha"), _tag("Beta")]}
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
-            artifact_id = _artifact(agent)
+            # The document is a provider-root shape with two root nodes, so exactly one
+            # of them can land.
+            artifact_id = asyncio.run(_publish_document(tmp_path, settings, document))
             gateway.partial_tag_imports_with(1)
             result = _import(agent, artifact_id)
 
@@ -413,9 +423,9 @@ def test_a_partial_import_is_recovery_required_and_never_a_success(tmp_path: Pat
     assert body["code"] == "outcome_unknown"
     # The message names what the bounded re-export was not showing, so the caller can
     # reconcile without another read.
-    assert "Nested" in body["message"]
+    assert "Beta" in body["message"]
     assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Alpha") is not None
-    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Nested") is None
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/Beta") is None
 
 
 def test_a_claimed_success_whose_tags_are_missing_is_recovery_required(tmp_path: Path) -> None:
@@ -480,8 +490,9 @@ def test_the_provider_root_is_addressable_as_an_explicit_target(tmp_path: Path) 
 
     body = structured(result)
     assert body["path"] == ""
-    assert body["observedState"]["present"] == ["Alpha", "Nested", "Nested/Beta"]
-    assert gateway.tags("MCP_CI_TAGS_ROOT", "Nested/Beta") is not None
+    assert body["observedState"]["present"] == ["source", "source/Alpha", "source/Nested",
+                                                "source/Nested/Beta"]
+    assert gateway.tags("MCP_CI_TAGS_ROOT", "source/Nested/Beta") is not None
     # The Tag the root already held is untouched: the import created Tags only.
     assert gateway.tags("MCP_CI_TAGS_ROOT", "existing")["value"] == "e"
 
@@ -722,5 +733,5 @@ def test_an_import_into_a_multi_segment_path_verifies_provider_relative(
             result = _import(agent, artifact_id, path="a/b")
 
     assert structured(result)["observedState"]["present"] == [
-        "a/b/Alpha", "a/b/Nested", "a/b/Nested/Beta",
+        "a/b/source", "a/b/source/Alpha", "a/b/source/Nested", "a/b/source/Nested/Beta",
     ]

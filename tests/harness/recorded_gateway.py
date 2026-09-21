@@ -1290,21 +1290,24 @@ def _decode_tag_document(body: bytes) -> dict[str, Any] | None:
 
 
 def _incoming_tag_nodes(document: dict[str, Any]) -> list[dict[str, Any]]:
-    """The Tag nodes one import document places under the target path.
+    """The Tag nodes one import document creates under the target path.
 
-    The root is the export wrapper — live-proven: a ``{"tags": [...]}`` document
-    imports its entries, not itself — so a provider-root document contributes its
-    children and a document with no ``tags`` contributes its own node.
+    A document that names its own root imports that root (the same reading the export
+    of a sub-path produces, ``{"name": "source", "tagType": "Folder", ...}``); one that
+    does not — a provider-root export — contributes its ``tags`` entries, which is the
+    shape the Runtime plane imports live.
     """
 
+    name = document.get("name")
+    if isinstance(name, str) and name:
+        return [document]
     children = document.get("tags")
     if isinstance(children, list) and children:
         return [
             child for child in children
             if isinstance(child, dict) and isinstance(child.get("name"), str) and child.get("name")
         ]
-    name = document.get("name")
-    return [document] if isinstance(name, str) and name else []
+    return []
 
 
 def _tag_import_success(count: int, shape: str) -> Any:

@@ -152,7 +152,7 @@ async def tag_config_import(
     payload = await _read_bounded(store, artifact)
     declared = _DeclaredTags(_decode_document(payload), path)
 
-    read_state: dict[str, Any] = {"artifact": artifact, "declared": declared.paths}
+    read_state: dict[str, Any] = {"declared": declared.paths}
 
     async def precondition() -> None:
         #: D11 collision policy: a Tag the document declares already exists at the
@@ -244,9 +244,10 @@ def _provider(value: str) -> str:
 def _import_path(value: str) -> str:
     """The destination path, normalized to the one form the Target identity names.
 
-    A leading, trailing or doubled separator, or a ``.``/``..`` segment, would let two
-    different inputs address the same Gateway path while reading as different Targets,
-    so they are refused rather than silently normalized.
+    Surrounding whitespace is trimmed, and a leading, trailing or doubled separator, or
+    a ``.``/``..`` segment, is refused rather than silently normalized: either would let
+    two different inputs address the same Gateway path while reading as different
+    Targets.
     """
 
     path = bounded_text(value, "path", MAX_TAG_PATH_LENGTH, allow_empty=True)
@@ -335,11 +336,12 @@ class _DeclaredTags:
     document's own structure plus the children of the paths it names, never the whole
     provider.
 
-    The document is read the way the Gateway reads it: its root is the export wrapper,
-    which is **not** imported (live-proven — the Runtime plane imports a
-    ``{"tags": [...]}`` document and the entries land under the import path), so a
-    document that declares ``tags`` contributes those nodes under ``base`` and a
-    document with no ``tags`` contributes its own node.
+    The document is read the way the Gateway imports it: its own nodes keep their
+    declared paths, so a root that names a Tag (the export of a sub-path, e.g.
+    ``{"name": "source", "tagType": "Folder", ...}``) is itself imported under ``base``
+    and its ``tags`` are its children. A root with no name — a provider-root export —
+    contributes nothing but its children, which is the shape the Runtime plane imports
+    live.
     """
 
     def __init__(self, document: dict[str, Any], base: str) -> None:
@@ -379,14 +381,21 @@ class _DeclaredTags:
             )
 
     def _collect(self, document: dict[str, Any]) -> None:
-        children = document.get("tags")
-        if isinstance(children, list):
-            self._walk(children, self.base)
-            return
         name = document.get("name")
         if isinstance(name, str) and name:
             _check_segment(name, "name")
-            self._add(f"{self.base}/{name}" if self.base else name)
+            # The root names a Tag, so the import creates it under ``base`` and its
+            # children belong to it. Without this the declared set would omit the very
+            # node the caller's export was rooted at.
+            current = f"{self.base}/{name}" if self.base else name
+            self._add(current)
+            children = document.get("tags")
+            if isinstance(children, list):
+                self._walk(children, current)
+            return
+        children = document.get("tags")
+        if isinstance(children, list):
+            self._walk(children, self.base)
 
     def _walk(self, nodes: list[Any], prefix: str) -> None:
         for node in nodes:
