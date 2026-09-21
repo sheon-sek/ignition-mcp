@@ -24,9 +24,13 @@ from typing import Any
 
 from starlette.testclient import TestClient
 
+import pytest
+
 import ignition_rest_mcp.server as server_module
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
 from ignition_rest_mcp.authorization import scope_tag
+from ignition_rest_mcp.safety.reserved_tag_providers import RESERVED_TAG_PROVIDERS
+from ignition_rest_mcp.services.tag_config_import import TAG_CONFIG_IMPORT
 from ignition_rest_mcp.storage.database import Database
 from ignition_rest_mcp.storage.schema import STATE_DDL
 from phase4_fixtures import (
@@ -47,6 +51,8 @@ from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
 PROVIDER = "MCP_CI_TAGS"
 OTHER_PROVIDER = "MCP_CI_TAGS_OTHER"
+#: The provider the Runtime plane keeps its Runtime Target Policy in (#6, D30 §1).
+RESERVED_PROVIDER = "IgnitionMCPPolicy"
 #: The path the artifact was exported from, and the two destinations the cases use.
 SOURCE_PATH = "source"
 TARGET_PATH = "target"
@@ -281,6 +287,19 @@ def test_the_tool_is_registered_as_a_config_mutation_without_being_destructive(
     assert "mutation" in (tool.tags or set())
 
 
+def test_the_contract_declares_the_reserved_providers_the_tool_enforces() -> None:
+    """The provider the Tool refuses is the contract's, and the contract's Target rule
+    is the one the operation declares."""
+
+    contract = json.loads(
+        (ROOT / "contracts/tools/rest/tag_config_import.contract.json").read_text(encoding="utf-8")
+    )
+    assert tuple(contract["reservedTagProviders"]["providers"]) == RESERVED_TAG_PROVIDERS
+    assert TAG_CONFIG_IMPORT.target_match == "provider_prefix"
+    assert contract["reservedTagProviders"]["denialCode"] == "permission_denied"
+    assert contract["targetId"]["match"] == "provider_qualified_prefix_at_segment_boundaries"
+
+
 # ------------------------------------------------------------------ the collision rule
 
 
@@ -445,6 +464,69 @@ def test_a_claimed_success_whose_tags_are_missing_is_recovery_required(tmp_path:
     assert "recovery_required" in _outcomes(tmp_path)
 
 
+#: 2xx import reports this server cannot interpret (D30 §2): a count that is negative,
+#: that is not a number at all, or that disagrees with its own failure list; a
+#: ``failures`` value that is not a list; a report with no failure count; and a body
+#: that is not a report.
+UNINTERPRETABLE_IMPORT_BODIES = (
+    {"failureCount": -1, "failures": [], "successCount": 0},
+    {"failureCount": 2, "failures": [], "successCount": 0},
+    {"failureCount": "0", "failures": [], "successCount": 3},
+    {"failureCount": True, "failures": [], "successCount": 1},
+    {"failureCount": 0, "failures": "none", "successCount": 3},
+    {"failureCount": 0, "failures": [], "successCount": -1},
+    {"successCount": 3},
+    None,
+)
+
+
+@pytest.mark.parametrize(
+    "body", UNINTERPRETABLE_IMPORT_BODIES,
+    ids=["negative-count", "count-disagrees-with-list", "string-count", "bool-count",
+         "failures-not-a-list", "negative-successes", "no-count", "null-body"],
+)
+def test_a_report_this_server_cannot_interpret_is_never_a_success(
+    tmp_path: Path, body: Any,
+) -> None:
+    """D30 §2: only an interpretable claim can confirm a dispatch.
+
+    The Gateway applies the document, so the bounded re-export shows every declared Tag
+    — and yet none of these reports may be read as this call's success. A count that is
+    negative or not a number is not evidence of anything, so the call ends unresolved
+    rather than ``succeeded``.
+    """
+
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            artifact_id = _artifact(agent)
+            gateway.answer_tag_import_with(body)
+            result = _import(agent, artifact_id)
+
+    assert envelope(result)["code"] == "outcome_unknown"
+    # The import really happened: what differs is the report, not the Tag state.
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source/Nested/Beta")["value"] == "b"
+    assert len(_import_requests(gateway)) == 1
+    assert _outcomes(tmp_path)[-1] == "outcome_unknown"
+
+
+def test_the_documented_list_shape_of_a_clean_import_is_still_a_claim(tmp_path: Path) -> None:
+    """The boundary of the rule above: the empty QualityCode list the OpenAPI documents
+    is an interpretable zero-failure report, so a real import through it succeeds."""
+
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            artifact_id = _artifact(agent)
+            gateway.answer_tag_import_failures_with("list")
+            result = _import(agent, artifact_id)
+
+    assert structured(result)["observedState"]["missing"] == []
+    assert _outcomes(tmp_path)[-1] == "completed"
+
+
 # ------------------------------------------------------------------ the D08 chain
 
 
@@ -495,6 +577,127 @@ def test_the_provider_root_is_addressable_as_an_explicit_target(tmp_path: Path) 
     assert gateway.tags("MCP_CI_TAGS_ROOT", "source/Nested/Beta") is not None
     # The Tag the root already held is untouched: the import created Tags only.
     assert gateway.tags("MCP_CI_TAGS_ROOT", "existing")["value"] == "e"
+
+
+def test_a_target_allowlist_entry_authorizes_the_subtree_below_it(tmp_path: Path) -> None:
+    """The issue's Target rule and D30 §1: an entry is a provider-qualified path
+    *prefix* that matches at segment boundaries, so the entry `[provider]target` also
+    authorizes a destination below it, `[provider]target/sub`."""
+
+    nested = f"{TARGET_PATH}/sub"
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            result = _import(agent, _artifact(agent), path=nested)
+
+    body = structured(result)
+    assert body["path"] == nested
+    assert body["observedState"] == {
+        "present": [f"{nested}/source", f"{nested}/source/Alpha",
+                    f"{nested}/source/Nested", f"{nested}/source/Nested/Beta"],
+        "missing": [],
+    }
+    assert gateway.tags(PROVIDER, f"{nested}/source/Nested/Beta")["value"] == "b"
+    # Nothing was created at the allowlisted path itself: the document landed below it.
+    assert gateway.tags(PROVIDER, f"{TARGET_PATH}/source") is None
+
+
+def test_a_prefix_entry_matches_only_at_a_segment_boundary_inside_one_provider(
+    tmp_path: Path,
+) -> None:
+    """D30 §1: `[provider]target` must not reach `[provider]target2`, and a provider
+    qualifier is compared in full — so an entry for `[MCP_CI_TAG]` cannot reach
+    `[MCP_CI_TAGS]target`. An entry that names the provider alone is its root and does
+    cover the whole provider."""
+
+    allowlisted = f"[{PROVIDER}]{TARGET_PATH}"
+    with _seed_gateway() as gateway:
+        with TestClient(server_module.create_server(_settings(
+            tmp_path, gateway, targets={TAG_IMPORT_TOOL: (allowlisted,)},
+        )).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            artifact_id = _artifact(agent)
+            longer_segment = _import(agent, artifact_id, path=f"{TARGET_PATH}2")
+            other_provider = _import(agent, artifact_id, provider=OTHER_PROVIDER, path=TARGET_PATH)
+        with TestClient(server_module.create_server(_settings(
+            tmp_path, gateway, targets={TAG_IMPORT_TOOL: ("[MCP_CI_TAG]",)},
+        )).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            partial_provider = _import(agent, _artifact(agent))
+        with TestClient(server_module.create_server(_settings(
+            tmp_path, gateway, targets={TAG_IMPORT_TOOL: (f"[{PROVIDER}]",)},
+        )).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            deep = _import(agent, _artifact(agent), path=f"{TARGET_PATH}/deep/path")
+
+    assert [envelope(result)["code"] for result in (
+        longer_segment, other_provider, partial_provider,
+    )] == ["permission_denied"] * 3
+    # Only the provider-root entry's call reached the Gateway, and it created Tags
+    # below the path it named.
+    assert len(_import_requests(gateway)) == 1
+    assert structured(deep)["observedState"]["present"][0] == f"{TARGET_PATH}/deep/path/source"
+
+
+def test_an_import_into_the_reserved_policy_provider_is_refused_under_a_wildcard(
+    tmp_path: Path,
+) -> None:
+    """D30 §1 property 2: the Runtime Target Policy's provider is reserved.
+
+    `*` covers a deployment's own Targets, not the provider the Runtime plane keeps its
+    policy in: a Tag Mutation that could write there could overwrite the policy document
+    or add Tags to it. The refusal is by provider, before the Target allowlist, and a
+    provider name that differs only in case addresses the same provider.
+    """
+
+    with _seed_gateway() as gateway:
+        gateway.seed_tags(RESERVED_PROVIDER, [
+            _tag("RuntimeTargetPolicy", dataType="String", value="{}"),
+        ])
+        settings = _settings(tmp_path, gateway, targets={TAG_IMPORT_TOOL: ("*",)})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            artifact_id = _artifact(agent)
+            results = [
+                _import(agent, artifact_id, provider=RESERVED_PROVIDER, path=path)
+                for path in ("", TARGET_PATH, "RuntimeTargetPolicy")
+            ]
+            folded = _import(agent, artifact_id, provider=RESERVED_PROVIDER.lower(), path=TARGET_PATH)
+            # The refusal happens before the artifact is read, so even an artifact this
+            # server does not hold is answered by the policy, not by not_found.
+            unknown = _import(agent, "a" * 8, provider=RESERVED_PROVIDER, path=TARGET_PATH)
+
+    assert [envelope(result)["code"] for result in results] == ["permission_denied"] * 3
+    assert envelope(folded)["code"] == "permission_denied"
+    assert envelope(unknown)["code"] == "permission_denied"
+    assert _import_requests(gateway) == []
+    assert gateway.tag_imports == []
+    # The policy provider's Tag state is exactly what it was.
+    assert gateway.tags(RESERVED_PROVIDER, "RuntimeTargetPolicy")["value"] == "{}"
+    assert gateway.tags(RESERVED_PROVIDER, TARGET_PATH) is None
+    assert [row["outcome"] for row in _audit(tmp_path)] == [
+        f"denied:target-class:reserved-tag-provider:{RESERVED_PROVIDER}",
+    ] * 5
+
+
+def test_an_allowlist_entry_that_names_the_reserved_provider_is_still_refused(
+    tmp_path: Path,
+) -> None:
+    """D30 §5's ordering: the Target-class rule runs before the Target allowlist, so a
+    deployment that names the reserved provider changes nothing."""
+
+    with _seed_gateway() as gateway:
+        settings = _settings(tmp_path, gateway, targets={
+            TAG_IMPORT_TOOL: (f"[{RESERVED_PROVIDER}]", f"[{RESERVED_PROVIDER}]{TARGET_PATH}"),
+        })
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            result = _import(agent, _artifact(agent), provider=RESERVED_PROVIDER, path=TARGET_PATH)
+
+    assert envelope(result)["code"] == "permission_denied"
+    assert _import_requests(gateway) == []
+    assert gateway.tags(RESERVED_PROVIDER, TARGET_PATH) is None
 
 
 def test_a_read_only_principal_is_denied_the_mutation(tmp_path: Path) -> None:

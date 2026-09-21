@@ -49,12 +49,23 @@
   },
   "targetId": {
     "form": "[<provider>]<path>: the provider-qualified destination the import creates Tags under, in Ignition Tag-path form",
-    "resolution": "one exact Target per call, built from the validated provider and path; the empty path is the provider root, '[<provider>]'",
+    "resolution": "one Target per call, built from the validated provider and path; the empty path is the provider root, '[<provider>]'",
+    "match": "provider_qualified_prefix_at_segment_boundaries",
+    "matchNote": "D30 §1/D08: an allowlist entry authorizes its own path and every path below it, but only at a '/' segment boundary — `[default]CI/Imports` covers `[default]CI/Imports` and `[default]CI/Imports/Nested`, and never `[default]CI/Imports2`. The provider qualifier is compared in full, so `[default]` does not reach `[default2]x`, and an entry with no path is the provider root and covers that provider. No other operation is affected: `exact` membership stays the rule for every Target that is not a provider-qualified Tag path.",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,
     "denialCode": "permission_denied",
     "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "reservedTagProviders": {
+    "providers": [
+      "IgnitionMCPPolicy"
+    ],
+    "rule": "D30 §1: the Runtime Target Policy lives in the reserved `IgnitionMCPPolicy` provider (ticket #6's characterized location), and the Runtime plane must not be able to write it. The refusal is a product rule — Jython handler scope is not a security boundary — so this Tool refuses any Target inside that provider with `permission_denied` before the Target allowlist is consulted, exactly as D30 §5 makes a Refused resource type refuse even under `*`. An entry that names the provider outright therefore changes nothing. The comparison is case-insensitive, because a Tag path that differs from the reserved name only in case addresses the same provider, and the audited reason names the reserved provider rather than the caller's spelling.",
+    "denialCode": "permission_denied",
+    "layer": "target-class",
+    "source": "docs/research/runtime-target-policy-storage-and-alarm-query-bound.md"
   },
   "artifactInput": {
     "kinds": [
@@ -79,7 +90,7 @@
       "the Gateway claimed success (a 2xx reporting zero failures) and the bounded re-export shows every Tag the document declares"
     ],
     "partialApplication": "a report of some successes and some failures is not a claim and not a refusal: the Gateway did not refuse the call, so the bounded re-export establishes the state, and an import that created only some of the document is recovery_required rather than a success",
-    "uninterpretableResponse": "a 2xx body this server cannot read is not a claim of success either: the outcome is unresolved, which the executor reports as recovery_required / outcome_unknown, and nothing is replayed",
+    "uninterpretableResponse": "a 2xx body this server cannot read is not a claim of success either: the outcome is unresolved, which the executor reports as recovery_required / outcome_unknown, and nothing is replayed. A reported count that is negative or not a number, a `failures` value that is not a list, and a count that disagrees with the failure list it carries are all uninterpretable, so none of them is read as an explicit zero-failure claim",
     "ambiguousAttribution": "an ambiguous dispatch (possibly sent with no response, or a 5xx) is reconciled only by the bounded re-export, and a re-export showing the intended Tags never confirms it — another writer may have created the same Tags — so it is outcome_unknown; a re-export showing none of them is not_applied",
     "recoveredSuccess": "unreachable for this Tool"
   },

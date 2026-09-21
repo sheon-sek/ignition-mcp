@@ -116,6 +116,26 @@ class ContractLintDriftTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "taxonomy drift"):
                 lint_contracts(contracts)
 
+    def test_tag_import_target_match_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/tag_config_import.contract.json",
+                lambda doc: doc["targetId"].update(match="exact"),
+            )
+            with self.assertRaisesRegex(ContractError, "Target match rule"):
+                lint_contracts(contracts)
+
+    def test_tag_import_reserved_provider_removal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/tag_config_import.contract.json",
+                lambda doc: doc.pop("reservedTagProviders"),
+            )
+            with self.assertRaisesRegex(ContractError, "reserved Tag providers"):
+                lint_contracts(contracts)
+
 
 if __name__ == "__main__":
     unittest.main()
