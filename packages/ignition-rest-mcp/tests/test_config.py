@@ -46,6 +46,8 @@ def _settings(**changes: object) -> Settings:
         "artifact_staging_deadline_seconds": 900.0,
         "artifact_cleanup_interval_seconds": 300.0,
         "artifact_cleanup_batch": 50,
+        "artifact_upload_enabled": False,
+        "sensitive_exports_enabled": False,
     }
     values.update(changes)
     return Settings(**values)  # type: ignore[arg-type]

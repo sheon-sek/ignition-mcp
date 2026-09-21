@@ -14,6 +14,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, PlainTextResponse, Response
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
+from ignition_rest_mcp.artifacts.routes import register_artifact_routes
 from ignition_rest_mcp.auth import build_auth, current_principal
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
@@ -434,6 +435,8 @@ def create_server(settings: Settings) -> FastMCP:
             )
             body = body + "\n".join(lines) + "\n"
         return PlainTextResponse(body, media_type="text/plain; version=0.0.4")
+
+    register_artifact_routes(mcp, state, settings)
 
     return mcp
 

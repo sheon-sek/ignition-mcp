@@ -50,6 +50,8 @@ class Settings:
     artifact_staging_deadline_seconds: float
     artifact_cleanup_interval_seconds: float
     artifact_cleanup_batch: int
+    artifact_upload_enabled: bool
+    sensitive_exports_enabled: bool
     jwt_jwks_uri: str | None = None
     jwt_public_key: str | None = None
     jwt_issuer: str | None = None
@@ -100,6 +102,8 @@ class Settings:
                 os.getenv("IGNITION_MCP_ARTIFACT_CLEANUP_INTERVAL_SECONDS", "300")
             ),
             artifact_cleanup_batch=int(os.getenv("IGNITION_MCP_ARTIFACT_CLEANUP_BATCH", "50")),
+            artifact_upload_enabled=_bool_env("IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED"),
+            sensitive_exports_enabled=_bool_env("IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"),
             jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
             jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
             jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
@@ -217,6 +221,15 @@ class Settings:
         if self.log_format != "auto":
             return self.log_format
         return "text" if self.deployment_profile == "development" else "json"
+
+
+def _bool_env(name: str) -> bool:
+    raw = (os.getenv(name) or "false").strip().lower()
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off", ""}:
+        return False
+    raise ConfigurationError(f"{name} must be a boolean ('true' or 'false')")
 
 
 def _is_loopback(host: str) -> bool:

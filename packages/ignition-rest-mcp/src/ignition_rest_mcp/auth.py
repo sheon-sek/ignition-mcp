@@ -72,14 +72,14 @@ class Principal:
         return scope in self.scopes
 
 
-def current_principal(settings: Settings) -> Principal:
-    """Derive the safe principal key from the *just-verified* access token, if any.
+def principal_from_token(settings: Settings, token: AccessToken | None) -> Principal:
+    """Derive the safe principal key from a *verified* access token (never from
+    caller-supplied strings — the token must come from auth.py verification).
 
     ``auth=none`` and ``static-token`` are each a single trust domain (D18/D07-A):
     the configured service identity and the static-token client respectively.
     """
 
-    token = get_access_token()
     if settings.auth_mode == "jwt" and token is not None:
         subject = token.subject or token.client_id
         return Principal(
@@ -93,7 +93,7 @@ def current_principal(settings: Settings) -> Principal:
             scopes=frozenset(token.scopes),
             auth_mode="static-token",
         )
-    if settings.auth_mode == "none":
+    if settings.auth_mode == "none" and token is None:
         return Principal(
             key=f"none:{settings.service_identity}",
             scopes=frozenset({READ_SCOPE}),
@@ -102,3 +102,7 @@ def current_principal(settings: Settings) -> Principal:
     # Unauthenticated under an authentication mode must never happen through the
     # MCP middleware; fail to a scope-less identity rather than a trusted one.
     return Principal(key="unauthenticated", scopes=frozenset(), auth_mode=settings.auth_mode)
+
+
+def current_principal(settings: Settings) -> Principal:
+    return principal_from_token(settings, get_access_token())

@@ -204,6 +204,10 @@ class LocalArtifactStore:
         self._last_free_check = 0.0
         self._fail_hook: Callable[[str], None] = lambda point: None
 
+    @property
+    def quotas(self) -> QuotaConfig:
+        return self._quotas
+
     # ------------------------------------------------------------------ layout
 
     def prepare(self) -> None:
