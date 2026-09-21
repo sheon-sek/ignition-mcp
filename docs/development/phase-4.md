@@ -167,12 +167,15 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
   the MCP Module's own `server-config`), and every one of them is classified. The
   derived inventory is committed with its source SHA-256 and run ID.
-- Frozen gates on this branch head: CI runs
-  [35639720685](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720685) and
-  [35640170047](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640170047), and
+- Frozen gates: CI and Phase 3 G3 have been green on every pushed head of this
+  branch, for example CI runs
+  [35639720685](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720685),
+  [35640170047](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640170047) and
+  [35640770475](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640770475), and
   Phase 3 G3 runs
-  [35639720676](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720676) and
-  [35640169783](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169783), all green.
+  [35639720676](https://github.com/sheon-sek/ignition-mcp/actions/runs/35639720676),
+  [35640169783](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640169783) and
+  [35640770477](https://github.com/sheon-sek/ignition-mcp/actions/runs/35640770477).
 
 ## Open questions
 
