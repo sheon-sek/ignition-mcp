@@ -53,9 +53,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import io
 import json
 from pathlib import Path
+import re
 import sys
 from typing import Any
 import zipfile
@@ -92,8 +94,14 @@ NOT_ALLOWLISTED_RESOURCE = "MCP_CI_AUDIT_OTHER"
 #: Project the Target allowlist deliberately does not name.
 DEFAULT_PROJECT = "MCP_CI_IMPORT"
 DEFAULT_CONTROL_PROJECT = "MCP_CI_IMPORT_CONTROL"
-#: The entry the candidate archive adds, so the import is observable from outside.
-IMPORT_MARKER = "mcp-p4-import.txt"
+#: The candidate's edit. G3's live runs proved the Gateway rewrites ``project.json`` on
+#: import (docs: tests/harness/phase3-live/driver.py), so a candidate that changes that
+#: file — or that adds an entry the Gateway does not recognise as a resource — does not
+#: round-trip byte-for-byte, and D16 could never observe C == B. The edit therefore
+#: appends a SQL comment to the first named-query payload, which the Gateway stores
+#: verbatim (the same edit the G3 live transaction case uses).
+IMPORT_QUERY_RE = re.compile(r"^ignition/named-query/.+/query\.sql$")
+IMPORT_MARKER_PREFIX = "mcp-p4-import"
 
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
@@ -248,26 +256,46 @@ class Artifacts:
         return artifact_id
 
 
-def _entry_names(payload: bytes) -> set[str]:
+def _entries(payload: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        return {info.filename for info in archive.infolist()}
+        return {info.filename: archive.read(info.filename) for info in archive.infolist()}
 
 
-def _rezipped(payload: bytes, marker: str) -> bytes:
-    """The exported archive plus one marker entry, re-zipped deterministically.
+def _zipped(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        for name, body in entries.items():
+            archive.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), body)
+    return buffer.getvalue()
 
-    The D16 fingerprint ignores container representation, so this is a candidate whose
-    logical content differs from the Project by exactly the marker.
+
+def _edited_candidate(payload: bytes, marker: str) -> bytes:
+    """The exported archive with one named-query payload appended to.
+
+    The D16 fingerprint ignores container representation, so this candidate's logical
+    content differs from the Project by exactly the marker comment.
     """
 
-    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        entries = {info.filename: archive.read(info.filename) for info in archive.infolist()}
-    entries[marker] = b"imported live by the phase 4 REST driver\n"
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
-        for name, body in entries.items():
-            out.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), body)
-    return buffer.getvalue()
+    entries = _entries(payload)
+    for name in sorted(entries):
+        if IMPORT_QUERY_RE.match(name):
+            text = entries[name].decode("utf-8", errors="replace").rstrip()
+            entries[name] = f"{text}\n-- {marker}\n".encode("utf-8")
+            break
+    else:
+        raise DriverError("the disposable Project has no named-query payload to edit")
+    return _zipped(entries)
+
+
+def _marker_present(payload: bytes, marker: str) -> bool:
+    needle = marker.encode("utf-8")
+    return any(needle in body for body in _entries(payload).values())
+
+
+def _entry_digests(payload: bytes) -> dict[str, str]:
+    return {
+        name: hashlib.sha256(body).hexdigest() for name, body in _entries(payload).items()
+    }
 
 
 def _fingerprint(payload: bytes, raw_dir: Path, name: str) -> str:
@@ -284,6 +312,29 @@ def _fingerprint(payload: bytes, raw_dir: Path, name: str) -> str:
     return project_fingerprint(str(path))
 
 
+def _round_trip_diff(candidate: bytes, observed: bytes, raw_dir: Path) -> dict[str, Any]:
+    """Which entries differ between the staged candidate and the post-import export.
+
+    ``candidate`` is the archive this harness uploaded, whose bytes are what the
+    transaction staged and dispatched; ``observed`` is the Gateway's own re-export. A
+    mismatch names the entries the Gateway changed, so one failed run is enough to
+    diagnose it (the diagnostic the G3 transaction case had to add after its first
+    round-trip mismatch).
+    """
+
+    before = _entry_digests(candidate)
+    after = _entry_digests(observed)
+    return {
+        "candidateEntries": sorted(before),
+        "observedEntries": sorted(after),
+        "changedEntries": sorted(
+            name for name in set(before) | set(after) if before.get(name) != after.get(name)
+        ),
+        "candidateFingerprint": _fingerprint(candidate, raw_dir, "import-candidate.zip"),
+        "observedFingerprint": _fingerprint(observed, raw_dir, "import-reexport.zip"),
+    }
+
+
 async def project_import_cases(
     *,
     agent: "Session",
@@ -298,6 +349,7 @@ async def project_import_cases(
 
     cases: list[dict[str, Any]] = []
     observations: dict[str, Any] = {}
+    marker = f"{IMPORT_MARKER_PREFIX}={project}"
     artifacts = Artifacts(rest_url)
     try:
         exported = structured(await agent.call("project_export", {"projectName": project}))
@@ -306,19 +358,31 @@ async def project_import_cases(
         exported_archive = await artifacts.download(
             str(exported["artifact"]["download"]["path"]), agent_token,
         )
-        candidate = await artifacts.upload(
-            _rezipped(exported_archive, IMPORT_MARKER), agent_token, label="candidate",
-        )
-        result = structured(await agent.call(IMPORT_TOOL, {
+        candidate_bytes = _edited_candidate(exported_archive, marker)
+        candidate = await artifacts.upload(candidate_bytes, agent_token, label="candidate")
+        result = await agent.call(IMPORT_TOOL, {
             "projectName": project, "artifactId": candidate, "expectedFingerprint": baseline,
-        }))
-        observations["importResult"] = result
-        _check(cases, "project-import-commits", "COMMITTED", result.get("state"))
+        })
+        body = result.get("structuredContent") if not result.get("isError") else None
+        observations["importResult"] = body if isinstance(body, dict) else error_envelope(result)
+        _check(cases, "project-import-commits", "COMMITTED",
+               body.get("state") if isinstance(body, dict) else None)
+        if not isinstance(body, dict) or body.get("state") != "COMMITTED":
+            # Gather the round-trip diagnostic before failing, so one run answers what
+            # the Gateway did with the candidate (the G3 transaction lesson), and do not
+            # run the cases that depend on a committed import.
+            fresh = structured(await agent.call("project_export", {"projectName": project}))
+            fresh_archive = await artifacts.download(
+                str(fresh["artifact"]["download"]["path"]), agent_token,
+            )
+            observations["importRoundTrip"] = _round_trip_diff(candidate_bytes, fresh_archive, raw_dir)
+            observations["importAborted"] = "the commit case did not reach COMMITTED"
+            return cases, observations
         _check(cases, "project-import-baseline-is-the-callers-read", baseline,
-               result.get("baselineFingerprint"))
-        _check(cases, "project-import-verifies-its-own-candidate", result.get("candidateFingerprint"),
-               result.get("resultFingerprint"))
-        _check(cases, "project-import-reports-the-dispatch", True, result.get("importDispatched"))
+               body.get("baselineFingerprint"))
+        _check(cases, "project-import-verifies-its-own-candidate", body.get("candidateFingerprint"),
+               body.get("resultFingerprint"))
+        _check(cases, "project-import-reports-the-dispatch", True, body.get("importDispatched"))
 
         # Independent evidence: re-export the Project, fingerprint it here, and look for
         # the marker the candidate carried.
@@ -329,8 +393,8 @@ async def project_import_cases(
         independent = _fingerprint(fresh_archive, raw_dir, "import-reexport.zip")
         observations["importIndependentFingerprint"] = independent
         _check(cases, "project-export-fingerprint-is-independent", fresh.get("fingerprint"), independent)
-        _check(cases, "project-import-content-lands", independent, result.get("candidateFingerprint"))
-        _check(cases, "project-import-marker-is-present", True, IMPORT_MARKER in _entry_names(fresh_archive))
+        _check(cases, "project-import-content-lands", independent, body.get("candidateFingerprint"))
+        _check(cases, "project-import-marker-is-present", True, _marker_present(fresh_archive, marker))
 
         # D16 no-op idempotency: importing the content the Tool just committed.
         again = structured(await agent.call(IMPORT_TOOL, {
@@ -362,9 +426,7 @@ async def project_import_cases(
                control.get("fingerprint"), control_after.get("fingerprint"))
 
         # ... and an archive owned by another principal (D30 §6).
-        foreign = await artifacts.upload(
-            _rezipped(exported_archive, IMPORT_MARKER), reader_token, label="other-principal",
-        )
+        foreign = await artifacts.upload(candidate_bytes, reader_token, label="other-principal")
         invisible = await agent.call(IMPORT_TOOL, {
             "projectName": project, "artifactId": foreign, "expectedFingerprint": independent,
         })
@@ -667,10 +729,19 @@ async def run_gate_on(
                await agent.signature(resource_type, renamed_name))
 
         # --------------------------------------------------- project import (#16)
-        import_cases, import_observations = await project_import_cases(
-            agent=agent, rest_url=rest_url, reader_token=reader_token, agent_token=agent_token,
-            project=project, control_project=control_project, raw_dir=raw_dir,
-        )
+        try:
+            import_cases, import_observations = await project_import_cases(
+                agent=agent, rest_url=rest_url, reader_token=reader_token, agent_token=agent_token,
+                project=project, control_project=control_project, raw_dir=raw_dir,
+            )
+        except (DriverError, ProbeError) as error:
+            # The section still reports what it managed to observe, and the run fails on
+            # this row rather than on a bare traceback.
+            import_cases = [{
+                "case": "project-import-section", "expected": "no driver error",
+                "observed": str(error), "ok": False,
+            }]
+            import_observations = {}
         cases.extend(import_cases)
         observations.update(import_observations)
     finally:

@@ -257,9 +257,9 @@ def test_importing_the_current_content_is_a_no_change(tmp_path: Path) -> None:
     assert body["resultFingerprint"] is None
     assert body["importDispatched"] is False
     assert _import_requests(gateway) == []
-    # Nothing was imported, and the one artifact left behind carries no lock.
-    assert _entries(gateway.project(PROJECT)) == _entries(gateway.project(PROJECT))
-    assert all(row[2] == 0 for row in _artifacts(tmp_path))
+    # The Project is untouched, and no recovery snapshot was taken (D16 no-op).
+    assert _entries(gateway.project(PROJECT)) == BASE_ENTRIES
+    assert [row for row in _artifacts(tmp_path) if row[1] == "RECOVERY"] == []
 
 
 def test_the_zip_gate_refuses_an_unsafe_archive_before_dispatch(tmp_path: Path) -> None:

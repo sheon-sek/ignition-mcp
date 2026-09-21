@@ -76,6 +76,15 @@ observe:
 | `inventory-gate-off-exact` | with the class disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
 
+The candidate archive the import cases upload is the export the Project already had,
+with one SQL comment appended to its first named-query payload. That is the edit the
+Gateway stores verbatim: its import rewrites `project.json` and drops archive entries it
+does not recognise as resources, so an edit there would make C differ from B for reasons
+that have nothing to do with this Tool (the same constraint the G3 transaction case hit
+live, recorded in `tests/harness/phase3-live/driver.py`). If a round trip ever mismatches,
+the driver writes the per-entry diff of the candidate against the Gateway's re-export into
+`observations.json` before it fails, so one run is enough to diagnose it.
+
 The driver asserts exactly one Target-denial code, `permission_denied` (D30 §7,
 Tool-scoped; see `docs/development/phase-4.md`). That is the code both
 `config_resource_*` and `project_import` answer; the frozen Phase 3 machinery the G3
