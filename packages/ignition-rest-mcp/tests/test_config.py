@@ -48,6 +48,12 @@ def _settings(**changes: object) -> Settings:
         "artifact_cleanup_batch": 50,
         "artifact_upload_enabled": False,
         "sensitive_exports_enabled": False,
+        "config_mutation_enabled": False,
+        "control_mutation_enabled": False,
+        "admin_mutation_enabled": False,
+        "mutation_operations": (),
+        "mutation_targets": {},
+        "project_designer_policy": "deny",
     }
     values.update(changes)
     return Settings(**values)  # type: ignore[arg-type]

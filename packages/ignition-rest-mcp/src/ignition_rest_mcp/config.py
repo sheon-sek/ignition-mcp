@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import ipaddress
+import json
 import os
+import re
 from urllib.parse import urlparse
 
 TEMP_FILESYSTEM_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
@@ -52,6 +54,12 @@ class Settings:
     artifact_cleanup_batch: int
     artifact_upload_enabled: bool
     sensitive_exports_enabled: bool
+    config_mutation_enabled: bool
+    control_mutation_enabled: bool
+    admin_mutation_enabled: bool
+    mutation_operations: tuple[str, ...]
+    mutation_targets: dict[str, tuple[str, ...]]
+    project_designer_policy: str
     jwt_jwks_uri: str | None = None
     jwt_public_key: str | None = None
     jwt_issuer: str | None = None
@@ -104,6 +112,12 @@ class Settings:
             artifact_cleanup_batch=int(os.getenv("IGNITION_MCP_ARTIFACT_CLEANUP_BATCH", "50")),
             artifact_upload_enabled=_bool_env("IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED"),
             sensitive_exports_enabled=_bool_env("IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"),
+            config_mutation_enabled=_bool_env("IGNITION_MCP_CONFIG_MUTATION_ENABLED"),
+            control_mutation_enabled=_bool_env("IGNITION_MCP_CONTROL_MUTATION_ENABLED"),
+            admin_mutation_enabled=_bool_env("IGNITION_MCP_ADMIN_MUTATION_ENABLED"),
+            mutation_operations=_csv_env("IGNITION_MCP_MUTATION_OPERATIONS"),
+            mutation_targets=_targets_env("IGNITION_MCP_MUTATION_TARGETS"),
+            project_designer_policy=(os.getenv("IGNITION_MCP_PROJECT_DESIGNER_POLICY") or "deny").strip().lower(),
             jwt_jwks_uri=os.getenv("IGNITION_MCP_JWT_JWKS_URI") or None,
             jwt_public_key=os.getenv("IGNITION_MCP_JWT_PUBLIC_KEY") or None,
             jwt_issuer=os.getenv("IGNITION_MCP_JWT_ISSUER") or None,
@@ -208,6 +222,25 @@ class Settings:
             raise ConfigurationError("IGNITION_MCP_ARTIFACT_STAGING_DEADLINE_SECONDS must be positive")
         if self.artifact_cleanup_interval_seconds <= 0:
             raise ConfigurationError("IGNITION_MCP_ARTIFACT_CLEANUP_INTERVAL_SECONDS must be positive")
+        self._validate_mutation_policy()
+
+    def _validate_mutation_policy(self) -> None:
+        # D08: every mutation class defaults disabled; allowlists are explicit and bounded.
+        if len(self.mutation_operations) > 100:
+            raise ConfigurationError("IGNITION_MCP_MUTATION_OPERATIONS accepts at most 100 operations")
+        for operation in self.mutation_operations:
+            if len(operation) > 64 or not re.fullmatch(r"[A-Za-z0-9_*.-]+", operation):
+                raise ConfigurationError(f"invalid mutation operation id: {operation[:70]!r}")
+        if len(self.mutation_targets) > 100:
+            raise ConfigurationError("IGNITION_MCP_MUTATION_TARGETS accepts at most 100 operations")
+        for operation, targets in self.mutation_targets.items():
+            if len(operation) > 64 or len(targets) > 500:
+                raise ConfigurationError(f"invalid mutation target list for {operation[:70]!r}")
+            for target in targets:
+                if len(target) > 256:
+                    raise ConfigurationError("mutation target entries must be <=256 characters")
+        if self.project_designer_policy not in {"deny", "warn", "ignore"}:
+            raise ConfigurationError("IGNITION_MCP_PROJECT_DESIGNER_POLICY must be deny, warn, or ignore")
 
     def budget_deadline_seconds(self, budget_class: str) -> float:
         return {
@@ -230,6 +263,33 @@ def _bool_env(name: str) -> bool:
     if raw in {"0", "false", "no", "off", ""}:
         return False
     raise ConfigurationError(f"{name} must be a boolean ('true' or 'false')")
+
+
+def _csv_env(name: str) -> tuple[str, ...]:
+    raw = os.getenv(name) or ""
+    return tuple(item.strip() for item in raw.split(",") if item.strip())
+
+
+def _targets_env(name: str) -> dict[str, tuple[str, ...]]:
+    raw = os.getenv(name) or ""
+    if not raw:
+        return {}
+    if len(raw.encode("utf-8")) > 32 * 1024:
+        raise ConfigurationError(f"{name} exceeds the 32 KiB bound")
+    try:
+        value = json.loads(raw)
+    except ValueError as error:
+        raise ConfigurationError(f"{name} must be a JSON object mapping operation to target list") from error
+    if type(value) is not dict:
+        raise ConfigurationError(f"{name} must be a JSON object")
+    result: dict[str, tuple[str, ...]] = {}
+    for operation, targets in value.items():
+        if not isinstance(operation, str) or not isinstance(targets, list) or any(
+            not isinstance(target, str) for target in targets
+        ):
+            raise ConfigurationError(f"{name} values must be string lists keyed by operation")
+        result[operation] = tuple(targets)
+    return result
 
 
 def _is_loopback(host: str) -> bool:

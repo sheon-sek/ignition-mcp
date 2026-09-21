@@ -72,6 +72,42 @@ class Principal:
         return scope in self.scopes
 
 
+#: Module-private construction token (slice 6): only ``auth.py`` — i.e. only code
+#: that has just *verified a credential* — can mint a VerifiedPrincipal. The
+#: guarded mutation executor accepts nothing else.
+_PRINCIPAL_TOKEN: object = object()
+
+
+class VerifiedPrincipal(Principal):
+    """A principal produced solely by this module's verified-token paths."""
+
+    __slots__ = ()
+
+    def __new__(cls, *args: object, **kwargs: object) -> "VerifiedPrincipal":
+        # Any direct construction (positional token, kwargs, whatever) must present
+        # the private token; the dataclass __init__ is never usable for this class.
+        if not args or args[0] is not _PRINCIPAL_TOKEN:
+            raise TypeError(
+                "VerifiedPrincipal may only be constructed by the authentication module "
+                "from a just-verified credential"
+            )
+        return object.__new__(cls)
+
+    @staticmethod
+    def _mint(*, key: str, scopes: frozenset[str], auth_mode: str) -> "VerifiedPrincipal":
+        instance = object.__new__(VerifiedPrincipal)
+        object.__setattr__(instance, "key", key)
+        object.__setattr__(instance, "scopes", scopes)
+        object.__setattr__(instance, "auth_mode", auth_mode)
+        return instance
+
+
+def is_verified_principal(value: object) -> bool:
+    """Exact type check: a forged or duck-typed principal is rejected."""
+
+    return type(value) is VerifiedPrincipal
+
+
 def principal_from_token(settings: Settings, token: AccessToken | None) -> Principal:
     """Derive the safe principal key from a *verified* access token (never from
     caller-supplied strings — the token must come from auth.py verification).
@@ -82,26 +118,26 @@ def principal_from_token(settings: Settings, token: AccessToken | None) -> Princ
 
     if settings.auth_mode == "jwt" and token is not None:
         subject = token.subject or token.client_id
-        return Principal(
+        return VerifiedPrincipal._mint(
             key=f"jwt:{subject}",
             scopes=frozenset(token.scopes),
             auth_mode="jwt",
         )
     if settings.auth_mode == "static-token" and token is not None:
-        return Principal(
+        return VerifiedPrincipal._mint(
             key=f"static-token:{token.client_id}",
             scopes=frozenset(token.scopes),
             auth_mode="static-token",
         )
     if settings.auth_mode == "none" and token is None:
-        return Principal(
+        return VerifiedPrincipal._mint(
             key=f"none:{settings.service_identity}",
             scopes=frozenset({READ_SCOPE}),
             auth_mode="none",
         )
     # Unauthenticated under an authentication mode must never happen through the
     # MCP middleware; fail to a scope-less identity rather than a trusted one.
-    return Principal(key="unauthenticated", scopes=frozenset(), auth_mode=settings.auth_mode)
+    return VerifiedPrincipal._mint(key="unauthenticated", scopes=frozenset(), auth_mode=settings.auth_mode)
 
 
 def current_principal(settings: Settings) -> Principal:

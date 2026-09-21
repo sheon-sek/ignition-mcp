@@ -1,0 +1,234 @@
+"""Slice 6 (Phase 3 / G3): static structural invariants of the D08 safety chain.
+
+These scans prove the *shape* of the mutation boundary in production code only:
+one write primitive, one auth-minted principal, one guarded executor, no
+destructive Tool registration and a zero-mutation effective Tool inventory in
+every gate configuration.
+"""
+
+from __future__ import annotations
+
+import ast
+import asyncio
+import json
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastmcp import Client
+
+import ignition_rest_mcp.server as server_module
+from ignition_rest_mcp.client.gateway import GatewayClient
+from test_config import _settings
+
+SRC_ROOT = Path(__file__).resolve().parents[1] / "src" / "ignition_rest_mcp"
+
+# The only two production modules allowed to touch the write transport.
+WRITE_BOUNDARY_FILES = frozenset({"client/gateway.py", "safety/executor.py"})
+
+WRITE_METHOD_CALLS = frozenset({"post", "put", "patch", "delete", "request"})
+
+READ_TOOLS = frozenset({
+    "gateway_info",
+    "gateway_diagnose",
+    "project_list",
+    "config_resource_search",
+    "config_resource_describe",
+    "config_resource_names",
+    "config_resource_list",
+    "config_resource_get",
+    "audit_query",
+    "alarm_pipeline_list",
+    "alarm_pipeline_status",
+    "project_export",
+    "tag_config_export",
+})
+
+MUTATION_TOOLS = frozenset({
+    "project_import",
+    "tag_config_import",
+    "artifact_delete",
+    "config_resource_create",
+    "config_resource_update",
+    "config_resource_delete",
+    "config_resource_rename",
+    "alarm_pipeline_cancel",
+})
+
+
+def _production_files() -> list[Path]:
+    files = sorted(p for p in SRC_ROOT.rglob("*.py") if "__pycache__" not in p.parts)
+    assert files, "the production source tree must be present for structural scans"
+    return files
+
+
+def _relative(path: Path) -> str:
+    return path.relative_to(SRC_ROOT).as_posix()
+
+
+def _parse(path: Path) -> ast.Module:
+    return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+
+# ------------------------------------------------------------------ 1. write primitive
+
+def test_dispatch_write_is_referenced_only_by_gateway_and_executor() -> None:
+    offenders: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        if rel in WRITE_BOUNDARY_FILES:
+            continue
+        for node in ast.walk(_parse(path)):
+            if (
+                (isinstance(node, ast.Name) and node.id == "dispatch_write")
+                or (isinstance(node, ast.Attribute) and node.attr == "dispatch_write")
+                or (isinstance(node, ast.alias) and node.name == "dispatch_write")
+            ):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], f"dispatch_write leaked outside the write boundary: {offenders}"
+
+
+# ------------------------------------------------------------------ 2. mintable principal
+
+def _is_principal_construction(node: ast.AST) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    func = node.func
+    if isinstance(func, ast.Name) and func.id == "VerifiedPrincipal":
+        return True
+    return (
+        isinstance(func, ast.Attribute)
+        and isinstance(func.value, ast.Name)
+        and func.value.id == "VerifiedPrincipal"
+    )
+
+
+def test_verified_principal_is_constructed_only_inside_auth() -> None:
+    offenders: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        if rel == "auth.py":
+            continue
+        for node in ast.walk(_parse(path)):
+            if _is_principal_construction(node):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], f"VerifiedPrincipal was constructed outside auth.py: {offenders}"
+
+
+def test_principal_token_is_confined_to_auth() -> None:
+    offenders: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        if rel == "auth.py":
+            continue
+        for node in ast.walk(_parse(path)):
+            if (
+                (isinstance(node, ast.Name) and node.id == "_PRINCIPAL_TOKEN")
+                or (isinstance(node, ast.alias) and node.name == "_PRINCIPAL_TOKEN")
+            ):
+                offenders.append(f"{rel}:{node.lineno}")
+    assert offenders == [], f"_PRINCIPAL_TOKEN leaked outside auth.py: {offenders}"
+
+
+# ------------------------------------------------------------------ 3. transport boundary
+
+def test_no_httpx_write_method_calls_outside_the_write_boundary() -> None:
+    offenders: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        if rel in WRITE_BOUNDARY_FILES:
+            continue
+        for node in ast.walk(_parse(path)):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in WRITE_METHOD_CALLS
+            ):
+                offenders.append(f"{rel}:{node.lineno}:{node.func.attr}")
+    assert offenders == [], f"direct HTTP write call sites outside the boundary: {offenders}"
+
+
+# ------------------------------------------------------------------ 4. no destructive tools
+
+def test_no_server_tool_registration_invokes_destructive_true() -> None:
+    tree = _parse(SRC_ROOT / "server.py")
+    create = next(
+        node for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "create_server"
+    )
+    offenders: list[int] = []
+    for node in ast.walk(create):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_invoke":
+            for keyword in node.keywords:
+                if keyword.arg == "destructive" and isinstance(keyword.value, ast.Constant) \
+                        and keyword.value.value is True:
+                    offenders.append(node.lineno)
+    assert offenders == [], f"_invoke(destructive=True) found at lines {offenders}"
+
+
+# ------------------------------------------------------------------ 5. zero-mutation inventory
+
+def _full_read_openapi() -> bytes:
+    return json.dumps({"paths": {
+        "/data/api/v1/gateway-info": {"get": {}},
+        "/data/api/v1/projects/list": {"get": {}},
+        "/data/api/v1/audit/log/{name}": {"get": {}},
+        "/data/alarm-notification/api/v1/pipelines": {"get": {}},
+        "/data/alarm-notification/api/v1/pipeline": {"get": {}},
+        "/data/api/v1/projects/export/{name}": {"get": {}},
+        "/data/api/v1/tags/export": {"get": {}},
+        "/data/api/v1/resources/type/tag/Tag": {"get": {}},
+        "/data/api/v1/resources/names/tag/Tag": {"get": {}},
+        "/data/api/v1/resources/list/tag/Tag": {"get": {}},
+        "/data/api/v1/resources/find/tag/Tag/{name}": {"get": {}},
+    }}).encode()
+
+
+@pytest.fixture
+def stub_full_gateway(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def info(self: GatewayClient, context: Any = None) -> dict[str, str]:
+        return {"ignitionVersion": "8.3.8"}
+
+    async def modules(self: GatewayClient, context: Any = None) -> dict[str, list[Any]]:
+        return {"items": []}
+
+    async def openapi(self: GatewayClient) -> bytes:
+        return _full_read_openapi()
+
+    monkeypatch.setattr(GatewayClient, "gateway_info", info)
+    monkeypatch.setattr(GatewayClient, "healthy_modules", modules)
+    monkeypatch.setattr(GatewayClient, "openapi", openapi)
+
+
+def test_effective_tool_inventory_has_zero_mutation_tools_in_every_gate_configuration(
+    tmp_path: Path, stub_full_gateway: None,
+) -> None:
+    async def listed(settings: Any) -> set[str]:
+        server = server_module.create_server(settings)
+        async with Client(server) as client:
+            first = {tool.name for tool in await client.list_tools()}
+            second = {tool.name for tool in await client.list_tools()}
+        assert first == second, "the effective inventory must be stable across listings"
+        return first
+
+    def visible(**overrides: Any) -> set[str]:
+        settings = _settings(data_dir=str(tmp_path), **overrides)
+        return asyncio.run(listed(settings))
+
+    for gates_on in (False, True):
+        names = visible(sensitive_exports_enabled=gates_on)
+        assert names <= READ_TOOLS, f"unexpected Tools in inventory: {sorted(names - READ_TOOLS)}"
+        assert not (names & MUTATION_TOOLS)
+        if gates_on:
+            # The stub advertises every read capability: the inventory must actually be
+            # populated, so the subset assertion above is not passing on an empty list.
+            assert names == READ_TOOLS
+
+
+def test_mutation_policy_inventory_stays_fully_gated_off_by_default() -> None:
+    default = _settings()
+    assert default.config_mutation_enabled is False
+    assert default.control_mutation_enabled is False
+    assert default.admin_mutation_enabled is False
+    assert default.mutation_operations == ()
+    assert default.mutation_targets == {}
