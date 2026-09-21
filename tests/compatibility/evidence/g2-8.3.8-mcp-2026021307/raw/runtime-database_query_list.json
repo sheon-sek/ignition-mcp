@@ -1,0 +1,35 @@
+{
+  "id": 14,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"approved\":1},\"entries\":[{\"pagination\":{\"defaultPageSize\":2,\"maxOffset\":1000,\"hardPageSize\":100,\"mode\":\"offset\"},\"resultMode\":\"dataset\",\"description\":\"Bounded CI fixture database query.\",\"alias\":\"ci_page\",\"parameters\":[]}],\"meta\":{\"correlationId\":\"d95c3ff2-475a-44ab-a1be-2be4221a9cb3\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "entries": [
+        {
+          "alias": "ci_page",
+          "description": "Bounded CI fixture database query.",
+          "pagination": {
+            "defaultPageSize": 2,
+            "hardPageSize": 100,
+            "maxOffset": 1000,
+            "mode": "offset"
+          },
+          "parameters": [],
+          "resultMode": "dataset"
+        }
+      ],
+      "meta": {
+        "correlationId": "d95c3ff2-475a-44ab-a1be-2be4221a9cb3"
+      },
+      "summary": {
+        "approved": 1
+      }
+    }
+  }
+}

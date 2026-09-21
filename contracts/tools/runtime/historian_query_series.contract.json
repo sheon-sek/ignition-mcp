@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "name": "historian_query_series",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "QUERY",
+  "parameters": {
+    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 50, "itemMaxLength": 2048},
+    "startTime": {"type": "string", "required": false, "defaultRangeHours": 24},
+    "endTime": {"type": "string", "required": false},
+    "sampleCount": {"type": "integer", "required": false, "default": 100, "minimum": 1}
+  },
+  "hardRangeDays": 7,
+  "hardTotalPoints": 25000,
+  "naturalReturnSizePublic": false,
+  "onChangeReturnSizePublic": false,
+  "outputSchema": "contracts/schemas/historian-query-series.output.schema.json",
+  "nativeRequirements": ["system.historian.queryRawPoints"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "patchSpecificParametersExposed": false,
+  "nullEncoding": "ignition-null-v1"
+}

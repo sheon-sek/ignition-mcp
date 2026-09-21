@@ -1,0 +1,101 @@
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"3ce23aad-d62c-4877-9dd4-27baa6f4be6d\",\"resourceType\":\"ignition/database-connection\",\"description\":{\"module\":\"ignition\",\"typeId\":\"database-connection\",\"total\":1,\"overrides\":0,\"singleton\":false,\"allowDisableOnRestore\":true,\"extensionPoint\":false,\"metrics\":{\"active-connections\":{\"name\":\"databases.active-connections\",\"metric\":{\"value\":1,\"type\":\"gauge\",\"description\":\"\",\"units\":\"connections\"}},\"faulted-connections\":{\"name\":\"databases.faulted-connections\",\"metric\":{\"value\":0,\"type\":\"gauge\",\"description\":\"\",\"units\":\"connections\"}},\"queries\":{\"name\":\"databases.queries\",\"metric\":{\"oneMinuteRate\":0.18400888292586468,\"fiveMinuteRate\":0.1966942907643235,\"fifteenMinuteRate\":0.19889196960097935,\"count\":2,\"meanRate\":0.15712756140775372,\"histogram\":{\"max\":0.038076,\"min\":0.011067,\"p50\":0.011067,\"p75\":0.038076,\"p95\":0.038076,\"p98\":0.038076,\"p99\":0.038076,\"mean\":0.023560557307110666,\"bucketSize\":0.001903,\"buckets\":[0,0,0,0,0,50,0,0,0,0,0,0,0,0,0,0,0,0,0,50],\"type\":\"histogram\",\"stdev\":0.013466607409503468},\"type\":\"timer\"}},\"total-throughput\":{\"name\":\"databases.total-throughput\",\"metric\":{\"value\":0.09998000399920015,\"type\":\"gauge\",\"description\":\"\",\"units\":\"queries/sec\"}}}}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "3ce23aad-d62c-4877-9dd4-27baa6f4be6d",
+      "description": {
+        "allowDisableOnRestore": true,
+        "extensionPoint": false,
+        "metrics": {
+          "active-connections": {
+            "metric": {
+              "description": "",
+              "type": "gauge",
+              "units": "connections",
+              "value": 1
+            },
+            "name": "databases.active-connections"
+          },
+          "faulted-connections": {
+            "metric": {
+              "description": "",
+              "type": "gauge",
+              "units": "connections",
+              "value": 0
+            },
+            "name": "databases.faulted-connections"
+          },
+          "queries": {
+            "metric": {
+              "count": 2,
+              "fifteenMinuteRate": 0.19889196960097935,
+              "fiveMinuteRate": 0.1966942907643235,
+              "histogram": {
+                "bucketSize": 0.001903,
+                "buckets": [
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  50,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  0,
+                  50
+                ],
+                "max": 0.038076,
+                "mean": 0.023560557307110666,
+                "min": 0.011067,
+                "p50": 0.011067,
+                "p75": 0.038076,
+                "p95": 0.038076,
+                "p98": 0.038076,
+                "p99": 0.038076,
+                "stdev": 0.013466607409503468,
+                "type": "histogram"
+              },
+              "meanRate": 0.15712756140775372,
+              "oneMinuteRate": 0.18400888292586468,
+              "type": "timer"
+            },
+            "name": "databases.queries"
+          },
+          "total-throughput": {
+            "metric": {
+              "description": "",
+              "type": "gauge",
+              "units": "queries/sec",
+              "value": 0.09998000399920015
+            },
+            "name": "databases.total-throughput"
+          }
+        },
+        "module": "ignition",
+        "overrides": 0,
+        "singleton": false,
+        "total": 1,
+        "typeId": "database-connection"
+      },
+      "resourceType": "ignition/database-connection"
+    }
+  }
+}

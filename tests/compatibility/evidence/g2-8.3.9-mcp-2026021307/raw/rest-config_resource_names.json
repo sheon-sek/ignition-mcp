@@ -1,0 +1,29 @@
+{
+  "id": 8,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"e37e0ad9-290c-47b6-be52-a27727a908ee\",\"resourceType\":\"ignition/database-connection\",\"items\":[{\"name\":\"MCP_CI_DB\",\"enabled\":true}],\"page\":{\"total\":1,\"matching\":1,\"limit\":100,\"offset\":0}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "e37e0ad9-290c-47b6-be52-a27727a908ee",
+      "items": [
+        {
+          "enabled": true,
+          "name": "MCP_CI_DB"
+        }
+      ],
+      "page": {
+        "limit": 100,
+        "matching": 1,
+        "offset": 0,
+        "total": 1
+      },
+      "resourceType": "ignition/database-connection"
+    }
+  }
+}

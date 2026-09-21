@@ -1,0 +1,23 @@
+{
+  "id": 12,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"f71d4589-3cb7-4961-8850-4bc3f9d9d134\",\"items\":[],\"page\":{\"total\":0,\"matching\":0,\"limit\":100,\"offset\":0}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "f71d4589-3cb7-4961-8850-4bc3f9d9d134",
+      "items": [],
+      "page": {
+        "limit": 100,
+        "matching": 0,
+        "offset": 0,
+        "total": 0
+      }
+    }
+  }
+}

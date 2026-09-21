@@ -1,0 +1,37 @@
+{
+  "id": 13,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"calculationBudget\":1,\"paths\":1,\"returned\":1},\"requestedAggregates\":[\"Average\"],\"meta\":{\"correlationId\":\"370d2a6e-e443-481a-a225-1d6d02059df1\"},\"startTime\":\"2026-09-20T20:02:55.400Z\",\"endTime\":\"2026-09-20T20:17:55.400Z\",\"items\":[{\"path\":\"2026-09-20 20:02:55.4\",\"calculations\":{\"tagpath\":\"histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value\",\"Average\":31.04694360013509}}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "endTime": "2026-09-20T20:17:55.400Z",
+      "items": [
+        {
+          "calculations": {
+            "Average": 31.04694360013509,
+            "tagpath": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value"
+          },
+          "path": "2026-09-20 20:02:55.4"
+        }
+      ],
+      "meta": {
+        "correlationId": "370d2a6e-e443-481a-a225-1d6d02059df1"
+      },
+      "requestedAggregates": [
+        "Average"
+      ],
+      "startTime": "2026-09-20T20:02:55.400Z",
+      "summary": {
+        "calculationBudget": 1,
+        "paths": 1,
+        "returned": 1
+      }
+    }
+  }
+}

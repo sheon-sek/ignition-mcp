@@ -1,0 +1,18 @@
+{
+  "title": "Phase 2 Runtime Readonly",
+  "version": "0.1.0",
+  "permissions": {
+    "type": "AllOf",
+    "securityLevels": [
+      {
+        "children": [
+          {"children": [], "name": "IgnitionMcpCi"}
+        ],
+        "name": "Authenticated"
+      }
+    ]
+  },
+  "tools": {"project/ignition_runtime": "*"},
+  "resources": {"project/ignition_runtime": "*"},
+  "prompts": {"project/ignition_runtime": "*"}
+}

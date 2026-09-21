@@ -1,0 +1,24 @@
+{
+  "id": 1,
+  "jsonrpc": "2.0",
+  "result": {
+    "capabilities": {
+      "logging": {},
+      "prompts": {
+        "listChanged": true
+      },
+      "resources": {
+        "listChanged": true,
+        "subscribe": false
+      },
+      "tools": {
+        "listChanged": true
+      }
+    },
+    "protocolVersion": "2025-06-18",
+    "serverInfo": {
+      "name": "ignition-rest",
+      "version": "0.1.0a0"
+    }
+  }
+}

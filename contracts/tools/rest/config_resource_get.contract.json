@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_get",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 512
+    },
+    "collection": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 128
+    },
+    "defaultIfUndefined": {
+      "type": "boolean",
+      "required": false,
+      "default": false
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-get.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/find/<catalog-resourceType>/{name}",
+    "GET /data/api/v1/resources/singleton/<catalog-resourceType>"
+  ],
+  "capabilityId": "config_resource_get",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true
+}

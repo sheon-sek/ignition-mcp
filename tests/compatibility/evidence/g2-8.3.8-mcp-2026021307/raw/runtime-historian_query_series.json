@@ -1,0 +1,52 @@
+{
+  "id": 12,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"paths\":1,\"hardPointLimit\":25000,\"returnedPoints\":2},\"points\":[{\"quality\":{\"code\":{\"$ignition\":\"null\"},\"good\":false,\"name\":\"192\"},\"path\":\"histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value\",\"value\":10,\"timestamp\":\"2026-09-20T20:17:38.184Z\"},{\"quality\":{\"code\":{\"$ignition\":\"null\"},\"good\":false,\"name\":\"192\"},\"path\":\"histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value\",\"value\":42,\"timestamp\":\"2026-09-20T20:17:41.229Z\"}],\"sampleCount\":10,\"meta\":{\"correlationId\":\"bd9c9091-79b2-43ff-bf55-11ba7159d02e\"},\"startTime\":\"2026-09-20T20:02:47.350Z\",\"endTime\":\"2026-09-20T20:17:47.350Z\"}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "endTime": "2026-09-20T20:17:47.350Z",
+      "meta": {
+        "correlationId": "bd9c9091-79b2-43ff-bf55-11ba7159d02e"
+      },
+      "points": [
+        {
+          "path": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value",
+          "quality": {
+            "code": {
+              "$ignition": "null"
+            },
+            "good": false,
+            "name": "192"
+          },
+          "timestamp": "2026-09-20T20:17:38.184Z",
+          "value": 10
+        },
+        {
+          "path": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value",
+          "quality": {
+            "code": {
+              "$ignition": "null"
+            },
+            "good": false,
+            "name": "192"
+          },
+          "timestamp": "2026-09-20T20:17:41.229Z",
+          "value": 42
+        }
+      ],
+      "sampleCount": 10,
+      "startTime": "2026-09-20T20:02:47.350Z",
+      "summary": {
+        "hardPointLimit": 25000,
+        "paths": 1,
+        "returnedPoints": 2
+      }
+    }
+  }
+}

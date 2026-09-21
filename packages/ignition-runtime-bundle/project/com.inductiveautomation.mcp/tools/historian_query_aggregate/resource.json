@@ -1,0 +1,17 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "historian_query_aggregate",
+    "description": "Calculate validated Historian aggregates across the entire requested range. This is not a time-bucket API.",
+    "parameters": [
+      {"name": "paths", "description": "Historical paths. Hard maximum 100; each path is limited to 2048 characters.", "type": "array", "required": true},
+      {"name": "startTime", "description": "Optional ISO-8601 instant. Defaults to 7 days before endTime.", "type": "string", "required": false, "default": ""},
+      {"name": "endTime", "description": "Optional ISO-8601 instant. Defaults to now.", "type": "string", "required": false, "default": ""},
+      {"name": "aggregates", "description": "At most 18 validated whole-range calculations before duplicate removal. Supported: Average, SimpleAverage, Sum, Minimum, Maximum, MinMax, LastValue, Range, Count, CountOn, CountOff, DurationOn, DurationOff, Variance, StdDev, PctGood, PctBad.", "type": "array", "required": false, "default": ["Average"]}
+    ]
+  }
+}

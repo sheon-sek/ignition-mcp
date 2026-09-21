@@ -1,0 +1,371 @@
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "annotations": {
+          "title": "tag_query"
+        },
+        "description": "Query a Tag Provider with a bounded semantic subset of system.tag.query. Supports native continuation without exposing the internal UDT definition namespace.",
+        "inputSchema": {
+          "properties": {
+            "continuation": {
+              "description": "Opaque continuation token returned by a previous tag_query call. When supplied, the Gateway-stored query is continued.",
+              "type": "string"
+            },
+            "includeUdtMembers": {
+              "description": "Whether UDT members may appear. Default true.",
+              "type": "boolean"
+            },
+            "maxResults": {
+              "description": "Maximum results in this page, 1..500. Default 100.",
+              "type": "integer"
+            },
+            "namePattern": {
+              "description": "Optional Tag name Like-pattern, for example *Pump*.",
+              "type": "string"
+            },
+            "pathPattern": {
+              "description": "Optional Tag path pattern understood by system.tag.query, for example Area/*.",
+              "type": "string"
+            },
+            "provider": {
+              "description": "Tag Provider name. Required for a new query; omit or leave empty when continuing with a continuation token.",
+              "type": "string"
+            },
+            "returnProperties": {
+              "description": "Properties to return from the allowlist: path, name, tagType, dataType, valueSource, typeId, quality. path is always added internally.",
+              "type": "array"
+            },
+            "tagType": {
+              "description": "Optional tag type: AtomicTag, Folder, or UdtInstance. UDT definitions are handled by udt_type_* tools.",
+              "type": "string"
+            },
+            "valueSource": {
+              "description": "Optional value source: memory, opc, expr, db, reference, or derived.",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "tag_query",
+        "title": "tag_query"
+      },
+      {
+        "annotations": {
+          "title": "tag_read"
+        },
+        "description": "Read current Tag values via system.tag.readBlocking. Bad/Uncertain quality remains domain data, not Tool failure. Tag property/document sub-paths are rejected. Preserves request order and duplicate paths. D28 ignition-null-v1 encodes logical null as {\"$ignition\":\"null\"}; documents containing $ignition are escaped as {\"$ignition\":\"object\",\"entries\":[[key,encodedValue],...]}. Arrays and objects recurse; see tag_read_output Resource schema. Example: {\"tagPaths\":[\"[System]Gateway/SystemName\"]}.",
+        "inputSchema": {
+          "properties": {
+            "tagPaths": {
+              "description": "1..500 absolute provider-qualified current Tag paths.",
+              "type": "array"
+            },
+            "timeout": {
+              "description": "Timeout in milliseconds, 0..30000. Default 10000.",
+              "type": "integer"
+            },
+            "timestampFormat": {
+              "description": "iso8601 or epochMillis. Default iso8601.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "tagPaths"
+          ],
+          "type": "object"
+        },
+        "name": "tag_read",
+        "title": "tag_read"
+      },
+      {
+        "annotations": {
+          "title": "database_query"
+        },
+        "description": "Execute one deployment-approved bounded Named Query alias. Arbitrary SQL, arbitrary Named Query paths, transactions, QueryString parameters, and dynamic datasource selection are not exposed.",
+        "inputSchema": {
+          "properties": {
+            "alias": {
+              "description": "Approved alias returned by database_query_list.",
+              "type": "string"
+            },
+            "offset": {
+              "description": "Dataset offset for aliases whose approved pagination mode is offset. Default 0.",
+              "type": "integer"
+            },
+            "pageSize": {
+              "description": "Dataset page size. 0 selects the registry default. Hard ceiling 2000. Ignored only for scalar aliases.",
+              "type": "integer"
+            },
+            "parameters": {
+              "description": "Validated Value-style parameters declared by the approved alias.",
+              "type": "object"
+            }
+          },
+          "required": [
+            "alias"
+          ],
+          "type": "object"
+        },
+        "name": "database_query",
+        "title": "database_query"
+      },
+      {
+        "annotations": {
+          "title": "historian_query_aggregate"
+        },
+        "description": "Calculate validated Historian aggregates across the entire requested range. This is not a time-bucket API.",
+        "inputSchema": {
+          "properties": {
+            "aggregates": {
+              "description": "At most 18 validated whole-range calculations before duplicate removal. Supported: Average, SimpleAverage, Sum, Minimum, Maximum, MinMax, LastValue, Range, Count, CountOn, CountOff, DurationOn, DurationOff, Variance, StdDev, PctGood, PctBad.",
+              "type": "array"
+            },
+            "endTime": {
+              "description": "Optional ISO-8601 instant. Defaults to now.",
+              "type": "string"
+            },
+            "paths": {
+              "description": "Historical paths. Hard maximum 100; each path is limited to 2048 characters.",
+              "type": "array"
+            },
+            "startTime": {
+              "description": "Optional ISO-8601 instant. Defaults to 7 days before endTime.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths"
+          ],
+          "type": "object"
+        },
+        "name": "historian_query_aggregate",
+        "title": "historian_query_aggregate"
+      },
+      {
+        "annotations": {
+          "title": "alarm_shelved_list"
+        },
+        "description": "List current shelved Alarm Paths with expiration and shelving identity via system.alarm.getShelvedPaths.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum shelved paths, 1..500. Default 100; over-limit results fail rather than truncate.",
+              "type": "integer"
+            }
+          },
+          "type": "object"
+        },
+        "name": "alarm_shelved_list",
+        "title": "alarm_shelved_list"
+      },
+      {
+        "annotations": {
+          "title": "bundle_info"
+        },
+        "description": "Return Runtime Bundle identity and current Gateway/MCP Module information.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "bundle_info",
+        "title": "bundle_info"
+      },
+      {
+        "annotations": {
+          "title": "historian_browse"
+        },
+        "description": "Browse historical paths with native bounded continuation. Patch-specific/ignored Historian parameters are intentionally not exposed.",
+        "inputSchema": {
+          "properties": {
+            "continuation": {
+              "description": "Opaque continuation token returned by a previous historian_browse call; at most 8192 characters.",
+              "type": "string"
+            },
+            "maxResults": {
+              "description": "Maximum results in one page, 1..500. Default 100.",
+              "type": "integer"
+            },
+            "nameFilters": {
+              "description": "Optional native name filters; at most 20 non-empty strings of at most 256 characters each.",
+              "type": "array"
+            },
+            "recursive": {
+              "description": "Whether to browse recursively. Default false.",
+              "type": "boolean"
+            },
+            "rootPath": {
+              "description": "Historical browse root such as a histprov-qualified path; at most 2048 characters.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "rootPath"
+          ],
+          "type": "object"
+        },
+        "name": "historian_browse",
+        "title": "historian_browse"
+      },
+      {
+        "annotations": {
+          "title": "udt_type_get"
+        },
+        "description": "Read one bounded UDT type definition by provider-relative type path. Callers never provide the internal _types_ namespace.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum definition/member nodes, 1..200. Default 200.",
+              "type": "integer"
+            },
+            "provider": {
+              "description": "Tag Provider name without brackets.",
+              "type": "string"
+            },
+            "typePath": {
+              "description": "Provider-relative UDT type path such as Motors/VFD. Do not include _types_.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "typePath"
+          ],
+          "type": "object"
+        },
+        "name": "udt_type_get",
+        "title": "udt_type_get"
+      },
+      {
+        "annotations": {
+          "title": "tag_get_config"
+        },
+        "description": "Read bounded Tag configuration with system.tag.getConfiguration. The internal UDT definition namespace is reserved for udt_type_* tools.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum configuration nodes after recursive expansion, 1..200. Default 50.",
+              "type": "integer"
+            },
+            "overridesOnly": {
+              "description": "For UDT members on supported Ignition versions, return only overridden properties. Default false.",
+              "type": "boolean"
+            },
+            "path": {
+              "description": "Absolute provider-qualified Tag, Folder, or UDT instance path outside _types_.",
+              "type": "string"
+            },
+            "recursive": {
+              "description": "Whether to include descendants. Default false.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "tag_get_config",
+        "title": "tag_get_config"
+      },
+      {
+        "annotations": {
+          "title": "udt_type_list"
+        },
+        "description": "List UDT type definitions in one Tag Provider without exposing the internal _types_ namespace in the public contract.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum UDT types, 1..500. Default 100.",
+              "type": "integer"
+            },
+            "provider": {
+              "description": "Tag Provider name without brackets.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider"
+          ],
+          "type": "object"
+        },
+        "name": "udt_type_list",
+        "title": "udt_type_list"
+      },
+      {
+        "annotations": {
+          "title": "database_query_list"
+        },
+        "description": "List only deployment-approved Named Query aliases. Backend project/path/datasource details are not caller-selectable.",
+        "inputSchema": {
+          "properties": {},
+          "type": "object"
+        },
+        "name": "database_query_list",
+        "title": "database_query_list"
+      },
+      {
+        "annotations": {
+          "title": "historian_query_series"
+        },
+        "description": "Query a finite bounded historical time series using system.historian.queryRawPoints. sampleCount must be positive; Natural/On-Change unbounded-style modes are forbidden.",
+        "inputSchema": {
+          "properties": {
+            "endTime": {
+              "description": "Optional ISO-8601 instant. Defaults to now.",
+              "type": "string"
+            },
+            "paths": {
+              "description": "Historical paths. Hard maximum 50; each path is limited to 2048 characters.",
+              "type": "array"
+            },
+            "sampleCount": {
+              "description": "Finite positive sample count. Default 100. paths x sampleCount may not exceed 25,000.",
+              "type": "integer"
+            },
+            "startTime": {
+              "description": "Optional ISO-8601 instant. Defaults to 24 hours before endTime.",
+              "type": "string"
+            }
+          },
+          "required": [
+            "paths"
+          ],
+          "type": "object"
+        },
+        "name": "historian_query_series",
+        "title": "historian_query_series"
+      },
+      {
+        "annotations": {
+          "title": "tag_browse"
+        },
+        "description": "Browse a bounded Tag hierarchy using system.tag.browse. UDT definition namespace _types_ is excluded. Results are never silently truncated: a partial bounded browse returns limit_exceeded.",
+        "inputSchema": {
+          "properties": {
+            "maxResults": {
+              "description": "Maximum returned nodes, 1..500. Default 100.",
+              "type": "integer"
+            },
+            "path": {
+              "description": "Absolute provider-qualified Tag path such as [default]Folder or [System]Gateway.",
+              "type": "string"
+            },
+            "recursive": {
+              "description": "Whether to recursively browse descendants. Default false.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "tag_browse",
+        "title": "tag_browse"
+      }
+    ]
+  }
+}

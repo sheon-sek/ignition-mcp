@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_names",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "search": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 256
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "offset": {
+      "type": "integer",
+      "required": false,
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-names.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/names/<catalog-resourceType>"
+  ],
+  "capabilityId": "config_resource_names",
+  "callerSuppliedRestPath": false,
+  "silentTruncation": false
+}

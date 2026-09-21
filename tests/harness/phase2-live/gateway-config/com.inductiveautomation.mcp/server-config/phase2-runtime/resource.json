@@ -1,0 +1,11 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": true,
+  "files": ["config.json"],
+  "attributes": {
+    "title": "Phase 2 Runtime Readonly",
+    "uuid": "24c38cf5-1080-567c-bbf3-74916fe4bea4"
+  }
+}

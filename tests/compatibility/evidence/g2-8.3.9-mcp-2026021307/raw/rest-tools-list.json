@@ -1,0 +1,1220 @@
+{
+  "id": 2,
+  "jsonrpc": "2.0",
+  "result": {
+    "tools": [
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:gateway_info",
+              "read"
+            ]
+          }
+        },
+        "description": "Return a bounded identity summary for the connected Ignition Gateway.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": "gateway_info",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "deploymentMode": {
+              "title": "Deploymentmode",
+              "type": "string"
+            },
+            "edition": {
+              "title": "Edition",
+              "type": "string"
+            },
+            "ignitionVersion": {
+              "title": "Ignitionversion",
+              "type": "string"
+            },
+            "jvmVersion": {
+              "title": "Jvmversion",
+              "type": "string"
+            },
+            "name": {
+              "title": "Name",
+              "type": "string"
+            },
+            "redundancyRole": {
+              "title": "Redundancyrole",
+              "type": "string"
+            },
+            "timeZoneId": {
+              "title": "Timezoneid",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "name",
+            "edition",
+            "ignitionVersion",
+            "redundancyRole",
+            "deploymentMode",
+            "timeZoneId",
+            "jvmVersion"
+          ],
+          "title": "GatewayInfoResult",
+          "type": "object"
+        },
+        "title": "Gateway Info"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "diagnostic",
+              "read"
+            ]
+          }
+        },
+        "description": "Run low-cost connectivity, authentication, and capability-registry diagnostics.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {},
+          "type": "object"
+        },
+        "name": "gateway_diagnose",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "authenticationOk": {
+              "title": "Authenticationok",
+              "type": "boolean"
+            },
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "gatewayReachable": {
+              "title": "Gatewayreachable",
+              "type": "boolean"
+            },
+            "gatewayVersion": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Gatewayversion"
+            },
+            "message": {
+              "title": "Message",
+              "type": "string"
+            },
+            "moduleCount": {
+              "minimum": 0,
+              "title": "Modulecount",
+              "type": "integer"
+            },
+            "openapiSha256": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Openapisha256"
+            },
+            "registryGeneration": {
+              "minimum": 0,
+              "title": "Registrygeneration",
+              "type": "integer"
+            },
+            "registryState": {
+              "title": "Registrystate",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "gatewayReachable",
+            "authenticationOk",
+            "registryState",
+            "registryGeneration",
+            "openapiSha256",
+            "gatewayVersion",
+            "moduleCount",
+            "message"
+          ],
+          "title": "GatewayDiagnoseResult",
+          "type": "object"
+        },
+        "title": "Gateway Diagnose"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:project_list",
+              "read"
+            ]
+          }
+        },
+        "description": "List Ignition Projects through the bounded Native REST collection endpoint.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "search": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "project_list",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "defaultDb": {
+                    "title": "Defaultdb",
+                    "type": "string"
+                  },
+                  "description": {
+                    "title": "Description",
+                    "type": "string"
+                  },
+                  "enabled": {
+                    "title": "Enabled",
+                    "type": "boolean"
+                  },
+                  "identityProvider": {
+                    "title": "Identityprovider",
+                    "type": "string"
+                  },
+                  "inheritable": {
+                    "title": "Inheritable",
+                    "type": "boolean"
+                  },
+                  "invalidParent": {
+                    "title": "Invalidparent",
+                    "type": "boolean"
+                  },
+                  "mutable": {
+                    "title": "Mutable",
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "parent": {
+                    "title": "Parent",
+                    "type": "string"
+                  },
+                  "tagProvider": {
+                    "title": "Tagprovider",
+                    "type": "string"
+                  },
+                  "title": {
+                    "title": "Title",
+                    "type": "string"
+                  },
+                  "userSource": {
+                    "title": "Usersource",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "description",
+                  "title",
+                  "enabled",
+                  "parent",
+                  "inheritable",
+                  "invalidParent",
+                  "mutable",
+                  "defaultDb",
+                  "tagProvider",
+                  "userSource",
+                  "identityProvider"
+                ],
+                "title": "ProjectSummary",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            }
+          },
+          "required": [
+            "correlationId",
+            "items",
+            "page"
+          ],
+          "title": "ProjectListResult",
+          "type": "object"
+        },
+        "title": "Project List"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:config_resource_search",
+              "read"
+            ]
+          }
+        },
+        "description": "Search OpenAPI-discovered Gateway configuration resource types. No REST path is caller-controlled.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "query": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "config_resource_search",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "module": {
+                    "title": "Module",
+                    "type": "string"
+                  },
+                  "resourceType": {
+                    "title": "Resourcetype",
+                    "type": "string"
+                  },
+                  "singleton": {
+                    "title": "Singleton",
+                    "type": "boolean"
+                  },
+                  "supportsGet": {
+                    "title": "Supportsget",
+                    "type": "boolean"
+                  },
+                  "supportsList": {
+                    "title": "Supportslist",
+                    "type": "boolean"
+                  },
+                  "supportsNames": {
+                    "title": "Supportsnames",
+                    "type": "boolean"
+                  },
+                  "typeId": {
+                    "title": "Typeid",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "resourceType",
+                  "module",
+                  "typeId",
+                  "singleton",
+                  "supportsNames",
+                  "supportsList",
+                  "supportsGet"
+                ],
+                "title": "ConfigResourceTypeSummary",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            }
+          },
+          "required": [
+            "correlationId",
+            "items",
+            "page"
+          ],
+          "title": "ConfigResourceSearchResult",
+          "type": "object"
+        },
+        "title": "Config Resource Search"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:config_resource_describe",
+              "read"
+            ]
+          }
+        },
+        "description": "Describe one exact OpenAPI-discovered Gateway configuration resource type.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "resourceType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ],
+          "type": "object"
+        },
+        "name": "config_resource_describe",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "description": {
+              "additionalProperties": true,
+              "title": "Description",
+              "type": "object"
+            },
+            "resourceType": {
+              "title": "Resourcetype",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "resourceType",
+            "description"
+          ],
+          "title": "ConfigResourceDescribeResult",
+          "type": "object"
+        },
+        "title": "Config Resource Describe"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:config_resource_names",
+              "read"
+            ]
+          }
+        },
+        "description": "List bounded names for a non-singleton OpenAPI-discovered configuration resource type.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "resourceType": {
+              "type": "string"
+            },
+            "search": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ],
+          "type": "object"
+        },
+        "name": "config_resource_names",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "title": "Enabled",
+                    "type": "boolean"
+                  },
+                  "name": {
+                    "title": "Name",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "enabled"
+                ],
+                "title": "ConfigResourceName",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            },
+            "resourceType": {
+              "title": "Resourcetype",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "resourceType",
+            "items",
+            "page"
+          ],
+          "title": "ConfigResourceNamesResult",
+          "type": "object"
+        },
+        "title": "Config Resource Names"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:config_resource_list",
+              "read"
+            ]
+          }
+        },
+        "description": "List bounded, redacted configuration resources for one OpenAPI-discovered non-singleton type.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "resourceType": {
+              "type": "string"
+            },
+            "search": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ],
+          "type": "object"
+        },
+        "name": "config_resource_list",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            },
+            "resourceType": {
+              "title": "Resourcetype",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "resourceType",
+            "items",
+            "page"
+          ],
+          "title": "ConfigResourceListResult",
+          "type": "object"
+        },
+        "title": "Config Resource List"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:config_resource_get",
+              "read"
+            ]
+          }
+        },
+        "description": "Read one exact or singleton configuration resource selected only through the OpenAPI capability catalog.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "collection": {
+              "default": "",
+              "type": "string"
+            },
+            "defaultIfUndefined": {
+              "default": false,
+              "type": "boolean"
+            },
+            "name": {
+              "default": "",
+              "type": "string"
+            },
+            "resourceType": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "resourceType"
+          ],
+          "type": "object"
+        },
+        "name": "config_resource_get",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "resource": {
+              "additionalProperties": true,
+              "title": "Resource",
+              "type": "object"
+            },
+            "resourceType": {
+              "title": "Resourcetype",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "resourceType",
+            "resource"
+          ],
+          "title": "ConfigResourceGetResult",
+          "type": "object"
+        },
+        "title": "Config Resource Get"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:audit_query",
+              "read"
+            ]
+          }
+        },
+        "description": "Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "action": {
+              "default": "",
+              "type": "string"
+            },
+            "actor": {
+              "default": "",
+              "type": "string"
+            },
+            "endTime": {
+              "default": "",
+              "type": "string"
+            },
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "originatingContext": {
+              "default": "",
+              "type": "string"
+            },
+            "profile": {
+              "type": "string"
+            },
+            "startTime": {
+              "default": "",
+              "type": "string"
+            },
+            "system": {
+              "default": "",
+              "type": "string"
+            },
+            "target": {
+              "default": "",
+              "type": "string"
+            },
+            "value": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "required": [
+            "profile"
+          ],
+          "type": "object"
+        },
+        "name": "audit_query",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "action": {
+                    "title": "Action",
+                    "type": "string"
+                  },
+                  "actionTarget": {
+                    "title": "Actiontarget",
+                    "type": "string"
+                  },
+                  "actionValue": {
+                    "title": "Actionvalue",
+                    "type": "string"
+                  },
+                  "actor": {
+                    "title": "Actor",
+                    "type": "string"
+                  },
+                  "actorHost": {
+                    "title": "Actorhost",
+                    "type": "string"
+                  },
+                  "originatingContext": {
+                    "title": "Originatingcontext",
+                    "type": "integer"
+                  },
+                  "originatingSystem": {
+                    "title": "Originatingsystem",
+                    "type": "string"
+                  },
+                  "result": {
+                    "title": "Result",
+                    "type": "string"
+                  },
+                  "statusCode": {
+                    "title": "Statuscode",
+                    "type": "integer"
+                  },
+                  "timestamp": {
+                    "title": "Timestamp",
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "action",
+                  "actionTarget",
+                  "actionValue",
+                  "actor",
+                  "actorHost",
+                  "originatingContext",
+                  "originatingSystem",
+                  "statusCode",
+                  "timestamp",
+                  "result"
+                ],
+                "title": "AuditRecord",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            },
+            "profile": {
+              "title": "Profile",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "profile",
+            "items",
+            "page"
+          ],
+          "title": "AuditQueryResult",
+          "type": "object"
+        },
+        "title": "Audit Query"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:alarm_pipeline_list",
+              "read"
+            ]
+          }
+        },
+        "description": "List bounded Alarm Notification Pipeline runtime overview records through Native REST.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "search": {
+              "default": "",
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "alarm_pipeline_list",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "active": {
+                    "title": "Active",
+                    "type": "boolean"
+                  },
+                  "itemCount": {
+                    "minimum": 0,
+                    "title": "Itemcount",
+                    "type": "integer"
+                  },
+                  "path": {
+                    "title": "Path",
+                    "type": "string"
+                  },
+                  "pipelineName": {
+                    "title": "Pipelinename",
+                    "type": "string"
+                  },
+                  "projectName": {
+                    "title": "Projectname",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path",
+                  "projectName",
+                  "pipelineName",
+                  "itemCount",
+                  "active"
+                ],
+                "title": "AlarmPipelineSummary",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            }
+          },
+          "required": [
+            "correlationId",
+            "items",
+            "page"
+          ],
+          "title": "AlarmPipelineListResult",
+          "type": "object"
+        },
+        "title": "Alarm Pipeline List"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": [
+              "capability:alarm_pipeline_status",
+              "read"
+            ]
+          }
+        },
+        "description": "Read bounded runtime instances for one exact Alarm Notification Pipeline path.",
+        "inputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "limit": {
+              "default": 100,
+              "type": "integer"
+            },
+            "offset": {
+              "default": 0,
+              "type": "integer"
+            },
+            "path": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "path"
+          ],
+          "type": "object"
+        },
+        "name": "alarm_pipeline_status",
+        "outputSchema": {
+          "additionalProperties": false,
+          "properties": {
+            "correlationId": {
+              "title": "Correlationid",
+              "type": "string"
+            },
+            "items": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "alarmEventId": {
+                    "title": "Alarmeventid",
+                    "type": "string"
+                  },
+                  "blockName": {
+                    "title": "Blockname",
+                    "type": "string"
+                  },
+                  "displayPath": {
+                    "title": "Displaypath",
+                    "type": "string"
+                  },
+                  "millis": {
+                    "minimum": 0,
+                    "title": "Millis",
+                    "type": "integer"
+                  },
+                  "pipelinePath": {
+                    "title": "Pipelinepath",
+                    "type": "string"
+                  },
+                  "source": {
+                    "title": "Source",
+                    "type": "string"
+                  },
+                  "status": {
+                    "title": "Status",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "pipelinePath",
+                  "source",
+                  "displayPath",
+                  "blockName",
+                  "status",
+                  "millis",
+                  "alarmEventId"
+                ],
+                "title": "AlarmPipelineInstance",
+                "type": "object"
+              },
+              "maxItems": 500,
+              "title": "Items",
+              "type": "array"
+            },
+            "page": {
+              "additionalProperties": false,
+              "properties": {
+                "limit": {
+                  "maximum": 500,
+                  "minimum": 0,
+                  "title": "Limit",
+                  "type": "integer"
+                },
+                "matching": {
+                  "minimum": 0,
+                  "title": "Matching",
+                  "type": "integer"
+                },
+                "offset": {
+                  "minimum": 0,
+                  "title": "Offset",
+                  "type": "integer"
+                },
+                "total": {
+                  "minimum": 0,
+                  "title": "Total",
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "total",
+                "matching",
+                "limit",
+                "offset"
+              ],
+              "title": "PageMetadata",
+              "type": "object"
+            },
+            "path": {
+              "title": "Path",
+              "type": "string"
+            }
+          },
+          "required": [
+            "correlationId",
+            "path",
+            "items",
+            "page"
+          ],
+          "title": "AlarmPipelineStatusResult",
+          "type": "object"
+        },
+        "title": "Alarm Pipeline Status"
+      }
+    ]
+  }
+}

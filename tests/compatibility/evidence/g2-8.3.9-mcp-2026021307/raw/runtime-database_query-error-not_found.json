@@ -1,0 +1,13 @@
+{
+  "id": 16,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"code\":\"not_found\",\"correlationId\":\"ff788087-c06f-461f-aac5-bfd4e4f0968a\",\"message\":\"The database query alias is not approved in this deployment.\"}",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}

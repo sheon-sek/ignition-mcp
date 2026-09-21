@@ -1,0 +1,32 @@
+{
+  "id": 18,
+  "jsonrpc": "2.0",
+  "result": {
+    "resources": [
+      {
+        "description": "JSON Schema for the bundle_info Tool output contract.",
+        "mimeType": "application/schema+json",
+        "name": "bundle-info-output",
+        "size": 754,
+        "title": "bundle_info_output",
+        "uri": "ignition://?contracts/bundle-info-output"
+      },
+      {
+        "description": "Semantic output contract for tag_read. D27 baseline does not publish native Tool outputSchema.",
+        "mimeType": "application/schema+json",
+        "name": "tag-read-output",
+        "size": 2766,
+        "title": "tag_read_output",
+        "uri": "ignition://?contracts/tag-read-output"
+      },
+      {
+        "description": "Semantic output contract for tag_browse. D27 baseline does not publish native Tool outputSchema.",
+        "mimeType": "application/schema+json",
+        "name": "tag-browse-output",
+        "size": 1197,
+        "title": "tag_browse_output",
+        "uri": "ignition://?contracts/tag-browse-output"
+      }
+    ]
+  }
+}

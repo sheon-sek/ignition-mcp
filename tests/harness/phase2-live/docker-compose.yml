@@ -1,0 +1,43 @@
+services:
+  db:
+    image: mariadb:11.4.13-noble
+    environment:
+      MARIADB_DATABASE: ignition_mcp_ci
+      MARIADB_ALLOW_EMPTY_ROOT_PASSWORD: "yes"
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 2s
+      timeout: 5s
+      retries: 60
+    volumes:
+      - ./db-init:/docker-entrypoint-initdb.d:ro
+      - phase2-db-data:/var/lib/mysql
+
+  gateway:
+    image: ${GATEWAY_IMAGE:?GATEWAY_IMAGE must be an exact patch tag}
+    pull_policy: never
+    ports:
+      - "127.0.0.1:8088:8088"
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ACCEPT_IGNITION_EULA: "Y"
+      GATEWAY_ADMIN_USERNAME: "admin"
+      GATEWAY_ADMIN_PASSWORD: "phase2-ci-only-not-a-production-secret"
+      IGNITION_EDITION: "standard"
+      DISABLE_QUICKSTART: "true"
+      GATEWAY_MODULES_ENABLED: "com.inductiveautomation.mcp,com.inductiveautomation.historian,com.inductiveautomation.alarm-notification,com.inductiveautomation.jdbc.mariadb"
+      ACCEPT_MODULE_CERTS: "com.inductiveautomation.mcp"
+      IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON: >-
+        {"schemaVersion":1,"entries":[{"alias":"ci_page","description":"Bounded CI fixture database query.","project":"ignition_mcp_phase2_fixtures","path":"mcp_ci/page","resultMode":"dataset","datasourcePolicy":"named-query-fixed","parameters":{},"pagination":{"mode":"offset","limitParameter":"limit","offsetParameter":"offset","defaultPageSize":2,"hardPageSize":100,"maxOffset":1000}}]}
+    volumes:
+      - phase2-gateway-data:/usr/local/bin/ignition/data
+      - ../../fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl:/usr/local/bin/ignition/user-lib/modules/MCP-module.modl:ro
+    command: >
+      -n ignition-mcp-phase2-ci
+      -m 1536
+
+volumes:
+  phase2-gateway-data:
+  phase2-db-data:

@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "name": "audit_query",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "QUERY",
+  "parameters": {
+    "profile": {
+      "type": "string",
+      "required": true,
+      "maxLength": 256
+    },
+    "actor": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "action": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "target": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "value": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "system": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "originatingContext": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "startTime": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "endTime": {
+      "type": "string",
+      "required": false,
+      "default": ""
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "offset": {
+      "type": "integer",
+      "required": false,
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  },
+  "outputSchema": "contracts/schemas/audit-query.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/audit/log/{name}"
+  ],
+  "capabilityId": "audit_query",
+  "gatewayAuditOnly": true,
+  "genericMcpAuditBrowser": false,
+  "silentTruncation": false
+}

@@ -1,0 +1,30 @@
+{
+  "id": 14,
+  "jsonrpc": "2.0",
+  "result": {
+    "resources": [
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        },
+        "description": "Bounded metadata for the current immutable Gateway capability snapshot.",
+        "mimeType": "application/json",
+        "name": "gateway-capabilities",
+        "uri": "ignition://gateway/capabilities"
+      },
+      {
+        "_meta": {
+          "fastmcp": {
+            "tags": []
+          }
+        },
+        "description": "OpenAPI fingerprint and registry metadata; does not expose the full OpenAPI document.",
+        "mimeType": "application/json",
+        "name": "gateway-openapi-info",
+        "uri": "ignition://gateway/openapi-info"
+      }
+    ]
+  }
+}

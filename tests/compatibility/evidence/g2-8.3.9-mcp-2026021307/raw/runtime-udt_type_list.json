@@ -1,0 +1,29 @@
+{
+  "id": 8,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":100,\"returned\":1},\"meta\":{\"correlationId\":\"9bb45296-2980-4368-b135-3aeaf404954f\"},\"items\":[{\"typePath\":\"McpCiType\",\"provider\":\"default\",\"name\":\"McpCiType\"}]}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "items": [
+        {
+          "name": "McpCiType",
+          "provider": "default",
+          "typePath": "McpCiType"
+        }
+      ],
+      "meta": {
+        "correlationId": "9bb45296-2980-4368-b135-3aeaf404954f"
+      },
+      "summary": {
+        "limit": 100,
+        "returned": 1
+      }
+    }
+  }
+}

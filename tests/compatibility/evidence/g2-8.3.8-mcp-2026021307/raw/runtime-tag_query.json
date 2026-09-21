@@ -1,0 +1,57 @@
+{
+  "id": 5,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"hasMore\":false,\"limit\":100,\"returned\":3},\"meta\":{\"correlationId\":\"9dc6d022-9f1c-4004-92bb-26687cf8c0d7\"},\"items\":[{\"path\":\"[default]_mcp_ci/Instance\",\"properties\":{\"path\":\"[default]_mcp_ci/Instance\",\"name\":\"Instance\",\"tagType\":\"UdtInstance\",\"typeId\":\"McpCiType\"}},{\"path\":\"[default]_mcp_ci/Value\",\"properties\":{\"dataType\":\"Int4\",\"path\":\"[default]_mcp_ci/Value\",\"name\":\"Value\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"}},{\"path\":\"[default]_mcp_ci/Instance/Member\",\"properties\":{\"dataType\":\"Int4\",\"path\":\"[default]_mcp_ci/Instance/Member\",\"name\":\"Member\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"}}],\"continuation\":{\"$ignition\":\"null\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "continuation": {
+        "$ignition": "null"
+      },
+      "items": [
+        {
+          "path": "[default]_mcp_ci/Instance",
+          "properties": {
+            "name": "Instance",
+            "path": "[default]_mcp_ci/Instance",
+            "tagType": "UdtInstance",
+            "typeId": "McpCiType"
+          }
+        },
+        {
+          "path": "[default]_mcp_ci/Value",
+          "properties": {
+            "dataType": "Int4",
+            "name": "Value",
+            "path": "[default]_mcp_ci/Value",
+            "tagType": "AtomicTag",
+            "valueSource": "memory"
+          }
+        },
+        {
+          "path": "[default]_mcp_ci/Instance/Member",
+          "properties": {
+            "dataType": "Int4",
+            "name": "Member",
+            "path": "[default]_mcp_ci/Instance/Member",
+            "tagType": "AtomicTag",
+            "valueSource": "memory"
+          }
+        }
+      ],
+      "meta": {
+        "correlationId": "9dc6d022-9f1c-4004-92bb-26687cf8c0d7"
+      },
+      "summary": {
+        "hasMore": false,
+        "limit": 100,
+        "returned": 3
+      }
+    }
+  }
+}

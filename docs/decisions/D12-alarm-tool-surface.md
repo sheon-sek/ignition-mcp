@@ -135,6 +135,16 @@ Roster configuration helpers are not public:
 
 Alarm Notification Pipeline definition authoring is deferred to the later typed Project Resource authoring design.
 
+## Phase 2 bounded-execution amendment
+
+**Approved by the project owner during the Phase 2 pre-G2 audit.**
+
+The public surface above remains a future semantic target, but `alarm_status` and `alarm_journal` are **deferred and disabled** in the current readonly profile. The documented Ignition 8.3 `system.alarm.queryStatus` and `system.alarm.queryJournal` signatures expose neither a native row limit nor reliable continuation. Their blocking calls also expose no per-call interrupt/timeout contract.
+
+A handler-side `maxResults` check after `queryStatus`/`queryJournal` returns is not a D10 execution or memory bound: the native `AlarmQueryResult` may already have been materialized. Narrower default time ranges and abandoned worker threads likewise do not establish a hard cardinality bound; the latter can leak orphan work. Therefore the project must not describe these Tools as bounded or expose them through the Phase 2 Runtime server.
+
+`alarm_shelved_list` remains public because it reads the finite current shelving state, subject to its existing output limit. Re-enabling `alarm_status` or `alarm_journal` requires a later explicit decision plus real-Gateway proof of a credible bound enforced before/during execution (for example, a verified native/provider continuation or independently enforced bounded backend). A post-materialization truncation/rejection is insufficient.
+
 ## Permission summary
 | Tool | Server | Class |
 |---|---|---|
@@ -156,5 +166,8 @@ pipeline_runtime_owner: ignition-rest
 caller_supplied_ack_username: forbidden
 shelve_wildcard_mutation: forbidden
 public_unshelve_tool: true
+phase2_alarm_status_enabled: false
+phase2_alarm_journal_enabled: false
+alarm_query_reenable_requires_pre_execution_bound_evidence: true
 pipeline_definition_authoring_v1: false
 ```

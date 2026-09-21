@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "name": "historian_query_aggregate",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "QUERY",
+  "parameters": {
+    "paths": {"type": "array", "required": true, "minItems": 1, "maxItems": 100, "itemMaxLength": 2048},
+    "startTime": {"type": "string", "required": false, "defaultRangeDays": 7},
+    "endTime": {"type": "string", "required": false},
+    "aggregates": {"type": "array", "required": false, "default": ["Average"], "maxItems": 18, "enumItems": ["Average", "SimpleAverage", "Sum", "Minimum", "Maximum", "MinMax", "LastValue", "Range", "Count", "CountOn", "CountOff", "DurationOn", "DurationOff", "Variance", "StdDev", "PctGood", "PctBad"]}
+  },
+  "hardRangeDays": 366,
+  "hardCalculationBudget": 25000,
+  "aggregateSemantics": "whole-range",
+  "outputSchema": "contracts/schemas/historian-query-aggregate.output.schema.json",
+  "nativeRequirements": ["system.historian.queryAggregatedPoints"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "patchSpecificParametersExposed": false,
+  "nullEncoding": "ignition-null-v1"
+}

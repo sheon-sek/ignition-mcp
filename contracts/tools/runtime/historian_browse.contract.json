@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "name": "historian_browse",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "QUERY",
+  "parameters": {
+    "rootPath": {"type": "string", "required": true, "maxLength": 2048},
+    "nameFilters": {"type": "array", "required": false, "default": [], "maxItems": 20, "itemMaxLength": 256},
+    "recursive": {"type": "boolean", "required": false, "default": false},
+    "maxResults": {"type": "integer", "required": false, "default": 100, "minimum": 1, "maximum": 500},
+    "continuation": {"type": "string", "required": false, "opaque": true, "maxLength": 8192}
+  },
+  "outputSchema": "contracts/schemas/historian-browse.output.schema.json",
+  "nativeRequirements": ["system.historian.browse"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "pagination": "native-continuation",
+  "patchSpecificParametersExposed": false,
+  "nullEncoding": "ignition-null-v1"
+}

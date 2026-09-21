@@ -1,0 +1,47 @@
+{
+  "id": 9,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":200,\"returned\":2},\"typePath\":\"McpCiType\",\"provider\":\"default\",\"meta\":{\"correlationId\":\"a6186c3c-4275-457f-8653-b41379622c10\"},\"definition\":{\"tags\":[{\"dataType\":\"Int4\",\"path\":{\"type\":\"native-object\",\"text\":\"Member\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"AtomicTag\",\"name\":\"Member\",\"valueSource\":\"memory\",\"value\":7}],\"path\":{\"type\":\"native-object\",\"text\":\"[default]_types_/McpCiType\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"UdtType\",\"name\":\"McpCiType\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "definition": {
+        "name": "McpCiType",
+        "path": {
+          "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+          "text": "[default]_types_/McpCiType",
+          "type": "native-object"
+        },
+        "tagType": "UdtType",
+        "tags": [
+          {
+            "dataType": "Int4",
+            "name": "Member",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "Member",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 7,
+            "valueSource": "memory"
+          }
+        ]
+      },
+      "meta": {
+        "correlationId": "a6186c3c-4275-457f-8653-b41379622c10"
+      },
+      "provider": "default",
+      "summary": {
+        "limit": 200,
+        "returned": 2
+      },
+      "typePath": "McpCiType"
+    }
+  }
+}

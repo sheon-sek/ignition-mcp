@@ -1,0 +1,41 @@
+{
+  "id": 4,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":100,\"returned\":2},\"recursive\":false,\"path\":\"[default]_mcp_ci\",\"nodes\":[{\"hasChildren\":true,\"path\":\"[default]_mcp_ci/Instance\",\"name\":\"Instance\",\"tagType\":\"UdtInstance\",\"typeId\":\"McpCiType\"},{\"hasChildren\":false,\"dataType\":\"Int4\",\"path\":\"[default]_mcp_ci/Value\",\"name\":\"Value\",\"tagType\":\"AtomicTag\",\"valueSource\":\"memory\"}],\"meta\":{\"correlationId\":\"8967ae2c-1418-4da8-83a3-3f64652e22d4\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "meta": {
+        "correlationId": "8967ae2c-1418-4da8-83a3-3f64652e22d4"
+      },
+      "nodes": [
+        {
+          "hasChildren": true,
+          "name": "Instance",
+          "path": "[default]_mcp_ci/Instance",
+          "tagType": "UdtInstance",
+          "typeId": "McpCiType"
+        },
+        {
+          "dataType": "Int4",
+          "hasChildren": false,
+          "name": "Value",
+          "path": "[default]_mcp_ci/Value",
+          "tagType": "AtomicTag",
+          "valueSource": "memory"
+        }
+      ],
+      "path": "[default]_mcp_ci",
+      "recursive": false,
+      "summary": {
+        "limit": 100,
+        "returned": 2
+      }
+    }
+  }
+}

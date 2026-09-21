@@ -1,0 +1,51 @@
+{
+  "id": 6,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"correlationId\":\"fdd21495-0938-4435-b331-c42a20d22102\",\"items\":[{\"resourceType\":\"ignition/database-connection\",\"module\":\"ignition\",\"typeId\":\"database-connection\",\"singleton\":false,\"supportsNames\":true,\"supportsList\":true,\"supportsGet\":true},{\"resourceType\":\"ignition/database-driver\",\"module\":\"ignition\",\"typeId\":\"database-driver\",\"singleton\":false,\"supportsNames\":true,\"supportsList\":true,\"supportsGet\":true},{\"resourceType\":\"ignition/database-translator\",\"module\":\"ignition\",\"typeId\":\"database-translator\",\"singleton\":false,\"supportsNames\":true,\"supportsList\":true,\"supportsGet\":true}],\"page\":{\"total\":38,\"matching\":3,\"limit\":100,\"offset\":0}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "correlationId": "fdd21495-0938-4435-b331-c42a20d22102",
+      "items": [
+        {
+          "module": "ignition",
+          "resourceType": "ignition/database-connection",
+          "singleton": false,
+          "supportsGet": true,
+          "supportsList": true,
+          "supportsNames": true,
+          "typeId": "database-connection"
+        },
+        {
+          "module": "ignition",
+          "resourceType": "ignition/database-driver",
+          "singleton": false,
+          "supportsGet": true,
+          "supportsList": true,
+          "supportsNames": true,
+          "typeId": "database-driver"
+        },
+        {
+          "module": "ignition",
+          "resourceType": "ignition/database-translator",
+          "singleton": false,
+          "supportsGet": true,
+          "supportsList": true,
+          "supportsNames": true,
+          "typeId": "database-translator"
+        }
+      ],
+      "page": {
+        "limit": 100,
+        "matching": 3,
+        "offset": 0,
+        "total": 38
+      }
+    }
+  }
+}

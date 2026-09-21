@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:tag-get-config:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "path": {"type": "string", "minLength": 3},
+    "recursive": {"type": "boolean"},
+    "overridesOnly": {"type": "boolean"},
+    "configuration": {"type": "array", "items": {"$ref": "#/$defs/value"}},
+    "summary": {"$ref": "#/$defs/summary"},
+    "meta": {"$ref": "#/$defs/meta"}
+  },
+  "required": ["path", "recursive", "overridesOnly", "configuration", "summary", "meta"],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "value": {"oneOf": [
+      {"type": ["string", "number", "boolean"]},
+      {"$ref": "#/$defs/null"},
+      {"type": "array", "items": {"$ref": "#/$defs/value"}},
+      {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}},
+      {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false}
+    ]},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"returned": {"type": "integer", "minimum": 0, "maximum": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": ["returned", "limit"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  }
+}

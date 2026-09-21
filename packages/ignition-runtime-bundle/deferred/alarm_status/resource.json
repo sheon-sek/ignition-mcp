@@ -1,0 +1,24 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "alarm_status",
+    "description": "Query current Alarm Events with validated filters via system.alarm.queryStatus. Domain alarm state is data, not Tool failure. Results are never silently truncated.",
+    "parameters": [
+      {"name": "states", "description": "Optional states: ClearUnacked, ClearAcked, ActiveUnacked, ActiveAcked.", "type": "array", "required": false, "default": []},
+      {"name": "priorities", "description": "Optional priorities: Diagnostic, Low, Medium, High, Critical.", "type": "array", "required": false, "default": []},
+      {"name": "alarmPaths", "description": "Optional Alarm Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "sourcePaths", "description": "Optional Source Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "displayPaths", "description": "Optional Display Path patterns; at most 50.", "type": "array", "required": false, "default": []},
+      {"name": "providers", "description": "Optional Tag Provider names; at most 20.", "type": "array", "required": false, "default": []},
+      {"name": "allProperties", "description": "Up to 20 AND property conditions: {property, operator, value}; operators =, !=, <, <=, >, >=.", "type": "array", "required": false, "default": []},
+      {"name": "anyProperties", "description": "Up to 20 OR property conditions: {property, operator, value}; operators =, !=, <, <=, >, >=.", "type": "array", "required": false, "default": []},
+      {"name": "definedProperties", "description": "Property names that must exist; at most 20.", "type": "array", "required": false, "default": []},
+      {"name": "includeShelved", "description": "Whether shelved events are included. Default false.", "type": "boolean", "required": false, "default": false},
+      {"name": "maxResults", "description": "Maximum complete result count, 1..500. Default 100. Over-limit queries fail rather than truncate.", "type": "integer", "required": false, "default": 100}
+    ]
+  }
+}

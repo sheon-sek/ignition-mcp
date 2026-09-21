@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "name": "database_query",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "alias": {"type": "string", "required": true},
+    "parameters": {"type": "object", "required": false, "default": {}},
+    "pageSize": {"type": "integer", "required": false, "default": 0, "minimum": 0, "maximum": 2000},
+    "offset": {"type": "integer", "required": false, "default": 0, "minimum": 0, "maximum": 1000000}
+  },
+  "approvedValueParameterTypes": ["string", "integer", "number", "boolean", "datetime"],
+  "queryStringParameters": "forbidden",
+  "dynamicDatasource": "forbidden",
+  "transactionHandles": "forbidden",
+  "arbitrarySql": "forbidden",
+  "callerCanSelectNamedQueryPath": false,
+  "boundedDatasetModes": ["offset", "fixed"],
+  "outputSchema": "contracts/schemas/database-query.output.schema.json",
+  "nativeRequirements": ["system.db.execQuery", "system.db.execScalar"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nullEncoding": "ignition-null-v1"
+}

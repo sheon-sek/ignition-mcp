@@ -1,0 +1,35 @@
+{
+  "id": 11,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"hasMore\":false,\"limit\":100,\"returned\":1},\"rootPath\":\"histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/\",\"recursive\":true,\"meta\":{\"correlationId\":\"1d2089a3-3ffe-491e-b42f-3d9c9b876acc\"},\"items\":[{\"hasChildren\":false,\"type\":\"tag\",\"path\":\"histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value\"}],\"continuation\":{\"$ignition\":\"null\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "continuation": {
+        "$ignition": "null"
+      },
+      "items": [
+        {
+          "hasChildren": false,
+          "path": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/Value",
+          "type": "tag"
+        }
+      ],
+      "meta": {
+        "correlationId": "1d2089a3-3ffe-491e-b42f-3d9c9b876acc"
+      },
+      "recursive": true,
+      "rootPath": "histprov:MCP_CI_HISTORY:/prov:default:/tag:_mcp_ci/",
+      "summary": {
+        "hasMore": false,
+        "limit": 100,
+        "returned": 1
+      }
+    }
+  }
+}

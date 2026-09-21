@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "name": "project_list",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "search": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 256
+    },
+    "limit": {
+      "type": "integer",
+      "required": false,
+      "default": 100,
+      "minimum": 1,
+      "maximum": 500
+    },
+    "offset": {
+      "type": "integer",
+      "required": false,
+      "default": 0,
+      "minimum": 0,
+      "maximum": 1000000
+    }
+  },
+  "outputSchema": "contracts/schemas/project-list.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/projects/list"
+  ],
+  "capabilityId": "project_list",
+  "silentTruncation": false
+}

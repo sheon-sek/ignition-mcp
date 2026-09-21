@@ -1,0 +1,80 @@
+{
+  "id": 7,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"summary\":{\"limit\":50,\"returned\":4},\"configuration\":[{\"tags\":[{\"tags\":[{\"dataType\":\"Int4\",\"path\":{\"type\":\"native-object\",\"text\":\"Member\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"AtomicTag\",\"name\":\"Member\",\"valueSource\":\"memory\",\"value\":7}],\"path\":{\"type\":\"native-object\",\"text\":\"Instance\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"UdtInstance\",\"name\":\"Instance\",\"typeId\":\"McpCiType\"},{\"historyEnabled\":true,\"defaultValue\":10,\"dataType\":\"Int4\",\"historySampleRateUnits\":\"MS\",\"historyMode\":\"OnChange\",\"historyProvider\":\"MCP_CI_HISTORY\",\"path\":{\"type\":\"native-object\",\"text\":\"Value\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"AtomicTag\",\"name\":\"Value\",\"valueSource\":\"memory\",\"value\":42,\"historySampleRate\":1000}],\"path\":{\"type\":\"native-object\",\"text\":\"[default]_mcp_ci\",\"class\":\"com.inductiveautomation.ignition.common.tags.paths.BasicTagPath\"},\"tagType\":\"Folder\",\"name\":\"_mcp_ci\"}],\"overridesOnly\":false,\"recursive\":true,\"path\":\"[default]_mcp_ci\",\"meta\":{\"correlationId\":\"5ae596ad-04eb-4f5b-8161-aa071698d579\"}}",
+        "type": "text"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "configuration": [
+        {
+          "name": "_mcp_ci",
+          "path": {
+            "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+            "text": "[default]_mcp_ci",
+            "type": "native-object"
+          },
+          "tagType": "Folder",
+          "tags": [
+            {
+              "name": "Instance",
+              "path": {
+                "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+                "text": "Instance",
+                "type": "native-object"
+              },
+              "tagType": "UdtInstance",
+              "tags": [
+                {
+                  "dataType": "Int4",
+                  "name": "Member",
+                  "path": {
+                    "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+                    "text": "Member",
+                    "type": "native-object"
+                  },
+                  "tagType": "AtomicTag",
+                  "value": 7,
+                  "valueSource": "memory"
+                }
+              ],
+              "typeId": "McpCiType"
+            },
+            {
+              "dataType": "Int4",
+              "defaultValue": 10,
+              "historyEnabled": true,
+              "historyMode": "OnChange",
+              "historyProvider": "MCP_CI_HISTORY",
+              "historySampleRate": 1000,
+              "historySampleRateUnits": "MS",
+              "name": "Value",
+              "path": {
+                "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+                "text": "Value",
+                "type": "native-object"
+              },
+              "tagType": "AtomicTag",
+              "value": 42,
+              "valueSource": "memory"
+            }
+          ]
+        }
+      ],
+      "meta": {
+        "correlationId": "5ae596ad-04eb-4f5b-8161-aa071698d579"
+      },
+      "overridesOnly": false,
+      "path": "[default]_mcp_ci",
+      "recursive": true,
+      "summary": {
+        "limit": 50,
+        "returned": 4
+      }
+    }
+  }
+}

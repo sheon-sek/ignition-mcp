@@ -1,0 +1,13 @@
+{
+  "id": 17,
+  "jsonrpc": "2.0",
+  "result": {
+    "content": [
+      {
+        "text": "{\"code\":\"invalid_argument\",\"correlationId\":\"4f1076ea-ac0f-4005-b612-91497dca3941\",\"message\":\"aggregates contains an unsupported calculation.\"}",
+        "type": "text"
+      }
+    ],
+    "isError": true
+  }
+}
