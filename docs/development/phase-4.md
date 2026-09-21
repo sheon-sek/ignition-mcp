@@ -247,6 +247,22 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
+  On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
+  immediate rerun ([run 35653162977](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653162977),
+  job rerun `--failed`). The check (`tests/harness/phase3-live/driver.py:533`) GETs the
+  first `project_export` artifact and HEADs the *second* export of the same project, so
+  it asserts that two exports of an unchanged project are byte-identical. In the failed
+  row the two artifacts had the same size (903 bytes) and the same project fingerprint
+  (`pcf1:f2a6639c…`, stable across the pair) but different bytes
+  (`52962dde…` vs `a37a321f…`), which is Gateway-side export non-determinism, not a
+  server or harness defect: no code under test is involved, and the other 23 checks in
+  that stage passed. The evidence is in the failed job's `observations.json`
+  (`checks[name=head-get-parity].detail`). **For the owner:** decide whether the check
+  should compare the two artifacts of one export (a GET and a HEAD of the same path, the
+  representation parity it is named for) or be relaxed to a fingerprint/size comparison —
+  either is a Phase 3 amendment, so this ticket did not touch it. Until then a G3 row can
+  fail for an unmodified head and needs a rerun.
 - **Ticket #15 — a config rename has two Targets, and D30 does not say so.** D30 §6 gives the Target
   rule for the Runtime Tag operations ("`tag_move` checks the source and the destination, and
   `tag_rename` checks the new path"); it says nothing about a *config* rename, which both changes the
