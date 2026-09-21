@@ -1,5 +1,6 @@
 {
   "accepted": "AboveValue+ackModeManual",
+  "alarmName": "ProbeHi",
   "bracketRoot": "[default]MCP_P4_REHEARSAL",
   "conclusion": "measured",
   "cycleResults": [
@@ -23,6 +24,7 @@
     }
   ],
   "cycles": 3,
+  "exactSourcePattern": "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi",
   "expectedActive": 64,
   "measurements": [
     {
@@ -35,10 +37,10 @@
       "maxElapsedMs": 6,
       "medianElapsedMs": 6,
       "minElapsedMs": 6,
-      "name": "queryStatus.exact.qualified",
+      "name": "queryStatus.exact.source",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -52,27 +54,10 @@
       "maxElapsedMs": 6,
       "medianElapsedMs": 6,
       "minElapsedMs": 6,
-      "name": "queryStatus.exact.bracket",
+      "name": "queryStatus.exact.sourceWithState",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
-      ],
-      "states": []
-    },
-    {
-      "count": 0,
-      "elapsedMs": [
-        5,
-        5,
-        5
-      ],
-      "maxElapsedMs": 5,
-      "medianElapsedMs": 5,
-      "minElapsedMs": 5,
-      "name": "queryStatus.exact.bare",
-      "ok": true,
-      "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -86,10 +71,10 @@
       "maxElapsedMs": 6,
       "medianElapsedMs": 6,
       "minElapsedMs": 6,
-      "name": "queryStatus.sibling.qualified",
+      "name": "queryStatus.sibling.source",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -103,10 +88,61 @@
       "maxElapsedMs": 5,
       "medianElapsedMs": 5,
       "minElapsedMs": 5,
-      "name": "queryStatus.folder.qualified",
+      "name": "queryStatus.exact.tagPathOnly",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.exact.bracketTagPath",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.exact.bareTagPath",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 0,
+      "elapsedMs": [
+        5,
+        5,
+        5
+      ],
+      "maxElapsedMs": 5,
+      "medianElapsedMs": 5,
+      "minElapsedMs": 5,
+      "name": "queryStatus.folder.tagPathOnly",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -123,7 +159,7 @@
       "name": "queryStatus.folder.partialLeaf",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -140,7 +176,24 @@
       "name": "queryStatus.folder.trailingWildcard",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
+      ],
+      "states": []
+    },
+    {
+      "count": 1,
+      "elapsedMs": [
+        6,
+        6,
+        6
+      ],
+      "maxElapsedMs": 6,
+      "medianElapsedMs": 6,
+      "minElapsedMs": 6,
+      "name": "queryStatus.almName.wildcard",
+      "ok": true,
+      "patterns": [
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -157,24 +210,7 @@
       "name": "queryStatus.root.trailingWildcard",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
-      ],
-      "states": []
-    },
-    {
-      "count": 64,
-      "elapsedMs": [
-        9,
-        9,
-        9
-      ],
-      "maxElapsedMs": 9,
-      "medianElapsedMs": 9,
-      "minElapsedMs": 9,
-      "name": "queryStatus.root.trailingSlashStar",
-      "ok": true,
-      "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -191,7 +227,7 @@
       "name": "queryStatus.root.bareWildcard",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -208,7 +244,7 @@
       "name": "queryStatus.system.unfiltered",
       "ok": true,
       "patterns": [
-        "prov:default:/tag:MCP_P4_REHEARSAL/Exact"
+        "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi"
       ],
       "states": []
     },
@@ -243,7 +279,7 @@
           "getName": "ProbeHi",
           "getNotes": "",
           "getPriority": "High",
-          "getSource": "prov:default:/tag:MCP_P4_REHEARSAL/Exact",
+          "getSource": "prov:default:/tag:MCP_P4_REHEARSAL/Exact:/alm:ProbeHi",
           "getState": "ActiveUnacked",
           "isAcked": "False",
           "isActive": "True",
@@ -281,6 +317,7 @@
         "waitedMs": 4000
       },
       "configured": true,
+      "folderFallbackUsed": false,
       "label": "AboveValue+ackModeManual",
       "mode": "AboveValue",
       "qualityCodes": [

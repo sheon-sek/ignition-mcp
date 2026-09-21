@@ -128,7 +128,12 @@ def test_policy_provision_writes_the_provider_and_reads_the_document_back(tmp_pa
     facts = record["facts"]
     assert facts["openapiMissingRoutes"] == []
     assert facts["policyImported"] is True
+    # The recorded 8.3.8 run answered the first import while the provider was
+    # still starting, so the write path must retry instead of failing.
+    assert facts["policyImportRetried"] is True
+    assert facts["policyImportAttemptCount"] == 2
     assert facts["abortPolicyRejectsExistingTarget"] is True
+    assert facts["mergeOverwriteReimportSucceeded"] is True
     assert facts["restReadBackMatches"] is True
     assert facts["providerResourceSignature"]
 
@@ -154,11 +159,24 @@ def test_alarm_probe_facts_come_from_the_recorded_handler_report(stub_mcp: dict[
     assert facts["alarmConclusion"] == "measured"
     assert facts["exactPathCountIsOnePerAlarm"] is True
     assert facts["exactPathMatchesOnlyOwnSource"] is True
+    assert facts["exactPathSourceFormMatchesPathForm"] is True
+    assert facts["tagPathOnlyPatternMatchesNothing"] is True
     assert facts["folderPathExpandsDescendants"] is False
     assert facts["partialLeafPathMatchesNothing"] is True
+    assert facts["alarmNameWildcardMatchesOneAlarm"] is True
     assert facts["rootWildcardMatchesEveryFixtureAlarm"] is True
     assert facts["perPathCountStableAcrossCycles"] is True
     assert facts["exactPathBoundedBasis"]["literalMatchingOnly"] is True
+
+
+def test_recorded_probe_reports_show_the_policy_surviving_a_restart() -> None:
+    before = _fixture("policy-probe.json")
+    after = _fixture("policy-probe-after-restart.json")
+    before_item = driver.first_item(driver.measurement(before, "tag.readBlocking.policy"))
+    after_item = driver.first_item(driver.measurement(after, "tag.readBlocking.policy"))
+    assert before_item["valueSha256"] == after_item["valueSha256"] == policy_document.policy_sha256()
+    assert before_item["valueLength"] == after_item["valueLength"] == len(policy_document.policy_json())
+    assert driver.measurement(after, "tag.readBlocking.policy")["jsonKeys"] == sorted(policy_document.POLICY.keys())
 
 
 def _record_stage(evidence: Path, name: str, record: dict[str, Any]) -> None:

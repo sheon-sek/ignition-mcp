@@ -3,7 +3,7 @@
   "measurements": [
     {
       "count": 1,
-      "elapsedMs": 20,
+      "elapsedMs": 22,
       "items": [
         {
           "quality": "Good",
@@ -48,7 +48,7 @@
     },
     {
       "count": 1,
-      "elapsedMs": 3,
+      "elapsedMs": 13,
       "entries": [
         {
           "keys": [
@@ -65,7 +65,7 @@
     },
     {
       "count": 1,
-      "elapsedMs": 4,
+      "elapsedMs": 9,
       "entries": [
         {
           "keys": [
@@ -106,17 +106,17 @@
         "items": [
           {
             "quality": "Good",
-            "valueByteLength": 12,
-            "valueLength": 12,
-            "valuePrefix": "phase4-unset",
-            "valueSha256": "50f9a5f3f26c90cc6385aa1d8b5266b7f1e238e996d95bdc3686ecc9f33cb9b2",
-            "valueText": "phase4-unset",
+            "valueByteLength": 24,
+            "valueLength": 24,
+            "valuePrefix": "phase4-write-probe-value",
+            "valueSha256": "47a18ab0702c45e956aac1fc7c2bb8162259662c79f85343f0dc2c250741ac39",
+            "valueText": "phase4-write-probe-value",
             "valueType": "unicode"
           }
         ],
         "path": "[IgnitionMCPPolicy]WriteProbe"
       },
-      "elapsedMs": 3,
+      "elapsedMs": 5,
       "name": "tag.writeBlocking.probe",
       "ok": true,
       "writeQualityCodes": [
@@ -190,7 +190,7 @@
       "present": false
     },
     {
-      "elapsedMs": 1,
+      "elapsedMs": 2,
       "hasAlarm": true,
       "hasConfig": true,
       "hasFile": true,

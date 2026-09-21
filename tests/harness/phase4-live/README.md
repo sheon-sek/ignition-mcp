@@ -68,7 +68,11 @@ and the **live Gateway identity**, and fails closed otherwise. Exit codes:
 the dedicated Tag provider through
 `POST /data/api/v1/resources/ignition/tag-provider`, import the Tag document
 through `POST /data/api/v1/tags/import`, prove the D30 `Abort` collision policy,
-and read the document back through `GET /data/api/v1/tags/export`.
+prove the idempotent `MergeOverwrite` update path, and read the document back
+through `GET /data/api/v1/tags/export`. A recorded 8.3.8 run showed that a
+freshly created Tag provider can answer the first import with
+`Bad 776 … cleanPath is null` while it is still starting, so the import is
+retried under a bounded deadline and the attempt count is recorded.
 
 ## Rehearsal
 

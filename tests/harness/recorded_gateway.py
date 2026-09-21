@@ -213,9 +213,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return
             self._json(200, _fixture("phase4/tag-provider-find.json"))
             return
-        if path == "/data/api/v1/resources/type/ignition/tag-provider":
-            self._json(200, _fixture("phase4/tag-provider-type.json"))
-            return
         if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
             self._json(200, {"name": "phase3-runtime"})
             return
@@ -381,11 +378,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not server.policy_provider_created:
                     self._json(404, _fixture("phase2/no-route.json"))
                     return
-                if server.policy_tags_imported and collision_policy == "Abort":
+                if not server.policy_tags_imported:
+                    if not server.policy_import_flaked:
+                        # The recorded 8.3.8 run answered the first import while
+                        # the provider was still starting; apply must retry.
+                        server.policy_import_flaked = True
+                        self._json(200, _fixture("phase4/tag-import-provider-not-ready.json"))
+                        return
+                    server.policy_tags_imported = True
+                    self._json(200, _fixture("phase4/tag-import-success.json"))
+                    return
+                if collision_policy == "Abort":
                     self._json(200, _fixture("phase4/tag-import-abort.json"))
                     return
-                server.policy_tags_imported = True
-                self._json(200, _fixture("phase4/tag-import-success.json"))
+                self._json(200, _fixture("phase4/tag-import-merge.json"))
                 return
             document = json.loads(body)
             if isinstance(document, list):
@@ -438,6 +444,7 @@ class _Server(http.server.ThreadingHTTPServer):
         self.policy_provider = policy_provider
         self.policy_provider_created = False
         self.policy_tags_imported = False
+        self.policy_import_flaked = False
 
 
 class RecordedGateway:

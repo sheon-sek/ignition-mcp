@@ -28,7 +28,14 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 	relativeRoot = rootName
 	qualifiedRoot = "prov:" + provider + ":/tag:" + relativeRoot
 	bracketRoot = "[" + provider + "]" + relativeRoot
+	alarmName = "ProbeHi"
 	expectedActive = 4 + noiseCount
+
+	def sourcePath(relativePath):
+		# The recorded live run showed that a query pattern is matched literally
+		# against the alarm's qualified source string, which includes the alarm
+		# name segment; a tag-path-only pattern matches nothing.
+		return qualifiedRoot + "/" + relativePath + ":/alm:" + alarmName
 
 	def atomicTag(name, alarm):
 		return {
@@ -150,16 +157,11 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 
 	def makeSourceQuery(patterns):
 		def run():
-			results = system.alarm.queryStatus(source=patterns)
-			return {"count": len(results)}
+			return {"count": len(system.alarm.queryStatus(source=patterns))}
 		return run
 
-	def exactQueryCount():
-		results = system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"])
-		return {"count": len(results), "results": results}
-
 	def eventDetail():
-		results = system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"])
+		results = system.alarm.queryStatus(path=[sourcePath("Exact")])
 		events = []
 		index = 0
 		while index < len(results) and index < 3:
@@ -182,16 +184,16 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 		return {"count": len(results), "events": events, "eventMethods": methods[:60]}
 
 	def acknowledgeExact():
-		results = system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"])
+		results = system.alarm.queryStatus(path=[sourcePath("Exact")])
 		identifiers = []
 		index = 0
 		while index < len(results) and index < 5:
 			identifiers.append(unicode(results[index].getId()))
 			index = index + 1
 		if not identifiers:
-			return {"attempted": 0, "remaining": []}
+			return {"attempted": 0, "remaining": [], "statesAfter": []}
 		remaining = system.alarm.acknowledge(identifiers, "ignition-mcp phase4 probe", ackUsername)
-		after = system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"])
+		after = system.alarm.queryStatus(path=[sourcePath("Exact")])
 		states = []
 		for event in after:
 			states.append(text(event.getState()))
@@ -212,11 +214,12 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 			entry["ok"] = False
 			entry["error"] = text(type(exc).__name__) + ": " + text(exc)
 		entry["elapsedMs"] = int((time.time() - started) * 1000)
+		entry["name"] = name
 		measurements.append(entry)
 		return entry
 
 	alarm = {
-		"name": "ProbeHi",
+		"name": alarmName,
 		"mode": "AboveValue",
 		"setpointA": 1.0,
 		"inclusiveA": False,
@@ -274,22 +277,24 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 			}}
 
 		queries = [
-			{"label": "exact.qualified", "patterns": [qualifiedRoot + "/Exact"], "states": None},
-			{"label": "exact.bracket", "patterns": [bracketRoot + "/Exact"], "states": None},
-			{"label": "exact.bare", "patterns": [relativeRoot + "/Exact"], "states": None},
-			{"label": "sibling.qualified", "patterns": [qualifiedRoot + "/ExactSibling"], "states": None},
-			{"label": "folder.qualified", "patterns": [qualifiedRoot + "/Fold"], "states": None},
+			{"label": "exact.source", "patterns": [sourcePath("Exact")], "states": None},
+			{"label": "exact.sourceWithState", "patterns": [sourcePath("Exact")], "states": ["ActiveUnacked"]},
+			{"label": "sibling.source", "patterns": [sourcePath("ExactSibling")], "states": None},
+			{"label": "exact.tagPathOnly", "patterns": [qualifiedRoot + "/Exact"], "states": None},
+			{"label": "exact.bracketTagPath", "patterns": [bracketRoot + "/Exact"], "states": None},
+			{"label": "exact.bareTagPath", "patterns": [relativeRoot + "/Exact"], "states": None},
+			{"label": "folder.tagPathOnly", "patterns": [qualifiedRoot + "/Fold"], "states": None},
 			{"label": "folder.partialLeaf", "patterns": [qualifiedRoot + "/Fold/Chi"], "states": None},
 			{"label": "folder.trailingWildcard", "patterns": [qualifiedRoot + "/Fold/*"], "states": None},
+			{"label": "almName.wildcard", "patterns": [qualifiedRoot + "/Exact:/alm:*"], "states": None},
 			{"label": "root.trailingWildcard", "patterns": [qualifiedRoot + "/*"], "states": None},
-			{"label": "root.trailingSlashStar", "patterns": [qualifiedRoot + "/*"], "states": ["ActiveUnacked"]},
 			{"label": "root.bareWildcard", "patterns": ["*" + relativeRoot + "*"], "states": None},
 			{"label": "system.unfiltered", "patterns": None, "states": None},
 		]
 		for query in queries:
 			measure("queryStatus." + query["label"], makeQuery(query["patterns"], query["states"]))
-		measure("queryStatus.exact.sourceForm", makeSourceQuery([qualifiedRoot + "/Exact"]))
-		measure("queryStatus.exact.count", makeCount([qualifiedRoot + "/Exact"]))
+		measure("queryStatus.exact.sourceForm", makeSourceQuery([sourcePath("Exact")]))
+		measure("queryStatus.exact.count", makeCount([sourcePath("Exact")]))
 
 		cycleResults = []
 		for index in range(cycles):
@@ -297,10 +302,10 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 			try:
 				writeValues([bracketRoot + "/Exact"], 5)
 				sleepSeconds(1.5)
-				entry["activeCount"] = len(system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"]))
+				entry["activeCount"] = len(system.alarm.queryStatus(path=[sourcePath("Exact")]))
 				writeValues([bracketRoot + "/Exact"], 0)
 				sleepSeconds(1.5)
-				entry["clearedCount"] = len(system.alarm.queryStatus(path=[qualifiedRoot + "/Exact"]))
+				entry["clearedCount"] = len(system.alarm.queryStatus(path=[sourcePath("Exact")]))
 				entry["ok"] = True
 			except (Exception, JavaException) as exc:
 				entry["ok"] = False
@@ -316,6 +321,8 @@ def onToolCalled(builder, providerRoot, rootName, provider, noiseCount, cycles, 
 			"rootName": rootName,
 			"qualifiedRoot": qualifiedRoot,
 			"bracketRoot": bracketRoot,
+			"alarmName": alarmName,
+			"exactSourcePattern": sourcePath("Exact"),
 			"expectedActive": expectedActive,
 			"noiseCount": noiseCount,
 			"cycles": cycles,

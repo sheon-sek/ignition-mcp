@@ -1,10 +1,15 @@
 {
-  "failureCount": 1,
+  "failureCount": 2,
   "failures": [
     {
-      "diagnosticMessage": "Tag already exists: RuntimeTargetPolicy",
-      "quality": "Error",
-      "qualitySubCode": 776
+      "diagnosticMessage": "Tag '[IgnitionMCPPolicy]RuntimeTargetPolicy' already exists, and 'abort' collision policy has been specified",
+      "quality": "Bad",
+      "qualitySubCode": 527
+    },
+    {
+      "diagnosticMessage": "Tag '[IgnitionMCPPolicy]WriteProbe' already exists, and 'abort' collision policy has been specified",
+      "quality": "Bad",
+      "qualitySubCode": 527
     }
   ],
   "successCount": 0

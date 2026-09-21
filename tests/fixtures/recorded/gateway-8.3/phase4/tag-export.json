@@ -1,8 +1,19 @@
 {
-  "path": "",
+  "name": "",
+  "tagType": "Provider",
   "tags": [
     {
       "dataType": "String",
+      "defaultValue": "phase4-unset",
+      "enabled": true,
+      "name": "WriteProbe",
+      "tagType": "AtomicTag",
+      "value": "phase4-unset",
+      "valueSource": "memory"
+    },
+    {
+      "dataType": "String",
+      "defaultValue": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"tag_write\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}",
       "enabled": true,
       "name": "RuntimeTargetPolicy",
       "tagType": "AtomicTag",
@@ -10,12 +21,8 @@
       "valueSource": "memory"
     },
     {
-      "dataType": "String",
-      "enabled": true,
-      "name": "WriteProbe",
-      "tagType": "AtomicTag",
-      "value": "phase4-unset",
-      "valueSource": "memory"
+      "name": "_types_",
+      "tagType": "Folder"
     }
   ]
 }

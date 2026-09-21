@@ -220,6 +220,40 @@ def wait_for_provider(config: Config) -> dict[str, Any]:
     }
 
 
+def import_policy(
+    config: Config, document: bytes, *, deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    """Import the policy Tag document, retrying until the provider accepts it.
+
+    The recorded 8.3.8 run showed a freshly created Tag provider answering
+    `/tags/import` with `Bad 776 TagPath.getPathLength() ... cleanPath is null`
+    while the provider was still starting, so `setup-native apply` cannot treat a
+    single import as reliable. The first attempt keeps D30's `Abort` policy; the
+    retries are idempotent so a partially applied import cannot wedge the write.
+    """
+    started = time.monotonic()
+    attempts: list[dict[str, Any]] = []
+    while True:
+        policy = "Abort" if not attempts else "MergeOverwrite"
+        status, payload = gateway_rest.import_tags(
+            config.base_url, config.api_token, config.provider, document,
+            collision_policy=policy,
+        )
+        failures = gateway_rest.import_failures(payload)
+        attempts.append({
+            "collisionPolicy": policy,
+            "status": status,
+            "body": bounded(payload),
+            "failures": bounded(failures),
+            "elapsedMs": int((time.monotonic() - started) * 1000),
+        })
+        if status == 200 and failures is None:
+            return {"ok": True, "attempts": attempts, "attemptCount": len(attempts)}
+        if time.monotonic() - started >= deadline_seconds:
+            return {"ok": False, "attempts": attempts, "attemptCount": len(attempts)}
+        time.sleep(3.0)
+
+
 def stage_policy_provision(config: Config) -> dict[str, Any]:
     facts: dict[str, Any] = {}
     raw: dict[str, Any] = {}
@@ -247,15 +281,15 @@ def stage_policy_provision(config: Config) -> dict[str, Any]:
     if not readiness["ready"]:
         raise StageFailure(f"the policy Tag provider never became readable: {readiness}")
 
-    status, payload = gateway_rest.import_tags(
-        config.base_url, config.api_token, config.provider, policy_document.tag_document_bytes(),
-    )
-    failures = gateway_rest.import_failures(payload)
-    raw["importPolicy"] = {"status": status, "body": bounded(payload)}
-    facts["policyImportStatus"] = status
-    facts["policyImportFailures"] = bounded(failures)
-    if status != 200 or failures is not None:
-        raise StageFailure(f"importing the policy Tag returned HTTP {status} with failures {failures}")
+    imported = import_policy(config, policy_document.tag_document_bytes())
+    raw["importPolicy"] = bounded(imported)
+    facts["policyImportAttemptCount"] = imported["attemptCount"]
+    facts["policyImportRetried"] = imported["attemptCount"] > 1
+    if not imported["ok"]:
+        raise StageFailure(
+            f"importing the policy Tag failed after {imported['attemptCount']} attempt(s): "
+            f"{json.dumps(imported['attempts'][-1])[:800]}"
+        )
     facts["policyImported"] = True
 
     status, payload = gateway_rest.import_tags(
@@ -266,6 +300,15 @@ def stage_policy_provision(config: Config) -> dict[str, Any]:
     raw["importPolicyAbort"] = {"status": status, "body": bounded(payload)}
     facts["abortReimportStatus"] = status
     facts["abortPolicyRejectsExistingTarget"] = abort_failures is not None
+
+    status, payload = gateway_rest.import_tags(
+        config.base_url, config.api_token, config.provider,
+        policy_document.tag_document_bytes(), collision_policy="MergeOverwrite",
+    )
+    merge_failures = gateway_rest.import_failures(payload)
+    raw["importPolicyMerge"] = {"status": status, "body": bounded(payload)}
+    facts["mergeReimportStatus"] = status
+    facts["mergeOverwriteReimportSucceeded"] = status == 200 and merge_failures is None
 
     status, exported = gateway_rest.export_tags(
         config.base_url, config.api_token, config.provider,
@@ -449,30 +492,35 @@ def stage_alarm(config: Config) -> dict[str, Any]:
     expected_active = int(report.get("expectedActive") or 0)
     facts["expectedActiveAlarms"] = expected_active
 
-    exact = counts.get("exact.qualified", -1)
-    sibling = counts.get("sibling.qualified", -1)
-    folder = counts.get("folder.qualified", -1)
+    exact = counts.get("exact.source", -1)
+    sibling = counts.get("sibling.source", -1)
+    tag_path_only = counts.get("exact.tagPathOnly", -1)
+    folder_tag_path = counts.get("folder.tagPathOnly", -1)
     folder_partial = counts.get("folder.partialLeaf", -1)
     folder_wildcard = counts.get("folder.trailingWildcard", -1)
+    alarm_name_wildcard = counts.get("almName.wildcard", -1)
     root_wildcard = counts.get("root.trailingWildcard", -1)
     system_unfiltered = counts.get("system.unfiltered", -1)
 
+    facts["exactPathSourcePattern"] = str(report.get("exactSourcePattern", ""))
     facts["exactPathCount"] = exact
     facts["exactPathCountIsOnePerAlarm"] = exact == 1
     facts["exactPathMatchesOnlyOwnSource"] = exact == 1 and sibling == 1
-    facts["bracketPathFormMatchesQualifiedForm"] = counts.get("exact.bracket", -1) == exact
-    facts["barePathFormMatchesQualifiedForm"] = counts.get("exact.bare", -1) == exact
-    facts["sourceFormMatchesPathForm"] = counts.get("exact.sourceForm", -1) == exact
-    facts["folderPathExpandsDescendants"] = folder > 0
-    facts["folderPathCount"] = folder
+    facts["exactPathStateFilterCount"] = counts.get("exact.sourceWithState", -1)
+    facts["exactPathSourceFormMatchesPathForm"] = counts.get("exact.sourceForm", -1) == exact
+    facts["tagPathOnlyPatternMatchesNothing"] = tag_path_only == 0
+    facts["tagPathOnlyPatternCount"] = tag_path_only
+    facts["bracketTagPathFormCount"] = counts.get("exact.bracketTagPath", -1)
+    facts["bareTagPathFormCount"] = counts.get("exact.bareTagPath", -1)
+    facts["folderPathExpandsDescendants"] = folder_tag_path > 0
+    facts["folderTagPathCount"] = folder_tag_path
     facts["partialLeafPathMatchesNothing"] = folder_partial == 0
     facts["folderTrailingWildcardCount"] = folder_wildcard
+    facts["alarmNameWildcardMatchesOneAlarm"] = alarm_name_wildcard == 1
     facts["rootTrailingWildcardCount"] = root_wildcard
     facts["rootWildcardMatchesEveryFixtureAlarm"] = root_wildcard == expected_active
     facts["systemUnfilteredCount"] = system_unfiltered
-    facts["wildcardFormMatchesMoreThanExactPath"] = (
-        root_wildcard > exact and root_wildcard > 0 and exact >= 0
-    )
+    facts["wildcardFormMatchesMoreThanExactPath"] = root_wildcard > exact > 0
 
     cycle_results = report.get("cycleResults") or []
     cycle_counts = [
@@ -500,15 +548,17 @@ def stage_alarm(config: Config) -> dict[str, Any]:
 
     if exact > 0 and system_unfiltered > 0:
         facts["exactToUnfilteredMedianRatio"] = round(
-            timings.get("exact.qualified", 0) / float(max(timings.get("system.unfiltered", 0), 1)), 4,
+            timings.get("exact.source", 0) / float(max(timings.get("system.unfiltered", 0), 1)), 4,
         )
     else:
         facts["exactToUnfilteredMedianRatio"] = None
     facts["exactPathBoundedBasis"] = {
-        "literalMatchingOnly": (exact == 1 and folder == 0 and sibling == 1),
+        "literalMatchingOnly": (
+            exact == 1 and sibling == 1 and tag_path_only == 0 and folder_tag_path == 0
+        ),
         "noAccumulationWithoutAck": facts["perPathCountStableAcrossCycles"],
         "timing": {
-            "exactMedianMs": timings.get("exact.qualified"),
+            "exactMedianMs": timings.get("exact.source"),
             "rootWildcardMedianMs": timings.get("root.trailingWildcard"),
             "systemUnfilteredMedianMs": timings.get("system.unfiltered"),
         },
