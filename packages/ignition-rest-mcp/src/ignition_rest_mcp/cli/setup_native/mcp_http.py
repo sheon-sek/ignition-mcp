@@ -12,6 +12,7 @@ live harness.
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -27,7 +28,12 @@ INITIALIZE_TIMEOUT_SECONDS = 30.0
 ERROR_BODY_SNIPPET = 160
 METHOD_NOT_FOUND = -32601
 USER_AGENT = "ignition-mcp-setup-native"
-
+#: An Ignition API token (``name:key``, the key being unpadded Base64URL).  The
+#: Gateway module's MCP endpoint authenticates it through ``X-Ignition-API-Token``
+#: and does not accept the bearer scheme; a value shaped like an API token is
+#: therefore also sent in that header.  JWTs and opaque MCP tokens (no colon)
+#: keep the pure bearer behavior.
+API_TOKEN_RE = re.compile(r"^[A-Za-z0-9._-]{1,128}:[A-Za-z0-9_-]{20,128}$")
 
 class McpProbeError(RuntimeError):
     """The MCP endpoint failed a probe; the message is safe to report."""
@@ -118,9 +124,7 @@ class McpHttpClient:
 
         await self._connect()
         client = self._require_client()
-        probe_headers = {"Accept": ACCEPT}
-        if self.token:
-            probe_headers["Authorization"] = f"Bearer {self.token}"
+        probe_headers = {"Accept": ACCEPT, **self._auth_headers()}
         snippet = bytearray()
         try:
             async with client.stream("GET", self.endpoint.url, headers=probe_headers) as response:
@@ -238,6 +242,16 @@ class McpHttpClient:
             raise McpProbeError(f"tools/call {name} returned an error result: {_redact(text, self.token or '')}")
         return ToolResult(structured=structured if isinstance(structured, dict) else {}, text=text)
 
+    def _auth_headers(self) -> dict[str, str]:
+        """Bearer always; plus the Gateway API-token header when the shape says so."""
+
+        if not self.token:
+            return {}
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if API_TOKEN_RE.fullmatch(self.token):
+            headers["X-Ignition-API-Token"] = self.token
+        return headers
+
     async def _post(
         self, payload: dict[str, Any], *, expect_result: bool = True, timeout_seconds: float | None = None
     ) -> dict[str, Any] | None:
@@ -250,8 +264,7 @@ class McpHttpClient:
         }
         if self.session_id:
             headers["Mcp-Session-Id"] = self.session_id
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        headers.update(self._auth_headers())
         request_body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         timeout = timeout_seconds if timeout_seconds is not None else self.timeout_seconds
         method = str(payload.get("method", ""))

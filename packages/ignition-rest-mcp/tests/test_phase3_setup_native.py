@@ -970,6 +970,35 @@ def test_mcp_client_echoes_the_session_and_sends_the_bearer() -> None:
     assert fake.methods[:2] == ["initialize", "notifications/initialized"]
 
 
+API_TOKEN = "ignition-mcp-ci:zG48znDwfapnZCJA_d7THMrQJpejwONfXMFZ5oBYn0I"
+JWT_SHAPE = "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJnMyJ9.9qY3pk-from-another-key"
+
+
+@pytest.mark.parametrize(
+    ("token", "api_header_expected"),
+    [(API_TOKEN, True), (JWT_SHAPE, False), (MCP_TOKEN, False)],
+    ids=["ignition-api-token", "jwt", "opaque-mcp-token"],
+)
+def test_mcp_client_adds_the_gateway_api_token_header_only_for_api_token_shapes(
+    token: str, api_header_expected: bool
+) -> None:
+    """The live Gateway module endpoint authenticates API tokens via
+    X-Ignition-API-Token (G3 run 35588029382: 403 on bearer-only); JWTs and
+    opaque tokens must stay pure bearer."""
+    fake = FakeMcp()
+
+    async def exercise() -> None:
+        async with McpHttpClient(endpoint=MCP_ENDPOINT, token=token, timeout_seconds=5.0,
+                                 transport=fake.transport) as client:
+            await client.initialize()
+
+    asyncio.run(exercise())
+    request = fake.requests[0]
+    assert request.headers["authorization"] == f"Bearer {token}"
+    assert (("x-ignition-api-token" in request.headers) is api_header_expected)
+    if api_header_expected:
+        assert request.headers["x-ignition-api-token"] == token
+
 @pytest.mark.parametrize("sse", [True, False], ids=["sse", "json"])
 def test_mcp_client_accepts_both_response_forms(sse: bool) -> None:
     fake = FakeMcp(prompts=["standup"], advertise=("tools", "resources", "prompts"), sse=sse)
