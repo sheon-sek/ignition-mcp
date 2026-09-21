@@ -20,6 +20,7 @@ from ignition_rest_mcp.projects.locks import SINGLE_WRITER_LIMITATION
 from ignition_rest_mcp.projects.locks import ProcessWriterGuard, ProjectLockRegistry
 from ignition_rest_mcp.projects.transactions import ProjectTransactionService
 from ignition_rest_mcp.auth import build_auth, current_principal
+from ignition_rest_mcp.authorization import ScopeAuthorizationMiddleware
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import Settings
@@ -195,6 +196,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="ignition-rest",
         version="0.1.0a0",
         auth=build_auth(settings),
+        middleware=[ScopeAuthorizationMiddleware(settings, state)],
         lifespan=lifespan,
         mask_error_details=True,
     )
@@ -224,7 +226,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway_info",
         description="Return a bounded identity summary for the connected Ignition Gateway.",
         output_schema=GatewayInfoResult.model_json_schema(),
-        tags={"read", "capability:gateway_info"},
+        tags={"read", "scope:ignition.read", "capability:gateway_info"},
     )
     async def gateway_info() -> GatewayInfoResult:
         async def flow(context: OperationContext) -> GatewayInfoResult:
@@ -236,7 +238,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway_diagnose",
         description="Run low-cost connectivity, authentication, and capability-registry diagnostics.",
         output_schema=GatewayDiagnoseResult.model_json_schema(),
-        tags={"read", "diagnostic"},
+        tags={"read", "scope:ignition.read", "diagnostic"},
     )
     async def gateway_diagnose() -> GatewayDiagnoseResult:
         async def flow(context: OperationContext) -> GatewayDiagnoseResult:
@@ -254,7 +256,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="project_list",
         description="List Ignition Projects through the bounded Native REST collection endpoint.",
         output_schema=ProjectListResult.model_json_schema(),
-        tags={"read", "capability:project_list"},
+        tags={"read", "scope:ignition.read", "capability:project_list"},
     )
     async def project_list(search: str = "", limit: int = 100, offset: int = 0) -> ProjectListResult:
         return await _invoke(
@@ -269,7 +271,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_search",
         description="Search OpenAPI-discovered Gateway configuration resource types. No REST path is caller-controlled.",
         output_schema=ConfigResourceSearchResult.model_json_schema(),
-        tags={"read", "capability:config_resource_search"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_search"},
     )
     async def config_resource_search(
         query: str = "", limit: int = 100, offset: int = 0,
@@ -285,7 +287,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_describe",
         description="Describe one exact OpenAPI-discovered Gateway configuration resource type.",
         output_schema=ConfigResourceDescribeResult.model_json_schema(),
-        tags={"read", "capability:config_resource_describe"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_describe"},
     )
     async def config_resource_describe(resourceType: str) -> ConfigResourceDescribeResult:
         return await _invoke(
@@ -299,7 +301,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_names",
         description="List bounded names for a non-singleton OpenAPI-discovered configuration resource type.",
         output_schema=ConfigResourceNamesResult.model_json_schema(),
-        tags={"read", "capability:config_resource_names"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_names"},
     )
     async def config_resource_names(
         resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
@@ -316,7 +318,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_list",
         description="List bounded, redacted configuration resources for one OpenAPI-discovered non-singleton type.",
         output_schema=ConfigResourceListResult.model_json_schema(),
-        tags={"read", "capability:config_resource_list"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_list"},
     )
     async def config_resource_list(
         resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
@@ -333,7 +335,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_get",
         description="Read one exact or singleton configuration resource selected only through the OpenAPI capability catalog.",
         output_schema=ConfigResourceGetResult.model_json_schema(),
-        tags={"read", "capability:config_resource_get"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_get"},
     )
     async def config_resource_get(
         resourceType: str, name: str = "", collection: str = "", defaultIfUndefined: bool = False,
@@ -351,7 +353,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
-        tags={"read", "capability:audit_query"},
+        tags={"read", "scope:ignition.read", "capability:audit_query"},
     )
     async def audit_query(
         profile: str,
@@ -380,7 +382,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="alarm_pipeline_list",
         description="List bounded Alarm Notification Pipeline runtime overview records through Native REST.",
         output_schema=AlarmPipelineListResult.model_json_schema(),
-        tags={"read", "capability:alarm_pipeline_list"},
+        tags={"read", "scope:ignition.read", "capability:alarm_pipeline_list"},
     )
     async def alarm_pipeline_list(
         search: str = "", limit: int = 100, offset: int = 0,
@@ -397,7 +399,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="alarm_pipeline_status",
         description="Read bounded runtime instances for one exact Alarm Notification Pipeline path.",
         output_schema=AlarmPipelineStatusResult.model_json_schema(),
-        tags={"read", "capability:alarm_pipeline_status"},
+        tags={"read", "scope:ignition.read", "capability:alarm_pipeline_status"},
     )
     async def alarm_pipeline_status(
         path: str, limit: int = 100, offset: int = 0,
@@ -414,7 +416,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="project_export",
         description="Export one Ignition Project into a server-held artifact (sensitive export; deployment-gated).",
         output_schema=ProjectExportResult.model_json_schema(),
-        tags={"read", "capability:project_export", "sensitive-export"},
+        tags={"read", "scope:ignition.read", "capability:project_export", "sensitive-export"},
     )
     async def project_export(projectName: str) -> ProjectExportResult:
         return await _invoke(
@@ -435,7 +437,7 @@ def create_server(settings: Settings) -> FastMCP:
             "(sensitive export; deployment-gated)."
         ),
         output_schema=TagConfigExportResult.model_json_schema(),
-        tags={"read", "capability:tag_config_export", "sensitive-export"},
+        tags={"read", "scope:ignition.read", "capability:tag_config_export", "sensitive-export"},
     )
     async def tag_config_export(
         provider: str, path: str = "", recursive: bool = True, includeUdts: bool = False,
@@ -455,7 +457,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="artifact_list",
         description="List READY artifact metadata visible to the calling principal (bounded, paginated).",
         output_schema=ArtifactListResult.model_json_schema(),
-        tags={"read", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "storage", "principal-scoped"},
     )
     async def artifact_list(kind: str = "", limit: int = 100, offset: int = 0) -> ArtifactListResult:
         principal = current_principal(settings)
@@ -470,7 +472,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="artifact_info",
         description="Read the metadata of one READY artifact visible to the calling principal.",
         output_schema=ArtifactInfoResult.model_json_schema(),
-        tags={"read", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "storage", "principal-scoped"},
     )
     async def artifact_info(artifactId: str) -> ArtifactInfoResult:
         principal = current_principal(settings)
@@ -486,7 +488,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="operation_diagnose",
         description="Diagnose one prior operation by its exact UUIDv7 correlationId (D19, principal-scoped).",
         output_schema=OperationDiagnoseResult.model_json_schema(),
-        tags={"read", "diagnostic", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "diagnostic", "storage", "principal-scoped"},
     )
     async def operation_diagnose(correlationId: str) -> OperationDiagnoseResult:
         principal = current_principal(settings)
@@ -502,6 +504,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway-capabilities",
         description="Bounded metadata for the current immutable Gateway capability snapshot.",
         mime_type="application/json",
+        tags={"read", "scope:ignition.read"},
     )
     async def gateway_capabilities() -> str:
         value: CapabilitiesResource = capabilities_resource(state.require_registry())
@@ -516,6 +519,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway-openapi-info",
         description="OpenAPI fingerprint and registry metadata; does not expose the full OpenAPI document.",
         mime_type="application/json",
+        tags={"read", "scope:ignition.read"},
     )
     async def gateway_openapi_info() -> str:
         value: OpenApiInfoResource = openapi_info_resource(state.require_registry())

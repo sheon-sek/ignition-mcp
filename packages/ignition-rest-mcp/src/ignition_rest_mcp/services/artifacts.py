@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore
 from ignition_rest_mcp.artifacts.model import Artifact
 from ignition_rest_mcp.audit.sink import AuditRow, AuditWriteError, SqliteAuditSink
-from ignition_rest_mcp.auth import ADMIN_SCOPE, Principal
+from ignition_rest_mcp.auth import Principal
+from ignition_rest_mcp.config import ADMIN_SCOPE
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.models import (
     ArtifactInfoResult,
