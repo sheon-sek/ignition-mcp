@@ -266,6 +266,39 @@ GOOD_QUALITY = {
 }
 
 
+def _policy_probe_report(server: Any, report: dict[str, Any]) -> dict[str, Any]:
+    """Apply the modelled provider state to one recorded `policy_probe` report.
+
+    `policy_provider_unready_reads` counts down per probe: while it is positive
+    (or `-1`, which never becomes ready) the provider answers handler reads with
+    `Error_Configuration`. That is the state the live 8.3.9 run of
+    `Phase 4 Live Gateway G4a` 35654626095 recorded: `/resources/find` and
+    `/tags/export` answered 200 for a provider whose Tag actors had not started.
+    """
+
+    remaining = server.policy_provider_unready_reads
+    if remaining == 0:
+        return report
+    if remaining > 0:
+        server.policy_provider_unready_reads = remaining - 1
+    document = json.loads(json.dumps(report))
+    for entry in document.get("measurements") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", ""))
+        if name.startswith("tag.readBlocking."):
+            for item in entry.get("items") or []:
+                if isinstance(item, dict):
+                    item["quality"] = 'Error_Configuration("The Tag provider is not serving tags.")'
+            entry["jsonKind"] = ""
+            entry["jsonKeys"] = []
+        elif name.startswith("tag.gatedRead."):
+            entry["gate"] = "blocked"
+            entry["reason"] = "the running provider is not serving tags"
+            entry["materialized"] = False
+    return document
+
+
 def _record_tag_import(server: Any, body: bytes) -> None:
     """Track the policy document an accepted import leaves in the provider.
 
@@ -728,6 +761,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 elif tool in {"policy_probe", "alarm_probe"}:
                     fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
                     report = _fixture(fixture) if tool == "policy_probe" else _alarm_body(server, fixture)
+                    if tool == "policy_probe":
+                        report = _policy_probe_report(server, report)
                     result = {
                         "content": [{"type": "text", "text": "recorded replay"}],
                         "isError": False,
@@ -802,6 +837,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if provider == server.policy_provider:
                 if not server.policy_provider_created:
                     self._json(404, _fixture("phase2/no-route.json"))
+                    return
+                if server.policy_provider_unready_reads != 0:
+                    # A provider that has not finished starting applies the import to
+                    # its config while the Tag's actor never starts — the recorded
+                    # `Bad 776 ... cleanPath is null` hazard, which a handler read
+                    # then answers with Error_Configuration forever.
+                    self._json(200, _fixture("phase4/tag-import-provider-not-ready.json"))
                     return
                 if not server.policy_tags_imported:
                     if not server.policy_import_flaked:
@@ -906,6 +948,12 @@ class _Server(http.server.ThreadingHTTPServer):
         self.policy_provider_created = False
         self.policy_tags_imported = False
         self.policy_import_flaked = False
+        #: The second recorded provider-startup hazard: a freshly created provider
+        #: answers handler reads of its Tags with `Error_Configuration` until it has
+        #: finished loading, and an import applied in that window leaves a Tag whose
+        #: actor never starts. A positive count models a provider that becomes
+        #: ready after that many handler reads, `-1` models one that never does.
+        self.policy_provider_unready_reads = 0
         # Ticket #7: the fake models Tag values so a `tag_read` after a Mutation
         # reports what that Mutation recorded, and the audit log can answer with
         # the correlation ID the recorded `tag_write` result carried.
@@ -1296,6 +1344,7 @@ class RecordedGateway:
         port: int = 0,
         audit_profile: str = "",
         alarm_root: str = "",
+        policy_provider_unready_reads: int = 0,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -1310,6 +1359,7 @@ class RecordedGateway:
             audit_profile,
             alarm_root,
         )
+        self._server.policy_provider_unready_reads = policy_provider_unready_reads
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         if audit_profile:
             # The Phase 4 policy names an audit profile the harness creates

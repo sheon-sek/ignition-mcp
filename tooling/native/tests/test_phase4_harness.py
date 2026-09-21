@@ -391,6 +391,114 @@ def test_recorded_alarm_report_shows_events_accumulating_without_acknowledgement
     assert facts["exactPathBoundedBasis"]["noAccumulationWithoutAck"] is False
 
 
+def test_policy_provision_gates_the_import_on_a_handler_read(tmp_path: Path) -> None:
+    """REST readiness cannot see a provider that is still loading its Tags, and an
+    import applied in that window leaves a Tag whose actor never starts (live run
+    35654626095). The provision stage must prove the provider serves a handler read
+    before it imports anything."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        policy_provider_unready_reads=2,
+    ) as gateway:
+        config = _config(
+            tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+            provider_ready_deadline_seconds=30.0,
+        )
+        record = driver.stage_policy_provision(config)
+    facts = record["facts"]
+    assert facts["providerHandlerReadAttempts"] == 3
+    assert facts["providerHandlerReadServing"] is True
+    assert facts["providerHandlerReadQuality"].startswith("Bad_NotFound")
+    assert facts["policyImported"] is True
+    kinds = [
+        "import" if request["path"].startswith("/data/api/v1/tags/import")
+        else "probe" if request["path"].startswith("/data/mcp/")
+        else "other"
+        for request in gateway.requests
+    ]
+    # Two probes answered "not serving" and the third was, so no import may appear
+    # before the third probe.
+    assert kinds[: kinds.index("import")].count("probe") >= 3
+
+
+def test_policy_provision_fails_when_the_provider_never_serves_a_handler_read(tmp_path: Path) -> None:
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        policy_provider_unready_reads=-1,
+    ) as gateway:
+        config = _config(
+            tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+            provider_ready_deadline_seconds=1.0,
+        )
+        with pytest.raises(driver.StageFailure) as caught:
+            driver.stage_policy_provision(config)
+    assert "never served a handler-scope read" in str(caught.value)
+
+
+def test_policy_read_does_not_re_import_into_a_provider_that_serves_nothing(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The recorded 8.3.9 failure: the provider answers no handler read at all, so
+    another config-plane import cannot help, and the stage must say so instead of
+    spending its deadline on futile repairs."""
+    unserved = json.loads(json.dumps(_fixture("policy-probe.json")))
+    for entry in unserved["measurements"]:
+        if entry["name"] in {"tag.readBlocking.policy", "tag.readBlocking.missing"}:
+            entry["items"] = [{
+                "quality": "Error_Configuration", "valueType": "NoneType",
+                "valueLength": 0, "valueByteLength": 0, "valueSha256": "", "valuePrefix": "",
+            }]
+            entry["jsonKeys"] = []
+            entry["jsonKind"] = ""
+    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+        config = _config(
+            tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+            policy_read_deadline_seconds=0.0,
+        )
+        driver.stage_policy_provision(config)
+
+        def imports() -> int:
+            return len([
+                request for request in gateway.requests
+                if request["path"].startswith("/data/api/v1/tags/import")
+            ])
+
+        before = imports()
+        _StubMcp.reports = {"policy_probe": unserved, "alarm_probe": _fixture("alarm-probe.json")}
+        _StubMcp.sequences = {}
+        with pytest.raises(driver.StageFailure) as caught:
+            driver.stage_policy_read(config)
+        assert imports() == before
+    assert "is not serving Tags at all" in str(caught.value)
+
+
+def test_a_served_gate_label_without_a_good_value_read_is_not_verified(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The probe labels its state "served" once it has read a value; whether the
+    provider actually served that value is the quality of the read it made. The
+    live 8.3.9 failure recorded a "served" gate whose value read was
+    Error_Configuration, so the verification must read the quality too."""
+    unserved = json.loads(json.dumps(_with_gate(_fixture("policy-probe.json"))))
+    for entry in unserved["measurements"]:
+        if entry["name"] == "tag.gatedRead.policy":
+            entry["quality"] = 'Error_Configuration("The Tag provider is not serving tags.")'
+            entry["lengthMatchesValue"] = False
+            entry["valueByteLength"] = 0
+            entry["valueSha256"] = ""
+    _StubMcp.reports = {"policy_probe": unserved, "alarm_probe": _fixture("alarm-probe.json")}
+    _StubMcp.sequences = {}
+    config = _config(tmp_path, policy_read_deadline_seconds=0.0)
+    with pytest.raises(driver.StageFailure) as caught:
+        driver.stage_policy_read(config)
+    facts = driver.derive_policy_read_facts(config, unserved)
+    assert facts["policyGateState"] == "served"
+    assert facts["policyGateValueQualityIsGood"] is False
+    assert facts["policyGateUnserved"] is True
+    assert facts["policyGatedReadServedAndVerified"] is False
+    assert "the policy gate did not verify the served document" in str(caught.value)
+
+
 def test_policy_read_repairs_a_provider_that_serves_no_tags(
     stub_mcp: dict[str, Any], tmp_path: Path,
 ) -> None:
@@ -1138,8 +1246,10 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
         assert stage in text, stage
     assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
     assert "python tests/harness/phase4-live/rehearse_local.py" in text
-    # Two readiness points, each waiting on both hosted endpoints.
-    assert text.count("wait_for_gateway.py") == 2
+    # Readiness points, each waiting on both hosted endpoints: after commissioning,
+    # after the policy-read heal restart, and after the restart that proves the
+    # document survives one.
+    assert text.count("wait_for_gateway.py") == 3
     assert "MAX_RESPONSE" not in text
     # Frozen expectations: drift must fail the job now.
     assert 'if [[ "$rc" == "3" ]]; then' in text

@@ -109,6 +109,7 @@ class Config:
     root_name: str = ""
     characterization: Path | None = None
     policy_read_deadline_seconds: float = POLICY_READ_DEADLINE_SECONDS
+    provider_ready_deadline_seconds: float = PROVIDER_READY_DEADLINE_SECONDS
     noise_count: int = 60
     cycles: int = 3
     repeats: int = 3
@@ -278,7 +279,7 @@ def identity(config: Config) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 def wait_for_provider(config: Config) -> dict[str, Any]:
-    deadline = time.monotonic() + PROVIDER_READY_DEADLINE_SECONDS
+    deadline = time.monotonic() + config.provider_ready_deadline_seconds
     started = time.monotonic()
     attempts = 0
     find_status = 0
@@ -307,6 +308,65 @@ def wait_for_provider(config: Config) -> dict[str, Any]:
         "findStatus": find_status,
         "exportStatus": export_status,
     }
+
+
+def provider_read_state(config: Config, client: mcp_client.McpClient) -> dict[str, Any]:
+    """One handler-scope read of an absent Tag path in the policy provider.
+
+    A provider that finished starting answers `Bad_NotFound` for a path that does
+    not exist. A provider that is still starting — or whose Tag actors never
+    started because an import was applied while it was loading — answers
+    `Error_Configuration` instead. That second case is recorded: in `Phase 4 Live
+    Gateway G4a` run 35654626095 (8.3.9) the provision stage imported the policy
+    Tag during the provider's initial load, the Gateway logged `Error creating
+    actor for tag ... cleanPath is null` (`ImportTagLoaderAdapter.onInitialLoad`),
+    and the running provider served nothing for the rest of the job while
+    `/resources/find` and `/tags/export` kept answering 200. Readiness therefore
+    has to come from a handler read, not from the config plane.
+    """
+
+    try:
+        report = client.structured("policy_probe", policy_probe_arguments(config))
+    except (mcp_client.McpError, StageFailure) as exc:
+        return {"ok": False, "missingPathQuality": "", "error": str(exc)[:400]}
+    missing = measurement(report, "tag.readBlocking.missing")
+    item = first_item(missing)
+    return {"ok": bool(missing.get("ok")), "missingPathQuality": str(item.get("quality", ""))}
+
+
+def provider_is_serving(state: dict[str, Any]) -> bool:
+    return str(state.get("missingPathQuality", "")).startswith("Bad_NotFound")
+
+
+def wait_for_handler_read(
+    config: Config, *, client: mcp_client.McpClient | None = None,
+) -> dict[str, Any]:
+    """Wait until the running provider answers a handler-scope read.
+
+    The REST readiness poll (`wait_for_provider`) cannot see a provider that is
+    still loading its Tags: both recorded provider-startup hazards happen after
+    `/resources/find` and `/tags/export` already answer 200. This gate is the one
+    that keeps the policy import from being applied in that window.
+    """
+
+    if client is None:
+        client = mcp_client.McpClient(config.mcp_url, config.api_token)
+    deadline = time.monotonic() + config.provider_ready_deadline_seconds
+    started = time.monotonic()
+    attempts: list[dict[str, Any]] = []
+    while True:
+        state = provider_read_state(config, client)
+        attempts.append(bounded(state, 2000))
+        result = {
+            "serving": provider_is_serving(state),
+            "attempts": len(attempts),
+            "waitedMs": int((time.monotonic() - started) * 1000),
+            "missingPathQuality": str(state.get("missingPathQuality", "")),
+            "lastAttempts": attempts[-3:],
+        }
+        if result["serving"] or time.monotonic() >= deadline:
+            return result
+        time.sleep(2.0)
 
 
 def import_policy(
@@ -369,6 +429,23 @@ def stage_policy_provision(config: Config) -> dict[str, Any]:
     facts["providerReadiness"] = readiness
     if not readiness["ready"]:
         raise StageFailure(f"the policy Tag provider never became readable: {readiness}")
+
+    # The REST readiness above is not enough: a provider that has not finished
+    # loading its Tags answers config-plane reads while an import applied in that
+    # window leaves a Tag whose actor never starts (run 35654626095). Import only
+    # once a handler-scope read proves the running provider is serving.
+    handler_readiness = wait_for_handler_read(config)
+    facts["providerHandlerReadAttempts"] = handler_readiness["attempts"]
+    facts["providerHandlerReadWaitedMs"] = handler_readiness["waitedMs"]
+    facts["providerHandlerReadQuality"] = handler_readiness["missingPathQuality"]
+    facts["providerHandlerReadServing"] = handler_readiness["serving"]
+    raw["providerHandlerRead"] = bounded(handler_readiness, 4000)
+    if not handler_readiness["serving"]:
+        raise StageFailure(
+            "the policy Tag provider never served a handler-scope read; an import "
+            "applied now would leave a Tag whose actor never starts: "
+            + json.dumps(handler_readiness, sort_keys=True)[:800]
+        )
 
     imported = import_policy(config, policy_document.tag_document_bytes())
     raw["importPolicy"] = bounded(imported)
@@ -492,8 +569,19 @@ def derive_policy_read_facts(config: Config, report: dict[str, Any]) -> dict[str
         gate.get("declaredLength") == policy_document.policy_byte_length()
     )
     facts["policyGateServedWithoutMaterializingOversize"] = gate.get("gate") == "served"
+    # The probe labels the state it reached, but whether the provider actually
+    # served the value is the quality of the read it made. A provider that is still
+    # loading its Tags, or whose Tag actors never started, answers
+    # Error_Configuration here while the gate still reports "served" (live run
+    # 35654626095 recorded exactly that), so the verification reads the quality.
+    facts["policyGateValueQuality"] = str(gate.get("quality", ""))
+    facts["policyGateValueQualityIsGood"] = quality_is_good(facts["policyGateValueQuality"])
+    facts["policyGateUnserved"] = (
+        str(gate.get("gate", "")) == "served" and not facts["policyGateValueQualityIsGood"]
+    )
     facts["policyGatedReadServedAndVerified"] = (
         gate.get("gate") == "served"
+        and facts["policyGateValueQualityIsGood"]
         and bool(gate.get("lengthMatchesValue"))
         and gate.get("valueSha256") == policy_document.policy_sha256()
     )
@@ -588,9 +676,20 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
             "policyReadQuality": str(facts.get("policyReadQuality", "")),
             "policyGateReported": gate_reported,
             "policyGateState": str(facts.get("policyGateState", "")),
+            "policyGateValueQuality": str(facts.get("policyGateValueQuality", "")),
+            "missingPathQuality": str(facts.get("missingPathQuality", "")),
             "handlerWriteQualityCodes": facts.get("handlerWriteQualityCodes", []),
             "error": error,
         }
+        # A provider that is not serving its Tags at all cannot be repaired by
+        # another config-plane import (run 35654626095 spent the whole deadline
+        # proving that), so ask whether the probe's own read of an absent path was
+        # answered at all, and only re-import when the provider is serving but the
+        # document is not.
+        provider_serving: bool | None = None
+        if not healthy and not deterministic_refusal:
+            attempt["providerReadQuality"] = str(facts.get("missingPathQuality", ""))
+            provider_serving = provider_is_serving({"missingPathQuality": facts.get("missingPathQuality", "")})
         # Retry only while the provider is not serving the document yet. A served
         # document whose report carries no gate measurement is a stale recorded
         # payload (the expectation drift check reports it), and a gate that
@@ -598,6 +697,11 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         if healthy or deterministic_refusal or (served_document and not gate_reported) or time.monotonic() >= deadline:
             attempts.append(attempt)
             break
+        if provider_serving is False:
+            # Wait for the provider to serve again instead of re-importing into it.
+            attempts.append(attempt)
+            time.sleep(3.0)
+            continue
         # Two recorded 8.3.8 provider-startup failures motivate this loop: the
         # first /tags/import can be rejected while the provider is starting, and
         # an accepted import can be written to config while the running provider
@@ -627,9 +731,24 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
             + json.dumps(attempts[-1], sort_keys=True)[:800]
         )
     if not served_document:
+        last = attempts[-1] if attempts else {}
+        detail = "the policy Tag was never served by the provider: " + json.dumps(last, sort_keys=True)[:800]
+        if last.get("providerReadQuality") and not str(last["providerReadQuality"]).startswith("Bad_NotFound"):
+            detail = (
+                "the running provider is not serving Tags at all (a handler read of an absent path "
+                "answered " + str(last["providerReadQuality"]) + "); re-importing the policy cannot "
+                "repair that provider state, and the recorded heal is a Gateway restart: "
+                + json.dumps(last, sort_keys=True)[:600]
+            )
+        raise StageFailure(detail)
+    if not facts.get("policyGatedReadServedAndVerified") and not (served_document and not gate_reported):
+        # The direct read proved the document, but the two-step gate the storage
+        # recommendation depends on did not verify it (a gate read that was not Good
+        # is the provider-startup state run 35654626095 recorded). Fail closed
+        # instead of reporting a green row for a gate that did not run.
         raise StageFailure(
-            "the policy Tag was never served by the provider: "
-            + json.dumps(attempts[-1], sort_keys=True)[:800]
+            "the policy gate did not verify the served document: "
+            + json.dumps(attempts[-1] if attempts else {}, sort_keys=True)[:800]
         )
     if config.label == "after-restart":
         previous = config.evidence_dir / "policy-read-before-restart.json"

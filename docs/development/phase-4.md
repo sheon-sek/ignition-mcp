@@ -254,6 +254,45 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     correlation ID with `actor` equal to the policy's Service identity.
 - **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
 
+- **Review round 1 fixes** (the ticket report holds the detail; the same three
+  Runtime-plane fixes apply to `alarm_shelve`/`alarm_unshelve` from #8):
+  - **D10 input bounds.** `tag_write` now enforces the 20-write project default
+    inside D10's 100-write hard ceiling, raisable by the Runtime Target Policy's
+    optional `tagWriteMaxWrites`; the Alarm Mutations use the same shape with
+    `alarmMaxPaths`. Both add a per-path byte/character ceiling, a per-string and
+    per-array value ceiling for `tag_write`, and one finite aggregate input-byte
+    budget (64 KiB), all refused before dispatch with `limit_exceeded` and the
+    requested amount plus the limit. Every Runtime Mutation contract declares the
+    numbers as `inputBounds`, and `tooling/contracts/lint.py` keeps the Policy
+    field a document-schema property.
+  - **Denied mutations are audited.** After a usable Policy is read, an allowlist
+    or reserved-provider refusal writes one `decision` row before returning
+    `permission_denied`; `off` still records nothing, and `required` refuses the
+    call (`operation_disabled`/`auditAttemptFailed`, `phase: "decision"`) when the
+    row cannot be written. The ordered D29 fixtures prove the denied case makes no
+    dispatch and one audit call.
+  - **The outcomes outlive the Observed state.** The Observed section carries its
+    own budget (per-value and total) and reports what it cannot return as an
+    explicit `limit_exceeded` observed error; a serializer failure or an
+    over-ceiling payload re-renders the result without the Observed state instead
+    of replacing a known per-item outcome with `outcome_unknown`, and the last
+    resort states the requested bytes, the limit and the outcome counts.
+  - **The G4a 8.3.9 row's provider failure is diagnosed and fixed.** Run
+    35654626095 lost the candidate row because the provision stage imported the
+    policy Tag while the freshly created provider was still performing its initial
+    load: the Gateway logged `Error creating actor for tag ... cleanPath is null`
+    (`ImportTagLoaderAdapter.onInitialLoad`), the Tag kept its config but its actor
+    never started, and the running provider answered every handler read with
+    `Error_Configuration` while `/resources/find` and `/tags/export` stayed 200 —
+    so the 240 s of config-plane re-imports could not heal it and the row died one
+    step before the restart that does. The provision stage now gates the first
+    import on a *handler-scope* read (an absent path in the provider must answer
+    `Bad_NotFound`), the policy-read loop distinguishes "not serving" from "not
+    yet applied" (waiting instead of re-importing in the first case), the gate
+    verification reads the value quality rather than the probe's label, and the
+    workflow gives the stage one bounded Gateway restart — the recorded heal —
+    before failing the job.
+
 ### Ticket #8: Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
 
 - Fixture-first coverage: 39 recorded-Jython fixtures
@@ -391,6 +430,35 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #7 — the D10 deployment override is two new optional Policy fields.**
+  D10's budget layers are "project safe default → deployment override → absolute
+  hard ceiling", and the Runtime plane's deployment-owned document is the Runtime
+  Target Policy, so the override is `tagWriteMaxWrites` (1..100) for `tag_write`
+  and `alarmMaxPaths` (1..100) for both Alarm Mutations; each handler validates
+  its own field and fails closed (`operation_disabled`) outside that range, and
+  the contract linter requires the field to be a property of the document schema.
+  D30 §1's list of what the document holds does not name a budget field, so the
+  two names are this ticket's choice, sitting alongside the already-decided
+  `alarmShelveMaxSeconds`. **For the owner:** confirm the field names (a single
+  shared budget key is the alternative).
+- **Ticket #7 — a denied target under `required` audit mode fails closed on the
+  denial row too.** D18 requires denied mutations to be audited and says
+  `required` mode fails during preflight when required audit cannot be provided.
+  A denial is refused either way, so the shipped behavior is: the audit-profile
+  check runs first (as D30 §6 says), a refusal then writes one `decision` row, and
+  when `required` mode cannot write that row the Tool reports
+  `operation_disabled` (`reason: auditAttemptFailed`, `phase: decision`) instead of
+  `permission_denied`. **For the owner:** confirm, or report the denial with
+  `auditRecorded=false` in its details under `required` mode as well.
+- **Ticket #7 — the G4a live assertions still stop before the new bound and
+  audit cases.** The D29 fixtures prove the D10 ceilings, the denial decision row
+  and the Observed-state budget, and the next G4a run exercises the changed
+  handlers through every existing live case on both rows, but no live case submits
+  a 21-write batch or reads a denial's audit rows yet: `tests/fixtures/recorded/gateway-8.3/phase4/`
+  holds payloads recorded before this change, so a driver case asserting the new
+  fields would drift the rehearsal until the payloads are re-recorded from a live
+  run. **For the owner:** acceptable, or spend the next live run recording those
+  payloads so the driver can pin them.
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
   immediate rerun ([run 35653162977](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653162977),
