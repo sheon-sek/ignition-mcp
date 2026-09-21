@@ -731,11 +731,11 @@ async def alarm_pipeline_cancel_cases(
     })
     _check(cases, "pipeline-cancel-oversize-path-is-limit-exceeded", "limit_exceeded",
            _refusal_code(oversize_path))
-    longs_event = await operator.call(ALARM_CANCEL_TOOL, {
+    oversize_event = await operator.call(ALARM_CANCEL_TOOL, {
         "path": pipeline, "alarmEventId": "e" * (MAX_ALARM_EVENT_ID_LENGTH + 1),
     })
     _check(cases, "pipeline-cancel-oversize-event-is-limit-exceeded", "limit_exceeded",
-           _refusal_code(longs_event))
+           _refusal_code(oversize_event))
     blank = await operator.call(ALARM_CANCEL_TOOL, {"path": "   ", "alarmEventId": alarm_event_id})
     _check(cases, "pipeline-cancel-blank-path-is-invalid-argument", "invalid_argument",
            _refusal_code(blank))

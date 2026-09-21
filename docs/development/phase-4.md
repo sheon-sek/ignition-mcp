@@ -525,15 +525,22 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`observations.json`: `pipelineStateBefore`/`pipelineStateAfter` both `not_found`, and
   the path is the run-unique `project:<Project>:/pipeline:MCP_CI_Notify`). With both
   classes disabled the gate-off row shows the read inventory and nothing else.
-- Frozen gates, green on the same head (`603e0f6`): CI
-  [35665840454](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840454) and
+- Frozen gates, green on the code head (`603e0f6`): CI
+  [35665840454](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840454), Phase 3
+  Live Gateway G3
+  [35665840469](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840469) and
   Phase 4 Live Gateway G4a
-  [35665840467](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840467). The
-  Phase 3 G3 run on this head is
-  [35665840469](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840469); the
-  ticket's documentation head is recorded with its own runs below.
-- The documentation head's runs are recorded once they have finished, in the same
-  per-head form the earlier tickets use.
+  [35665840467](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840467).
+- Frozen gates, green on the documentation head (`82e34c1`): CI
+  [35666368247](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368247), Phase 3
+  Live Gateway G3
+  [35666368318](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368318) and
+  Phase 4 Live Gateway G4a
+  [35666368252](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368252); the
+  REST workflow re-ran on that head too
+  ([35666368372](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368372),
+  **82/82 cases in both rows** again). The head this section was last touched on re-runs the
+  same four workflows; its run IDs are in the ticket report.
 
 ## Open questions
 
