@@ -236,7 +236,7 @@ Built **before** any code that can dispatch a Gateway write.
 
 1. `tooling/compat/` evidence **generator** (schema/validator already exist from slice 9) used by harnesses to write schema-valid `tests/compatibility/evidence/g3-<gateway>-mcp-<build>/`.
 2. `tests/harness/phase3-live/` reusing the G2 fixture approach: CI-owned ephemeral official images (8.3.8 required row, 8.3.9 candidate row), checksum-pinned MCP Module, exact module whitelist, bounded diagnostics with `timeout` + detached stdin, symlink-pruned log copies, unconditional teardown (Phase 2 lessons). Deploy the exact `release`-built ZIP and record its SHA-256 + manifest. Harness provisioning remains test-only (not a second installer).
-3. **L5 mutation-safety guards** (D23): workflow job uses a protected GitHub environment (`phase3-live`); Gateway endpoints restricted to localhost / the compose network; before any import, the harness verifies an explicit CI marker and expected Gateway identity (e.g. marker written during provisioning + gateway-info identity match) and a run-unique disposable project name (`mcp_g3_<run_id>_<attempt>`); any missing guard fails closed before the import.
+3. **L5 mutation-safety guards** (D23): workflow job uses the GitHub environment `phase3-live` (created without protection rules by owner decision, see Open questions); Gateway endpoints restricted to localhost / the compose network; before any import, the harness verifies an explicit CI marker and expected Gateway identity (e.g. marker written during provisioning + gateway-info identity match) and a run-unique disposable project name (`mcp_g3_<run_id>_<attempt>`); any missing guard fails closed before the import.
 4. Live checks:
    - `setup-native doctor` and `verify` pass; `plan` reports only NO CHANGE for provisioned items.
    - `project_export` (gate on) → READY artifact; `GET` body SHA-256 == metadata == `ETag`; `HEAD` parity; `artifact_list`/`artifact_info` see it.
@@ -246,7 +246,7 @@ Built **before** any code that can dispatch a Gateway write.
    - Transaction machinery driven by an in-process harness driver through the internal service and guarded executor, with the server configured for `jwt` auth using a harness-generated key pair, `CONFIG_MUTATION` enabled, and operation/target allowlists naming only the project-import operation and the disposable project. Authn/authz layers are proven live first: an invalid JWT, a JWT with only `ignition.read`, and a valid `ignition.config` JWT targeting a non-allowlisted project are each denied before dispatch (audit `decision` rows present, Gateway project unchanged). Then with a valid `ignition.config` JWT: `NO_CHANGE`; normal edit ⇒ `COMMITTED` verified by re-export; external change injected between A and A′ ⇒ `CONFLICTED` with no import; recovery artifact persisted + retention-locked; audit `decision/attempt/result` rows present.
    - Exact REST inventory for gate on and gate off (zero mutation Tools); unchanged exact 13-Tool Runtime inventory.
 5. Workflow `.github/workflows/phase3-live-g3.yml` via `pull_request` with the trusted-repo guard (feature-branch workflows cannot be dispatched) **and** the protected environment. Evidence persisted under `tests/compatibility/evidence/`.
-6. Owner prerequisite: create the `phase3-live` environment in the GitHub repository settings before the first live run.
+6. Owner prerequisite: create the `phase3-live` environment in the GitHub repository settings before the first live run. **Done 2026-09-21** (verified via `gh api repos/sheon-sek/ignition-mcp/environments/phase3-live`: exists; `protection_rules: []`, `deployment_branch_policy: null`, `can_admins_bypass: true`).
 
 ### Slice 12 — G3 close
 
@@ -306,5 +306,7 @@ Phase 3 ends at G3. Phase 4 starts only on a new user-directed feature branch.
 ## Open questions
 
 (Record here any decided rule that cannot be met as written; stop the affected slice and ask the owner.)
+
+- **Owner-accepted deviation (2026-09-21): `phase3-live` has no protection rules.** D23 places L5 mutation jobs in a *protected* environment. The owner reviewed the environment and chose to keep it without required reviewers, wait timer or deployment-branch restriction (repository is public; admins may bypass). Compensating controls that remain mandatory: the `pull_request` trusted-repo job guard (no fork execution), no repository/environment secrets consumed by the G3 job, localhost/compose-network-only Gateway endpoints, CI-marker + expected-Gateway-identity check and run-unique disposable project immediately before any import, and fail-closed on any missing guard. G3 evidence must record this deviation; adding required reviewers later needs no plan change.
 
 - **Deferred to Phase 4 (not a Phase 3 blocker):** how `static-token` and `auth=none` deployments may obtain `ignition.config` / `ignition.control` / `ignition.admin` for mutations. Phase 3 keeps them read-only; D07 is unchanged.
