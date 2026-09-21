@@ -137,6 +137,46 @@ class ConfigResourceUpdateResult(StrictModel):
     observedState: dict[str, Any]
 
 
+class ConfigResourceCreateResult(StrictModel):
+    """D30 §2: a create takes no Precondition token, so the resource it published is
+    what the bounded re-read reports — as Observed state, plus the Resource signature
+    the caller needs for the next change to it."""
+
+    correlationId: str
+    resourceType: str
+    name: str
+    collection: str
+    signature: str | None
+    observedState: dict[str, Any]
+
+
+class ConfigResourceDeleteResult(StrictModel):
+    """D30: a delete is verified by the Target's absence. That absence is the whole
+    Observed state a delete leaves, so the read-back reports exactly it."""
+
+    correlationId: str
+    resourceType: str
+    name: str
+    collection: str
+    #: False on success: the bounded read-back established that no resource exists at
+    #: the Target. It is data, not a claim of durable absence.
+    present: bool
+
+
+class ConfigResourceRenameResult(StrictModel):
+    """D30: the rename is verified by the old name being vacant and the new name
+    holding the resource, whose Resource signature is the token for the next change."""
+
+    correlationId: str
+    resourceType: str
+    #: The name the resource carries after the rename.
+    name: str
+    previousName: str
+    collection: str
+    signature: str | None
+    observedState: dict[str, Any]
+
+
 class AuditRecord(StrictModel):
     action: str
     actionTarget: str

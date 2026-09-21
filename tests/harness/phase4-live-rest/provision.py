@@ -5,16 +5,18 @@ This is a harness, not a second installer (the same rule the Phase 0-2
 provisioning harness follows): it prepares the disposable config resources the
 live cases need on a CI-owned Gateway, through the Gateway's own Native REST API.
 
-It provisions two ``ignition/audit-profile`` resources:
+It provisions four ``ignition/audit-profile`` resources:
 
-- ``MCP_CI_AUDIT`` — the Target the harness's deployment allowlist names;
-- ``MCP_CI_AUDIT_OTHER`` — a second resource of the same type that the allowlist
-  does *not* name, so the Target-allowlist refusal is exercised live.
+- ``MCP_CI_AUDIT`` — the Target the harness's update allowlist names;
+- ``MCP_CI_AUDIT_OTHER`` — a second resource of the same type that the allowlists do
+  *not* name, so the Target-allowlist refusal is exercised live;
+- ``MCP_CI_AUDIT_RENAME_SOURCE`` and ``MCP_CI_AUDIT_RENAME_SOURCE_2`` — the rename
+  sources, so the rename cases do not depend on the create Tool working first.
 
-Both are created without a signature (creation takes no Precondition token) and are
+All are created without a signature (creation takes no Precondition token) and are
 read back with a signature, which is the proof that the live cases have a real
-Precondition token to work with. Re-running is safe: an existing resource is left
-alone.
+Precondition token to work with. The name the create case publishes is deliberately
+*not* provisioned. Re-running is safe: an existing resource is left alone.
 """
 
 from __future__ import annotations
@@ -32,15 +34,20 @@ RESOURCE_TYPE = "ignition/audit-profile"
 SINGLETON_TYPE = "ignition/cobranding"
 COLLECTION_PATH = f"/data/api/v1/resources/{RESOURCE_TYPE}"
 FIND_PATH = f"/data/api/v1/resources/find/{RESOURCE_TYPE}/"
+RENAME_PATH = f"/data/api/v1/resources/rename/{RESOURCE_TYPE}/"
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
+RENAME_SOURCES = ("MCP_CI_AUDIT_RENAME_SOURCE", "MCP_CI_AUDIT_RENAME_SOURCE_2")
 REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/type/{RESOURCE_TYPE}"),
     ("GET", f"/data/api/v1/resources/find/{RESOURCE_TYPE}/{{name}}"),
     ("POST", COLLECTION_PATH),
     ("PUT", COLLECTION_PATH),
+    ("DELETE", f"{COLLECTION_PATH}/{{name}}/{{signature}}"),
+    ("POST", f"{RENAME_PATH}{{name}}"),
     ("GET", f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}"),
     ("PUT", f"/data/api/v1/resources/{SINGLETON_TYPE}"),
+    ("DELETE", f"/data/api/v1/resources/{SINGLETON_TYPE}/{{signature}}"),
 })
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OPENAPI_BYTES = 16 * 1_048_576
@@ -162,11 +169,13 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
         name: {
             "createStatus": _create_profile(base_url, token, name, description),
             "signature": _read_profile(base_url, token, name)["signature"],
-            "allowlisted": name == ALLOWLISTED,
+            "allowlisted": name not in {UNALLOWLISTED},
         }
         for name, description in (
             (ALLOWLISTED, "Disposable Phase 4 CI audit profile (allowlisted Target)"),
             (UNALLOWLISTED, "Disposable Phase 4 CI audit profile (allowlist control)"),
+            (RENAME_SOURCES[0], "Disposable Phase 4 CI audit profile (rename source)"),
+            (RENAME_SOURCES[1], "Disposable Phase 4 CI audit profile (rename conflict source)"),
         )
     }
     token_status, token_payload = _request(

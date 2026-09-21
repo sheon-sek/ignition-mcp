@@ -28,6 +28,9 @@ SAFE_AUDIT_FIELDS: dict[str, frozenset[str]] = {
     "artifact_access": frozenset({"artifactId", "kind", "sensitivity", "method", "bytesSent"}),
     "artifact_info_restricted": frozenset({"artifactId", "kind"}),
     "config_resource_update": frozenset({"resourceType", "name", "collection"}),
+    "config_resource_create": frozenset({"resourceType", "name", "collection"}),
+    "config_resource_delete": frozenset({"resourceType", "name", "collection"}),
+    "config_resource_rename": frozenset({"resourceType", "name", "collection"}),
 }
 
 

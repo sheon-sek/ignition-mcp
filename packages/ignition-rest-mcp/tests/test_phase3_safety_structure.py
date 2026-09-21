@@ -1,9 +1,9 @@
 """Slice 6 (Phase 3 / G3): static structural invariants of the D08 safety chain.
 
 These scans prove the *shape* of the mutation boundary in production code only:
-one write primitive, one auth-minted principal, one guarded executor, no
-destructive Tool registration and a zero-mutation effective Tool inventory in
-every gate configuration.
+one write primitive, one auth-minted principal, one guarded executor, destructive
+registrations that match their contracts and a zero-mutation effective Tool
+inventory in every gate configuration.
 """
 
 from __future__ import annotations
@@ -200,22 +200,51 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
-# ------------------------------------------------------------------ 4. no destructive tools
+# ------------------------------------------------------------------ 4. destructive declarations
 
-def test_no_server_tool_registration_invokes_destructive_true() -> None:
+def test_destructive_registrations_match_the_tool_contracts() -> None:
+    """A Tool's ``_invoke`` declaration must be the one its contract publishes.
+
+    Phase 3 registered no destructive Tool at all; Phase 4 adds exactly one
+    (``config_resource_delete``, D26). Rather than weakening that invariant, the
+    scan now ties every registration to the contract it ships with, so a destructive
+    Tool can never be registered as harmless — or the reverse — anywhere.
+    """
+
+    repo_root = SRC_ROOT.parents[3]
+    contracts = {
+        path.name[: -len(".contract.json")]: json.loads(
+            path.read_text(encoding="utf-8"),
+        ).get("destructive", False)
+        for path in sorted((repo_root / "contracts" / "tools" / "rest").glob("*.contract.json"))
+    }
     tree = _parse(SRC_ROOT / "server.py")
     create = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "create_server"
     )
-    offenders: list[int] = []
+    registered: dict[str, bool] = {}
     for node in ast.walk(create):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_invoke":
-            for keyword in node.keywords:
-                if keyword.arg == "destructive" and isinstance(keyword.value, ast.Constant) \
-                        and keyword.value.value is True:
-                    offenders.append(node.lineno)
-    assert offenders == [], f"_invoke(destructive=True) found at lines {offenders}"
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_invoke"):
+            continue
+        name = node.args[0] if node.args else None
+        assert isinstance(name, ast.Constant) and isinstance(name.value, str), (
+            "every _invoke call must name its Tool with a literal"
+        )
+        declared = next(
+            (keyword.value.value for keyword in node.keywords if keyword.arg == "destructive"),
+            False,
+        )
+        assert isinstance(declared, bool)
+        registered[name.value] = declared
+
+    assert registered, "_invoke call sites must be discoverable in create_server"
+    mismatched = {
+        name: declared for name, declared in registered.items()
+        if contracts.get(name) is not declared
+    }
+    assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
+    assert [name for name, declared in registered.items() if declared] == ["config_resource_delete"]
 
 
 # ------------------------------------------------------------------ 5. zero-mutation inventory

@@ -69,6 +69,10 @@ class MutationRequest:
     content_type: str
     method: str = "POST"
     params: dict[str, Any] = field(default_factory=dict)
+    #: Further Targets the same call changes (D30 §3 Preflight). A rename mutates its
+    #: source *and* produces a resource at its destination, so both must be
+    #: allowlisted before anything executes; an empty tuple means the one Target.
+    additional_target_ids: tuple[str, ...] = ()
     dispatch_deadline_seconds: float = 120.0
     verification_deadline_seconds: float = 30.0
     verify: Callable[[WriteDispatchResult], Awaitable[VerificationOutcome]] | None = None
@@ -119,24 +123,34 @@ async def execute_mutation(
         )
         raise GatewayError("permission_denied", "mutations require a verified principal")
 
-    for decision in (
-        authorize_scope(request.principal, request.operation),
-        evaluate_deployment_policy(
-            settings, request.operation, request.target_id,
-            registry.supports(request.operation.capability),
-            # D30 §5: the operation's own Target-class rule (Refused resource
-            # types) is evaluated before the Target allowlist, so it also covers
-            # the fully allowlisted deployment where only it can refuse.
-            target_class=request.target_policy() if request.target_policy is not None else None,
-        ),
-    ):
-        if not decision.allowed:
-            await auditor.decision(
-                allowed=False, reason=f"{decision.layer}:{decision.reason}",
-                target_type=target_type, target_id=request.target_id,
-            )
-            assert decision.error_code is not None
-            raise GatewayError(decision.error_code, _layer_message(decision))
+    scope = authorize_scope(request.principal, request.operation)
+    if not scope.allowed:
+        await auditor.decision(
+            allowed=False, reason=f"{scope.layer}:{scope.reason}",
+            target_type=target_type, target_id=request.target_id,
+        )
+        assert scope.error_code is not None
+        raise GatewayError(scope.error_code, _layer_message(scope))
+
+    capability_present = registry.supports(request.operation.capability)
+    # D30 §5: the operation's own Target-class rule (Refused resource types) is
+    # evaluated before the Target allowlist, so it also covers the fully allowlisted
+    # deployment where only it can refuse.
+    target_class = request.target_policy() if request.target_policy is not None else None
+    # D30 §3 Preflight: every Target this call changes is checked before anything
+    # executes, and a denial names the Target that was refused.
+    for target_id in (request.target_id, *request.additional_target_ids):
+        decision = evaluate_deployment_policy(
+            settings, request.operation, target_id, capability_present, target_class=target_class,
+        )
+        if decision.allowed:
+            continue
+        await auditor.decision(
+            allowed=False, reason=f"{decision.layer}:{decision.reason}",
+            target_type=target_type, target_id=target_id,
+        )
+        assert decision.error_code is not None
+        raise GatewayError(decision.error_code, _layer_message(decision))
 
     if request.precondition is not None:
         try:

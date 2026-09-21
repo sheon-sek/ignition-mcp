@@ -1,34 +1,39 @@
 """D30 config-resource Mutations on the Native REST plane (Phase 4).
 
-The first REST Mutation Tool. Everything it does goes through the D08 chain: the
-caller supplies the Resource signature ``config_resource_get`` gave it, the
-deployment policy decides whether the operation and Target are allowed, a Refused
-resource type is denied whatever the allowlist says, and the write is dispatched
-once by the guarded executor — never replayed.
+The Phase 4 REST Mutation Tools. Everything each one does goes through the D08
+chain: the caller supplies the Resource signature ``config_resource_get`` gave it
+(where the operation has one), the deployment policy decides whether the operation
+and every Target it changes are allowed, a Refused resource type is denied whatever
+the allowlist says, and the write is dispatched once by the guarded executor — never
+replayed.
 
 Three rules decide the wire item:
 
 - **D03 schema validation.** The change item is validated against the target
-  Gateway's own documented PUT request schema, taken from the D04 snapshot, before
-  anything is dispatched. A Gateway that documents an update route without a usable
-  schema exposes no update at all (the capability is withheld), so no change is ever
-  sent unvalidated.
-- **D30 §2 Precondition.** The signature is sent to the Gateway natively *and*
-  compared against a bounded read immediately before dispatch, so a stale token fails
-  with ``conflict`` without a change byte being built, and a Gateway that reports no
-  signature can never be preconditioned. The read-compare narrows the race window but
-  does not remove it: the Gateway's check stays the authority, and a refusal it
-  reports itself is mapped to the caller's error as well.
+  Gateway's own documented request schema, taken from the D04 snapshot, before
+  anything is dispatched. A Gateway that documents a write route without a usable
+  schema exposes no such write at all (the capability is withheld), so no change is
+  ever sent unvalidated.
+- **D30 §2 Precondition.** A Resource signature is sent to the Gateway natively
+  where its route can carry one (``PUT``, ``DELETE``) *and* compared against a
+  bounded read immediately before dispatch, so a stale token fails with ``conflict``
+  without a change byte being built, and a Gateway that reports no signature can
+  never be preconditioned. The rename endpoint takes no signature, so its token is a
+  server-side read-compare only: the Gateway's check stays the authority for an
+  update and a delete, and a refusal it reports itself is mapped to the caller's
+  error as well. A read-compare narrows the race window but does not remove it.
 - **Target identity.** A Target is the exact ``<resourceType>/<name>`` in the
   default configuration collection. A caller-supplied collection is refused, because
-  the Target allowlist cannot name one unambiguously; see
-  ``resource_target_id`` and the runbook's open question.
+  the Target allowlist cannot name one unambiguously; see ``resource_target_id`` and
+  the runbook's open question. A rename changes its source *and* produces a resource
+  at its destination, so both are Targets and both must be allowlisted (D30 §3).
 
-Because an explicit Gateway rejection is final for this Tool (D30 §2), the operation
-is declared ``rejection_is_final``: the caller either gets the Gateway's own refusal
-(``conflict`` for a signature mismatch) or the confirmation of a claim the Gateway
-itself made. ``recovered_success`` is unreachable here, and an ambiguous dispatch
-whose read-back looks right is ``outcome_unknown`` rather than a success.
+Because an explicit Gateway rejection is final for these Tools (D30 §2), every
+operation is declared ``rejection_is_final``: the caller either gets the Gateway's
+own refusal (``conflict`` for a signature mismatch or a collision) or the
+confirmation of a claim the Gateway itself made. ``recovered_success`` is unreachable
+here, and an ambiguous dispatch whose read-back looks right is ``outcome_unknown``
+rather than a success.
 """
 
 from __future__ import annotations
@@ -47,7 +52,12 @@ from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, ConfigRe
 from ignition_rest_mcp.client.gateway import DispatchOutcome, GatewayClient, WriteDispatchResult
 from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
-from ignition_rest_mcp.models import ConfigResourceUpdateResult
+from ignition_rest_mcp.models import (
+    ConfigResourceCreateResult,
+    ConfigResourceDeleteResult,
+    ConfigResourceRenameResult,
+    ConfigResourceUpdateResult,
+)
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.safety.executor import (
     MutationRequest,
@@ -78,6 +88,36 @@ CONFIG_RESOURCE_UPDATE = MutationOperation(
     rejection_is_final=True,
 )
 
+CONFIG_RESOURCE_CREATE = MutationOperation(
+    op_id="config_resource_create",
+    mutation_class=CONFIG_MUTATION,
+    capability="config_resource_create",
+    destructive=False,
+    target_denial_code="permission_denied",
+    #: Create takes no Precondition token (D30 §2), so nothing but the Gateway's own
+    #: answer can decide the outcome: an explicit refusal is final, and an ambiguous
+    #: dispatch whose read-back shows the resource is still outcome_unknown.
+    rejection_is_final=True,
+)
+
+CONFIG_RESOURCE_DELETE = MutationOperation(
+    op_id="config_resource_delete",
+    mutation_class=CONFIG_MUTATION,
+    capability="config_resource_delete",
+    destructive=True,
+    target_denial_code="permission_denied",
+    rejection_is_final=True,
+)
+
+CONFIG_RESOURCE_RENAME = MutationOperation(
+    op_id="config_resource_rename",
+    mutation_class=CONFIG_MUTATION,
+    capability="config_resource_rename",
+    destructive=False,
+    target_denial_code="permission_denied",
+    rejection_is_final=True,
+)
+
 UPDATE_OPERATION_ID = CONFIG_RESOURCE_UPDATE.op_id
 
 #: D10: the change is bounded and an oversize change fails explicitly. The ceiling
@@ -89,8 +129,9 @@ MAX_SIGNATURE_LENGTH = 512
 MAX_DESCRIPTION_LENGTH = 1024
 SIGNATURE_DISPLAY_LENGTH = 64
 
-#: D30 §4: the caller can never choose this knob.
+#: D30 §4: the caller can never choose these knobs.
 ALLOW_INVALID_REFERENCES = "false"
+REFERENCES_ABORT = "ABORT"
 
 
 async def config_resource_update(
@@ -110,12 +151,7 @@ async def config_resource_update(
 ) -> ConfigResourceUpdateResult:
     """Change one configuration resource, preconditioned on its Resource signature."""
 
-    if not registry.supports(CONFIG_RESOURCE_UPDATE.capability):
-        raise GatewayError(
-            "unsupported_capability",
-            "config_resource_update is not present in the current Gateway capability snapshot",
-        )
-    capability = catalog_resource_type(registry, resource_type)
+    capability = _write_capability(registry, CONFIG_RESOURCE_UPDATE, resource_type)
     if capability.update_path is None:
         raise GatewayError(
             "unsupported_capability",
@@ -124,8 +160,10 @@ async def config_resource_update(
     name = _requested_name(capability, name)
     collection = _default_collection(collection)
     expected_signature = _required_signature(expected_signature)
-    fields = _change_fields(capability, config, enabled, description)
-    item = _change_item(capability, name, expected_signature, fields)
+    fields = _change_fields(config, enabled, description, required=True)
+    item = _write_item(
+        capability, capability.update_request_schema, name, expected_signature, fields,
+    )
     body = _wire_body(item)
 
     #: Filled by the pre-dispatch read; the Gateway's own refusal is what a stale
@@ -133,23 +171,9 @@ async def config_resource_update(
     read_state: dict[str, Any] = {}
 
     async def precondition() -> None:
-        current = await _read_resource(client, context, capability, name, collection)
-        read_state["resource"] = current
-        signature = resource_signature(current)
-        if signature is None:
-            raise GatewayError(
-                "conflict",
-                "the Gateway reports no Resource signature for this resource, so the change "
-                "cannot be preconditioned and was not dispatched",
-            )
-        if signature != expected_signature:
-            # The resource changed after the caller read it. Nothing was dispatched.
-            raise GatewayError(
-                "conflict",
-                "the resource changed after it was read (expected signature "
-                f"{_display(expected_signature)}, the Gateway now reports {_display(signature)}); "
-                "nothing was dispatched",
-            )
+        read_state["resource"] = await _preconditioned_read(
+            client, context, capability, name, collection, expected_signature,
+        )
 
     async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
         current = await _read_resource(client, context, capability, name, collection)
@@ -157,24 +181,14 @@ async def config_resource_update(
         # D30 §6 (Observed state): the bounded read-back is reported as data and
         # decides success by answering "is the intended change visible?".
         read_state["observed"] = current
-        unchanged = _still_pre_state(current, before, fields)
-        if _is_claimed_success(dispatch):
-            if _matches_intended_state(current, fields):
-                return VerificationOutcome.CONFIRMED
-            return VerificationOutcome.UNCHANGED if unchanged else VerificationOutcome.MISMATCH
-        # No claim to verify (an ambiguous dispatch: possibly sent, no response). A
-        # read-back can show the requested values without proving this call wrote
-        # them — another writer may have made the same change inside the window — so
-        # only a negative conclusion is drawn from it: the pre-state intact, or a
-        # request whose values were already in place, is UNCHANGED ("nothing
-        # attributable to this call"), and anything else is INDETERMINATE, which the
-        # executor reports as outcome_unknown. A success here would be a claim the
-        # evidence cannot support.
-        if unchanged or _already_satisfied(fields, before):
-            return VerificationOutcome.UNCHANGED
-        if _matches_intended_state(current, fields):
-            return VerificationOutcome.INDETERMINATE
-        return VerificationOutcome.MISMATCH
+        return _verdict(
+            claimed=_is_claimed_success(dispatch),
+            intended=_matches_intended_state(current, fields),
+            pre_state=_pre_state_intact(current, before, fields),
+            # A change whose values were already in place has no observable effect of
+            # its own: nothing it observes can be attributed to it.
+            no_effect=_already_satisfied(fields, before),
+        )
 
     mutation = await execute_mutation(
         client=client, registry=registry, settings=settings, context=context,
@@ -212,7 +226,302 @@ async def config_resource_update(
     )
 
 
+async def config_resource_create(
+    client: GatewayClient,
+    registry: CapabilityRegistry,
+    settings: Settings,
+    context: OperationContext,
+    *,
+    principal: VerifiedPrincipal,
+    resource_type: str,
+    name: str,
+    collection: str,
+    config: dict[str, Any] | None,
+    enabled: bool | None,
+    description: str | None,
+) -> ConfigResourceCreateResult:
+    """Create one configuration resource.
+
+    D30 §2: create takes no Precondition token, so there is nothing to compare before
+    dispatch; the collision policy decides the refusals instead. D11 says an existing
+    target fails with ``conflict``, which is checked against the Gateway before
+    anything is sent *and* reported by the Gateway itself if the target appears in the
+    race window.
+    """
+
+    capability = _write_capability(registry, CONFIG_RESOURCE_CREATE, resource_type)
+    if capability.create_path is None:
+        raise GatewayError(
+            "unsupported_capability",
+            "this resourceType has no documented create route on the connected Gateway",
+        )
+    name = _requested_name(capability, name)
+    collection = _default_collection(collection)
+    fields = _change_fields(config, enabled, description, required=False)
+    item = _write_item(capability, capability.create_request_schema, name, None, fields)
+    body = _wire_body(item)
+
+    read_state: dict[str, Any] = {}
+
+    async def precondition() -> None:
+        if await _probe_resource(client, context, capability, name, collection) is not None:
+            # D11 collision policy: the target exists, so this call has nothing to
+            # create. Nothing was dispatched and the caller keeps its read.
+            raise GatewayError(
+                "conflict",
+                "the target already exists, so there is nothing to create; nothing was dispatched",
+            )
+
+    async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
+        current = await _probe_resource(client, context, capability, name, collection)
+        read_state["observed"] = current
+        return _verdict(
+            claimed=_is_claimed_success(dispatch),
+            intended=current is not None and _matches_intended_state(current, fields),
+            # The pre-state of a create is the target's absence.
+            pre_state=current is None,
+        )
+
+    mutation = await execute_mutation(
+        client=client, registry=registry, settings=settings, context=context,
+        request=MutationRequest(
+            operation=CONFIG_RESOURCE_CREATE, principal=principal,
+            target_id=resource_target_id(capability, name),
+            request_path=capability.create_path,
+            method="POST",
+            params={"allowInvalidReferences": ALLOW_INVALID_REFERENCES},
+            body_chunks=_chunked(body),
+            content_type="application/json",
+            dispatch_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verification_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verify=verify,
+            precondition=precondition,
+            rejection=_gateway_rejection,
+            target_policy=_target_policy(capability),
+            audit_fields={
+                "resourceType": capability.resource_type, "name": name, "collection": collection,
+            },
+            target_type="config-resource",
+        ),
+    )
+    failure = mutation_failure(mutation)
+    if failure is not None:
+        raise failure
+    observed = read_state["observed"]
+    return ConfigResourceCreateResult(
+        correlationId=context.correlation_id,
+        resourceType=capability.resource_type,
+        name=name,
+        collection=collection,
+        signature=resource_signature(observed),
+        observedState=redact(observed),
+    )
+
+
+async def config_resource_delete(
+    client: GatewayClient,
+    registry: CapabilityRegistry,
+    settings: Settings,
+    context: OperationContext,
+    *,
+    principal: VerifiedPrincipal,
+    resource_type: str,
+    name: str,
+    collection: str,
+    expected_signature: str,
+) -> ConfigResourceDeleteResult:
+    """Delete one configuration resource.
+
+    D30 §2 puts the Resource signature in the ``DELETE`` path, so the Gateway enforces
+    the token itself; a bounded read-compare immediately before dispatch still turns a
+    stale token into ``conflict`` without touching the resource. The caller cannot
+    authorize a cascading delete: the route's ``confirm`` flag is never sent, so a
+    delete the Gateway wants confirmed is a refusal like any other.
+    """
+
+    capability = _write_capability(registry, CONFIG_RESOURCE_DELETE, resource_type)
+    template = capability.delete_path_template
+    if template is None:
+        raise GatewayError(
+            "unsupported_capability",
+            "this resourceType has no documented delete route on the connected Gateway",
+        )
+    name = _requested_name(capability, name)
+    collection = _default_collection(collection)
+    expected_signature = _required_signature(expected_signature)
+    path = _delete_path(template, name, expected_signature)
+
+    read_state: dict[str, Any] = {}
+
+    async def precondition() -> None:
+        read_state["resource"] = await _preconditioned_read(
+            client, context, capability, name, collection, expected_signature,
+        )
+
+    async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
+        current = await _probe_resource(client, context, capability, name, collection)
+        read_state["observed"] = current
+        return _verdict(
+            claimed=_is_claimed_success(dispatch),
+            # The intended post-state of a delete is the Target's absence.
+            intended=current is None,
+            pre_state=_pre_state_intact(current, read_state["resource"]),
+        )
+
+    mutation = await execute_mutation(
+        client=client, registry=registry, settings=settings, context=context,
+        request=MutationRequest(
+            operation=CONFIG_RESOURCE_DELETE, principal=principal,
+            target_id=resource_target_id(capability, name),
+            request_path=path,
+            method="DELETE",
+            body_chunks=_no_body(),
+            content_type="application/json",
+            dispatch_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verification_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verify=verify,
+            precondition=precondition,
+            rejection=_gateway_rejection,
+            target_policy=_target_policy(capability),
+            audit_fields={
+                "resourceType": capability.resource_type, "name": name, "collection": collection,
+            },
+            target_type="config-resource",
+        ),
+    )
+    failure = mutation_failure(mutation)
+    if failure is not None:
+        raise failure
+    return ConfigResourceDeleteResult(
+        correlationId=context.correlation_id,
+        resourceType=capability.resource_type,
+        name=name,
+        collection=collection,
+        # The bounded Observed state a delete leaves: the Target's absence, which the
+        # verification had to observe for the call to be reported as a success.
+        present=read_state["observed"] is not None,
+    )
+
+
+async def config_resource_rename(
+    client: GatewayClient,
+    registry: CapabilityRegistry,
+    settings: Settings,
+    context: OperationContext,
+    *,
+    principal: VerifiedPrincipal,
+    resource_type: str,
+    name: str,
+    new_name: str,
+    collection: str,
+    expected_signature: str,
+) -> ConfigResourceRenameResult:
+    """Rename one configuration resource.
+
+    D30 §2: the rename endpoint takes no signature, so the Precondition token is a
+    server-side read-compare only — the race window between that read and the dispatch
+    remains, and no atomicity is claimed. Both the resource being renamed and the one
+    the rename produces are Targets (D30 §3), so the deployment checks and allowlists
+    both before anything executes. The destination must not exist (D11 collision
+    policy), and ``references=ABORT`` is always sent (D30 §4).
+    """
+
+    capability = _write_capability(registry, CONFIG_RESOURCE_RENAME, resource_type)
+    template = capability.rename_path_template
+    if template is None:
+        raise GatewayError(
+            "unsupported_capability",
+            "this resourceType has no documented rename route on the connected Gateway",
+        )
+    name = _requested_name(capability, name)
+    collection = _default_collection(collection)
+    new_name = _new_name(name, new_name)
+    expected_signature = _required_signature(expected_signature)
+    body = _rename_body(capability, new_name)
+    path = template.replace("{name}", quote(name, safe=""))
+
+    read_state: dict[str, Any] = {}
+
+    async def precondition() -> None:
+        read_state["resource"] = await _preconditioned_read(
+            client, context, capability, name, collection, expected_signature,
+        )
+        if await _probe_resource(client, context, capability, new_name, collection) is not None:
+            # D11 collision policy: the rename destination is taken, so nothing may be
+            # dispatched, and the caller's signature is not consumed.
+            raise GatewayError(
+                "conflict",
+                "a resource already exists at the rename destination; nothing was dispatched",
+            )
+
+    async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
+        renamed = await _probe_resource(client, context, capability, new_name, collection)
+        source = await _probe_resource(client, context, capability, name, collection)
+        read_state["observed"] = renamed
+        return _verdict(
+            claimed=_is_claimed_success(dispatch),
+            intended=renamed is not None and source is None,
+            pre_state=renamed is None and _pre_state_intact(source, read_state["resource"]),
+        )
+
+    mutation = await execute_mutation(
+        client=client, registry=registry, settings=settings, context=context,
+        request=MutationRequest(
+            operation=CONFIG_RESOURCE_RENAME, principal=principal,
+            target_id=resource_target_id(capability, name),
+            # D30 §3: the rename produces a resource at its destination, so that
+            # resource is a Target of this call too and must be allowlisted.
+            additional_target_ids=(resource_target_id(capability, new_name),),
+            request_path=path,
+            method="POST",
+            body_chunks=_chunked(body),
+            content_type="application/json",
+            dispatch_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verification_deadline_seconds=settings.budget_deadline_seconds("FAST"),
+            verify=verify,
+            precondition=precondition,
+            rejection=_gateway_rejection,
+            target_policy=_target_policy(capability),
+            audit_fields={
+                "resourceType": capability.resource_type, "name": name, "collection": collection,
+            },
+            target_type="config-resource",
+        ),
+    )
+    failure = mutation_failure(mutation)
+    if failure is not None:
+        raise failure
+    observed = read_state["observed"]
+    return ConfigResourceRenameResult(
+        correlationId=context.correlation_id,
+        resourceType=capability.resource_type,
+        previousName=name,
+        name=new_name,
+        collection=collection,
+        signature=resource_signature(observed),
+        observedState=redact(observed),
+    )
+
+
 # ------------------------------------------------------------------ input
+
+
+def _write_capability(
+    registry: CapabilityRegistry, operation: MutationOperation, resource_type: str,
+) -> ConfigResourceCapability:
+    """The catalogued resource type a write addresses, or a refusal.
+
+    The operation's semantic capability must be in the current snapshot before any
+    per-type route is considered: a Gateway whose document has no write route at all
+    exposes no such Tool.
+    """
+
+    if not registry.supports(operation.capability):
+        raise GatewayError(
+            "unsupported_capability",
+            f"{operation.op_id} is not present in the current Gateway capability snapshot",
+        )
+    return catalog_resource_type(registry, resource_type)
 
 
 def _requested_name(capability: ConfigResourceCapability, value: str) -> str:
@@ -231,14 +540,20 @@ def _required_signature(value: str) -> str:
 
 
 def _change_fields(
-    capability: ConfigResourceCapability,
     config: dict[str, Any] | None,
     enabled: bool | None,
     description: str | None,
+    *,
+    required: bool,
 ) -> dict[str, Any]:
-    """The validated, name-independent part of one change item (D30 §3 Preflight)."""
+    """The validated part of one write that does not identify its Target (D30 §3).
 
-    if config is None and enabled is None and description is None:
+    ``required`` is the update's rule, not a universal one: a change that supplies
+    nothing would consume the caller's Resource signature without changing anything,
+    while a create is fully described by the name it is asked to publish.
+    """
+
+    if required and config is None and enabled is None and description is None:
         raise GatewayError(
             "invalid_argument",
             "the change is empty: supply config, enabled or description, or the call would "
@@ -257,6 +572,19 @@ def _change_fields(
     if description is not None:
         fields["description"] = description
     return fields
+
+
+def _new_name(current: str, value: str) -> str:
+    """The rename destination (D30 §3: validated before anything executes)."""
+
+    new_name = bounded_text(value, "newName", MAX_NAME_LENGTH, allow_empty=False)
+    if new_name == current:
+        raise GatewayError(
+            "invalid_argument",
+            "newName is the resource's current name, so the rename would consume the "
+            "Resource signature without changing anything",
+        )
+    return new_name
 
 
 def _default_collection(value: str) -> str:
@@ -280,37 +608,68 @@ def _default_collection(value: str) -> str:
     return collection
 
 
-def _change_item(
+def _write_item(
     capability: ConfigResourceCapability,
+    schema: Mapping[str, Any] | None,
     name: str,
-    expected_signature: str,
+    expected_signature: str | None,
     fields: dict[str, Any],
 ) -> dict[str, Any]:
     """The complete Gateway-shaped change item, validated against the snapshot (D03).
 
-    The name is included exactly when the Gateway's documented item schema declares
-    one: a singleton's item schema requires only ``signature``, and sending an
-    undeclared field is not what the Gateway documents.
+    The Resource signature is included when the operation's route carries one, and the
+    name exactly when the documented item schema declares one: a singleton's update
+    item requires only ``signature``, a create item takes no signature at all, and
+    sending an undeclared field is not what the Gateway documents.
     """
 
-    item: dict[str, Any] = {"signature": expected_signature}
-    if _item_schema_declares_name(capability):
+    item: dict[str, Any] = {}
+    if expected_signature is not None:
+        item["signature"] = expected_signature
+    if _schema_declares(schema, "name"):
         item["name"] = name
     item.update(fields)
-    _validate_change_item(capability, item)
+    _validate_against_gateway(capability, schema, item)
     return item
 
 
-def _item_schema_declares_name(capability: ConfigResourceCapability) -> bool:
-    schema = capability.update_request_schema
+def _rename_body(capability: ConfigResourceCapability, new_name: str) -> bytes:
+    """The bounded rename body, validated against the documented request schema (D03).
+
+    D30 §4 fixes ``references`` to ``ABORT``: the caller cannot choose a value that
+    would let the rename change resources outside its Targets.
+    """
+
+    payload: dict[str, Any] = {"name": new_name, "references": REFERENCES_ABORT}
+    _validate_against_gateway(capability, capability.rename_request_schema, payload)
+    return _bounded_body(payload)
+
+
+def _schema_declares(schema: Mapping[str, Any] | None, field: str) -> bool:
     if not isinstance(schema, Mapping):
         return False
     properties = schema.get("properties")
-    return isinstance(properties, Mapping) and "name" in properties
+    return isinstance(properties, Mapping) and field in properties
 
 
-def _validate_change_item(capability: ConfigResourceCapability, item: dict[str, Any]) -> None:
-    """D03: the change must satisfy the Gateway's own documented request schema.
+def _delete_path(template: str, name: str, expected_signature: str) -> str:
+    """The documented ``DELETE`` route with both path parameters percent-encoded.
+
+    The signature of a DELETE is part of the path, so it is encoded segment by
+    segment: a token containing a separator must not become a second path segment.
+    """
+
+    return template.replace("{name}", quote(name, safe="")).replace(
+        "{signature}", quote(expected_signature, safe=""),
+    )
+
+
+def _validate_against_gateway(
+    capability: ConfigResourceCapability,
+    schema: Mapping[str, Any] | None,
+    payload: dict[str, Any],
+) -> None:
+    """D03: the body must satisfy the Gateway's own documented request schema.
 
     The snapshot's schema is self-contained (bundled at refresh time), so this cannot
     hit an unresolvable reference. The failure message names the failing location and
@@ -318,13 +677,13 @@ def _validate_change_item(capability: ConfigResourceCapability, item: dict[str, 
     configuration document, which may hold embedded secrets.
     """
 
-    schema = capability.update_request_schema
     if not isinstance(schema, Mapping):
         raise GatewayError(
             "unsupported_capability",
-            "this resourceType has no documented update request schema on the connected Gateway",
+            "this resourceType has no documented request schema for this route on the "
+            "connected Gateway",
         )
-    errors = sorted(Draft202012Validator(schema).iter_errors(item), key=_error_order)
+    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=_error_order)
     if not errors:
         return
     first = errors[0]
@@ -344,7 +703,13 @@ def _error_order(error: Any) -> tuple[int, str]:
 def _wire_body(item: dict[str, Any]) -> bytes:
     """The bounded Gateway body: one JSON array holding the single change item."""
 
-    raw = json.dumps([item], separators=(",", ":")).encode("utf-8")
+    return _bounded_body([item])
+
+
+def _bounded_body(payload: Any) -> bytes:
+    """One bounded JSON request body (D10: oversize input fails explicitly)."""
+
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     if len(raw) > MAX_CHANGE_BYTES:
         raise GatewayError(
             "limit_exceeded",
@@ -412,8 +777,114 @@ async def _read_resource(
     return await client.get_json(path, params=params or None, context=context)
 
 
+async def _probe_resource(
+    client: GatewayClient,
+    context: OperationContext,
+    capability: ConfigResourceCapability,
+    name: str,
+    collection: str,
+) -> dict[str, Any] | None:
+    """Whether one Target exists, as its document (``None`` = absent).
+
+    Only the Gateway's own 404 means absent: a permission, transport or schema
+    failure propagates, so no failure is ever mistaken for a missing resource.
+    """
+
+    try:
+        return await _read_resource(client, context, capability, name, collection)
+    except GatewayError as error:
+        if error.code == "not_found":
+            return None
+        raise
+
+
+async def _preconditioned_read(
+    client: GatewayClient,
+    context: OperationContext,
+    capability: ConfigResourceCapability,
+    name: str,
+    collection: str,
+    expected_signature: str,
+) -> dict[str, Any]:
+    """The bounded read that enforces the Precondition token before dispatch (D30 §2).
+
+    A Gateway that reports no signature leaves nothing to compare, and a signature
+    that differs means the resource changed after the caller read it: both are
+    ``conflict`` with nothing dispatched. The returned document is the pre-state the
+    later verification compares against.
+    """
+
+    current = await _read_resource(client, context, capability, name, collection)
+    signature = resource_signature(current)
+    if signature is None:
+        raise GatewayError(
+            "conflict",
+            "the Gateway reports no Resource signature for this resource, so the change "
+            "cannot be preconditioned and was not dispatched",
+        )
+    if signature != expected_signature:
+        raise GatewayError(
+            "conflict",
+            "the resource changed after it was read (expected signature "
+            f"{_display(expected_signature)}, the Gateway now reports {_display(signature)}); "
+            "nothing was dispatched",
+        )
+    return current
+
+
 async def _chunked(body: bytes) -> AsyncIterator[bytes]:
     yield body
+
+
+async def _no_body() -> AsyncIterator[bytes]:
+    """A ``DELETE`` route documents no request body, so none is sent."""
+
+    return
+    yield b""  # pragma: no cover - unreachable, and what makes this an async generator
+
+
+def _verdict(
+    *, claimed: bool, intended: bool, pre_state: bool, no_effect: bool = False,
+) -> VerificationOutcome:
+    """The one D30 §2 rule every config Mutation's verification follows.
+
+    A claimed success is confirmed when the intended state is observed. Anything
+    else has no claim to verify (an ambiguous dispatch: possibly sent, no response),
+    and a read-back can show the intended values without proving *this* call wrote
+    them — another writer may have made the same change inside the window — so only a
+    negative conclusion is drawn: the pre-state intact, or a request with no
+    observable effect of its own, is UNCHANGED ("nothing attributable to this call"),
+    and anything else is INDETERMINATE, which the executor reports as
+    ``outcome_unknown``. A success there would be a claim the evidence cannot support.
+    """
+
+    if claimed:
+        if intended:
+            return VerificationOutcome.CONFIRMED
+        return VerificationOutcome.UNCHANGED if pre_state else VerificationOutcome.MISMATCH
+    if pre_state or no_effect:
+        return VerificationOutcome.UNCHANGED
+    if intended:
+        return VerificationOutcome.INDETERMINATE
+    return VerificationOutcome.MISMATCH
+
+
+def _pre_state_intact(
+    current: dict[str, Any] | None, before: dict[str, Any], fields: dict[str, Any] | None = None,
+) -> bool:
+    """Whether the Target still shows the state the caller preconditioned on.
+
+    Compared on the Resource signature and, when the operation names fields, on those
+    fields too, so an unrelated Gateway-side field cannot turn "nothing happened" into
+    an ambiguous outcome. A Target that is gone is the pre-state of nothing.
+    """
+
+    if current is None or resource_signature(current) != resource_signature(before):
+        return False
+    for key in set(fields or ()) & {"config", "enabled", "description"}:
+        if current.get(key) != before.get(key):
+            return False
+    return True
 
 
 def _is_claimed_success(dispatch: WriteDispatchResult) -> bool:
@@ -435,24 +906,6 @@ def _already_satisfied(fields: dict[str, Any], before: dict[str, Any]) -> bool:
     """
 
     return _matches_intended_state(before, fields)
-
-
-def _still_pre_state(
-    current: dict[str, Any], before: dict[str, Any], fields: dict[str, Any],
-) -> bool:
-    """Whether the resource still shows the state the caller preconditioned on.
-
-    Compared on the supplied fields plus the Resource signature, so an unrelated
-    Gateway-side field cannot turn "nothing happened" into an ambiguous outcome.
-    """
-
-    if resource_signature(current) != resource_signature(before):
-        return False
-    keys = set(fields) & {"config", "enabled", "description"}
-    for key in keys:
-        if current.get(key) != before.get(key):
-            return False
-    return True
 
 
 def _matches_intended_state(current: dict[str, Any], fields: dict[str, Any]) -> bool:

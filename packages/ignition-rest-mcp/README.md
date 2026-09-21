@@ -123,6 +123,41 @@ module administration, and the MCP Module's own `server-config`) are refused wit
 `permission_denied` whatever the Target allowlist says; a resource type that is not classified is
 refused too.
 
+**`config_resource_create`, `config_resource_delete` and `config_resource_rename`** (D30, Phase 4
+milestone 4c) require the same scope, class and allowlists as the update Tool, and each has its own
+Precondition rule:
+
+- `config_resource_create` takes **no** Precondition token (D30 §2). The D11 collision policy
+  decides instead: the Target must be absent, which is checked against the Gateway before anything
+  is dispatched, and an existing target — including one that appears in the race window — is a
+  `conflict`. The published resource and its signature are the Observed state. The item is validated
+  against the type's documented `POST` request schema (D03) first.
+- `config_resource_delete` carries `expectedSignature` **in the native `DELETE` path**
+  (`/data/api/v1/resources/<resourceType>/{name}/{signature}`, or `/{signature}` for a singleton), so
+  the Gateway enforces the token itself, and a bounded read-compare before dispatch still turns a
+  stale token into `conflict` without touching the resource. Its verification is the Target's
+  **absence**: the result reports the Observed state a delete leaves, `present: false`. The route's
+  optional `confirm` flag is **never sent**, so a caller cannot authorize a delete the Gateway says
+  would affect other resources — such a delete is refused like any other rejection. This Tool is
+  `destructive: true` (D26), and its audit rows say so.
+- `config_resource_rename` renames one resource to `newName`. Its endpoint takes no signature, so the
+  Precondition token is a **server-side read-compare** only: the race window between that read and
+  the dispatch remains and no atomicity is claimed (D30 §2). `references=ABORT` is always sent (D30
+  §4) and the body is validated against the documented rename schema (D03). Two names are Targets
+  (D30 §3) — the resource being renamed and the one the rename produces — so **both must be
+  allowlisted**. The destination must be absent before dispatch (D11); a collision is a `conflict`.
+  Verification needs both names: the old one vacant *and* the new one holding the resource, whose
+  read-back and signature are returned.
+
+Common rules for all four: a Target is `<resourceType>/<name>` (or the bare `<resourceType>` for a
+singleton) in the **default** collection, a caller-supplied `collection` is refused with
+`invalid_argument`, a Target outside the allowlist is `permission_denied` (D30 §7), and an explicit
+Gateway rejection — a 4xx or a 2xx carrying `success=false` with a `problem` — is final: no read-back
+may turn it into a success. A success therefore comes only from a claim the Gateway itself made; an
+ambiguous dispatch whose read-back merely matches the intended state (another writer could have made
+the same change) is `outcome_unknown`, and an ambiguous dispatch that changed nothing is
+`not_applied`.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

@@ -253,9 +253,96 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `MCP_CI_AUDIT` log held both rows (attempt + result) for the call's
     correlation ID with `actor` equal to the policy's Service identity.
 - **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
+### Ticket #15 — REST `config_resource_create`, `config_resource_delete` and `config_resource_rename` (milestone 4c)
+
+- Fixture-first coverage: `packages/ignition-rest-mcp/tests/test_phase4_config_resource_create_delete_rename.py`
+  (38 cases) drives the real server through MCP against
+  `tests/harness/recorded_gateway.py`, which now models the collection `POST`, the
+  signature-carrying `DELETE` and the rename routes, their collisions, their races and
+  the ambiguous-dispatch boundaries. The full `AGENTS.md` command block is green
+  (785 pytest cases).
+- Per-Tool rules implemented and pinned: create takes no Precondition token and relies
+  on the D11 collision policy (checked against the Gateway before dispatch); delete
+  carries the signature in the native `DELETE` path *and* read-compares it before
+  dispatch, verifies the Target's absence, and never sends the route's `confirm` flag;
+  rename is a server-side read-compare only (the D30 §2 race window is documented, and
+  a live case shows another writer's version being renamed inside it), always sends
+  `references=ABORT`, and verifies both names.
+- D30 §3 Preflight extended to more than one Target: `MutationRequest` gained
+  `additional_target_ids`, the guarded executor checks every Target before anything
+  executes and names the refused Target in the audit row, and a rename therefore needs
+  both its source and its destination allowlisted. Unit and live cases cover the
+  destination denial and the source denial separately.
+- D03 extended to the new writes: the capability snapshot bundles a type's documented
+  `POST` item schema and an operation's request body (rename) next to the existing
+  `PUT` item schema; a write route without a usable schema, or without a lookup route to
+  precondition from, exposes no write. Unit tests hold all three routes of every
+  committed 8.3.8 type to that rule.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **47/47 cases**
+  against the recorded Gateway, both deployment gates.
+- Live ([run 35652623709](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623709),
+  re-run on the documentation head
+  [35654240134](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240134)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green on every head,
+  **47/47 live cases on 8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`,
+  candidate)** — the exact four-Tool inventory with the class enabled and the read-only
+  inventory without it, an allowlisted create/delete/rename each confirmed by an
+  independent read, a create and a delete collision, a rename onto an occupied
+  destination, stale tokens refused with `conflict` and changing nothing,
+  `ignition/api-token` refused with `permission_denied` for all three Tools while the
+  token keeps working, an unallowlisted Target denied for each Tool (including the
+  rename destination), and a refused cross-check that a denied create/delete/rename
+  published or removed nothing. `provision.json` records the four provisioned resources
+  and the nine required OpenAPI routes.
+- Frozen gates, green on every pushed head of this ticket (`b4fcb59`, `020befb`,
+  `a7c6dc5`): CI
+  [35652623688](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623688) and
+  [35654240141](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240141),
+  Phase 3 Live Gateway G3
+  [35652623873](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623873) and
+  [35654240140](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240140), and
+  Phase 4 Live Gateway G4a
+  [35652623753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623753) and
+  [35654240189](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240189) — all
+  success. One G3 row needed a rerun for a Gateway-side reason recorded in Open
+  questions.
 
 ## Open questions
 
+- **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
+  On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
+  immediate rerun ([run 35653162977](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653162977),
+  job rerun `--failed`). The check (`tests/harness/phase3-live/driver.py:533`) GETs the
+  first `project_export` artifact and HEADs the *second* export of the same project, so
+  it asserts that two exports of an unchanged project are byte-identical. In the failed
+  row the two artifacts had the same size (903 bytes) and the same project fingerprint
+  (`pcf1:f2a6639c…`, stable across the pair) but different bytes
+  (`52962dde…` vs `a37a321f…`), which is Gateway-side export non-determinism, not a
+  server or harness defect: no code under test is involved, and the other 23 checks in
+  that stage passed. The evidence is in the failed job's `observations.json`
+  (`checks[name=head-get-parity].detail`). **For the owner:** decide whether the check
+  should compare the two artifacts of one export (a GET and a HEAD of the same path, the
+  representation parity it is named for) or be relaxed to a fingerprint/size comparison —
+  either is a Phase 3 amendment, so this ticket did not touch it. Until then a G3 row can
+  fail for an unmodified head and needs a rerun.
+- **Ticket #15 — a config rename has two Targets, and D30 does not say so.** D30 §6 gives the Target
+  rule for the Runtime Tag operations ("`tag_move` checks the source and the destination, and
+  `tag_rename` checks the new path"); it says nothing about a *config* rename, which both changes the
+  resource at its old `<resourceType>/<name>` and produces one at `<resourceType>/<newName>`. The
+  conservative reading is implemented — **both** names are Targets (D30 §3 Preflight), both are
+  checked and both must be allowlisted (`MutationRequest.additional_target_ids`, with a unit test
+  proving the destination denial and a live case proving it on 8.3.8 and 8.3.9) — and the behaviour
+  is recorded in the Tool's contract (`targetIds`). **For the owner:** confirm the both-names rule, or
+  narrow it to the destination only (the Runtime `tag_rename` reading) if that is what the decision
+  intended.
+- **Ticket #15 — two Gateway behaviours in the recorded fixture are modelled, not recorded.** The
+  fixture answers an existing create target and an occupied rename destination with 409 (the status
+  the committed document responds with elsewhere, and the one D30 §7 maps to `conflict`), and a stale
+  signature in a `DELETE` path with 409 as well. No live Gateway is reachable from the local fixture,
+  so the live cases were written not to need them: every live create collision, rename collision and
+  stale-token case is refused by the server's own pre-dispatch checks. The shape the real Gateway uses
+  for those three refusals is therefore still unverified and should be captured on the next live run
+  (`observations.json` records what the live cases observed).
 - **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy: RESOLVED by a Tool-scoped
   mapping.** D30 §7 maps "target not allowlisted" to `permission_denied`; the Phase 3 machinery
   answers `operation_disabled`, which `test_phase3_safety_executor.py` and the live G3 driver

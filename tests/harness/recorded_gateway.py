@@ -57,6 +57,16 @@ _OPENAPI_OPERATIONS = (
     ("get", "/data/api/v1/resources/type/ignition/cobranding"),
     ("get", "/data/api/v1/resources/singleton/ignition/cobranding"),
     ("put", "/data/api/v1/resources/ignition/cobranding"),
+    # Phase 4 ticket #15: the create, delete and rename surface. Every type gets the
+    # POST collection route (create) and the DELETE route whose *path* carries the
+    # Resource signature (`/{name}/{signature}`, or `/{signature}` for a singleton);
+    # a non-singleton also gets the POST rename route, which takes no signature.
+    ("post", "/data/api/v1/resources/ignition/cobranding"),
+    ("delete", "/data/api/v1/resources/ignition/cobranding/{signature}"),
+    ("delete", "/data/api/v1/resources/ignition/audit-profile/{name}/{signature}"),
+    ("post", "/data/api/v1/resources/rename/ignition/audit-profile/{name}"),
+    ("delete", "/data/api/v1/resources/ignition/api-token/{name}/{signature}"),
+    ("post", "/data/api/v1/resources/rename/ignition/api-token/{name}"),
     # Phase 4 ticket #6 characterization: the Native REST write path for the
     # deployment-owned Runtime Target Policy provider and its Tags.
     ("post", "/data/api/v1/resources/ignition/tag-provider"),
@@ -74,6 +84,9 @@ _RESERVED_RESOURCE_SEGMENTS = frozenset({
     "copy", "delete", "move", "rename", "datafile", "names", "list", "find", "singleton", "type",
 })
 
+#: The documented rename route: ``/data/api/v1/resources/rename/<type>/{name}``.
+_RENAME_ROUTE_PREFIX = "/data/api/v1/resources/rename/"
+
 
 def _resource_type_segment(path: str) -> str | None:
     """The exact ``<module>/<typeId>`` a collection path addresses, or ``None``."""
@@ -88,30 +101,61 @@ def _resource_type_segment(path: str) -> str | None:
     return remainder
 
 
+def _delete_target(path: str) -> tuple[str | None, str, str]:
+    """Split a documented DELETE path into ``(resourceType, name, signature)``.
+
+    ``/<type>/{name}/{signature}`` addresses a named resource and
+    ``/<type>/{signature}`` the type's singleton; anything else is not a route this
+    fixture serves (and ``resourceType`` is ``None``).
+    """
+
+    prefix = "/data/api/v1/resources/"
+    if not path.startswith(prefix):
+        return None, "", ""
+    parts = path[len(prefix):].split("/")
+    if len(parts) == 4 and all(parts):
+        resource_type = f"{parts[0]}/{parts[1]}"
+        return resource_type, parts[2], parts[3]
+    if len(parts) == 3 and all(parts):
+        return f"{parts[0]}/{parts[1]}", "", parts[2]
+    return None, "", ""
+
+
 #: The repository's committed 8.3.8 specification. The recorded Gateway advertises
-#: the *real* PUT request body for a resource type it serves: an update route
-#: without the request schema D03 requires cannot be exposed, so a schema-less stub
-#: would silently disable the Tool under test instead of exercising it.
+#: the *real* request body for every route the server's D03 validation reads: a
+#: route without the request schema the capability snapshot needs is withheld, so a
+#: schema-less stub would silently disable the Tool under test instead of
+#: exercising it.
 COMMITTED_OPENAPI = ROOT / "docs/ignition-8.3.8-openapi/openapi.min.json"
+#: Operation paths that name an action rather than a resource type, so their
+#: request bodies are also part of the recorded document.
+_ACTION_PREFIXES = ("/data/api/v1/resources/rename/",)
 _committed_openapi: dict[str, Any] | None = None
 
 
-def _committed_update_body(resource_type: str) -> dict[str, Any] | None:
+def _committed_document() -> dict[str, Any]:
     global _committed_openapi
     if _committed_openapi is None:
         _committed_openapi = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
-    operation = (_committed_openapi.get("paths") or {}).get(
-        f"/data/api/v1/resources/{resource_type}",
-    )
-    body = (operation or {}).get("put", {}).get("requestBody")
+    return _committed_openapi
+
+
+def _committed_request_body(method: str, operation_path: str) -> dict[str, Any] | None:
+    """The committed request body of one documented collection or action route."""
+
+    if method not in {"put", "post"}:
+        return None
+    if _resource_type_segment(operation_path) is None and not operation_path.startswith(
+        _ACTION_PREFIXES,
+    ):
+        return None
+    operation = (_committed_document().get("paths") or {}).get(operation_path)
+    body = ((operation or {}).get(method) or {}).get("requestBody")
     return body if isinstance(body, dict) else None
 
 
 def _recorded_operation(method: str, operation_path: str) -> dict[str, Any]:
-    if method != "put":
-        return {}
-    resource_type = _resource_type_segment(operation_path)
-    body = _committed_update_body(resource_type) if resource_type else None
+    body = _committed_request_body(method, operation_path)
     return {"requestBody": body} if body else {}
 
 
@@ -148,10 +192,7 @@ def _committed_components() -> dict[str, Any]:
 
 
 def _committed_pointer(pointer: str) -> Any:
-    global _committed_openapi
-    if _committed_openapi is None:
-        _committed_openapi = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
-    node: Any = _committed_openapi
+    node: Any = _committed_document()
     for part in pointer[2:].split("/"):
         part = part.replace("~1", "/").replace("~0", "~")
         node = node[part]
@@ -583,6 +624,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if self.headers.get("X-Ignition-API-Token") != API_TOKEN:
             self._json(403, _fixture("http/forbidden.json"))
             return
+        # Phase 4 ticket #15: a type the harness has published resource state for
+        # answers the write surface from that state, so create and rename behave as
+        # the real Gateway does. A type with no published state keeps the recorded
+        # Phase 2/3 provisioning behaviour of its own exact-path branch below.
+        if path.startswith(_RENAME_ROUTE_PREFIX):
+            resource_type, _, name = path[len(_RENAME_ROUTE_PREFIX):].rpartition("/")
+            status, payload = server.apply_resource_rename(resource_type, name, body)
+            self._json(status, payload)
+            return
+        resource_type = _resource_type_segment(path)
+        if resource_type is not None and resource_type in server.resources:
+            status, payload = server.apply_resource_create(resource_type, body)
+            self._json(status, payload)
+            return
         if path.startswith("/data/api/v1/projects/import/"):
             name = path.rsplit("/", 1)[-1]
             server.projects[name] = _gateway_import(server.projects.get(name), body)
@@ -677,6 +732,24 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         status, payload = server.apply_resource_update(resource_type, body)
         self._json(status, payload)
 
+    def do_DELETE(self) -> None:  # noqa: N802
+        server: Any = self.server
+        server.requests.append({
+            "method": "DELETE", "path": self.path, "headers": dict(self.headers), "body": b"",
+        })
+        path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
+        if self.headers.get("X-Ignition-API-Token") != API_TOKEN:
+            self._json(403, _fixture("http/forbidden.json"))
+            return
+        # The signature travels in the path, exactly as the documented route has it:
+        # `/<type>/{name}/{signature}`, or `/<type>/{signature}` for a singleton.
+        resource_type, name, signature = _delete_target(path)
+        if resource_type is None:
+            self._json(404, {"message": "No recorded response", "status": "404"})
+            return
+        status, payload = server.apply_resource_delete(resource_type, name, signature)
+        self._json(status, payload)
+
 
 class _Server(http.server.ThreadingHTTPServer):
     daemon_threads = True
@@ -725,18 +798,14 @@ class _Server(http.server.ThreadingHTTPServer):
         #: through :meth:`RecordedGateway.seed_resource`.
         self.resources: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
         self.signature_serial = 0
-        #: Modelled (not recorded) Gateway rejection: when set, every resource PUT
-        #: answers 200 with ``success=false`` and this ``problem`` message, the
-        #: documented shape for a change the Gateway refused to apply.
-        self.update_problem: str | None = None
-        #: Modelled (not recorded) competing writer: when set, the addressed resource
-        #: is changed (and its signature moved) at PUT time, after the caller's own
-        #: read and before the signature check — the race window D30 §2 documents.
-        self.update_race: dict[str, Any] = {}
-        #: Modelled (not recorded) ambiguous dispatch: when set, every resource PUT
-        #: answers this status (500 by default) without applying the change, the
-        #: boundary at which the caller cannot know whether its write landed.
-        self.update_status: int | None = None
+        #: Modelled (not recorded) per-operation write behaviour, keyed by the
+        #: operation the Tool performs ("update", "create", "delete", "rename"):
+        #: a Gateway that refuses a change inside a 200 (`write_problem`), one that
+        #: answers an ambiguous status without applying anything (`write_status`),
+        #: and a competing writer that acts at dispatch time (`write_race`).
+        self.write_problem: dict[str, str] = {}
+        self.write_status: dict[str, int] = {}
+        self.write_race: dict[str, dict[str, Any]] = {}
 
     # ------------------------------------------------------- config resources
 
@@ -780,51 +849,213 @@ class _Server(http.server.ThreadingHTTPServer):
     def apply_resource_update(self, resource_type: str, body: bytes) -> tuple[int, dict[str, Any]]:
         """Apply one recorded Gateway resource PUT: validate all, then change all."""
 
-        try:
-            changes = json.loads(body)
-        except (ValueError, UnicodeDecodeError):
-            return 400, {"message": "Invalid request body", "status": "400"}
-        if not isinstance(changes, list) or not changes:
-            return 400, {"message": "Invalid request body", "status": "400"}
+        changes = _decode_changes(body)
+        if changes is None:
+            return 400, _INVALID_BODY
         entries = self.resources[resource_type]
         targets: list[tuple[dict[str, Any], dict[str, Any]]] = []
         for change in changes:
-            if not isinstance(change, dict):
-                return 400, {"message": "Invalid request body", "status": "400"}
             current = self._change_target(resource_type, entries, change)
             if current is None:
-                return 404, {"message": "No such resource", "status": "404"}
+                return 404, _NO_SUCH_RESOURCE
             targets.append((change, current))
-        if self.update_race:
-            fields, self.update_race = self.update_race, {}
+        if self.write_race.get("update"):
+            fields = self.write_race.pop("update")
             for _change, current in targets:
                 current.update(fields)
                 current["signature"] = self.next_signature()
-        if self.update_status is not None:
-            return self.update_status, {
-                "message": "Internal Server Error", "status": str(self.update_status),
-            }
+        if (status := self.write_status.get("update")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
         for change, current in targets:
             if change.get("signature") != current.get("signature"):
-                return 409, {
-                    "message": "Signature mismatch: the resource changed after it was read",
-                    "status": "409",
-                }
-        if self.update_problem is not None:
-            return 200, {"success": False, "problem": {"message": self.update_problem, "stacktrace": []}}
+                return 409, _SIGNATURE_MISMATCH
+        if (problem := self.write_problem.get("update")) is not None:
+            return 200, _refused(problem)
         applied: list[dict[str, Any]] = []
         for change, current in targets:
             for key in ("config", "enabled", "description"):
                 if key in change:
                     current[key] = change[key]
             current["signature"] = self.next_signature()
-            applied.append({
-                "name": current.get("name", ""),
-                "type": resource_type.rsplit("/", 1)[-1],
-                "collection": current.get("collection", ""),
-                "newSignature": current["signature"],
-            })
+            applied.append(self._change_notice(resource_type, current))
         return 200, {"success": True, "changes": applied}
+
+    def apply_resource_create(self, resource_type: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway resource POST: validate all, then create all.
+
+        A create takes no Resource signature; an existing target is the Gateway's
+        own D11 collision refusal (409), which the Tool must report as ``conflict``.
+        """
+
+        changes = _decode_changes(body)
+        if changes is None:
+            return 400, _INVALID_BODY
+        entries = self.resources[resource_type]
+        targets: list[tuple[dict[str, Any], str, str]] = []
+        for change in changes:
+            name, collection = self._create_identity(resource_type, entries, change)
+            if name is None:
+                return 400, _INVALID_BODY
+            targets.append((change, name, collection))
+        if (race := self.write_race.get("create")) is not None:
+            self.write_race.pop("create")
+            for _change, name, collection in targets:
+                entries[(name, collection)] = self._document(
+                    resource_type, name, collection, race,
+                )
+        if (status := self.write_status.get("create")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        for _change, name, collection in targets:
+            if (name, collection) in entries:
+                return 409, {
+                    "message": f"A resource named {name} already exists", "status": "409",
+                }
+        if (problem := self.write_problem.get("create")) is not None:
+            return 200, _refused(problem)
+        applied: list[dict[str, Any]] = []
+        for change, name, collection in targets:
+            document = self._document(resource_type, name, collection, change)
+            entries[(name, collection)] = document
+            applied.append(self._change_notice(resource_type, document))
+        return 200, {"success": True, "changes": applied}
+
+    def apply_resource_delete(
+        self, resource_type: str, name: str, signature: str,
+    ) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway resource DELETE.
+
+        The route carries the signature in its path, so the Gateway itself refuses a
+        stale one (modelled as the same 409 the update route answers; the live Gateway
+        cannot be reached from this fixture, and D30 §2 maps a stale token to
+        ``conflict``).
+        """
+
+        entries = self.resources.get(resource_type)
+        if entries is None:
+            return 404, _NO_SUCH_RESOURCE
+        current = self._singleton(resource_type) if not name else entries.get((name, ""))
+        if current is None:
+            return 404, _NO_SUCH_RESOURCE
+        race = self.write_race.pop("delete", None)
+        if race is not None:
+            if race.get("deleted"):
+                del entries[(str(current.get("name", name)), str(current.get("collection", "")))]
+                current = None
+            else:
+                current.update(race)
+                current["signature"] = self.next_signature()
+        if (status := self.write_status.get("delete")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        if current is None:
+            return 404, _NO_SUCH_RESOURCE
+        if current.get("signature") != signature:
+            return 409, _SIGNATURE_MISMATCH
+        if (problem := self.write_problem.get("delete")) is not None:
+            return 200, _refused(problem)
+        del entries[(str(current.get("name", name)), str(current.get("collection", "")))]
+        return 200, {"success": True, "changes": [
+            {"name": current.get("name", name), "type": resource_type.rsplit("/", 1)[-1],
+             "collection": current.get("collection", "")},
+        ]}
+
+    def apply_resource_rename(
+        self, resource_type: str, name: str, body: bytes,
+    ) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway resource rename POST.
+
+        The endpoint takes no Resource signature (D30 §2), so a competing writer can
+        change the resource inside the window between the caller's read-compare and
+        this dispatch: the documented race, modelled by ``write_race``.
+        """
+
+        try:
+            payload = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return 400, _INVALID_BODY
+        if not isinstance(payload, dict) or not isinstance(payload.get("name"), str):
+            return 400, _INVALID_BODY
+        if payload.get("references") != "ABORT":
+            return 400, {
+                "message": "references must be ABORT", "status": "400",
+            }
+        entries = self.resources.get(resource_type)
+        if entries is None:
+            return 404, _NO_SUCH_RESOURCE
+        current = entries.get((name, ""))
+        if current is None:
+            return 404, _NO_SUCH_RESOURCE
+        new_name = str(payload["name"])
+        if (new_name, "") in entries:
+            return 409, {"message": f"A resource named {new_name} already exists", "status": "409"}
+        race = self.write_race.pop("rename", None)
+        if race is not None:
+            if race.get("deleted"):
+                del entries[(name, "")]
+                current = None
+            else:
+                current.update(race)
+                current["signature"] = self.next_signature()
+        if (status := self.write_status.get("rename")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        if current is None:
+            return 404, _NO_SUCH_RESOURCE
+        if (problem := self.write_problem.get("rename")) is not None:
+            return 200, _refused(problem)
+        del entries[(name, "")]
+        current["name"] = new_name
+        current["signature"] = self.next_signature()
+        entries[(new_name, "")] = current
+        return 200, {"success": True, "changes": [self._change_notice(resource_type, current)]}
+
+    def _document(
+        self, resource_type: str, name: str, collection: str, fields: dict[str, Any],
+    ) -> dict[str, Any]:
+        """One stored resource document, as creation leaves it."""
+
+        document: dict[str, Any] = {
+            "type": resource_type.rsplit("/", 1)[-1],
+            "name": name,
+            "enabled": bool(fields.get("enabled", True)),
+            "description": str(fields.get("description", "")),
+            "collection": collection,
+            "signature": self.next_signature(),
+            "config": fields.get("config", {}),
+        }
+        return document
+
+    def _change_notice(self, resource_type: str, document: dict[str, Any]) -> dict[str, Any]:
+        """One entry of the recorded ``changes`` list a write answers with."""
+
+        return {
+            "name": document.get("name", ""),
+            "type": resource_type.rsplit("/", 1)[-1],
+            "collection": document.get("collection", ""),
+            "newSignature": document.get("signature"),
+        }
+
+    def _create_identity(
+        self,
+        resource_type: str,
+        entries: dict[tuple[str, str], dict[str, Any]],
+        change: dict[str, Any],
+    ) -> tuple[str | None, str]:
+        """The resource a create item names, or ``(None, "")`` for an invalid item.
+
+        A non-singleton create item names its resource (its documented schema requires
+        ``name``); a singleton's item declares no name and addresses the type's single
+        resource, whose replacement identity is described by its own state.
+        """
+
+        collection = change.get("collection", "")
+        if not isinstance(collection, str):
+            return None, ""
+        name = change.get("name")
+        if name is None:
+            existing = self._singleton(resource_type)
+            name = str(existing.get("name", resource_type)) if existing else resource_type
+        if not isinstance(name, str) or not name.strip():
+            return None, ""
+        return name, collection
 
     def _change_target(
         self,
@@ -848,6 +1079,38 @@ class _Server(http.server.ThreadingHTTPServer):
         if not isinstance(name, str) or not name.strip():
             return None
         return entries.get((name, collection))
+
+
+#: The response bodies the modelled Gateway answers with. They are modelled, not
+#: recorded: no live Gateway is reachable from this fixture, and each shape is the
+#: documented or decided one (409 for a signature mismatch and a collision, a 200
+#: carrying ``success=false`` with a ``problem`` for a refusal).
+_INVALID_BODY: dict[str, Any] = {"message": "Invalid request body", "status": "400"}
+_NO_SUCH_RESOURCE: dict[str, Any] = {"message": "No such resource", "status": "404"}
+_SIGNATURE_MISMATCH: dict[str, Any] = {
+    "message": "Signature mismatch: the resource changed after it was read",
+    "status": "409",
+}
+
+
+def _refused(problem: str) -> dict[str, Any]:
+    """A refusal the Gateway reports inside a 2xx resource response."""
+
+    return {"success": False, "problem": {"message": problem, "stacktrace": []}}
+
+
+def _decode_changes(body: bytes) -> list[dict[str, Any]] | None:
+    """The change items of one resource write, or ``None`` for an invalid body."""
+
+    try:
+        changes = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(changes, list) or not changes:
+        return None
+    if not all(isinstance(change, dict) for change in changes):
+        return None
+    return [dict(change) for change in changes]
 
 
 def _resource_collection(
@@ -975,24 +1238,44 @@ class RecordedGateway:
     def signature(self, resource_type: str, name: str, collection: str = "") -> str:
         return str(self.resource(resource_type, name, collection)["signature"])
 
-    def race_update_with(self, **fields: Any) -> None:
-        """Model another writer changing the addressed resource at PUT time.
+    def refuse_writes_with(self, operation: str, problem: str | None) -> None:
+        """Model a Gateway that answers 200 with ``success=false`` for one operation.
 
-        The competing change lands after this harness's pre-dispatch read and before
-        the Gateway's signature check, so the Gateway refuses the caller's own change
-        with a signature mismatch: the deterministic race D30 §2 documents.
+        ``operation`` is the write the Tool performs: ``update`` (PUT), ``create``
+        (POST on the collection route), ``delete`` (DELETE) or ``rename`` (POST on
+        the rename route).
         """
 
-        self._server.update_race = dict(fields)
+        self._server.write_problem[operation] = problem
 
-    def fail_updates_with(self, status: int = 500) -> None:
-        """Model a Gateway that answers every resource PUT with ``status``.
+    def fail_writes_with(self, operation: str, status: int = 500) -> None:
+        """Model a Gateway that answers one write operation with ``status``.
 
         Nothing is applied, and the caller cannot tell whether its write landed before
         the failure — the ambiguous dispatch boundary of D08.
         """
 
-        self._server.update_status = status
+        self._server.write_status[operation] = status
+
+    def race_write_with(self, operation: str, **fields: Any) -> None:
+        """Model another writer acting on the target at dispatch time.
+
+        The competing change lands after this harness's pre-dispatch read and before
+        the Gateway's own check, which is the deterministic race each operation's
+        Precondition token is meant to narrow (D30 §2). Any field models the writer
+        changing the resource; ``deleted=True`` models it *removing* the target, which
+        is what a delete or a rename cannot tell apart from its own work.
+        """
+
+        self._server.write_race[operation] = dict(fields)
+
+    # The update shorthand the reviewed #14 cases call; the generic methods above are
+    # the same mechanism, named for the operation each one models.
+    def race_update_with(self, **fields: Any) -> None:
+        self.race_write_with("update", **fields)
+
+    def fail_updates_with(self, status: int = 500) -> None:
+        self.fail_writes_with("update", status)
 
     def change_resource_out_of_band(
         self, resource_type: str, name: str, collection: str = "", **fields: Any,
@@ -1008,7 +1291,7 @@ class RecordedGateway:
     def refuse_updates_with(self, problem: str | None) -> None:
         """Model a Gateway that answers 200 with ``success=false`` for every PUT."""
 
-        self._server.update_problem = problem
+        self.refuse_writes_with("update", problem)
 
     def restart(self) -> None:
         """Apply an accepted shared certificate as the recorded Gateway restart did."""
