@@ -1,0 +1,15 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "tag_write",
+    "description": "Write current Tag values via system.tag.writeBlocking: one bounded batch, scalars and arrays of scalars only (Dataset and Document values are invalid_argument). The per-item Native outcome is the result's QualityCode; a bounded read-back is returned as Observed state and never decides success. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable; a target outside the tag_write Target allowlist, or inside the reserved IgnitionMCPPolicy provider (whatever the allowlist says, including an explicit *), fails with permission_denied before anything executes. Preflight checks every item before any item runs, with no rollback. Runtime audit follows the policy's auditMode; a failed post-write audit reports auditRecorded=false and stays a success. D28 ignition-null-v1 encodes logical null as {\"$ignition\":\"null\"}. D10: the documented default batch is 20 items and the hard maximum is 100. Example: {\"writes\":[{\"path\":\"[default]AHU/AHU01/Setpoint\",\"value\":22}]}.",
+    "parameters": [
+      {"name": "writes", "description": "1..100 write items: {\"path\": provider-qualified current Tag value path, \"value\": scalar or array of scalars}. Default 20 (D10), hard maximum 100.", "type": "array", "required": true},
+      {"name": "timeout", "description": "Timeout in milliseconds, 0..30000. Default 10000.", "type": "integer", "required": false, "default": 10000}
+    ]
+  }
+}
