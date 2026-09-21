@@ -142,6 +142,22 @@ G4 closes only when all of the following are true:
 
 Run the full command block in `AGENTS.md` (Commands) after every ticket. Before spending a live CI run, rehearse locally against `tests/harness/recorded_gateway.py`.
 
+## Results
+
+### Ticket #14 — REST `config_resource_update` (milestone 4c)
+
+- Fixture-first coverage: the 8.3.8 OpenAPI resource-type classification, the
+  `config_resource_get` signature, the refusal, the precondition and the two
+  deployment gates are all covered by `packages/ignition-rest-mcp/tests/test_phase4_*`
+  against the recorded Gateway; the full `AGENTS.md` command block is green.
+- Live: `.github/workflows/phase4-live-rest.yml` (environment `phase4-live`,
+  matrix 8.3.8 required / 8.3.9 candidate) runs
+  `tests/harness/phase4-live-rest/rest_driver.py` twice — class enabled and class
+  disabled — plus the local rehearsal `rehearse_local.py` (14/14 cases) against the
+  recorded Gateway. Run IDs and outcomes are recorded here as each live run lands;
+  the uploaded artifacts hold `provision.json`, `observations.json`, `identity.json`
+  and the raw MCP bodies.
+
 ## Open questions
 
 - **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy.** D30 §7 maps "target not
@@ -159,3 +175,10 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   classification test discovers documents by `docs/ignition-*-openapi/openapi.min.json`, so
   committing an 8.3.9 export fails the test until its types are classified. Producing that export
   needs a live Gateway, which only CI has.
+- **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
+  live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
+  timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open
+  questions. The compensating controls are mandatory in the workflow: the trusted-repo guard, no
+  repository or environment secrets in the job, loopback/compose-only Gateway and MCP endpoints,
+  run-unique CI-only credentials, and the driver's expectation checks over live data. Each run
+  repeats the note in its uploaded `identity.json`.

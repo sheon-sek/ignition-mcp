@@ -60,7 +60,17 @@ def authorize_scope(principal: VerifiedPrincipal, operation: MutationOperation) 
 
 def evaluate_deployment_policy(
     settings: Settings, operation: MutationOperation, target_id: str, capability_present: bool,
+    *,
+    target_class: PolicyDecision | None = None,
 ) -> PolicyDecision:
+    """The deployment-side checks, in D08's order.
+
+    Class enablement, then the operation allowlist, then the operation's own
+    Target-class rule (D30 §5 Refused resource types — evaluated *before* the
+    Target allowlist, so a refused type is denied even under ``*``), then the
+    Target allowlist, then the capability.
+    """
+
     class_enabled = {
         CONFIG_MUTATION: settings.config_mutation_enabled,
         CONTROL_MUTATION: settings.control_mutation_enabled,
@@ -77,6 +87,8 @@ def evaluate_deployment_policy(
             allowed=False, layer="operation-allowlist", reason="operation-not-allowlisted",
             error_code="operation_disabled",
         )
+    if target_class is not None and not target_class.allowed:
+        return target_class
     targets = settings.mutation_targets.get(operation.op_id, ())
     if WILDCARD not in targets and target_id not in targets:
         return PolicyDecision(

@@ -75,9 +75,9 @@ class MutationRequest:
     precondition: Callable[[], Awaitable[None]] | None = None
     audit_fields: dict[str, Any] = field(default_factory=dict)
     target_type: str = ""
-    #: A Target-class policy rule the operation itself declares (D30 §5): it runs
-    #: after the deployment policy and before anything is dispatched, and its
-    #: denial is audited like every other layer.
+    #: A Target-class policy rule the operation itself declares (D30 §5): it is
+    #: evaluated between the operation allowlist and the Target allowlist, inside
+    #: the deployment policy, and its denial is audited like every other layer.
     target_policy: Callable[[], PolicyDecision] | None = None
     #: A Gateway can report a refused change inside a 2xx response (Ignition's
     #: resource PUT answers ``success=false`` with a ``problem``). Such a response
@@ -124,11 +124,11 @@ async def execute_mutation(
         evaluate_deployment_policy(
             settings, request.operation, request.target_id,
             registry.supports(request.operation.capability),
+            # D30 §5: the operation's own Target-class rule (Refused resource
+            # types) is evaluated before the Target allowlist, so it also covers
+            # the fully allowlisted deployment where only it can refuse.
+            target_class=request.target_policy() if request.target_policy is not None else None,
         ),
-        # D30 §5: a Target-class rule the operation declares (Refused resource
-        # types) runs after the deployment policy, so it also covers the fully
-        # allowlisted deployment where only it can refuse.
-        request.target_policy() if request.target_policy is not None else PolicyDecision.allow(),
     ):
         if not decision.allowed:
             await auditor.decision(

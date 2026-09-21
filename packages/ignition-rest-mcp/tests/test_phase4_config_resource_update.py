@@ -419,18 +419,26 @@ def test_a_signature_the_gateway_will_not_report_cannot_be_preconditioned(tmp_pa
     assert puts == []
 
 
-def test_a_refused_resource_type_is_denied_even_under_a_wildcard_allowlist(
-    tmp_path: Path,
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("*",),
+        (f"{PROFILE}/{RESOURCE}",),
+    ],
+    ids=["wildcard", "narrow"],
+)
+def test_a_refused_resource_type_is_denied_whatever_the_allowlist_says(
+    tmp_path: Path, targets: tuple[str, ...],
 ) -> None:
-    """D30 §5: the refused set is contract-listed, survives every allowlist, and
-    never reaches the Gateway — including the Gateway's own API tokens."""
+    """D30 §5: the refused set is contract-listed, precedes the Target allowlist,
+    and never reaches the Gateway — including the Gateway's own API tokens."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
         signature = gateway.signature(TOKEN_TYPE, "ignition-mcp-ci")
         settings = _mutation_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
-            mutation_targets={UPDATE_TOOL: ("*",)},
+            mutation_targets={UPDATE_TOOL: targets},
         )
 
         with TestClient(server_module.create_server(settings).http_app()) as http:
