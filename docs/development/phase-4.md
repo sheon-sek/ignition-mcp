@@ -86,7 +86,7 @@ Authentication: the D07 Phase 4 amendment adds named static tokens with per-toke
 
 These rules come from D30. The decision holds the full text.
 
-- **Runtime Target Policy.** A Gateway document outside the bundle. It is read by every Runtime Mutation handler and fails closed with `operation_disabled`. It holds Target allowlists per class (provider-qualified prefixes matched at segment boundaries), the Service identity, the audit mode and the shelve cap. UDT definitions need an explicit `_types_` prefix.
+- **Runtime Target Policy.** A Gateway document outside the bundle. It is read by every Runtime Mutation handler and fails closed with `operation_disabled`. It holds Target allowlists per Mutation class (provider-qualified prefixes matched at segment boundaries), the Service identity, the audit mode and the shelve cap. UDT definitions need an explicit `_types_` prefix. Its document contract is `contracts/shared/runtime-target-policy.schema.json`; ticket #7 keyed `allowlists` by Tool name (see Open questions).
 - **Preflight.** Every item in a batch passes input, allowlist and Precondition-token checks before any item executes. Items then execute one at a time, with per-item outcomes and no rollback.
 - **Fixed knobs.** `references=ABORT`, `allowInvalidReferences=false`, `collisionPolicy=Abort`.
 - **Refused resource types.** Contract-listed and refused even under `*`. An unclassified type is refused, and a test fails on any unclassified type in a supported OpenAPI document.
@@ -148,3 +148,41 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **`alarm_acknowledge` (ticket #9) is parked.** The D12 Phase 4 amendment holds only if recorded evidence shows an exact-path `queryStatus` is bounded before or during execution. The recorded run shows the opposite: one exact Alarm path returned 1 → 2 → 3 items over three unacknowledged activate/clear cycles, because cleared-unacknowledged events accumulate until they are acknowledged, and the query exposes no limit or continuation (D12 Phase 2 amendment). The handler-side Observed state for an acknowledge has no bounded source, so the ticket cannot be implemented as specified. **For the owner:** approve the park, or supply a credible pre/during-execution bound (a verified native limit/continuation, or an independently bounded alarm backend). The scope and ticket tables mark it parked.
 - **Policy read bound (ticket #6 follow-up).** The Runtime Target Policy is a `String` Tag, and Ignition documents no maximum length for a Tag value; `system.tag.readBlocking` takes only paths and a timeout, so a post-read length check is not a bound (the reasoning D12's Phase 2 amendment applied to `alarm_status`). The recommendation is therefore conditional on a product-enforced cap: the policy Tag carries a companion `RuntimeTargetPolicyLength` Int4 Tag that `setup-native apply` writes in the same import, and the reader refuses a document whose declared length is missing, non-integer or over `IgnitionMcpPolicyMaxBytes` (32 KiB) **without reading the value at all**, then re-checks the value's byte length after reading. The harness measures both the served, length-verified read and a deliberately oversize pair that must be skipped unmaterialized. **For the owner to approve or reject:** the cap value and the rule that `apply` is the only writer of that provider (which is what makes the declared length an enforced maximum). If the cap is rejected, the fail-closed default is to keep Runtime Mutations disabled and move the policy to a mechanism with a native bound.
 - **`phase4-live` environment reuse.** The new `phase4-live` GitHub environment was created with no protection rules, reusing the owner-accepted deviation recorded for `phase3-live`. The compensating controls are the trusted-repo guard, no repository or environment secrets in the job, compose-localhost endpoints only, run-unique Alarm paths, and the driver-enforced CI marker plus Gateway-identity check that fails closed before any probe call. Recorded in every evidence row (`ownerAcceptedDeviations`).
+- **Ticket #7 resolved the two policy questions above in the fail-closed direction.** `tag_write` implements the reserved-provider refusal and the companion-length gate, so the recommendations in the two questions above are now the shipped behavior rather than a proposal. The document contract is `contracts/shared/runtime-target-policy.schema.json` (lint-checked against the reader's required fields), and the harness documents are validated against it in `tooling/native/tests/test_phase4_harness.py`.
+- **Policy `allowlists` is keyed by Tool name, not by Mutation class.** D30 §1 says "Target allowlists per class"; the document is keyed by Tool (`tag_write`, `alarm_shelve`, …) because a Tag path prefix and an Alarm source pattern have different grammars and one class-wide list would have to accept both. This is strictly finer-grained than per-class — a Tool with no key has no targets — and it matches the document the ticket #6 evidence recorded. The contract linter requires each Runtime Mutation contract's `allowlistKey` to be its own Tool name.
+- **The policy carries an optional `auditProfile`, and `required` mode verifies it through `system.config.getResource`.** D30 §6 says `required` mode "checks that the Project's audit profile is configured". Ignition 8.3 exposes no scripting getter for the project's audit profile (`system.project` has `getProjectName`, `getProjectNames`, `requestScan`), so a handler cannot read that setting directly. The shipped behavior is therefore: `required` mode requires the policy to name an `auditProfile` that resolves through `system.config.getResource("ignition", "audit-profile", name)` to an enabled resource, and fails closed with `operation_disabled` (`auditProfileUnavailable`) otherwise; all audit writes pass that profile explicitly, so the row does not depend on the project's own setting. This is a stronger, verifiable form of the D30 rule, and the optional field is part of the ticket #7 contract work. **For the owner:** confirm this reading, or name the native read that exposes the project's audit profile.
+- **The reserved-provider refusal is `permission_denied`, and it precedes the allowlist check per item.** D30 §7 maps "target not allowlisted, or a Refused resource type" to `permission_denied`; the reserved provider is the same class of refusal, so `tag_write` answers `permission_denied` with `details.items[].reason = "reservedProvider"`. Because the check runs before the allowlist for each item, a reserved target is refused identically under a prefix allowlist and under an explicit `*`, which is exactly what the live case proves.
+- **An unattributable Native outcome list is a whole-batch `outcome_unknown`.** `system.tag.writeBlocking` answers one QualityCode per path. If the count does not match, no item can be attributed positionally, so the Tool returns `outcome_unknown` for the batch (with `requested`/`returned` in the details) instead of guessing a prefix. Per-item `outcome_unknown` is reserved for an item whose own Native outcome is present but indeterminate (a null QualityCode).
+- **Live proof of the Runtime `required` audit mode is left to G4 close (#23).** Ticket #7 fixture-covers the `required` path (audit profile missing, attempt write failed, and the success shape), and its live stage runs `best_effort` with the audit rows read back from the profile. The G4 acceptance item "audit failure (`required` mode) proven live on both Planes" needs a policy state whose `auditMode` is `required`; the harness can install one with `install_tag_write_policy(audit_mode="required")`, but doing it in this ticket would spend a live run on a case the ticket does not require.
+- **`tag_write` live evidence (ticket #7).** See "Ticket results" below.
+
+## Ticket results
+
+Recorded here when a ticket's live evidence lands; the runbook's Open questions
+hold what needs an owner decision.
+
+| Ticket | Status | What landed | Evidence |
+|---|---|---|---|
+| #6 (4a) | done | Runtime Target Policy storage characterized; `alarm_acknowledge` parked | `phase4-live-g4a` runs 35635887711, 35636981286, 35640303173 (both Gateway rows) |
+| #7 (4a) | implemented; live run pending | `tag_write` end to end: policy gate, Preflight, per-item Native outcome, Observed state, Runtime audit, reserved-provider refusal, `operator`/`full` profiles, bundle 0.3.0 | `phase4-live-g4a` run (filled in below) |
+
+### Ticket #7 (`tag_write`)
+
+- Contract `contracts/tools/runtime/tag_write.contract.json` (CONTROL, not
+  destructive, FAST, 1..100 items) and `contracts/schemas/tag-write.output.schema.json`;
+  the policy document contract is `contracts/shared/runtime-target-policy.schema.json`.
+- Handler `packages/ignition-runtime-bundle/.../tools/tag_write/onToolCalled.py`:
+  the gated two-step policy read (companion length Tag, 32 KiB cap, length-equals-value
+  re-check), input/allowlist/reserved-provider Preflight over every item, one
+  `system.tag.writeBlocking` call, per-item QualityCodes, a bounded `readBlocking`
+  Observed state, and `system.util.audit` attempt/result rows under the policy's
+  audit mode with the policy's Service identity as actor.
+- Profiles: `tag_write` added to `operator` and `full`; `readonly` and
+  `configurator` unchanged; bundle `BUNDLE_VERSION` 0.2.0 → 0.3.0 (D21 MINOR).
+- Fixtures: 20 recorded-Jython fixtures (`tooling/native/jython_runner/fixtures/`)
+  driven by `tooling/native/jython_runner/tests/test_tag_write.py`; the D29 runner
+  now replays an ordered native call sequence, so a fixture fails when the handler
+  makes an unrecorded call or skips a recorded one.
+- Live: `tests/harness/phase4-live/` gained `tag-write-no-policy`,
+  `tag-write-setup` and `tag-write` stages, a `tag_fixture_probe` probe Tool, the
+  `phase4-operator` Server Config, and the shipped bundle as a deployed project.
