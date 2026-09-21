@@ -164,6 +164,28 @@ jobs:
           echo "Authenticated Gateway REST did not become ready" >&2
           exit 1
 
+      - name: Capture the Gateway OpenAPI document
+        shell: bash
+        run: |
+          set -euo pipefail
+          document="$EVIDENCE_DIR/openapi-$GATEWAY_VERSION.json"
+          curl --fail --silent --show-error --max-time 60 \
+            -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+            http://127.0.0.1:8088/openapi.json > "$document"
+          python3 - "$document" <<'PY'
+          import hashlib, json, sys
+          from pathlib import Path
+          path = Path(sys.argv[1])
+          raw = path.read_bytes()
+          document = json.loads(raw)
+          paths = document.get("paths")
+          if not isinstance(paths, dict) or not paths:
+              raise SystemExit(f"{path}: captured document has no paths")
+          digest = hashlib.sha256(raw).hexdigest()
+          Path(str(path) + ".sha256").write_text(f"{digest}  {path.name}\n", encoding="utf-8")
+          print(f"openapi: {len(raw)} bytes, {len(paths)} paths, sha256 {digest}")
+          PY
+
       - name: Provision the Phase 4 REST fixtures
         shell: bash
         run: |
