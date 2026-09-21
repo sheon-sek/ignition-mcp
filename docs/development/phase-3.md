@@ -328,6 +328,7 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 7 | `6e7035f` | full validation suite green (360 tests) |
 | 8 | `a81ba12` | full validation suite green (370 tests) |
 | 9 | `40ecc81` | full validation suite green (compat validator + double-release cmp added) |
+| 10 | `5c4bd26` | full validation suite green (509 tests; verified per handoff checklist; structural scan CLI exclusion + compensating GET-only test added) |
 
 ## Handoff status (2026-09-21, context-window boundary — continue from here in a fresh omp)
 
@@ -362,6 +363,19 @@ UNKNOWN(incomplete)-vs-UNTESTED(no-row) mapping, exact inventory (superset = FAI
 Commit subject: `feat(cli): setup-native doctor/plan/verify (read-only, manifest-driven)`.
 
 ### Remaining: Slice 11 then 12
+
+**Status (slice 11 scaffolding committed):** `tests/harness/phase3-live/`
+(docker-compose, `driver.py`, `inventory_gate_off.py`, `harness_common.py`,
+fixture-project, phase3-runtime server-config, README) plus
+`tooling/compat/generate.py` (`python -m tooling.compat generate …`, self-validating
+through the slice-9 validator, refuses failed/fatal observations, never overwrites
+existing evidence) and `.github/workflows/phase3-live-g3.yml` (pull_request +
+trusted-repo guard + `environment: phase3-live` + owner-deviation recorded in every
+row; 8.3.8 required / 8.3.9 candidate; deploys the exact release ZIP and records its
+SHA-256 + manifest; L5 CI marker written during provisioning and verified by the
+driver before any import; bounded diagnostics + unconditional teardown). Driver exit
+codes 0/3/2; evidence generated per row and merged-set validated in CI. Remaining:
+push + draft PR + live G3 run + commit generated evidence rows (then slice 12).
 
 Slice 11: `tests/harness/phase3-live/` (compose modeled on phase2-live: exact images 8.3.8 required +
 8.3.9 candidate, module checksum-pinned, minimal GATEWAY_MODULES_ENABLED whitelist, bounded diagnostics

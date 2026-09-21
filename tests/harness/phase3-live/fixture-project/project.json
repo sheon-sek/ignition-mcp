@@ -1,0 +1,7 @@
+{
+  "title": "Ignition MCP Phase 3 G3 Disposable",
+  "description": "Run-unique disposable Project for guarded transaction evidence only",
+  "parent": "",
+  "enabled": true,
+  "inheritable": false
+}
