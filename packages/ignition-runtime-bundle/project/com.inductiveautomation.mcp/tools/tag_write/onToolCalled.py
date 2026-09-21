@@ -201,8 +201,19 @@ def onToolCalled(builder, writes, timeout):
 		if not isinstance(allowlists, (dict, Map)):
 			return "policyAllowlists"
 		for key in allowlists:
-			if normalizeEntries(allowlists.get(key)) is None:
+			# The document shape is validated for every key, but the *grammar* of
+			# an entry belongs to the Tool that reads it: an Alarm source pattern
+			# and a Tag path prefix are different languages. Each handler therefore
+			# validates its own key strictly and the others only as strings.
+			entries = allowlists.get(key)
+			if not isinstance(entries, (list, tuple, List)):
 				return "policyAllowlists"
+			for entry in entries:
+				if not isinstance(entry, basestring) or not entry.strip():
+					return "policyAllowlists"
+		own = allowlists.get(ALLOWLIST_KEY)
+		if own is not None and normalizeEntries(own) is None:
+			return "policyAllowlists"
 		serviceIdentity = document.get("serviceIdentity")
 		if not (isinstance(serviceIdentity, basestring) and serviceIdentity.strip()):
 			return "policyServiceIdentity"

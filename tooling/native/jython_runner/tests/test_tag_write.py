@@ -234,6 +234,9 @@ VALID_POLICY_FIXTURES = (
     "tag_write-reserved-provider-under-wildcard",
     "tag_write-preflight-refuses-whole-batch",
     "tag_write-wildcard-allows-target",
+    "tag_write-mixed-tool-allowlists",
+    # Shape-valid: only the Tool's own key is held to its entry grammar.
+    "tag_write-policy-broken-allowlist-entry",
     # The length-mismatch fixture replays a valid document with a wrong declared
     # length; the oversize fixture deliberately replays no document at all.
     "tag_write-policy-length-mismatch",
@@ -262,6 +265,23 @@ def _replayed_policies(name: str) -> list[dict]:
             if isinstance(value, str) and value.startswith("{"):
                 policies.append(json.loads(value))
     return policies
+
+
+def test_another_tools_allowlist_grammar_does_not_disable_this_tool() -> None:
+    """The deployment document carries every Tool's allowlist. An Alarm source
+    pattern is not a Tag path, so tag_write must validate its own key strictly and
+    leave the others to the Tools that read them — the live run refused the
+    ticket #6 document shape until this was fixed."""
+    structured = run_recorded_tool("tag_write", _fixture("mixed-tool-allowlists"))["structuredContent"]
+
+    assert structured["summary"]["succeeded"] == 1
+    assert structured["items"][0]["quality"]["good"] is True
+
+
+def test_this_tools_own_allowlist_entry_must_be_a_tag_path() -> None:
+    error = _error("policy-broken-allowlist-entry", "operation_disabled")
+
+    assert error["details"]["reason"] == "policyAllowlists"
 
 
 def test_recorded_policy_documents_satisfy_the_shipped_schema() -> None:
