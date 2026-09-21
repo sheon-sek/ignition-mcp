@@ -160,35 +160,41 @@ def _read_entries(data: bytes) -> dict[str, bytes]:
     return {info.filename: source.read(info.filename) for info in source.infolist()}
 
 
-#: The live Gateway rewrites project.json on every export (deterministic but
-#: not our indentation), so the candidate edit must preserve the exported bytes
-#: exactly except for the description value. Otherwise a re-import/export
-#: cannot reproduce pcf1(B) and COMMITTED degrades to RECOVERY_REQUIRED. g3diag
-#: R1 found that no JSON re-serialization variant matched the live pcf1.
+#: G3 runs 35593736110+ proved the live Gateway rewrites project.json on
+#: import: the post-import export matched neither the baseline export nor the
+#: hand-edited candidate, while every resource payload round-tripped byte-exact
+#: (query.sql and resource.json digests unchanged through import, verification
+#: capture and an independent re-export). The candidate edit therefore targets
+#: the named-query payload - plain SQL text the Gateway stores verbatim; the
+#: description edit and the probe file remain as documented fallbacks.
 DESCRIPTION_RE = re.compile(r'("description"\s*:\s*)"((?:[^"\\]|\\.)*)"')
 CANDIDATE_SUFFIX_RE = re.compile(r"\s*mcp-g3-candidate=[0-9a-f]{1,8}\s*$")
+DESCRIPTION_SUFFIX_RE = re.compile(r"\s*mcp-g3-candidate=[0-9a-f]{1,8}$")
+QUERY_ENTRY_RE = re.compile(r"^ignition/named-query/.+/query\.sql$")
 
 
-def _edit_description(entries: dict[str, bytes], token: str) -> dict[str, bytes]:
-    """Append a run token to the description, byte-preserving the rest.
-
-    Falls back to an added entry only when no project.json description string
-    is found (which would mean the export layout changed; the probe entry then
-    still makes B != A deterministically).
-    """
+def _edit_candidate(entries: dict[str, bytes], token: str) -> dict[str, bytes]:
+    """Append the run token as an SQL comment to the first named-query payload."""
     edited = dict(entries)
+    marker = f"-- mcp-g3-candidate={token}"
+    for name in sorted(edited):
+        if QUERY_ENTRY_RE.match(name):
+            original = edited[name].decode("utf-8", errors="replace")
+            base = CANDIDATE_SUFFIX_RE.sub("", original.rstrip()).rstrip()
+            edited[name] = f"{base} {marker}\n".encode("utf-8")
+            return edited
     original = edited.get("project.json")
     if original is not None:
         match = DESCRIPTION_RE.search(original.decode("utf-8", errors="replace"))
         if match is not None:
             current = json.loads(f'"{match.group(2)}"')
-            base = CANDIDATE_SUFFIX_RE.sub("", current).strip()
+            base = DESCRIPTION_SUFFIX_RE.sub("", current).strip()
             new_value = f"{base} mcp-g3-candidate={token}".strip()
-            text = original.decode("utf-8", errors="replace")
+            raw = original.decode("utf-8", errors="replace")
             replaced = DESCRIPTION_RE.sub(
-                lambda m: m.group(1) + json.dumps(new_value), text, count=1,
+                lambda m: m.group(1) + json.dumps(new_value), raw, count=1,
             )
-            if replaced != text:
+            if replaced != raw:
                 edited["project.json"] = replaced.encode("utf-8")
                 return edited
     edited["mcp-g3-probe.txt"] = token.encode("utf-8")
@@ -220,7 +226,7 @@ class _CopyBuilder(CandidateBuilder):
 
 
 class _EditBuilder(CandidateBuilder):
-    """Deterministic description edit + optional external-drift hook.
+    """Deterministic resource-payload edit + optional external-drift hook.
 
     Records the baseline and candidate entry digests, so a round-trip mismatch
     is diagnosable from a single run (g3diag R1 diagnostics).
@@ -237,7 +243,7 @@ class _EditBuilder(CandidateBuilder):
         self.baseline_entries = _entry_digests(data)
         if self.hook is not None:
             await self.hook()
-        payload = _drained_zip(_edit_description(_read_entries(data), self.token))
+        payload = _drained_zip(_edit_candidate(_read_entries(data), self.token))
         self.candidate_entries = _entry_digests(payload)
         await out.write(payload)
 
@@ -273,7 +279,7 @@ def _verify_project_description(client: GatewayClient, store: LocalArtifactStore
                 with contextlib.suppress(GatewayError):
                     await store.delete_internal(capture.artifact.artifact_id)
             marker = f"mcp-g3-candidate={token}".encode("utf-8")
-            if marker in _read_entries(data).get("project.json", b""):
+            if any(marker in payload for payload in _read_entries(data).values()):
                 return VerificationOutcome.CONFIRMED
             return VerificationOutcome.MISMATCH
         except GatewayError:
@@ -724,6 +730,50 @@ class Driver:
                                                        per_txn_seconds=self.settings.artifact_timeout_seconds)
         self.stage.check("restart-reconcile-clean-start", attempts == 0, attempts)
 
+        # -- round-trip probe (guarded, disposable project, recorded not asserted):
+        # re-import the Gateway's own export until the fingerprint stops moving.
+        # This separates "import normalizes project.json once" from "import stamps
+        # volatile data every time"; only the first is survivable by pcf1 verify.
+        async def _confirmed(dispatch: Any) -> VerificationOutcome:
+            return VerificationOutcome.CONFIRMED
+
+        chain: list[str] = []
+        current = await capture_project(
+            self.client, self.store, self.context("capture", str(principal_config.key)),
+            project_name=project, gateway_id=self.settings.gateway_id,
+            retention_class="EPHEMERAL", deadline_seconds=self.settings.artifact_timeout_seconds,
+        )
+        for _ in range(3):
+            chain.append(current.fingerprint)
+            if len(chain) > 1 and chain[-1] == chain[-2]:
+                break
+            body = await _artifact_bytes(self.store, current.artifact.artifact_id)
+            probe_context = self.context("project_import", str(principal_config.key), destructive=True)
+            await execute_mutation(
+                client=self.client, registry=self.registry, settings=self.settings,
+                context=probe_context,
+                request=MutationRequest(
+                    operation=PROJECT_IMPORT_OPERATION, principal=principal_config, target_id=project,
+                    request_path=f"/data/api/v1/projects/import/{project}",
+                    body_chunks=_chunked(body), content_type="application/zip",
+                    params={"overwrite": "true"},
+                    dispatch_deadline_seconds=self.settings.artifact_timeout_seconds,
+                    verification_deadline_seconds=self.settings.project_verification_timeout_seconds,
+                    verify=_confirmed, audit_fields={"projectName": project}, target_type="project",
+                ),
+            )
+            stale = current
+            current = await capture_project(
+                self.client, self.store, self.context("capture", str(principal_config.key)),
+                project_name=project, gateway_id=self.settings.gateway_id,
+                retention_class="EPHEMERAL", deadline_seconds=self.settings.artifact_timeout_seconds,
+            )
+            with contextlib.suppress(GatewayError):
+                await self.store.delete_internal(stale.artifact.artifact_id)
+        with contextlib.suppress(GatewayError):
+            await self.store.delete_internal(current.artifact.artifact_id)
+        self.observations["roundTripProbe"] = {"chain": chain, "stable": len(chain) > 1 and chain[-1] == chain[-2]}
+
         async def run(builder: CandidateBuilder) -> tuple[OperationContext, Any]:
             context = self.context("project_import", str(principal_config.key), destructive=True)
             result = await service.execute(project_name=project, builder=builder, context=context,
@@ -832,7 +882,7 @@ class Driver:
                 project_name=project, gateway_id=self.settings.gateway_id,
                 retention_class="EPHEMERAL", deadline_seconds=self.settings.artifact_timeout_seconds,
             )
-            data = _drained_zip(_edit_description(
+            data = _drained_zip(_edit_candidate(
                 _read_entries(await _artifact_bytes(self.store, drift.artifact.artifact_id)), external_token,
             ))
             drift_context = self.context("project_import", "jwt:g3-drift", destructive=True)
