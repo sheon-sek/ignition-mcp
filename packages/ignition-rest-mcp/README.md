@@ -16,7 +16,31 @@ The caller-facing MCP trust boundary is independent from the deployment-owned Ig
 
 Set `IGNITION_MCP_GATEWAY_URL` and `IGNITION_MCP_GATEWAY_API_TOKEN` for the deployment-owned upstream connection. Defaults bind only `127.0.0.1:8000/mcp` in the development profile.
 
-For internal production, explicitly set `IGNITION_MCP_DEPLOYMENT_PROFILE=trusted-internal` and choose `IGNITION_MCP_AUTH_MODE=static-token` with `IGNITION_MCP_STATIC_TOKEN`, or explicitly select `none` on a trusted network. Plain HTTP and authentication are independent choices under D07-A.
+For internal production, explicitly set `IGNITION_MCP_DEPLOYMENT_PROFILE=trusted-internal` and choose `IGNITION_MCP_AUTH_MODE=static-token` with `IGNITION_MCP_STATIC_TOKENS`, or explicitly select `none` on a trusted network. Plain HTTP and authentication are independent choices under D07-A.
+
+**Named static tokens** (D07 Phase 4 amendment). `IGNITION_MCP_STATIC_TOKENS` is a JSON object
+mapping a token name to `{"token": "...", "scopes": [...]}`. Scopes are drawn from the four
+canonical scopes (`ignition.read`, `ignition.config`, `ignition.control`, `ignition.admin`) with
+**no hierarchy**, and the token's *name* — never its value — is its Mutation principal: the audit
+actor, the operation-record actor and the artifact owner are `static-token:<name>`. Startup fails
+closed on an unknown scope, an empty, repeated or whitespace-only scope/token value, a repeated JSON
+key, a duplicate name, two names sharing one value, more than 32 tokens, a name outside 1–64
+characters of `[A-Za-z0-9._:-]`, or a token value longer than 512 characters.
+`IGNITION_MCP_STATIC_TOKEN` remains the single-token form: one token named
+`trusted-internal-static-token` (the Phase 1–3 principal name) holding `ignition.read` only, verified
+exactly as given — the value is never trimmed, so surrounding spaces are part of the credential. An
+empty or whitespace-only value, or setting both variables, is a configuration error.
+
+Every Tool and Resource declares the scope it needs — a `scope:<scope>` tag next to its capability
+tag, mirrored by `requiredScope` in its contract. Authorization is centralized in middleware and
+runs twice (D07): an unauthorized component is filtered out of `tools/list`/`resources/list`, and a
+call to it is refused with `permission_denied` *before* the handler or the Gateway is reached. Each
+refusal is also a durable audit `decision` row (`denied:authz-scope:missing-scope:<scope>`, the
+token name as actor, the Tool's effect class as `operation_class`) sharing one correlation ID with
+the caller's error envelope; a denial is never upgraded to an allow because the audit write failed.
+The credential itself never leaves `auth.py`: it is not logged, not audited, not returned in an error,
+and not retained on the verified token. `auth=none` has no principal and stays `ignition.read` only,
+so it can neither read a CONFIG/ADMIN surface nor mutate anything.
 
 For `IGNITION_MCP_DEPLOYMENT_PROFILE=secured`, set `IGNITION_MCP_AUTH_MODE=jwt`, mandatory `IGNITION_MCP_JWT_ISSUER` and `IGNITION_MCP_JWT_AUDIENCE`, and exactly one of `IGNITION_MCP_JWT_JWKS_URI` (HTTPS) or `IGNITION_MCP_JWT_PUBLIC_KEY` (PEM). Phase 1 accepts RS256 with valid signature, expiry and `ignition.read` scope. Verified token subject/client becomes the operation actor. This is resource-server verification, not an OAuth authorization server. JWKS retrieval/rotation is delegated to FastMCP; live IdP rotation has not been integration-tested.
 
@@ -62,8 +86,8 @@ and at call time with `operation_disabled`; every attempt including denials is a
 `IGNITION_MCP_MUTATION_OPERATIONS` is a CSV allowlist (≤100 ids, `*` allowed) and
 `IGNITION_MCP_MUTATION_TARGETS` a JSON object mapping operation id → target list (deny-by-default;
 an operation with no target list allows nothing). Mutations accept only a `VerifiedPrincipal`
-minted by `auth.py` from a just-verified credential; in Phase 3 only `jwt` deployments can carry
-`ignition.config`, and `static-token`/`none` are read-only.
+minted by `auth.py` from a just-verified credential; `jwt` takes its scopes from the verified token
+claims and a named static token from its configured scope set, while `auth=none` stays read-only.
 
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,

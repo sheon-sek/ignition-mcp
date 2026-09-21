@@ -17,6 +17,7 @@ from fastmcp import Client
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
 from ignition_rest_mcp.artifacts.routes import ZipSafetyValidator, _stream
+from ignition_rest_mcp.config import LEGACY_STATIC_TOKEN_NAME, READ_SCOPE, StaticToken
 from ignition_rest_mcp.storage.database import Database
 from ignition_rest_mcp.storage.schema import AUDIT_DDL, STATE_DDL
 from test_config import _settings
@@ -32,6 +33,12 @@ def _run(coro: Any) -> Any:
         return await coro
 
     return asyncio.run(main())
+
+
+def _legacy_static_token() -> tuple[StaticToken, ...]:
+    """The Phase 1--3 single-token configuration, as D07's named form."""
+
+    return (StaticToken(name=LEGACY_STATIC_TOKEN_NAME, token=STATIC_TOKEN, scopes=(READ_SCOPE,)),)
 
 
 class _Stack:
@@ -184,7 +191,7 @@ def test_internal_artifacts_do_not_require_audit_rows(tmp_path: Path) -> None:
 
 def test_unknown_id_bad_syntax_and_unauthenticated_404_400_401(tmp_path: Path) -> None:
     async def scenario() -> None:
-        async with _Stack(tmp_path, auth_mode="static-token", static_token=STATIC_TOKEN) as stack:
+        async with _Stack(tmp_path, auth_mode="static-token", static_tokens=_legacy_static_token()) as stack:
             auth = {"Authorization": STATIC_BEARER}
             noauth = await stack.http.get("/artifacts/" + "0" * 36)
             assert noauth.status_code == 401
@@ -211,7 +218,7 @@ def test_unknown_id_bad_syntax_and_unauthenticated_404_400_401(tmp_path: Path) -
 
 def test_static_token_single_trust_domain(tmp_path: Path) -> None:
     async def scenario() -> None:
-        async with _Stack(tmp_path, auth_mode="static-token", static_token=STATIC_TOKEN) as stack:
+        async with _Stack(tmp_path, auth_mode="static-token", static_tokens=_legacy_static_token()) as stack:
             owner_key = "static-token:trusted-internal-static-token"
             ref = await _publish_fixture(tmp_path, stack.settings, owner=owner_key)
             ok = await stack.http.get(
