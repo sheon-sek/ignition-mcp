@@ -408,6 +408,83 @@ def test_recorded_alarm_report_shows_events_accumulating_without_acknowledgement
     assert facts["exactPathBoundedBasis"]["noAccumulationWithoutAck"] is False
 
 
+def test_the_handler_read_gate_opens_an_mcp_session(tmp_path: Path) -> None:
+    """The Module refuses `tools/call` with HTTP 400 (`Session is required for
+    method: tools/call`) until the caller has initialized, which live run
+    35667242361 recorded for a gate that called the probe without a session: 61
+    attempts, all refused, and the provision stage failed on both rows. This
+    endpoint enforces the same rule against the real `McpClient`."""
+    sessions: list[str] = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            payload = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)))
+            method = str(payload.get("method", ""))
+            if method == "initialize":
+                session = "mcp-session-1"
+                sessions.append(session)
+                self._json({
+                    "jsonrpc": "2.0", "id": payload.get("id"),
+                    "result": {"protocolVersion": "2025-06-18", "serverInfo": {"name": "probe"}},
+                }, session)
+                return
+            if self.headers.get("Mcp-Session-Id") not in sessions or not sessions:
+                body = json.dumps({
+                    "message": f"Session is required for method: {method}",
+                    "url": self.path.split("?")[0],
+                    "status": "400",
+                }).encode()
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            report = json.loads((FIXTURES / "policy-probe.json").read_text(encoding="utf-8"))
+            for entry in report["measurements"]:
+                if entry["name"] == "tag.readBlocking.missing":
+                    entry["items"] = [{"quality": "Bad_NotFound", "valueType": "NoneType"}]
+            self._json({
+                "jsonrpc": "2.0", "id": payload.get("id"),
+                "result": {"content": [{"type": "text", "text": "ok"}], "structuredContent": report},
+            }, None)
+            return
+
+        def _json(self, value: Any, session: str | None) -> None:
+            body = json.dumps(value).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            if session:
+                self.send_header("Mcp-Session-Id", session)
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *args: Any) -> None:
+            return
+
+    class _Server(socketserver.ThreadingTCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    server = _Server(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        config = _config(
+            tmp_path, base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            provider_ready_deadline_seconds=5.0,
+        )
+        readiness = driver.wait_for_handler_read(config)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert readiness["serving"] is True
+    assert readiness["attempts"] == 1
+    assert sessions == ["mcp-session-1"]
+
+
 def test_policy_provision_gates_the_import_on_a_handler_read(tmp_path: Path) -> None:
     """REST readiness cannot see a provider that is still loading its Tags, and an
     import applied in that window leaves a Tag whose actor never starts (live run

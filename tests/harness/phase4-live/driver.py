@@ -374,6 +374,11 @@ def provider_read_state(config: Config, client: mcp_client.McpClient) -> dict[st
     and the running provider served nothing for the rest of the job while
     `/resources/find` and `/tags/export` kept answering 200. Readiness therefore
     has to come from a handler read, not from the config plane.
+
+    `client` must already have opened its MCP session; the Module answers
+    `tools/call` with HTTP 400 (`Session is required for method: tools/call`)
+    otherwise, which live run 35667242361 recorded for a caller that skipped
+    `initialize`.
     """
 
     try:
@@ -389,6 +394,17 @@ def provider_is_serving(state: dict[str, Any]) -> bool:
     return str(state.get("missingPathQuality", "")).startswith("Bad_NotFound")
 
 
+def session_is_required(state: dict[str, Any]) -> bool:
+    """Whether a failed probe read was refused for a missing MCP session.
+
+    The Module drops an idle session, and every request after that answers HTTP
+    400 until the caller initializes again, so the gate re-opens its session
+    instead of reporting a provider that is not serving.
+    """
+
+    return "Session is required" in str(state.get("error", ""))
+
+
 def wait_for_handler_read(
     config: Config, *, client: mcp_client.McpClient | None = None,
 ) -> dict[str, Any]:
@@ -402,11 +418,19 @@ def wait_for_handler_read(
 
     if client is None:
         client = mcp_client.McpClient(config.mcp_url, config.api_token)
+        client.initialize()
     deadline = time.monotonic() + config.provider_ready_deadline_seconds
     started = time.monotonic()
     attempts: list[dict[str, Any]] = []
     while True:
         state = provider_read_state(config, client)
+        if session_is_required(state):
+            try:
+                client.initialize()
+            except (mcp_client.McpError, StageFailure) as exc:
+                state = {"ok": False, "missingPathQuality": "", "error": str(exc)[:400]}
+            else:
+                state = provider_read_state(config, client)
         attempts.append(bounded(state, 2000))
         result = {
             "serving": provider_is_serving(state),
