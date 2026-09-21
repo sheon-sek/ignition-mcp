@@ -752,11 +752,9 @@ class ProjectTransactionService:
             )
             LOGGER.warning(
                 "Reconciled an interrupted transaction from its recorded dispatch answer "
-                "(never replayed, never re-read)",
-                extra={
-                    "event": "txn_reconcile", "outcome": "recorded_boundary",
-                    "errorCode": boundary.value,
-                },
+                "(never replayed, never re-read): %s",
+                boundary.value,
+                extra={"event": "txn_reconcile", "outcome": "recorded_boundary"},
             )
             return
 
@@ -835,18 +833,17 @@ class ProjectTransactionService:
 
     async def _reconcile_not_applied(
         self, txn_id: str, *, baseline_id: Any, candidate_id: Any, error_code: str,
-        import_dispatched: bool, current: Any = None,
+        import_dispatched: bool, current: CapturedProject | None = None,
     ) -> None:
         """End a reconciled attempt NOT_APPLIED: release the snapshot, drop the candidate."""
 
         if baseline_id:
             await self._store.release_retention(str(baseline_id))
-        for artifact_id in (str(candidate_id) if candidate_id else None,):
-            if artifact_id:
-                try:
-                    await self._store.delete_internal(artifact_id)
-                except GatewayError:
-                    pass
+        if candidate_id:
+            try:
+                await self._store.delete_internal(str(candidate_id))
+            except GatewayError:
+                pass
         if current is not None:
             try:
                 await self._store.delete_internal(current.artifact.artifact_id)
