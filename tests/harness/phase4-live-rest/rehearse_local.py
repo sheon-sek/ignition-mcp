@@ -37,8 +37,12 @@ sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from rest_driver import (  # noqa: E402
+    ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
+    DEFAULT_ALARM_EVENT_ID,
+    DEFAULT_CONTROL_PIPELINE,
     DEFAULT_CONTROL_PROJECT,
+    DEFAULT_PIPELINE,
     DEFAULT_PROJECT,
     DEFAULT_TAG_CONTROL_PATH,
     DEFAULT_TAG_PROVIDER,
@@ -68,10 +72,17 @@ TAG_PROVIDER = DEFAULT_TAG_PROVIDER
 TAG_SOURCE_PATH = DEFAULT_TAG_SOURCE_PATH
 TAG_TARGET_PATH = DEFAULT_TAG_TARGET_PATH
 TAG_CONTROL_PATH = DEFAULT_TAG_CONTROL_PATH
+#: The pipeline surface the #18 cases address: the exact path the Target allowlist
+#: names (in the Project the import cases use, so it is run-unique live), a second
+#: pipeline it does not name, and an alarm event no run holds.
+PIPELINE = DEFAULT_PIPELINE
+CONTROL_PIPELINE = DEFAULT_CONTROL_PIPELINE
+ALARM_EVENT_ID = DEFAULT_ALARM_EVENT_ID
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
 AGENT_TOKEN = "phase4-rehearsal-agent"
+OPERATOR_TOKEN = "phase4-rehearsal-operator"
 #: The same per-Tool Target allowlists the live workflow configures: one entry list
 #: per Mutation Tool, and every name a case addresses that must be allowed.
 MUTATION_TARGETS = {
@@ -94,6 +105,8 @@ MUTATION_TARGETS = {
     "project_import": (PROJECT,),
     # D30 §3/#17: the Target of a Tag import is the provider-qualified destination path.
     TAG_IMPORT_TOOL: (f"[{TAG_PROVIDER}]{TAG_TARGET_PATH}",),
+    # D30 §6/#18: the Target of a pipeline cancel is the exact pipeline path.
+    ALARM_CANCEL_TOOL: (PIPELINE,),
 }
 
 
@@ -112,6 +125,8 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
             StaticToken(name="rehearsal-reader", token=READER_TOKEN, scopes=("ignition.read",)),
             StaticToken(name="rehearsal-agent", token=AGENT_TOKEN,
                         scopes=("ignition.read", "ignition.config")),
+            StaticToken(name="rehearsal-operator", token=OPERATOR_TOKEN,
+                        scopes=("ignition.read", "ignition.control")),
         ),
         service_identity="phase4-rehearsal", watcher_interval_seconds=2.0, request_timeout_seconds=10.0,
         structured_output_limit_bytes=262_144, log_format="text", data_dir=data_dir,
@@ -123,7 +138,7 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         artifact_min_free_ratio=0.05, artifact_export_ttl_hours=24, artifact_recovery_ttl_days=7,
         artifact_staging_deadline_seconds=900.0, artifact_cleanup_interval_seconds=3600.0,
         artifact_cleanup_batch=50, artifact_upload_enabled=True, sensitive_exports_enabled=True,
-        config_mutation_enabled=mutation_enabled, control_mutation_enabled=False,
+        config_mutation_enabled=mutation_enabled, control_mutation_enabled=mutation_enabled,
         admin_mutation_enabled=False, mutation_operations=tuple(MUTATION_TARGETS),
         mutation_targets=MUTATION_TARGETS,
         project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=True,
@@ -250,6 +265,7 @@ def main() -> int:
         with _server(_settings(gateway, data_dir, mutation_enabled=True)) as url:
             gate_on = asyncio.run(run_gate_on(
                 rest_url=url, reader_token=READER_TOKEN, agent_token=AGENT_TOKEN,
+                operator_token=OPERATOR_TOKEN,
                 resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
                 unallowlisted=UNALLOWLISTED, singleton_type=SINGLETON_TYPE,
                 created_name=CREATED_RESOURCE, rename_source=RENAME_SOURCE,
@@ -258,6 +274,8 @@ def main() -> int:
                 project=PROJECT, control_project=CONTROL_PROJECT,
                 tag_provider=TAG_PROVIDER, tag_source_path=TAG_SOURCE_PATH,
                 tag_target_path=TAG_TARGET_PATH, tag_control_path=TAG_CONTROL_PATH,
+                pipeline=PIPELINE, control_pipeline=CONTROL_PIPELINE,
+                alarm_event_id=ALARM_EVENT_ID,
                 raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:

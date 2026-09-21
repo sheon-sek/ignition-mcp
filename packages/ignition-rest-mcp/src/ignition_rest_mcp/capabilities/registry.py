@@ -22,6 +22,10 @@ PROJECT_LIST_PATH = "/data/api/v1/projects/list"
 AUDIT_QUERY_PATH = "/data/api/v1/audit/log/{name}"
 ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
+#: D26 ticket #18: the cancel is the same documented path as the status read, addressed
+#: with ``DELETE``. The `alarm_pipeline_cancel` capability requires both routes, because
+#: the bounded status read *is* the Tool's verification (D30 §6).
+ALARM_PIPELINE_CANCEL_PATH = ALARM_PIPELINE_STATUS_PATH
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
 TAG_CONFIG_IMPORT_PATH = "/data/api/v1/tags/import"
@@ -341,6 +345,14 @@ def _semantic_capabilities(
     # gated by `tag_config_export`.
     if ("POST", TAG_CONFIG_IMPORT_PATH) in endpoints:
         semantic.add("tag_config_import")
+    # `alarm_pipeline_cancel` (D26 ticket #18) stops one Alarm Notification Pipeline run.
+    # The route that decides it is the documented DELETE, but the bounded status read
+    # D30 §6 makes its verification has to be there too: without it the Tool could never
+    # establish whether a cancel landed, so it is not exposed at all.
+    if ("DELETE", ALARM_PIPELINE_CANCEL_PATH) in endpoints and (
+        "GET", ALARM_PIPELINE_STATUS_PATH
+    ) in endpoints:
+        semantic.add("alarm_pipeline_cancel")
     if ("GET", DESIGNERS_PATH) in endpoints:
         semantic.add("designer_sessions")
     if ("GET", PROJECT_FIND_PATH) in endpoints:

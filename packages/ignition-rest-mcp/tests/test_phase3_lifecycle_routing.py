@@ -54,11 +54,10 @@ def _registered_tool_functions() -> list[ast.AsyncFunctionDef]:
 def test_every_registered_tool_routes_through_the_single_invoke() -> None:
     tools = _registered_tool_functions()
     # 11 Phase 2 tools + the two sensitive exports (slice 5) + three storage tools
-    # (slice 8) + the Phase 4 REST Mutation Tools (milestone 4c), whose
-    # operation-record paths are pinned in the test_phase4_config_resource_* and
-    # test_phase4_project_import modules because a CONFIG-scope credential is needed
-    # to reach them.
-    assert len(tools) == 22, "registered REST Tool functions drifted from the routed inventory"
+    # (slice 8) + the Phase 4 REST Mutation Tools (milestone 4c, both classes), whose
+    # operation-record paths are pinned in the test_phase4_* modules because a
+    # scope-carrying credential is needed to reach them.
+    assert len(tools) == 23, "registered REST Tool functions drifted from the routed inventory"
     for node in tools:
         calls = {
             call.func.id

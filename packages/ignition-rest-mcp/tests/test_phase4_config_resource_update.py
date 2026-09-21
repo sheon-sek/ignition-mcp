@@ -39,7 +39,7 @@ from phase4_fixtures import (
     write_requests,
 )
 from phase4_fixtures import Session as _Session
-from phase4_fixtures import MUTATION_TOOLS as MUTATION_TOOL_NAMES
+from phase4_fixtures import CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))

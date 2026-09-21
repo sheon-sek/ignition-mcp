@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 from ignition_rest_mcp.models import (
+    AlarmPipelineCancelResult,
     AlarmPipelineListResult,
     ArtifactInfoResult,
     ArtifactListResult,
@@ -55,6 +56,7 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (AuditQueryResult, "audit-query.output.schema.json"),
         (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
         (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
+        (AlarmPipelineCancelResult, "alarm-pipeline-cancel.output.schema.json"),
         (ProjectExportResult, "project-export.output.schema.json"),
         (ProjectImportResult, "project-import.output.schema.json"),
         (TagConfigExportResult, "tag-config-export.output.schema.json"),
