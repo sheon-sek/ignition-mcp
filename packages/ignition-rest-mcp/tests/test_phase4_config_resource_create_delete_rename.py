@@ -32,7 +32,6 @@ from phase4_fixtures import (
     SINGLETON_NAME,
     SINGLETON_TYPE,
     TOKEN_TYPE,
-    UPDATE_TOOL,
     audit_rows,
     envelope,
     mutation_settings,
@@ -42,13 +41,17 @@ from phase4_fixtures import (
     write_requests,
 )
 from phase4_fixtures import Session as Session
+from phase4_fixtures import MUTATION_TOOLS as MUTATION_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
-MUTATION_TOOLS = {UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL}
+#: Every Phase 4 REST Mutation Tool, not just this milestone's: the class gate, not
+#: the operation allowlist, decides discovery (D08/D30), and the recorded Gateway
+#: documents every route these Tools need.
+MUTATION_TOOLS = set(MUTATION_TOOL_NAMES)
 
 
 def _seed(gateway: RecordedGateway) -> None:

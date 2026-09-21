@@ -20,6 +20,7 @@ from ignition_rest_mcp.models import (
     GatewayInfoResult,
     ProjectListResult,
     ProjectExportResult,
+    ProjectImportResult,
     TagConfigExportResult,
 )
 
@@ -54,6 +55,7 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
         (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
         (ProjectExportResult, "project-export.output.schema.json"),
+        (ProjectImportResult, "project-import.output.schema.json"),
         (TagConfigExportResult, "tag-config-export.output.schema.json"),
         (ArtifactListResult, "artifact-list.output.schema.json"),
         (ArtifactInfoResult, "artifact-info.output.schema.json"),

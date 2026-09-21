@@ -38,6 +38,8 @@ sys.path.insert(0, str(HARNESS.parent))
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from rest_driver import (  # noqa: E402
     CREATED_RESOURCE,
+    DEFAULT_CONTROL_PROJECT,
+    DEFAULT_PROJECT,
     RENAMED_RESOURCE,
     RENAME_SOURCE,
     RENAME_SOURCE_2,
@@ -50,6 +52,10 @@ from rest_driver import (  # noqa: E402
 )
 
 RESOURCE_TYPE = "ignition/audit-profile"
+#: The two Projects the import cases use: the allowlisted Target and a Project the
+#: Target allowlist does not name. Both are provisioned live by the workflow.
+PROJECT = DEFAULT_PROJECT
+CONTROL_PROJECT = DEFAULT_CONTROL_PROJECT
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
@@ -72,6 +78,8 @@ MUTATION_TARGETS = {
         f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
         f"{RESOURCE_TYPE}/{RENAMED_RESOURCE}",
     ),
+    # D30 §6: the Target of the Project import is the Project itself.
+    "project_import": (PROJECT,),
 }
 
 
@@ -100,11 +108,11 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         artifact_total_bytes=1_073_741_824, artifact_max_count=1000, artifact_min_free_bytes=104_857_600,
         artifact_min_free_ratio=0.05, artifact_export_ttl_hours=24, artifact_recovery_ttl_days=7,
         artifact_staging_deadline_seconds=900.0, artifact_cleanup_interval_seconds=3600.0,
-        artifact_cleanup_batch=50, artifact_upload_enabled=False, sensitive_exports_enabled=False,
+        artifact_cleanup_batch=50, artifact_upload_enabled=True, sensitive_exports_enabled=True,
         config_mutation_enabled=mutation_enabled, control_mutation_enabled=False,
         admin_mutation_enabled=False, mutation_operations=tuple(MUTATION_TARGETS),
         mutation_targets=MUTATION_TARGETS,
-        project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=False,
+        project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=True,
         project_lock_timeout_seconds=10.0, project_lock_max_entries=32,
         project_reconcile_interval_seconds=3600.0, project_verification_timeout_seconds=60.0,
     )
@@ -132,6 +140,29 @@ def _server(settings: Settings) -> Iterator[str]:
     finally:
         instance.should_exit = True
         thread.join(timeout=15)
+
+
+def _project_archive(marker: str) -> bytes:
+    """A Project archive in the shape the recorded Gateway serves on export."""
+
+    import io
+    import json
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            zipfile.ZipInfo("project.json", date_time=(1980, 1, 1, 0, 0, 0)),
+            json.dumps({
+                "title": f"Phase 4 REST rehearsal {marker}",
+                "description": "fixture", "parent": "", "enabled": True, "inheritable": False,
+            }, sort_keys=True).encode("utf-8"),
+        )
+        archive.writestr(
+            zipfile.ZipInfo("ignition/named-query/mcp_probe/query.sql", date_time=(1980, 1, 1, 0, 0, 0)),
+            b"SELECT 1",
+        )
+    return buffer.getvalue()
 
 
 def _seed(gateway: RecordedGateway) -> None:
@@ -172,7 +203,12 @@ def main() -> int:
     args = parser.parse_args()
 
     args.raw_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, RecordedGateway() as gateway:
+    projects = {
+        PROJECT: _project_archive("target"),
+        CONTROL_PROJECT: _project_archive("control"),
+    }
+    with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, \
+            RecordedGateway(projects=projects) as gateway:
         _seed(gateway)
         with _server(_settings(gateway, data_dir, mutation_enabled=True)) as url:
             gate_on = asyncio.run(run_gate_on(
@@ -181,7 +217,8 @@ def main() -> int:
                 unallowlisted=UNALLOWLISTED, singleton_type=SINGLETON_TYPE,
                 created_name=CREATED_RESOURCE, rename_source=RENAME_SOURCE,
                 rename_source_2=RENAME_SOURCE_2, renamed_name=RENAMED_RESOURCE,
-                unallowlisted_renamed=UNALLOWLISTED_RENAMED, raw_dir=args.raw_dir,
+                unallowlisted_renamed=UNALLOWLISTED_RENAMED,
+                project=PROJECT, control_project=CONTROL_PROJECT, raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(

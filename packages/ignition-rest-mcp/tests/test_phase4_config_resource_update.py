@@ -24,11 +24,8 @@ from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
 from ignition_rest_mcp.services.config_mutation import CONFIG_RESOURCE_UPDATE
 from phase4_fixtures import (
     CONFIG,
-    CREATE_TOOL,
-    DELETE_TOOL,
     PROFILE,
     READ_INVENTORY,
-    RENAME_TOOL,
     RESOURCE,
     TOKEN_TYPE,
     UPDATE_TOOL,
@@ -42,6 +39,7 @@ from phase4_fixtures import (
     write_requests,
 )
 from phase4_fixtures import Session as _Session
+from phase4_fixtures import MUTATION_TOOLS as MUTATION_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
@@ -131,10 +129,11 @@ def test_mutation_tool_visibility_follows_the_class_gate(
     """Each Mutation Tool is discoverable only when CONFIG_MUTATION is enabled for
     the deployment; everything else in the inventory is unchanged (D08). The class
     gate, not the operation allowlist, decides discovery: only `config_resource_update`
-    is in this deployment's operation allowlist, and the other three are still
-    listed — they refuse at call time instead."""
+    is in this deployment's operation allowlist, and the other Phase 4 Mutation Tools
+    are still listed — they refuse at call time instead."""
 
-    mutation_tools = {UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL}
+    mutation_tools = set(MUTATION_TOOL_NAMES)
+    assert UPDATE_TOOL in mutation_tools
     with RecordedGateway() as gateway:
         _seed(gateway)
         settings = _mutation_settings(

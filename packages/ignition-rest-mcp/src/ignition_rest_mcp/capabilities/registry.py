@@ -330,8 +330,8 @@ def _semantic_capabilities(
     if any(item.rename_path_template is not None for item in resource_types.values()):
         semantic.add("config_resource_rename")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
-    # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
-    # capability only gates internal machinery and future Phase 4 exposure (D08/D26).
+    # is in the OpenAPI inventory. Phase 3 never dispatched the import; Phase 4's
+    # `project_import` Tool is gated on this capability (D08/D26).
     if ("POST", PROJECT_IMPORT_PATH) in endpoints:
         semantic.add("project_import")
     if ("GET", DESIGNERS_PATH) in endpoints:

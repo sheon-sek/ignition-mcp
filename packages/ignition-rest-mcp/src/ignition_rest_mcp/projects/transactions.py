@@ -4,6 +4,8 @@ Protocol (canonical order, D16 / plan slice 7):
 
     writer lock (per Gateway ID + project) -> Designer-session policy
     -> export baseline A (EPHEMERAL, pcf1 fingerprint)
+    -> caller's expected fingerprint (D30 §2 Precondition token) != fingerprint(A)
+       =>  CONFLICTED (nothing staged, nothing dispatched)
     -> build candidate B (EPHEMERAL, streamed through the ArtifactStore)
     -> fingerprint(B) == fingerprint(A)  =>  NO_CHANGE (no backup, no import)
     -> validate/promote A to locked RECOVERY (failure => FAILED_PRE_IMPORT)
@@ -27,7 +29,7 @@ re-export comparison. Every row transition is persisted with timestamps.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import logging
 from typing import Any, AsyncIterator
@@ -63,6 +65,22 @@ PROJECT_IMPORT_OPERATION = MutationOperation(
     mutation_class=CONFIG_MUTATION,
     capability="project_import",
     destructive=True,
+)
+
+#: The Phase 4 Tool's declaration of the same operation (D30 §7 and §2).
+#:
+#: D30 §7 decides ``permission_denied`` for a Target outside a Phase 4 Mutation's
+#: Target allowlist, and D30 §2 makes an explicit Gateway rejection the result of the
+#: attempt. The Phase 3 machinery shipped before that decision: the frozen G3 driver
+#: and its evidence record ``operation_disabled`` for a refused Target, and a rejected
+#: dispatch there may still be reconciled to a recovered success. Both are per
+#: operation, so the Tool declares its own policy rather than changing what the frozen
+#: harness drives (``operation_disabled`` stays in `tests/harness/phase3-live` and in
+#: the committed G3 evidence).
+PROJECT_IMPORT_TOOL_OPERATION = replace(
+    PROJECT_IMPORT_OPERATION,
+    target_denial_code="permission_denied",
+    rejection_is_final=True,
 )
 
 
@@ -120,6 +138,32 @@ class CandidateBuilder:
 
     async def build(self, baseline: ArtifactReader, out: ArtifactWriter) -> None:  # pragma: no cover
         raise NotImplementedError
+
+
+class ArtifactCandidateBuilder(CandidateBuilder):
+    """Candidate B from a caller-supplied Project archive (the ``project_import`` Tool).
+
+    It authors nothing: it streams an already READY artifact into the transaction's own
+    EPHEMERAL candidate, so the archive the transaction fingerprints is the archive it
+    dispatches, and the caller cannot swap the artifact between the two steps. The
+    bytes are validated on the way (the fingerprint pass enforces the D15 ZIP gate), so
+    an unsafe archive fails with ``invalid_argument`` before any backup or dispatch.
+    """
+
+    def __init__(self, store: LocalArtifactStore, artifact_id: str) -> None:
+        self._store = store
+        self._artifact_id = artifact_id
+
+    async def build(self, baseline: ArtifactReader, out: ArtifactWriter) -> None:
+        reader = await self._store.open_read(self._artifact_id)
+        try:
+            while True:
+                chunk = await reader.read_chunk()
+                if chunk is None:
+                    return
+                await out.write(chunk)
+        finally:
+            await reader.close()
 
 
 class ProjectTransactionService:
@@ -191,7 +235,8 @@ class ProjectTransactionService:
 
     async def execute(
         self, *, project_name: str, builder: CandidateBuilder, context: OperationContext,
-        principal: VerifiedPrincipal,
+        principal: VerifiedPrincipal, operation: MutationOperation = PROJECT_IMPORT_OPERATION,
+        expected_fingerprint: str | None = None,
     ) -> TransactionResult:
         if not self._settings.project_writer_enabled:
             raise GatewayError(
@@ -205,11 +250,15 @@ class ProjectTransactionService:
         async with self._locks.acquire(lock_key, name):
             txn_id = uuid7()
             await self._insert(txn_id, context, name)
-            return await self._run_locked(txn_id, name, builder, context, principal)
+            return await self._run_locked(
+                txn_id, name, builder, context, principal, operation, expected_fingerprint,
+            )
 
     async def _run_locked(
         self, txn_id: str, name: str, builder: CandidateBuilder,
         context: OperationContext, principal: VerifiedPrincipal,
+        operation: MutationOperation = PROJECT_IMPORT_OPERATION,
+        expected_fingerprint: str | None = None,
     ) -> TransactionResult:
         baseline: CapturedProject | None = None
         candidate: CapturedProject | None = None
@@ -250,6 +299,27 @@ class ProjectTransactionService:
                 txn_id, TransactionState.BASELINE_CAPTURED,
                 baseline_artifact=baseline.artifact.artifact_id, baseline_fingerprint=baseline.fingerprint,
             )
+
+            # D30 §2 Precondition: the caller's Project fingerprint must equal baseline A.
+            # A mismatch is `conflict` before anything is dispatched: the agent's plan was
+            # built on a Project state that is no longer current. The transaction ends
+            # CONFLICTED (`concurrent modification, importAttempted=false`, D16) and no
+            # candidate is staged from the stale plan.
+            if expected_fingerprint is not None and baseline.fingerprint != expected_fingerprint:
+                await cleanup_ephemerals(baseline.artifact.artifact_id)
+                stale = GatewayError(
+                    "conflict",
+                    f"project {name!r} is at {baseline.fingerprint}, not the fingerprint the caller "
+                    f"read ({expected_fingerprint}); the project changed after that read and the "
+                    "import was not attempted",
+                )
+                await self._update(
+                    txn_id, TransactionState.CONFLICTED, error_code="conflict", import_dispatched=False,
+                )
+                return self._result(
+                    txn_id, TransactionState.CONFLICTED, name, baseline, None, None, error=stale,
+                    designer_warning=designer_warning,
+                )
 
             # Candidate B through the bounded builder contract only.
             candidate_writer = await self._store.create(
@@ -346,7 +416,7 @@ class ProjectTransactionService:
             mutation: MutationResult = await execute_mutation(
                 client=self._client, registry=self._registry, settings=self._settings, context=context,
                 request=MutationRequest(
-                    operation=PROJECT_IMPORT_OPERATION, principal=principal, target_id=name,
+                    operation=operation, principal=principal, target_id=name,
                     request_path=f"/data/api/v1/projects/import/{quote(name, safe='')}",
                     params={"overwrite": "true"},
                     body_chunks=_artifact_chunks(self._store, candidate_artifact.artifact_id),

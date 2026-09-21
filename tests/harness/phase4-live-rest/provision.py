@@ -17,6 +17,12 @@ All are created without a signature (creation takes no Precondition token) and a
 read back with a signature, which is the proof that the live cases have a real
 Precondition token to work with. The name the create case publishes is deliberately
 *not* provisioned. Re-running is safe: an existing resource is left alone.
+
+It also confirms the two disposable Projects the ``project_import`` cases address
+(installed into the Gateway's data directory by the workflow, which is why this
+harness cannot create them itself): the Target the Project-import allowlist names, and
+a second existing Project the allowlist deliberately does not name. A missing Project
+fails here, before a single live case runs.
 """
 
 from __future__ import annotations
@@ -51,6 +57,7 @@ REQUIRED_ENDPOINTS = frozenset({
 })
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OPENAPI_BYTES = 16 * 1_048_576
+PROJECT_LIST_PATH = "/data/api/v1/projects/list"
 
 
 class ProvisionError(RuntimeError):
@@ -163,8 +170,29 @@ def _read_profile(base_url: str, token: str, name: str) -> dict[str, Any]:
     return payload
 
 
-def provision(base_url: str, token: str) -> dict[str, Any]:
+def _project_names(base_url: str, token: str) -> set[str]:
+    """Every Project name the Gateway lists, bounded to one page of 500."""
+
+    status, payload = _request(
+        base_url, token, "GET", PROJECT_LIST_PATH + "?limit=500&offset=0",
+    )
+    if status != 200 or not isinstance(payload, dict):
+        raise ProvisionError(f"listing Projects returned HTTP {status}")
+    items = payload.get("items")
+    if not isinstance(items, list):
+        raise ProvisionError("the Project listing has no items array")
+    return {
+        str(item["name"]) for item in items
+        if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
+
+def provision(base_url: str, token: str, *, project: str, control_project: str) -> dict[str, Any]:
     readiness = await_required_endpoints(base_url, token)
+    projects = _project_names(base_url, token)
+    missing = sorted({project, control_project} - projects)
+    if missing:
+        raise ProvisionError(f"the disposable Projects are not installed: {missing}")
     resources = {
         name: {
             "createStatus": _create_profile(base_url, token, name, description),
@@ -205,6 +233,11 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
             ),
         },
         "readiness": readiness,
+        "projects": {
+            "target": {"name": project, "present": project in projects, "allowlisted": True},
+            "control": {"name": control_project, "present": control_project in projects,
+                        "allowlisted": False},
+        },
     }
 
 
@@ -213,14 +246,22 @@ def main() -> int:
     parser.add_argument("--gateway-url", default="http://127.0.0.1:8088")
     parser.add_argument("--api-token", required=True)
     parser.add_argument("--evidence", required=True, type=Path)
+    parser.add_argument("--project", required=True)
+    parser.add_argument("--control-project", required=True)
     args = parser.parse_args()
-    report = provision(args.gateway_url, args.api_token)
+    report = provision(
+        args.gateway_url, args.api_token,
+        project=args.project, control_project=args.control_project,
+    )
     args.evidence.parent.mkdir(parents=True, exist_ok=True)
     args.evidence.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps({
         "resources": {name: item["signature"] for name, item in report["resources"].items()},
         "refusedResourcePresent": report["refusedResourceType"]["present"],
         "singletonTargetPresent": report["singletonTarget"]["present"],
+        "projects": sorted(
+            item["name"] for item in report["projects"].values() if item["present"]
+        ),
     }, sort_keys=True))
     return 0
 

@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Phase 4 milestone 4c live driver: the config-resource Mutations on a real Gateway.
+"""Phase 4 milestone 4c live driver: the REST Mutations on a real Gateway.
 
 Run against a running ``ignition-rest`` server (``--mode gate-on``) and again
 against the same server restarted with ``IGNITION_MCP_CONFIG_MUTATION_ENABLED=false``
-(``--mode gate-off``). The driver only ever talks MCP over HTTP and the Gateway's
-own read routes; it never mutates the Gateway directly, so everything it reports is
-something an agent could observe.
+(``--mode gate-off``). The driver talks MCP over HTTP, the artifact data plane and
+the Gateway's own read routes, exactly as an agent would; it never mutates the
+Gateway directly, so everything it reports is something an agent could observe.
 
-Live cases (tickets #14 and #15):
+Live cases (tickets #14, #15 and #16):
 
 - the effective REST inventory is exact with the class enabled *and* disabled, and
   the config-scoped credential sees the Mutation Tools while the read-only one does
@@ -25,7 +25,19 @@ Live cases (tickets #14 and #15):
   non-allowlisted cases change nothing;
 - a rename moves the resource, an occupied destination is a ``conflict``, a
   non-allowlisted source or destination is ``permission_denied``, and a stale
-  signature is a ``conflict``.
+  signature is a ``conflict``;
+- a Project import commits an uploaded archive into an existing Project, the
+  post-import export is fingerprinted independently by this harness and carries the
+  marker entry the archive held, re-importing that content is a ``NO_CHANGE``, the
+  pre-commit fingerprint is a stale-token ``conflict``, a Project outside the Target
+  allowlist is ``permission_denied``, and an archive owned by another principal is
+  ``not_found``.
+
+The Project cases need the D16 writer enabled (``IGNITION_MCP_PROJECT_WRITER_ENABLED``,
+``IGNITION_MCP_GATEWAY_ID``), artifact upload and the sensitive exports this driver
+reads the Precondition token from. Those gates also decide the expected inventory:
+this deployment enables both read gates, so the two sensitive-export Tools are part
+of it.
 
 One note on the Target-allowlist expectation: D30 §7 decides ``permission_denied``
 for a Phase 4 Mutation whose Target is not in the Target allowlist, and the Tool-scoped
@@ -41,10 +53,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import io
 import json
 from pathlib import Path
 import sys
 from typing import Any
+import zipfile
+
+import httpx
 
 HARNESS = Path(__file__).resolve().parent
 sys.path.insert(0, str(HARNESS.parent / "phase3-live"))
@@ -55,7 +71,8 @@ UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
 DELETE_TOOL = "config_resource_delete"
 RENAME_TOOL = "config_resource_rename"
-MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL)
+IMPORT_TOOL = "project_import"
+MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL)
 REFUSED_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
 #: An allowed *singleton* (its documented change item carries no name).
@@ -71,8 +88,17 @@ UNALLOWLISTED_RENAMED = "MCP_CI_AUDIT_RENAMED_NOT_ALLOWED"
 #: A name of the allowlisted type that the Target allowlists deliberately omit.
 NOT_ALLOWLISTED_RESOURCE = "MCP_CI_AUDIT_OTHER"
 
-#: The effective REST inventory with the config mutation class disabled, and with
-#: it enabled. ``readonly`` is unchanged by Phase 4: no read Tool is added or removed.
+#: The two names the Project import cases use: the allowlisted Target and an existing
+#: Project the Target allowlist deliberately does not name.
+DEFAULT_PROJECT = "MCP_CI_IMPORT"
+DEFAULT_CONTROL_PROJECT = "MCP_CI_IMPORT_CONTROL"
+#: The entry the candidate archive adds, so the import is observable from outside.
+IMPORT_MARKER = "mcp-p4-import.txt"
+
+#: The effective REST inventory: this deployment enables the sensitive-export gate as
+#: well as the config mutation class (the Project cases read their Precondition token
+#: with ``project_export``), and with the class disabled the two sensitive exports and
+#: the read Tools remain. ``readonly`` itself is unchanged by Phase 4.
 READ_INVENTORY = frozenset({
     "gateway_info",
     "gateway_diagnose",
@@ -88,6 +114,8 @@ READ_INVENTORY = frozenset({
     "artifact_list",
     "artifact_info",
     "operation_diagnose",
+    "project_export",
+    "tag_config_export",
 })
 GATE_ON_INVENTORY = READ_INVENTORY | set(MUTATION_TOOLS)
 
@@ -190,6 +218,163 @@ async def _absent(agent: "Session", resource_type: str, name: str) -> bool:
     return _envelope_code(result) == "not_found"
 
 
+class Artifacts:
+    """The D17 artifact data plane, used exactly as an agent would use it."""
+
+    def __init__(self, rest_url: str) -> None:
+        self._client = httpx.AsyncClient(base_url=rest_url, timeout=180.0)
+
+    async def aclose(self) -> None:
+        await self._client.aclose()
+
+    async def download(self, path: str, token: str) -> bytes:
+        response = await self._client.get(path, headers={"Authorization": "Bearer " + token})
+        if response.status_code != 200:
+            raise DriverError(f"artifact download {path} returned HTTP {response.status_code}")
+        return response.content
+
+    async def upload(self, payload: bytes, token: str, *, label: str) -> str:
+        response = await self._client.post(
+            "/artifacts", params={"kind": "project_archive"}, content=payload,
+            headers={"Authorization": "Bearer " + token, "Content-Type": "application/zip"},
+        )
+        if response.status_code != 201:
+            raise DriverError(
+                f"artifact upload ({label}) returned HTTP {response.status_code}: {response.text[:200]}",
+            )
+        artifact_id = response.json().get("artifactId")
+        if not isinstance(artifact_id, str) or not artifact_id:
+            raise DriverError(f"artifact upload ({label}) returned no artifactId")
+        return artifact_id
+
+
+def _entry_names(payload: bytes) -> set[str]:
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        return {info.filename for info in archive.infolist()}
+
+
+def _rezipped(payload: bytes, marker: str) -> bytes:
+    """The exported archive plus one marker entry, re-zipped deterministically.
+
+    The D16 fingerprint ignores container representation, so this is a candidate whose
+    logical content differs from the Project by exactly the marker.
+    """
+
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        entries = {info.filename: archive.read(info.filename) for info in archive.infolist()}
+    entries[marker] = b"imported live by the phase 4 REST driver\n"
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as out:
+        for name, body in entries.items():
+            out.writestr(zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0)), body)
+    return buffer.getvalue()
+
+
+def _fingerprint(payload: bytes, raw_dir: Path, name: str) -> str:
+    """The D16 ``pcf1`` fingerprint of an archive, computed in this process.
+
+    The harness runs from the repository, so it can check the server's reported
+    fingerprint against the algorithm the contract publishes instead of trusting it.
+    """
+
+    from ignition_rest_mcp.projects.fingerprint import project_fingerprint
+
+    path = raw_dir / name
+    path.write_bytes(payload)
+    return project_fingerprint(str(path))
+
+
+async def project_import_cases(
+    *,
+    agent: "Session",
+    rest_url: str,
+    reader_token: str,
+    agent_token: str,
+    project: str,
+    control_project: str,
+    raw_dir: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The D16 Project import cases (ticket #16)."""
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    artifacts = Artifacts(rest_url)
+    try:
+        exported = structured(await agent.call("project_export", {"projectName": project}))
+        baseline = str(exported["fingerprint"])
+        observations["importBaselineFingerprint"] = baseline
+        exported_archive = await artifacts.download(
+            str(exported["artifact"]["download"]["path"]), agent_token,
+        )
+        candidate = await artifacts.upload(
+            _rezipped(exported_archive, IMPORT_MARKER), agent_token, label="candidate",
+        )
+        result = structured(await agent.call(IMPORT_TOOL, {
+            "projectName": project, "artifactId": candidate, "expectedFingerprint": baseline,
+        }))
+        observations["importResult"] = result
+        _check(cases, "project-import-commits", "COMMITTED", result.get("state"))
+        _check(cases, "project-import-baseline-is-the-callers-read", baseline,
+               result.get("baselineFingerprint"))
+        _check(cases, "project-import-verifies-its-own-candidate", result.get("candidateFingerprint"),
+               result.get("resultFingerprint"))
+        _check(cases, "project-import-reports-the-dispatch", True, result.get("importDispatched"))
+
+        # Independent evidence: re-export the Project, fingerprint it here, and look for
+        # the marker the candidate carried.
+        fresh = structured(await agent.call("project_export", {"projectName": project}))
+        fresh_archive = await artifacts.download(
+            str(fresh["artifact"]["download"]["path"]), agent_token,
+        )
+        independent = _fingerprint(fresh_archive, raw_dir, "import-reexport.zip")
+        observations["importIndependentFingerprint"] = independent
+        _check(cases, "project-export-fingerprint-is-independent", fresh.get("fingerprint"), independent)
+        _check(cases, "project-import-content-lands", independent, result.get("candidateFingerprint"))
+        _check(cases, "project-import-marker-is-present", True, IMPORT_MARKER in _entry_names(fresh_archive))
+
+        # D16 no-op idempotency: importing the content the Tool just committed.
+        again = structured(await agent.call(IMPORT_TOOL, {
+            "projectName": project, "artifactId": candidate, "expectedFingerprint": independent,
+        }))
+        _check(cases, "project-import-of-the-current-content-is-no-change", "NO_CHANGE",
+               again.get("state"))
+        _check(cases, "project-import-no-change-dispatches-nothing", False, again.get("importDispatched"))
+
+        # The token the caller read before that commit is now stale (D30 §2).
+        stale = await agent.call(IMPORT_TOOL, {
+            "projectName": project, "artifactId": candidate, "expectedFingerprint": baseline,
+        })
+        _check(cases, "project-import-stale-fingerprint-is-conflict", "conflict", _envelope_code(stale))
+        after_stale = structured(await agent.call("project_export", {"projectName": project}))
+        _check(cases, "project-import-stale-fingerprint-changes-nothing", independent,
+               after_stale.get("fingerprint"))
+
+        # A Project the Target allowlist does not name (D30 §7) ...
+        control = structured(await agent.call("project_export", {"projectName": control_project}))
+        denied = await agent.call(IMPORT_TOOL, {
+            "projectName": control_project, "artifactId": candidate,
+            "expectedFingerprint": control["fingerprint"],
+        })
+        _check(cases, "project-import-non-allowlisted-project-is-permission-denied",
+               TARGET_DENIAL_CODE, _envelope_code(denied))
+        control_after = structured(await agent.call("project_export", {"projectName": control_project}))
+        _check(cases, "project-import-non-allowlisted-project-changes-nothing",
+               control.get("fingerprint"), control_after.get("fingerprint"))
+
+        # ... and an archive owned by another principal (D30 §6).
+        foreign = await artifacts.upload(
+            _rezipped(exported_archive, IMPORT_MARKER), reader_token, label="other-principal",
+        )
+        invisible = await agent.call(IMPORT_TOOL, {
+            "projectName": project, "artifactId": foreign, "expectedFingerprint": independent,
+        })
+        _check(cases, "project-import-invisible-artifact-is-not-found", "not_found",
+               _envelope_code(invisible))
+    finally:
+        await artifacts.aclose()
+    return cases, observations
+
+
 async def run_gate_on(
     *,
     rest_url: str,
@@ -204,6 +389,8 @@ async def run_gate_on(
     rename_source_2: str,
     renamed_name: str,
     unallowlisted_renamed: str,
+    project: str = DEFAULT_PROJECT,
+    control_project: str = DEFAULT_CONTROL_PROJECT,
     raw_dir: Path,
 ) -> dict[str, Any]:
     """The live cases that need the CONFIG_MUTATION class enabled."""
@@ -478,6 +665,14 @@ async def run_gate_on(
         )
         _check(cases, "rename-into-an-unallowlisted-destination-changes-nothing", moved_signature,
                await agent.signature(resource_type, renamed_name))
+
+        # --------------------------------------------------- project import (#16)
+        import_cases, import_observations = await project_import_cases(
+            agent=agent, rest_url=rest_url, reader_token=reader_token, agent_token=agent_token,
+            project=project, control_project=control_project, raw_dir=raw_dir,
+        )
+        cases.extend(import_cases)
+        observations.update(import_observations)
     finally:
         await reader.aclose()
         await agent.aclose()
@@ -536,7 +731,8 @@ async def _run(args: argparse.Namespace) -> int:
             unallowlisted=args.unallowlisted, singleton_type=args.singleton_type,
             created_name=args.created_name, rename_source=args.rename_source,
             rename_source_2=args.rename_source_2, renamed_name=args.renamed_name,
-            unallowlisted_renamed=args.unallowlisted_renamed, raw_dir=args.raw_dir,
+            unallowlisted_renamed=args.unallowlisted_renamed,
+            project=args.project, control_project=args.control_project, raw_dir=args.raw_dir,
         )
     else:
         mode = await run_gate_off(
@@ -570,6 +766,8 @@ def main() -> int:
     parser.add_argument("--rename-source-2", default=RENAME_SOURCE_2)
     parser.add_argument("--renamed-name", default=RENAMED_RESOURCE)
     parser.add_argument("--unallowlisted-renamed", default=UNALLOWLISTED_RENAMED)
+    parser.add_argument("--project", default=DEFAULT_PROJECT)
+    parser.add_argument("--control-project", default=DEFAULT_CONTROL_PROJECT)
     parser.add_argument("--observations", required=True, type=Path)
     parser.add_argument("--raw-dir", required=True, type=Path)
     args = parser.parse_args()

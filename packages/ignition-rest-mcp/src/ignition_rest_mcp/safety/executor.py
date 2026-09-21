@@ -60,6 +60,27 @@ class VerificationOutcome(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class MutationPreflight:
+    """Everything the D08 chain decides on before a dispatch: the operation, the
+    caller and every Target the call changes.
+
+    ``MutationRequest`` projects itself onto this, and a Tool with expensive work to do
+    before it dispatches (the D16 Project transaction exports, stages and fingerprints
+    an archive first) runs the same chain on its own, so a denial refuses the call
+    before that work and both callers share one implementation.
+    """
+
+    operation: MutationOperation
+    principal: VerifiedPrincipal
+    target_id: str
+    target_type: str = ""
+    additional_target_ids: tuple[str, ...] = ()
+    target_policy: Callable[[], PolicyDecision] | None = None
+    precondition: Callable[[], Awaitable[None]] | None = None
+    audit_fields: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class MutationRequest:
     operation: MutationOperation
     principal: VerifiedPrincipal
@@ -89,6 +110,17 @@ class MutationRequest:
     #: the D06 error the caller must see.
     rejection: Callable[[WriteDispatchResult], GatewayError | None] | None = None
 
+    @property
+    def preflight(self) -> MutationPreflight:
+        """The part of this request the D08 chain decides on before a dispatch."""
+
+        return MutationPreflight(
+            operation=self.operation, principal=self.principal, target_id=self.target_id,
+            target_type=self.target_type, additional_target_ids=self.additional_target_ids,
+            target_policy=self.target_policy, precondition=self.precondition,
+            audit_fields=dict(self.audit_fields),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class MutationResult:
@@ -99,6 +131,77 @@ class MutationResult:
     @property
     def possibly_dispatched(self) -> bool:
         return self.state not in {MutationState.NOT_SENT, MutationState.REJECTED}
+
+
+async def preflight_mutation(
+    *,
+    registry: CapabilityRegistry,
+    settings: Settings,
+    context: OperationContext,
+    preflight: MutationPreflight,
+) -> None:
+    """The D08 chain up to and including the Precondition hook, exactly once.
+
+    Authentication, authorization scope, deployment class, operation allowlist, the
+    operation's Target-class rule (D30 §5), every Target allowlist and the Precondition
+    hook run in order, every denial writes its ``decision`` row, and nothing outside
+    this function decides whether a mutation may be attempted. It is callable on its
+    own so a Tool that has expensive work to do before dispatch — the D16 Project
+    transaction exports, stages and fingerprints an archive first — refuses the call
+    before that work, and so the audited reason and the caller's error code cannot
+    drift between the two callers.
+    """
+
+    auditor = context.auditor
+    if auditor is None:
+        raise GatewayError("internal_error", "mutation dispatch requires an audited invocation context")
+    target_type = preflight.target_type or "mutation-target"
+
+    if not is_verified_principal(preflight.principal):
+        await auditor.decision(
+            allowed=False, reason="unauthenticated-principal",
+            target_type=target_type, target_id=preflight.target_id,
+        )
+        raise GatewayError("permission_denied", "mutations require a verified principal")
+
+    scope = authorize_scope(preflight.principal, preflight.operation)
+    if not scope.allowed:
+        await auditor.decision(
+            allowed=False, reason=f"{scope.layer}:{scope.reason}",
+            target_type=target_type, target_id=preflight.target_id,
+        )
+        assert scope.error_code is not None
+        raise GatewayError(scope.error_code, _layer_message(scope))
+
+    capability_present = registry.supports(preflight.operation.capability)
+    # D30 §5: the operation's own Target-class rule (Refused resource types) is
+    # evaluated before the Target allowlist, so it also covers the fully allowlisted
+    # deployment where only it can refuse.
+    target_class = preflight.target_policy() if preflight.target_policy is not None else None
+    # D30 §3 Preflight: every Target this call changes is checked before anything
+    # executes, and a denial names the Target that was refused.
+    for target_id in (preflight.target_id, *preflight.additional_target_ids):
+        decision = evaluate_deployment_policy(
+            settings, preflight.operation, target_id, capability_present, target_class=target_class,
+        )
+        if decision.allowed:
+            continue
+        await auditor.decision(
+            allowed=False, reason=f"{decision.layer}:{decision.reason}",
+            target_type=target_type, target_id=target_id,
+        )
+        assert decision.error_code is not None
+        raise GatewayError(decision.error_code, _layer_message(decision))
+
+    if preflight.precondition is not None:
+        try:
+            await preflight.precondition()
+        except GatewayError as error:
+            await auditor.decision(
+                allowed=False, reason=f"precondition:{error.code}",
+                target_type=target_type, target_id=preflight.target_id,
+            )
+            raise
 
 
 async def execute_mutation(
@@ -115,52 +218,9 @@ async def execute_mutation(
     if auditor is None:
         raise GatewayError("internal_error", "mutation dispatch requires an audited invocation context")
     target_type = request.target_type or "mutation-target"
-
-    if not is_verified_principal(request.principal):
-        await auditor.decision(
-            allowed=False, reason="unauthenticated-principal",
-            target_type=target_type, target_id=request.target_id,
-        )
-        raise GatewayError("permission_denied", "mutations require a verified principal")
-
-    scope = authorize_scope(request.principal, request.operation)
-    if not scope.allowed:
-        await auditor.decision(
-            allowed=False, reason=f"{scope.layer}:{scope.reason}",
-            target_type=target_type, target_id=request.target_id,
-        )
-        assert scope.error_code is not None
-        raise GatewayError(scope.error_code, _layer_message(scope))
-
-    capability_present = registry.supports(request.operation.capability)
-    # D30 §5: the operation's own Target-class rule (Refused resource types) is
-    # evaluated before the Target allowlist, so it also covers the fully allowlisted
-    # deployment where only it can refuse.
-    target_class = request.target_policy() if request.target_policy is not None else None
-    # D30 §3 Preflight: every Target this call changes is checked before anything
-    # executes, and a denial names the Target that was refused.
-    for target_id in (request.target_id, *request.additional_target_ids):
-        decision = evaluate_deployment_policy(
-            settings, request.operation, target_id, capability_present, target_class=target_class,
-        )
-        if decision.allowed:
-            continue
-        await auditor.decision(
-            allowed=False, reason=f"{decision.layer}:{decision.reason}",
-            target_type=target_type, target_id=target_id,
-        )
-        assert decision.error_code is not None
-        raise GatewayError(decision.error_code, _layer_message(decision))
-
-    if request.precondition is not None:
-        try:
-            await request.precondition()
-        except GatewayError as error:
-            await auditor.decision(
-                allowed=False, reason=f"precondition:{error.code}",
-                target_type=target_type, target_id=request.target_id,
-            )
-            raise
+    await preflight_mutation(
+        registry=registry, settings=settings, context=context, preflight=request.preflight,
+    )
 
     await auditor.decision(
         allowed=True, target_type=target_type, target_id=request.target_id,

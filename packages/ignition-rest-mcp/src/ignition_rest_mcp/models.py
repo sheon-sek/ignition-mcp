@@ -177,6 +177,33 @@ class ConfigResourceRenameResult(StrictModel):
     observedState: dict[str, Any]
 
 
+class ProjectImportResult(StrictModel):
+    """D16: the terminal transaction state of a Project import, as data.
+
+    Only a satisfied outcome is a result: ``COMMITTED`` (the import landed and the
+    post-import export C equals the candidate) or ``NO_CHANGE`` (the candidate was
+    semantically equal to the baseline, so nothing was backed up or imported). Every
+    other D16 terminal state is a Tool error carrying the D30 §7 code, and its message
+    names the state and the ``transactionId`` reported here.
+    """
+
+    correlationId: str
+    projectName: str
+    transactionId: str
+    state: str = Field(pattern="^(COMMITTED|NO_CHANGE)$")
+    #: Baseline A: the Project's content fingerprint at the start of the transaction.
+    baselineFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    #: Candidate B: the fingerprint of the archive this call staged and dispatched.
+    candidateFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    #: Re-export C after the import; equal to the candidate on a commit, and absent only
+    #: on a no-op, where nothing was imported.
+    resultFingerprint: str | None = Field(default=None, pattern="^pcf1:[0-9a-f]{64}$")
+    #: False for ``NO_CHANGE``, and for a commit recovered from an ambiguous dispatch.
+    importDispatched: bool
+    #: True when the designer-session policy is ``warn`` and a Designer session was open.
+    designerWarning: bool
+
+
 class AuditRecord(StrictModel):
     action: str
     actionTarget: str

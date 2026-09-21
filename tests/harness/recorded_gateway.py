@@ -278,7 +278,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         if path.startswith("/data/api/v1/projects/export/"):
             name = path.rsplit("/", 1)[-1]
-            project = server.projects.get(name)
+            project = server.observe_export(name)
             if project is None:
                 self._json(404, {"message": "No project", "status": "404"})
                 return
@@ -509,9 +509,8 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         if path.startswith("/data/api/v1/projects/import/"):
             name = path.rsplit("/", 1)[-1]
-            server.projects[name] = _gateway_import(server.projects.get(name), body)
-            server.imports.append(name)
-            self._json(200, {"message": f"Project {name} imported"})
+            status, payload = server.apply_project_import(name, body)
+            self._json(status, payload)
             return
         if path == "/data/api/v1/resources/ignition/database-connection":
             resources = json.loads(body)
@@ -665,6 +664,56 @@ class _Server(http.server.ThreadingHTTPServer):
         self.write_problem: dict[str, str] = {}
         self.write_status: dict[str, int] = {}
         self.write_race: dict[str, dict[str, Any]] = {}
+        #: Exports served, and one scheduled external Project change that lands once
+        #: that many exports have been served (models a writer acting between baseline
+        #: A and the D16 pre-import re-export A').
+        self.exports_served = 0
+        self.project_change_after: tuple[str, int, dict[str, bytes]] | None = None
+
+    # ------------------------------------------------------- projects
+
+    def observe_export(self, name: str) -> bytes | None:
+        """Serve one Project export, applying a scheduled external change first.
+
+        The change lands *after* the scheduled number of exports have been served, so
+        the export that follows it is the first to see it.
+        """
+
+        pending = self.project_change_after
+        if pending is not None and pending[0] == name and self.exports_served >= pending[1]:
+            self.project_change_after = None
+            self.change_project(pending[0], pending[2])
+        self.exports_served += 1
+        return self.projects.get(name)
+
+    def change_project(self, name: str, entries: dict[str, bytes]) -> None:
+        """Change a Project without the MCP server, as another operator would.
+
+        The change goes through the recorded import transition, so the Project stays a
+        valid archive while a fingerprint taken before it is stale.
+        """
+
+        self.projects[name] = _gateway_import(self.projects.get(name), _zip_bytes(entries))
+
+    def apply_project_import(self, name: str, body: bytes) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway Project import.
+
+        The transition itself is the recorded one (:func:`_gateway_import`); the write
+        hooks the config-resource routes use model the boundaries around it, keyed by
+        ``"import"``: a competing writer at dispatch time (``write_race``), an
+        ambiguous status that applies nothing (``write_status``), and a refusal carried
+        inside a 200 (``write_problem``).
+        """
+
+        if race := self.write_race.pop("import", None):
+            self.change_project(name, {key: value for key, value in race.items()})
+        if (status := self.write_status.get("import")) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        if (problem := self.write_problem.get("import")) is not None:
+            return 200, _refused(problem)
+        self.projects[name] = _gateway_import(self.projects.get(name), body)
+        self.imports.append(name)
+        return 200, {"message": f"Project {name} imported"}
 
     # ------------------------------------------------------- config resources
 
@@ -1053,6 +1102,48 @@ class RecordedGateway:
     @property
     def imports(self) -> list[str]:
         return self._server.imports
+
+    # ------------------------------------------------------------- projects
+
+    def project(self, name: str) -> bytes | None:
+        """The Project archive the Gateway currently serves for ``name``."""
+
+        return self._server.projects.get(name)
+
+    def change_project_out_of_band(self, name: str, entries: dict[str, bytes]) -> None:
+        """Change a Project without the MCP server, as another operator would; a
+        fingerprint read before the change is now stale."""
+
+        self._server.change_project(name, entries)
+
+    def change_project_after_exports(
+        self, name: str, exports: int, entries: dict[str, bytes],
+    ) -> None:
+        """Schedule an external Project change that lands once ``exports`` exports have
+        been served.
+
+        With the baseline export being the first one, ``exports=1`` models a writer that
+        changes the Project between baseline A and the D16 mandatory pre-import
+        re-export A'.
+        """
+
+        self._server.project_change_after = (name, exports, dict(entries))
+
+    def fail_imports_with(self, status: int = 500) -> None:
+        """Model a Gateway that answers the Project import with ``status`` and applies
+        nothing — the ambiguous dispatch boundary of D08."""
+
+        self._server.write_status["import"] = status
+
+    def refuse_imports_with(self, problem: str | None) -> None:
+        """Model a Gateway that refuses the Project import inside a 200 response."""
+
+        self._server.write_problem["import"] = problem
+
+    def race_import_with(self, entries: dict[str, bytes]) -> None:
+        """Model another writer importing ``entries`` at dispatch time (D30 §2's race)."""
+
+        self._server.write_race["import"] = dict(entries)
 
     # ------------------------------------------------------- config resources
 

@@ -42,8 +42,9 @@ UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
 DELETE_TOOL = "config_resource_delete"
 RENAME_TOOL = "config_resource_rename"
+IMPORT_TOOL = "project_import"
 #: Every Phase 4 REST Mutation Tool, in the order the milestone introduced them.
-MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL)
+MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL)
 
 ACCEPT = "application/json, text/event-stream"
 PROTOCOL_VERSION = "2025-06-18"

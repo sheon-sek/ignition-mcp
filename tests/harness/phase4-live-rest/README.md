@@ -1,20 +1,21 @@
 # Phase 4 REST live harness (milestone 4c)
 
 Live proof for the REST Mutation Tools — `config_resource_update`,
-`config_resource_create`, `config_resource_delete` and `config_resource_rename` — on
-disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
+`config_resource_create`, `config_resource_delete`, `config_resource_rename` and
+`project_import` — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
 on pull requests in the trusted repository, under the `phase4-live` GitHub
 environment.
 
 ## What it proves
 
 The driver (`rest_driver.py`) talks MCP over HTTP to a real `ignition-rest`
-server and reads the Gateway only through the server's own read Tools, so every
-case is something an agent could observe:
+server, uses the artifact data plane the way an agent would, and reads the Gateway
+only through the server's own read Tools, so every case is something an agent could
+observe:
 
 | Case | Expectation |
 |---|---|
-| `inventory-agent-exact` | with the class enabled, the config-scoped credential sees exactly the read inventory plus the four Mutation Tools |
+| `inventory-agent-exact` | with the class enabled, the config-scoped credential sees exactly the read inventory plus the five Mutation Tools |
 | `inventory-reader-exact` | the read-only credential sees exactly the read inventory: D07 discovery still filters every Mutation Tool |
 | `allowlisted-update-applies` | an allowlisted change returns structured success |
 | `update-moves-the-signature` | the Resource signature moved, so the caller has a fresh Precondition token |
@@ -58,11 +59,34 @@ case is something an agent could observe:
 | `refused-resource-survives-the-rename-denial` | …with the token still working |
 | `rename-into-an-unallowlisted-destination-is-permission-denied` | the rename destination is a Target too (D30 §3) |
 | `rename-into-an-unallowlisted-destination-changes-nothing` | …and nothing moved |
+| `project-import-commits` | an uploaded archive imports into an existing Project and the D16 transaction ends `COMMITTED` |
+| `project-import-baseline-is-the-callers-read` | the transaction's baseline A is the fingerprint `project_export` reported to the caller |
+| `project-import-verifies-its-own-candidate` | the post-import export C equals the staged candidate B (D16 reconcile) |
+| `project-import-reports-the-dispatch` | the committed transaction reports that it dispatched |
+| `project-export-fingerprint-is-independent` | the fingerprint the server reports for a fresh export equals this harness's own `pcf1` computation |
+| `project-import-content-lands` | that independent fingerprint equals the candidate the import reported |
+| `project-import-marker-is-present` | the entry the candidate carried is in the Project the Gateway now serves |
+| `project-import-of-the-current-content-is-no-change` | re-importing that content is D16's `NO_CHANGE` |
+| `project-import-no-change-dispatches-nothing` | …and nothing was dispatched |
+| `project-import-stale-fingerprint-is-conflict` | the pre-commit fingerprint is a stale Precondition token (D30 §2) |
+| `project-import-stale-fingerprint-changes-nothing` | …and the refused import changed nothing |
+| `project-import-non-allowlisted-project-is-permission-denied` | D30 §7 for a Project the Target allowlist does not name |
+| `project-import-non-allowlisted-project-changes-nothing` | …and that Project is untouched |
+| `project-import-invisible-artifact-is-not-found` | D30 §6: an archive another principal owns answers `not_found` |
 | `inventory-gate-off-exact` | with the class disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
 
 The driver asserts exactly one Target-denial code, `permission_denied` (D30 §7,
-Tool-scoped; see `docs/development/phase-4.md`).
+Tool-scoped; see `docs/development/phase-4.md`). That is the code both
+`config_resource_*` and `project_import` answer; the frozen Phase 3 machinery the G3
+harness drives keeps its recorded `operation_disabled` because the code is declared per
+operation.
+
+The deployment this driver runs against enables the config mutation class, the
+sensitive exports (the Project cases read their Precondition token from
+`project_export`), artifact upload, and the D16 Project writer with an explicit
+`IGNITION_MCP_GATEWAY_ID`. Those gates decide the inventory the driver asserts, so the
+read inventory here includes the two sensitive-export Tools.
 
 ## Layout
 
@@ -72,7 +96,9 @@ Tool-scoped; see `docs/development/phase-4.md`).
   allowlist control, and the two rename sources). It waits for the required OpenAPI
   routes first, including the `DELETE` and rename routes the new Tools need, so no
   fixture mutation happens before the capability exists. The name the create case
-  publishes is deliberately not provisioned.
+  publishes is deliberately not provisioned. It also confirms the two disposable
+  Projects the import cases address are installed and listed, so a missing Project
+  fails before the driver runs.
 - `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
   `tests/harness/recorded_gateway.py` and runs both driver modes with the same
