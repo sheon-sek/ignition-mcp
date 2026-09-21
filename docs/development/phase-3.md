@@ -327,7 +327,7 @@ Phase 3 ends at G3. Phase 4 starts only on a new user-directed feature branch.
 
 ## Execution log
 
-Commit SHAs are recorded by the next slice's commit (a commit cannot contain its own SHA); Slice 12 fills any final row.
+Each row names the primary implementation or close-out commit. The Slice 12 log update follows its recorded commit because a commit cannot contain its own SHA.
 
 | Slice | Commit | Validation |
 |---|---|---|
@@ -344,6 +344,7 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 9 | `40ecc81` | full validation suite green (compat validator + double-release cmp added) |
 | 10 | `5c4bd26` | full validation suite green (509 tests; verified per handoff checklist; structural scan CLI exclusion + compensating GET-only test added) |
 | 11 | `a1ada74` plus fixes through `c3f6955`; evidence `03f98a6` | final live run `35595061842` green on both rows; six-row compatibility set and full validation suite green (526 tests) |
+| 12 | `1df276e` | G3 closed; results, operator guidance, resume point and release documentation updated; full validation suite green (526 tests) |
 
 ## Archived implementation handoff (2026-09-21)
 
