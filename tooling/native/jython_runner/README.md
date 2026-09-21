@@ -1,8 +1,50 @@
 # Recorded Jython runner
 
-This test utility executes an unchanged Runtime Bundle `onToolCalled.py` under Jython 2.7.4, injects a recorded `system.*` result, and validates successful `structuredContent` against the schema selected by the Tool contract.
+This test utility executes an unchanged Runtime Bundle `onToolCalled.py` under Jython 2.7.4, replays a recorded sequence of `system.*` calls, and validates the handler's result against the schema selected by the Tool contract.
 
 It is a fast recorded-shape check. It does not replace the D23 live-Gateway tests or claim that fixture adapters are Inductive Automation classes.
+
+## Fixture format
+
+A `schemaVersion: 2` fixture lists the native calls the handler must make, in order:
+
+```json
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": ["writes", "timeout"],
+  "arguments": {"writes": [{"path": "[default]AHU/PV", "value": 22}], "timeout": 5000},
+  "calls": [
+    {"target": "system.tag.readBlocking", "args": [["[p]Len"], 5000],
+     "result": {"kind": "qualified-values", "items": [{"quality": {"name": "Good", "code": 192,
+                "level": "Good", "good": true, "diagnosticMessage": null}, "value": 123}]}},
+    {"target": "system.util.audit", "kwargs": {"action": "ignition-mcp.tag_write"},
+     "result": {"kind": "none"}}
+  ]
+}
+```
+
+Matching rules:
+
+- The handler must make exactly the recorded calls, in order. An unrecorded call, a
+  recorded call it never makes, a mismatched positional `args` list, or a mismatched
+  recorded `kwargs` value fails the run. That is what lets a fixture assert the
+  negative half of a behavior: the policy Tag was never read, no write was dispatched.
+- `args` is compared exactly; `kwargs` compares only the recorded keys (so a generated
+  value such as a correlation ID inside `actionValue` stays out of the fixture).
+- Result kinds: `none` (returns `None`), `qualified-values` (`system.tag.readBlocking`),
+  `quality-codes` (`system.tag.writeBlocking`), `results` (`system.tag.query`),
+  `resource` / `missing` (`system.config.getResource`), and `raise` (a
+  `java.lang.RuntimeException`, the shape a handler's `except (Exception, JavaException)`
+  catches).
+- `system.util.jsonEncode`, `jsonDecode` and `getLogger` are real implementations in the
+  Jython process; only Gateway state is recorded.
+
+`run_recorded_tool(tool, fixture)` requires a successful result and validates
+`structuredContent` against the contract's `outputSchema`.
+`run_recorded_tool_error(tool, fixture, expected_code=...)` requires a canonical D06 Tool
+Error and returns the error object (including its `details`), so a test can assert
+*which* refusal a batch produced.
 
 ## Requirements
 

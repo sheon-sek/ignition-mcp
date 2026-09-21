@@ -151,32 +151,53 @@ def _validate_structured_content(contract_path: Path, result: dict[str, Any]) ->
     Draft202012Validator(schema).validate(structured)
 
 
-def _fixture_path(fixture_path: Path) -> Path:
-    """The recorded fixture to replay, confined to the committed fixture directory.
+def _error_codes() -> set[str]:
+    document = json.loads(
+        (ROOT / "contracts/shared/error-codes.json").read_text(encoding="utf-8")
+    )
+    return {str(code) for code in document["codes"]}
 
-    D29 restricts the vulnerable Jython 2.7.4 process to repository-controlled
-    handlers and fixtures: a path that resolves outside ``fixtures/`` — including
-    through a symlink — is rejected, as is one over :data:`MAX_FIXTURE_BYTES`.
-    Both checks run before Java starts.
+
+def _canonical_error(result: dict[str, Any]) -> dict[str, Any]:
+    """D06: a Tool error is `content` text carrying the canonical error object.
+
+    A handler returns ``content`` as one text part object (the Module wraps it
+    into the protocol's single-element array), so both shapes are accepted here.
     """
-    fixture = fixture_path.expanduser().resolve()
-    if not fixture.is_relative_to(FIXTURE_DIR):
-        raise JythonRunnerError(
-            f"Recorded fixtures must come from {FIXTURE_DIR} (D29); "
-            f"{fixture_path} resolves to {fixture}"
-        )
-    if not fixture.is_file():
-        raise JythonRunnerError(f"Recorded fixture is missing: {fixture}")
-    size = fixture.stat().st_size
-    if size > MAX_FIXTURE_BYTES:
-        raise JythonRunnerError(
-            f"Recorded fixture is {size} bytes, over the {MAX_FIXTURE_BYTES}-byte limit: {fixture}"
-        )
-    return fixture
+
+    content = result.get("content")
+    if isinstance(content, dict):
+        content = [content]
+    if not isinstance(content, list) or len(content) != 1 or not isinstance(content[0], dict):
+        raise JythonRunnerError(f"Tool Error must contain exactly one content part: {result}")
+    if content[0].get("type") != "text" or not isinstance(content[0].get("text"), str):
+        raise JythonRunnerError(f"Tool Error must contain canonical JSON text: {result}")
+    try:
+        error = json.loads(content[0]["text"])
+    except json.JSONDecodeError as error_or:  # pragma: no cover - defensive
+        raise JythonRunnerError(f"Tool Error text is not JSON: {content[0]['text']!r}") from error_or
+    if not isinstance(error, dict):
+        raise JythonRunnerError("Tool Error text must be a JSON object")
+    if not {"code", "message", "correlationId"} <= set(error) <= {"code", "message", "correlationId", "details"}:
+        raise JythonRunnerError(f"Tool Error keys drifted from the canonical shape: {sorted(error)}")
+    if error["code"] not in _error_codes():
+        raise JythonRunnerError(f"Tool Error used an unknown code: {error['code']!r}")
+    if not isinstance(error["message"], str) or not error["message"]:
+        raise JythonRunnerError("Tool Error message must be a non-empty string")
+    if not isinstance(error["correlationId"], str) or not error["correlationId"]:
+        raise JythonRunnerError("Tool Error correlationId must be a non-empty string")
+    if "details" in error and not isinstance(error["details"], dict):
+        raise JythonRunnerError("Tool Error details must be an object")
+    return error
 
 
-def run_recorded_tool(tool_name: str, fixture_path: Path) -> dict[str, Any]:
-    """Run one unchanged Runtime Tool handler with a recorded native result fixture."""
+def _run(tool_name: str, fixture_path: Path) -> tuple[dict[str, Any], Path]:
+    """Run one unchanged Runtime Tool handler over one recorded fixture.
+
+    Returns the raw handler result and the Tool's contract path, so each public
+    wrapper can validate the shape it expects.
+    """
+
     handler, contract = _tool_paths(tool_name)
     fixture = _fixture_path(fixture_path)
 
@@ -204,8 +225,58 @@ def run_recorded_tool(tool_name: str, fixture_path: Path) -> dict[str, Any]:
         raise JythonRunnerError(f"Jython emitted invalid JSON: {completed.stdout!r}") from error
     if not isinstance(raw_result, dict):
         raise JythonRunnerError("Jython handler result must be an object")
-    result = dict(raw_result)
+    return dict(raw_result), contract
+
+
+def run_recorded_tool(tool_name: str, fixture_path: Path) -> dict[str, Any]:
+    """Run one unchanged Runtime Tool handler with a recorded native result fixture."""
+    result, contract = _run(tool_name, fixture_path)
     if result.get("isError") is True:
         raise JythonRunnerError(f"Runtime Tool returned an error: {result}")
     _validate_structured_content(contract, result)
     return result
+
+
+def run_recorded_tool_error(
+    tool_name: str, fixture_path: Path, *, expected_code: str | None = None
+) -> dict[str, Any]:
+    """Run a fixture whose recorded conditions must produce a canonical Tool error.
+
+    The returned object is the Tool Error (`code`, `message`, `correlationId` and
+    the Tool's optional `details`), so a test can assert *which* refusal a batch
+    produced — for example a reserved-provider refusal rather than an allowlist one.
+    """
+    result, _contract = _run(tool_name, fixture_path)
+    if result.get("isError") is not True:
+        raise JythonRunnerError(f"Runtime Tool did not fail as recorded: {result}")
+    if "structuredContent" in result:
+        raise JythonRunnerError("A Tool Error must not carry structuredContent")
+    error = _canonical_error(result)
+    if expected_code is not None and error["code"] != expected_code:
+        raise JythonRunnerError(f"Expected {expected_code}, got {error['code']}: {error}")
+    return error
+
+
+def _fixture_path(fixture_path: Path) -> Path:
+    """The recorded fixture to replay, confined to the committed fixture directory.
+
+    D29 restricts the vulnerable Jython 2.7.4 process to repository-controlled
+    handlers and fixtures: a path that resolves outside ``fixtures/`` — including
+    through a symlink — is rejected, as is one over :data:`MAX_FIXTURE_BYTES`.
+    Both checks run before Java starts.
+    """
+    fixture = fixture_path.expanduser().resolve()
+    if not fixture.is_relative_to(FIXTURE_DIR):
+        raise JythonRunnerError(
+            f"Recorded fixtures must come from {FIXTURE_DIR} (D29); "
+            f"{fixture_path} resolves to {fixture}"
+        )
+    if not fixture.is_file():
+        raise JythonRunnerError(f"Recorded fixture is missing: {fixture}")
+    size = fixture.stat().st_size
+    if size > MAX_FIXTURE_BYTES:
+        raise JythonRunnerError(
+            f"Recorded fixture is {size} bytes, over the {MAX_FIXTURE_BYTES}-byte limit: {fixture}"
+        )
+    return fixture
+

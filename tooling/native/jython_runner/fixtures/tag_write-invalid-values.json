@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": [
+    "writes",
+    "timeout"
+  ],
+  "arguments": {
+    "writes": [
+      {
+        "path": "[default]AHU/Setpoint",
+        "value": {
+          "setpoint": 22
+        }
+      },
+      {
+        "path": "[default]AHU/Other",
+        "value": 1,
+        "note": "extra"
+      },
+      {
+        "path": "[default]AHU/Nested",
+        "value": [
+          [
+            1,
+            2
+          ]
+        ]
+      }
+    ],
+    "timeout": 5000
+  },
+  "calls": []
+}

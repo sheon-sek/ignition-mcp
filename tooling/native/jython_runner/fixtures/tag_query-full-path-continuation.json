@@ -1,6 +1,6 @@
 {
-  "schemaVersion": 1,
-  "operation": "system.tag.query",
+  "schemaVersion": 2,
+  "tool": "tag_query",
   "parameterOrder": [
     "provider",
     "pathPattern",
@@ -23,17 +23,32 @@
     "maxResults": 1,
     "continuation": ""
   },
-  "result": {
-    "nativeType": "Results",
-    "items": [
-      {
-        "fullPath": {
-          "nativeType": "TagPath",
-          "text": "[default]Area/Pump 1/Running"
+  "calls": [
+    {
+      "target": "system.tag.query",
+      "args": [
+        "default",
+        {
+          "options": {"includeUdtMembers": true, "includeUdtDefinitions": false},
+          "condition": {"path": "Area/*", "tagType": "AtomicTag"},
+          "returnProperties": ["path", "tagType"]
         },
-        "tagType": "AtomicTag"
+        1
+      ],
+      "result": {
+        "kind": "results",
+        "nativeType": "Results",
+        "items": [
+          {
+            "fullPath": {
+              "nativeType": "TagPath",
+              "text": "[default]Area/Pump 1/Running"
+            },
+            "tagType": "AtomicTag"
+          }
+        ],
+        "continuationPoint": "recorded-continuation-2"
       }
-    ],
-    "continuationPoint": "recorded-continuation-2"
-  }
+    }
+  ]
 }
