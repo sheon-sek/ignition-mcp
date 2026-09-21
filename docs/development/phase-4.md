@@ -226,24 +226,32 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   committed 8.3.8 type to that rule.
 - Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **47/47 cases**
   against the recorded Gateway, both deployment gates.
-- Live ([run 35652623709](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623709)):
-  workflow `Phase 4 Live Gateway REST mutation`, both rows green, **47/47 live cases on
-  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — the exact
-  four-Tool inventory with the class enabled and the read-only inventory without it, an
-  allowlisted create/delete/rename each confirmed by an independent read, a create and a
-  delete collision, a rename onto an occupied destination, stale tokens refused with
-  `conflict` and changing nothing, `ignition/api-token` refused with `permission_denied`
-  for all three Tools while the token keeps working, an unallowlisted Target denied for
-  each Tool (including the rename destination), and a refused cross-check that a denied
-  create/delete/rename published or removed nothing. `provision.json` records the four
-  provisioned resources and the nine required OpenAPI routes.
-- Frozen gates on the same head (`b4fcb59`): CI
-  [35652623688](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623688),
+- Live ([run 35652623709](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623709),
+  re-run on the documentation head
+  [35654240134](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240134)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green on every head,
+  **47/47 live cases on 8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`,
+  candidate)** — the exact four-Tool inventory with the class enabled and the read-only
+  inventory without it, an allowlisted create/delete/rename each confirmed by an
+  independent read, a create and a delete collision, a rename onto an occupied
+  destination, stale tokens refused with `conflict` and changing nothing,
+  `ignition/api-token` refused with `permission_denied` for all three Tools while the
+  token keeps working, an unallowlisted Target denied for each Tool (including the
+  rename destination), and a refused cross-check that a denied create/delete/rename
+  published or removed nothing. `provision.json` records the four provisioned resources
+  and the nine required OpenAPI routes.
+- Frozen gates, green on every pushed head of this ticket (`b4fcb59`, `020befb`,
+  `a7c6dc5`): CI
+  [35652623688](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623688) and
+  [35654240141](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240141),
   Phase 3 Live Gateway G3
   [35652623873](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623873) and
+  [35654240140](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240140), and
   Phase 4 Live Gateway G4a
-  [35652623753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623753) —
-  all success.
+  [35652623753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35652623753) and
+  [35654240189](https://github.com/sheon-sek/ignition-mcp/actions/runs/35654240189) — all
+  success. One G3 row needed a rerun for a Gateway-side reason recorded in Open
+  questions.
 
 ## Open questions
 
