@@ -28,6 +28,8 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 RESOURCE_TYPE = "ignition/audit-profile"
+#: An allowed singleton target (the documented change item carries no name).
+SINGLETON_TYPE = "ignition/cobranding"
 COLLECTION_PATH = f"/data/api/v1/resources/{RESOURCE_TYPE}"
 FIND_PATH = f"/data/api/v1/resources/find/{RESOURCE_TYPE}/"
 ALLOWLISTED = "MCP_CI_AUDIT"
@@ -37,6 +39,8 @@ REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/find/{RESOURCE_TYPE}/{{name}}"),
     ("POST", COLLECTION_PATH),
     ("PUT", COLLECTION_PATH),
+    ("GET", f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}"),
+    ("PUT", f"/data/api/v1/resources/{SINGLETON_TYPE}"),
 })
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OPENAPI_BYTES = 16 * 1_048_576
@@ -169,6 +173,10 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
         base_url, token, "GET", "/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci",
         allowed_error_statuses=frozenset({404}),
     )
+    singleton_status, singleton_payload = _request(
+        base_url, token, "GET", f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}",
+        allowed_error_statuses=frozenset({404}),
+    )
     return {
         "schemaVersion": 1,
         "resourceType": RESOURCE_TYPE,
@@ -177,6 +185,15 @@ def provision(base_url: str, token: str) -> dict[str, Any]:
             "resourceType": "ignition/api-token",
             "name": "ignition-mcp-ci",
             "present": token_status == 200 and isinstance(token_payload, dict),
+        },
+        "singletonTarget": {
+            "resourceType": SINGLETON_TYPE,
+            "present": singleton_status == 200 and isinstance(singleton_payload, dict),
+            "signature": (
+                singleton_payload.get("signature")
+                if singleton_status == 200 and isinstance(singleton_payload, dict)
+                else None
+            ),
         },
         "readiness": readiness,
     }
@@ -194,6 +211,7 @@ def main() -> int:
     print(json.dumps({
         "resources": {name: item["signature"] for name, item in report["resources"].items()},
         "refusedResourcePresent": report["refusedResourceType"]["present"],
+        "singletonTargetPresent": report["singletonTarget"]["present"],
     }, sort_keys=True))
     return 0
 

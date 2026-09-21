@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'emscripten'",
-    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
     "python_full_version >= '3.14' and sys_platform != 'emscripten'",
+    "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
     "(python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
 ]
 
@@ -532,6 +532,7 @@ source = { editable = "packages/ignition-rest-mcp" }
 dependencies = [
     { name = "fastmcp" },
     { name = "httpx" },
+    { name = "jsonschema" },
     { name = "pydantic" },
 ]
 
@@ -539,6 +540,7 @@ dependencies = [
 requires-dist = [
     { name = "fastmcp", specifier = "==4.0.5" },
     { name = "httpx", specifier = "==0.28.1" },
+    { name = "jsonschema", specifier = "==4.26.0" },
     { name = "pydantic", specifier = ">=2.11,<3" },
 ]
 

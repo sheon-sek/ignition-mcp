@@ -23,6 +23,11 @@ CLASS_SCOPE = {
 
 WILDCARD = "*"
 
+#: D06 codes a Target-allowlist denial may carry: D30 §7 decides
+#: ``permission_denied`` for the Phase 4 Mutations, and the Phase 3 machinery that
+#: predates that decision records ``operation_disabled``.
+TARGET_DENIAL_CODES = ("operation_disabled", "permission_denied")
+
 
 @dataclass(frozen=True, slots=True)
 class MutationOperation:
@@ -30,10 +35,17 @@ class MutationOperation:
     mutation_class: str
     capability: str
     destructive: bool
+    #: The D06 code a Target-allowlist denial carries for this operation. D30 §7
+    #: decides `permission_denied` for the Phase 4 Mutations; the Phase 3 machinery
+    #: that shipped before that decision keeps its recorded `operation_disabled`,
+    #: and its frozen G3 evidence stays valid because the code is per operation.
+    target_denial_code: str = "operation_disabled"
 
     def __post_init__(self) -> None:
         if self.mutation_class not in MUTATION_CLASSES:
             raise ValueError("mutation operations must declare a real D08 mutation class")
+        if self.target_denial_code not in TARGET_DENIAL_CODES:
+            raise ValueError(f"unknown Target denial code: {self.target_denial_code}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +105,7 @@ def evaluate_deployment_policy(
     if WILDCARD not in targets and target_id not in targets:
         return PolicyDecision(
             allowed=False, layer="target-allowlist", reason="target-not-allowlisted",
-            error_code="operation_disabled",
+            error_code=operation.target_denial_code,
         )
     if not capability_present:
         return PolicyDecision(

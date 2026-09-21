@@ -163,6 +163,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   nothing, `ignition/api-token` refused with `permission_denied` and left usable, and
   a resource outside the Target allowlist denied with nothing changed. The observed
   Target-denial code is `operation_disabled` (see Open questions).
+- Review round 1 fixes (see the ticket report): a non-allowlisted Target is `permission_denied`
+  (D30 §7) through a Tool-scoped mapping that leaves the frozen G3 behavior and evidence untouched;
+  the change item is validated against the target Gateway's own documented PUT request schema (D03)
+  before dispatch, and an update route without a usable schema exposes no update; a
+  collection-qualified change is refused; and a Gateway refusal is never reported as a success when
+  the requested values happened to equal the pre-state.
 - The same runs captured each Gateway's `/openapi.json`; the 8.3.9 candidate exposes
   56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
   the MCP Module's own `server-config`), and every one of them is classified. The
@@ -179,15 +185,15 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
-- **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy.** D30 §7 maps "target not
-  allowlisted" to `permission_denied`; the shared D08 layer answers `operation_disabled`
-  (`safety/policy.py::evaluate_deployment_policy`, pinned by
-  `packages/ignition-rest-mcp/tests/test_phase3_safety_executor.py:487` and asserted against a live
-  Gateway by `tests/harness/phase3-live/driver.py:696`). Ticket #14 implemented the D30 §5 Refused
-  resource type rule exactly — `permission_denied`, evaluated inside the chain, even under `*` — and
-  left the shared Target-allowlist layer on the frozen Phase 3 code so no G3 artifact changes.
-  Unifying the two needs a D30 §7 amendment or a G3 driver change; both are owner-visible, so
-  neither was made here.
+- **Ticket #14 — D30 §7 vs the frozen Phase 3 deployment policy: RESOLVED by a Tool-scoped
+  mapping.** D30 §7 maps "target not allowlisted" to `permission_denied`; the Phase 3 machinery
+  answers `operation_disabled`, which `test_phase3_safety_executor.py` and the live G3 driver
+  (`tests/harness/phase3-live/driver.py:696`) pin as recorded, frozen evidence. `MutationOperation`
+  now declares `target_denial_code` (D30 §7 decides `permission_denied` for
+  `config_resource_update`; `PROJECT_IMPORT_OPERATION` keeps `operation_disabled`), so the Phase 4
+  Tool returns the decided code, no G3 artifact or evidence changes, and a unit test pins the
+  per-operation split. `tooling/contracts/lint.py` refuses a Phase 4 mutation contract that does
+  not declare `permission_denied`. The live REST driver asserts exactly that code.
 - **Ticket #14 — the 8.3.9 candidate's full OpenAPI document is not committed.**
   `docs/ignition-8.3.9-openapi/resource-types.json` records the resource-type inventory a live
   8.3.9 Gateway exposed (56 types, a strict subset of the 8.3.8 document's 57 — the difference is
@@ -195,6 +201,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   the capturing run. Every listed type is classified. Committing the 12.7 MB document itself is a
   repository-size decision for the owner; until then the classification test enforces the inventory
   and the discovery-by-path rule, and anything unclassified stays refused.
+- **Ticket #14 — a collection-qualified Target policy does not exist yet.** The Gateway reads and
+  changes a config resource by collection as well as by name, so a Target allowlist entry for
+  `<resourceType>/<name>` would otherwise authorize the same name in every collection.
+  `config_resource_update` therefore refuses a caller-supplied `collection` with `invalid_argument`
+  and addresses only the default collection, which closes the gap without inventing an encoding the
+  Target policy has no room for. Supporting collections means amending the Target policy (D08/D30)
+  to name the triple unambiguously; until then a two-collection test proves the refusal, and the
+  fixture keys resource state by `(name, collection)` so the distinction is observable.
 - **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
   live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
   timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open

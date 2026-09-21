@@ -39,6 +39,7 @@ from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from rest_driver import (  # noqa: E402
     REFUSED_NAME,
     REFUSED_TYPE,
+    SINGLETON_TYPE,
     run_gate_off,
     run_gate_on,
 )
@@ -78,7 +79,7 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         artifact_cleanup_batch=50, artifact_upload_enabled=False, sensitive_exports_enabled=False,
         config_mutation_enabled=mutation_enabled, control_mutation_enabled=False,
         admin_mutation_enabled=False, mutation_operations=("config_resource_update",),
-        mutation_targets={"config_resource_update": (f"{RESOURCE_TYPE}/{ALLOWLISTED}",)},
+        mutation_targets={"config_resource_update": (f"{RESOURCE_TYPE}/{ALLOWLISTED}", SINGLETON_TYPE)},
         project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=False,
         project_lock_timeout_seconds=10.0, project_lock_max_entries=32,
         project_reconcile_interval_seconds=3600.0, project_verification_timeout_seconds=60.0,
@@ -120,6 +121,10 @@ def _seed(gateway: RecordedGateway) -> None:
         config={"profile": {"type": "local"}, "settings": {}},
         description="Disposable Phase 4 CI audit profile (allowlist control)",
     )
+    # An allowed singleton: its documented change item carries no name.
+    gateway.seed_resource(
+        SINGLETON_TYPE, "cobranding", config={"enabled": True}, description="CI branding",
+    )
     # The refused resource the live Gateway really has: its own CI API token.
     gateway.seed_resource(
         REFUSED_TYPE, REFUSED_NAME,
@@ -140,7 +145,8 @@ def main() -> int:
             gate_on = asyncio.run(run_gate_on(
                 rest_url=url, reader_token=READER_TOKEN, agent_token=AGENT_TOKEN,
                 resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
-                unallowlisted=UNALLOWLISTED, raw_dir=args.raw_dir,
+                unallowlisted=UNALLOWLISTED, singleton_type=SINGLETON_TYPE,
+                raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(

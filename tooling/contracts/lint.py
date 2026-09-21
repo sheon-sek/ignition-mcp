@@ -197,6 +197,18 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: unclassified resource types must be refused")
         if tool.get("fixedKnobs", {}).get("allowInvalidReferences") != "false":
             raise ContractError(f"{tool_name}: allowInvalidReferences is fixed false (D30)")
+        target = tool.get("targetId")
+        if not isinstance(target, dict) or target.get("denialCode") != "permission_denied":
+            raise ContractError(f"{tool_name}: D30 §7 decides permission_denied for a Target denial")
+        if target.get("wildcard") != "*" or target.get("denyByDefault") is not True:
+            raise ContractError(f"{tool_name}: the Target allowlist stays deny-by-default with an explicit *")
+        schema_validation = tool.get("requestSchemaValidation")
+        if not isinstance(schema_validation, dict) or (
+            schema_validation.get("source") != "gateway-openapi-capability-snapshot"
+        ):
+            raise ContractError(f"{tool_name}: D03 request-schema validation must be declared")
+        if schema_validation.get("unavailableDisposition") is None:
+            raise ContractError(f"{tool_name}: an unusable request schema must fail closed")
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")

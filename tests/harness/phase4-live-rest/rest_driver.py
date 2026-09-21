@@ -19,16 +19,14 @@ Live cases (the ticket's list):
   under a ``*`` Target allowlist, and the resource it refuses to change still works;
 - a change to a resource the Target allowlist does not name never reaches Ignition.
 
-Two notes on expectations:
+One note on the Target-allowlist expectation: D30 §7 decides ``permission_denied``
+for a Phase 4 Mutation whose Target is not in the Target allowlist, and the Tool-scoped
+mapping keeps the frozen Phase 3 machinery on its recorded ``operation_disabled`` (G3
+evidence asserts that code). This driver therefore asserts exactly one code.
 
-- The Target-allowlist layer answers ``operation_disabled`` today (the frozen Phase 3
-  mapping). D30 §7 maps "target not allowlisted" to ``permission_denied``; that
-  contradiction is recorded in ``docs/development/phase-4.md`` Open questions, so this
-  case records which denial code was observed and accepts either, requiring only that
-  the denial happened and the resource did not change.
-- No compatibility evidence row is produced here: a G4 row carries the Gateway/Module
-  tuple, and this harness deploys no MCP Module. The observations are uploaded as
-  workflow artifacts and referenced by the G4 close-out.
+No compatibility evidence row is produced here: a G4 row carries the Gateway/Module
+tuple, and this harness deploys no MCP Module. The observations are uploaded as
+workflow artifacts and referenced by the G4 close-out.
 """
 
 from __future__ import annotations
@@ -48,6 +46,9 @@ from harness_common import McpHttp, ProbeError, error_envelope  # noqa: E402
 UPDATE_TOOL = "config_resource_update"
 REFUSED_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
+#: An allowed *singleton* (its documented change item carries no name) and a
+#: per-Target denial code D30 §7 decides for the Phase 4 Mutations.
+SINGLETON_TYPE = "ignition/cobranding"
 
 #: The effective REST inventory with the config mutation class disabled, and with
 #: it enabled. ``readonly`` is unchanged by Phase 4: no read Tool is added or removed.
@@ -69,9 +70,10 @@ READ_INVENTORY = frozenset({
 })
 GATE_ON_INVENTORY = READ_INVENTORY | {UPDATE_TOOL}
 
-#: A refusal that must never be a success, whichever denial code the deployment
-#: policy layer currently answers with (see the module docstring).
-TARGET_DENIAL_CODES = frozenset({"operation_disabled", "permission_denied"})
+#: D30 §7: a Target outside the Target allowlist is `permission_denied` for a Phase 4
+#: Mutation. Exactly one code is accepted; the driver must not tolerate the frozen
+#: Phase 3 code, or the Tool's contract would be unverified.
+TARGET_DENIAL_CODE = "permission_denied"
 
 
 class DriverError(RuntimeError):
@@ -112,14 +114,14 @@ class Session:
         self._record(f"call-{tool}", result)
         return result
 
-    async def signature(self, resource_type: str, name: str) -> str:
+    async def signature(self, resource_type: str, name: str = "") -> str:
         body = await self.get(resource_type, name)
         signature = body.get("signature")
         if not isinstance(signature, str) or not signature:
             raise DriverError(f"{resource_type}/{name} reported no Resource signature")
         return signature
 
-    async def get(self, resource_type: str, name: str) -> dict[str, Any]:
+    async def get(self, resource_type: str, name: str = "") -> dict[str, Any]:
         result = await self.call("config_resource_get", {
             "resourceType": resource_type, "name": name, "collection": "", "defaultIfUndefined": False,
         })
@@ -151,6 +153,7 @@ async def run_gate_on(
     resource_type: str,
     allowlisted: str,
     unallowlisted: str,
+    singleton_type: str,
     raw_dir: Path,
 ) -> dict[str, Any]:
     """The live cases that need the CONFIG_MUTATION class enabled."""
@@ -223,10 +226,27 @@ async def run_gate_on(
         })
         denied_code = _envelope_code(denied)
         observations["targetDenialCode"] = denied_code
-        _check(cases, "non-allowlisted-target-is-denied", True, denied_code in TARGET_DENIAL_CODES)
+        _check(cases, "non-allowlisted-target-is-permission-denied", TARGET_DENIAL_CODE, denied_code)
         _check(
             cases, "non-allowlisted-target-changes-nothing", other_before,
             await agent.signature(resource_type, unallowlisted),
+        )
+
+        # A singleton's documented change item carries no name; its update proves the
+        # item is built from the Gateway's own request schema.
+        singleton_before = await agent.signature(singleton_type)
+        singleton = await agent.call(UPDATE_TOOL, {
+            "resourceType": singleton_type,
+            "expectedSignature": singleton_before,
+            "description": "Disposable Phase 4 CI branding (updated live)",
+        })
+        _check(cases, "singleton-update-applies", True, not singleton.get("isError"))
+        singleton_signature = (
+            singleton.get("structuredContent") or {}
+        ).get("signature")
+        _check(
+            cases, "singleton-update-moves-the-signature", True,
+            isinstance(singleton_signature, str) and singleton_signature != singleton_before,
         )
     finally:
         await reader.aclose()
@@ -283,7 +303,8 @@ async def _run(args: argparse.Namespace) -> int:
         mode = await run_gate_on(
             rest_url=args.rest_url, reader_token=args.reader_token, agent_token=args.agent_token,
             resource_type=args.resource_type, allowlisted=args.allowlisted,
-            unallowlisted=args.unallowlisted, raw_dir=args.raw_dir,
+            unallowlisted=args.unallowlisted, singleton_type=args.singleton_type,
+            raw_dir=args.raw_dir,
         )
     else:
         mode = await run_gate_off(
@@ -311,6 +332,7 @@ def main() -> int:
     parser.add_argument("--resource-type", default="ignition/audit-profile")
     parser.add_argument("--allowlisted", default="MCP_CI_AUDIT")
     parser.add_argument("--unallowlisted", default="MCP_CI_AUDIT_OTHER")
+    parser.add_argument("--singleton-type", default=SINGLETON_TYPE)
     parser.add_argument("--observations", required=True, type=Path)
     parser.add_argument("--raw-dir", required=True, type=Path)
     args = parser.parse_args()

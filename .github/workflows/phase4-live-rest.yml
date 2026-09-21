@@ -53,6 +53,8 @@ jobs:
       HARNESS: tests/harness/phase4-live-rest
       RESOURCE_TYPE: ignition/audit-profile
       ALLOWLISTED_RESOURCE: MCP_CI_AUDIT
+      # An allowed singleton target: its documented change item carries no name.
+      SINGLETON_TYPE: ignition/cobranding
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -212,7 +214,7 @@ jobs:
           IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
           IGNITION_MCP_CONFIG_MUTATION_ENABLED=true \
           IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update \
-          IGNITION_MCP_MUTATION_TARGETS="{\"config_resource_update\":[\"$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE\"]}" \
+          IGNITION_MCP_MUTATION_TARGETS="{\"config_resource_update\":[\"$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE\",\"$SINGLETON_TYPE\"]}" \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
           echo "$!" > artifacts/rest-gate-on.pid
@@ -240,6 +242,7 @@ jobs:
             --agent-token "$AGENT_TOKEN" \
             --resource-type "$RESOURCE_TYPE" \
             --allowlisted "$ALLOWLISTED_RESOURCE" \
+            --singleton-type "$SINGLETON_TYPE" \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
             > "$EVIDENCE_DIR/driver-gate-on.log" 2>&1

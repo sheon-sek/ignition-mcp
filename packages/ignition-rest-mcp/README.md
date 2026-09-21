@@ -95,17 +95,25 @@ A Tool whose class is disabled is hidden from `tools/list` as well as refused at
 **`config_resource_update`** (D30, Phase 4 milestone 4c) is the first REST Mutation Tool. It
 requires scope `ignition.config`, class `CONFIG_MUTATION`, an operation-allowlist entry and a
 Target-allowlist entry. The Target of a config change is the exact `<resourceType>/<name>`, or the
-bare `<resourceType>` for a singleton; `*` is still required to allow everything. The caller passes
-the `expectedSignature` it read from `config_resource_get`, which is compared against a bounded
-re-read immediately before dispatch and then sent to the Gateway as its native `signature` — a
-stale token fails with `conflict` and dispatches nothing. `allowInvalidReferences=false` is always
-sent and is not a parameter, the change body is bounded (262144 bytes), and the result carries the
-resource as Observed state plus the new Resource signature for the caller's next change. The
-**Refused resource types** in `contracts/shared/refused-resource-types.json` (API tokens, security
-levels/properties/zones, user sources, identity providers, OAuth2 clients, secret providers, system
-properties, EAM license and module administration, and the MCP Module's own `server-config`) are
-refused with `permission_denied` whatever the Target allowlist says; a resource type that is not
-classified is refused too.
+bare `<resourceType>` for a singleton, always in the **default** configuration collection: the
+Gateway selects a resource by collection as well as by name, so a caller-supplied `collection` is
+refused with `invalid_argument` rather than resolved to a look-alike in another collection, and a
+Target outside the allowlist is `permission_denied` (D30 §7). `*` is still required to allow
+everything. The caller passes the `expectedSignature` it read from `config_resource_get`, which is
+compared against a bounded re-read immediately before dispatch and then sent to the Gateway as its
+native `signature` — a stale token fails with `conflict` and dispatches nothing. The change item is
+validated against the target Gateway's own documented `PUT` request schema (D03), taken from the
+capability snapshot and bundled into a self-contained JSON Schema at refresh time: a value the
+type's schema forbids is `invalid_argument` without a request leaving the server, and a Gateway that
+documents an update route without a usable request schema exposes no update for it at all.
+`allowInvalidReferences=false` is always sent and is not a parameter, and the change body is bounded
+(262144 bytes). The result carries the resource as Observed state plus the new Resource signature for
+the caller's next change. The **Refused resource types** in
+`contracts/shared/refused-resource-types.json` (API tokens, security levels/properties/zones, user
+sources, identity providers, OAuth2 clients, secret providers, system properties, EAM license and
+module administration, and the MCP Module's own `server-config`) are refused with
+`permission_denied` whatever the Target allowlist says; a resource type that is not classified is
+refused too.
 
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,

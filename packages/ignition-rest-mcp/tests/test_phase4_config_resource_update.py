@@ -20,6 +20,8 @@ from starlette.testclient import TestClient
 
 import ignition_rest_mcp.server as server_module
 from ignition_rest_mcp.authorization import scope_tag
+from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
+from ignition_rest_mcp.services.config_mutation import CONFIG_RESOURCE_UPDATE
 from ignition_rest_mcp.config import StaticToken
 from ignition_rest_mcp.storage.database import Database
 from ignition_rest_mcp.storage.records import OperationRecordStore
@@ -69,6 +71,11 @@ def _seed(gateway: RecordedGateway) -> None:
         PROFILE, RESOURCE,
         config={"profile": {"type": "local", "retentionDays": 14}, "settings": {}},
         description="CI audit profile",
+    )
+    gateway.seed_resource(
+        PROFILE, RESOURCE, collection="custom",
+        config={"profile": {"type": "local", "retentionDays": 3}},
+        description="same name, other collection",
     )
     gateway.seed_resource(
         TOKEN_TYPE, "ignition-mcp-ci",
@@ -267,6 +274,36 @@ def test_update_tool_is_hidden_when_the_gateway_lacks_the_update_capability(
             return json.dumps({"paths": paths}).encode("utf-8")
 
         monkeypatch.setattr(server_module.GatewayClient, "openapi", read_only_openapi)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            names = _Session(http, "cfg-secret").tools()
+
+    assert UPDATE_TOOL not in names
+    assert "config_resource_get" in names
+
+
+def test_update_tool_is_hidden_when_the_update_route_has_no_request_schema(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D03: a documented route without a documented request schema leaves nothing to
+    validate the write against, so the route is withheld and the Tool is hidden."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        paths = {
+            "/data/api/v1/gateway-info": {"get": {}},
+            f"/data/api/v1/resources/type/{PROFILE}": {"get": {}},
+            f"/data/api/v1/resources/find/{PROFILE}/{{name}}": {"get": {}},
+            f"/data/api/v1/resources/{PROFILE}": {"put": {}},
+        }
+
+        async def schema_less_openapi(self: Any) -> bytes:
+            return json.dumps({"paths": paths}).encode("utf-8")
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", schema_less_openapi)
         settings = _mutation_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
         )
@@ -497,7 +534,45 @@ def test_a_gateway_refusal_inside_a_success_response_is_a_conflict(tmp_path: Pat
     assert rows[0]["correlation_id"] == envelope["correlationId"]
 
 
-def test_a_change_outside_the_target_allowlist_is_refused_before_dispatch(tmp_path: Path) -> None:
+def test_a_refused_change_whose_values_were_already_in_place_is_still_a_conflict(
+    tmp_path: Path,
+) -> None:
+    """A Gateway refusal must not become a success just because the requested values
+    happened to equal the pre-state: nothing this call asked for is observable, so a
+    stale Precondition token stays `conflict` (D30 §2)."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        existing = str(gateway.resource(PROFILE, RESOURCE)["description"])
+        before = gateway.signature(PROFILE, RESOURCE)
+        gateway.refuse_updates_with("Signature mismatch for resource MCP_CI_AUDIT")
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "description": existing,
+            })
+
+        rows = _audit_rows(tmp_path)
+
+    envelope = _envelope(result)
+    assert envelope["code"] == "conflict"
+    assert gateway.signature(PROFILE, RESOURCE) == before
+    assert [(row["phase"], row["outcome"], row["error_code"]) for row in rows] == [
+        ("decision", "allowed", None),
+        ("attempt", "attempted", None),
+        ("result", "rejected", "conflict"),
+        ("result", "failed", "conflict"),
+    ]
+
+
+def test_a_change_outside_the_target_allowlist_is_permission_denied(tmp_path: Path) -> None:
+    """D30 §7: a Target outside the Target allowlist is `permission_denied` for a
+    Phase 4 Mutation, before anything is dispatched."""
+
     with RecordedGateway() as gateway:
         _seed(gateway)
         gateway.seed_resource(PROFILE, "OTHER_PROFILE", config={"profile": {"type": "local"}})
@@ -513,10 +588,20 @@ def test_a_change_outside_the_target_allowlist_is_refused_before_dispatch(tmp_pa
             })
 
         puts = _put_requests(gateway)
+        rows = _audit_rows(tmp_path)
 
     envelope = _envelope(result)
-    assert envelope["code"] == "operation_disabled"
+    assert envelope["code"] == "permission_denied"
     assert puts == []
+    assert rows[0]["outcome"] == "denied:target-allowlist:target-not-allowlisted"
+
+
+def test_the_target_denial_code_is_declared_per_operation() -> None:
+    """The D30 §7 mapping is Tool-scoped on purpose: the Phase 3 operation that G3
+    evidence pins keeps its recorded code, so no frozen artifact changes."""
+
+    assert CONFIG_RESOURCE_UPDATE.target_denial_code == "permission_denied"
+    assert PROJECT_IMPORT_OPERATION.target_denial_code == "operation_disabled"
 
 
 def test_an_operation_outside_the_allowlist_is_refused_before_dispatch(tmp_path: Path) -> None:
@@ -581,6 +666,156 @@ def test_a_read_only_credential_cannot_see_or_call_the_update_tool(tmp_path: Pat
     assert UPDATE_TOOL not in names
     assert _envelope(denied)["code"] == "permission_denied"
     assert puts == []
+
+
+# ------------------------------------------------------------ collections (D30)
+
+
+def test_a_non_default_collection_is_refused_and_dispatches_nothing(tmp_path: Path) -> None:
+    """The Target allowlist names a resource, not a collection, so a
+    collection-qualified change is refused rather than resolved to a look-alike."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        default_signature = gateway.signature(PROFILE, RESOURCE)
+        other_signature = gateway.signature(PROFILE, RESOURCE, "custom")
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: ("*",)},
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": other_signature,
+                "name": RESOURCE, "collection": "custom", "enabled": False,
+            })
+
+        puts = _put_requests(gateway)
+
+    assert _envelope(result)["code"] == "invalid_argument"
+    assert puts == [], "a collection-qualified change must not reach the Gateway"
+    assert gateway.signature(PROFILE, RESOURCE, "custom") == other_signature
+    assert gateway.signature(PROFILE, RESOURCE) == default_signature
+
+
+def test_the_default_collection_resource_is_the_one_a_change_applies_to(tmp_path: Path) -> None:
+    """Two collections really are two resources: the refused collection change left
+    the other collection alone, and the default one still updates."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        other_signature = gateway.signature(PROFILE, RESOURCE, "custom")
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            session = _Session(http, "cfg-secret")
+            refused = session.call(UPDATE_TOOL, {
+                "resourceType": PROFILE,
+                "expectedSignature": gateway.signature(PROFILE, RESOURCE, "custom"),
+                "name": RESOURCE, "collection": "custom", "enabled": False,
+            })
+            applied = session.call(UPDATE_TOOL, {
+                "resourceType": PROFILE,
+                "expectedSignature": gateway.signature(PROFILE, RESOURCE),
+                "name": RESOURCE, "description": "default collection only",
+            })
+
+        bodies = [json.loads(request["body"]) for request in _put_requests(gateway)]
+
+    assert _envelope(refused)["code"] == "invalid_argument"
+    assert _structured(applied)["collection"] == ""
+    assert bodies == [[{
+        "name": RESOURCE, "signature": bodies[0][0]["signature"],
+        "description": "default collection only",
+    }]]
+    assert gateway.resource(PROFILE, RESOURCE)["description"] == "default collection only"
+    assert gateway.resource(PROFILE, RESOURCE, "custom")["enabled"] is True
+    assert gateway.signature(PROFILE, RESOURCE, "custom") == other_signature
+
+
+# ------------------------------------------------- D03 request schema (issue #14)
+
+
+def test_a_change_that_violates_the_gateway_request_schema_never_dispatches(
+    tmp_path: Path,
+) -> None:
+    """D03: the change item is validated against the Gateway's own documented PUT
+    schema, so a value the type's schema forbids is refused locally."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before, "name": RESOURCE,
+                # The documented item schema allows database|edge|local|remote.
+                "config": {"profile": {"type": "not-a-documented-type"}},
+            })
+
+        puts = _put_requests(gateway)
+
+    envelope = _envelope(result)
+    assert envelope["code"] == "invalid_argument"
+    assert "/config/profile/type" in envelope["message"]
+    assert puts == [], "a schema-invalid change must not reach the Gateway"
+    assert gateway.signature(PROFILE, RESOURCE) == before
+
+
+def test_a_schema_valid_change_still_dispatches(tmp_path: Path) -> None:
+    """The guard is only worth its line if the documented shape still passes."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE,
+                "expectedSignature": gateway.signature(PROFILE, RESOURCE),
+                "name": RESOURCE,
+                "config": {"profile": {"type": "database", "retentionDays": 7}},
+            })
+
+    assert _structured(result)["observedState"]["config"]["profile"]["type"] == "database"
+
+
+def test_a_singleton_change_item_carries_no_name_the_gateway_does_not_document(
+    tmp_path: Path,
+) -> None:
+    """A singleton's documented item schema requires only `signature`; the change
+    item is built from that schema, not from an assumed shape."""
+
+    with RecordedGateway() as gateway:
+        gateway.seed_resource(
+            "ignition/cobranding", "cobranding",
+            config={"enabled": True}, description="before",
+        )
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: ("ignition/cobranding",)},
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": "ignition/cobranding",
+                "expectedSignature": gateway.signature("ignition/cobranding", "cobranding"),
+                "description": "after",
+            })
+
+        bodies = [json.loads(request["body"]) for request in _put_requests(gateway)]
+
+    assert _structured(result)["observedState"]["description"] == "after"
+    assert bodies == [[{
+        "signature": bodies[0][0]["signature"], "description": "after",
+    }]]
 
 
 # ------------------------------------------------- destructive declaration (#13)
