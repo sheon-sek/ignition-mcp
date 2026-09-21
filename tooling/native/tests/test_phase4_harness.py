@@ -165,8 +165,21 @@ def test_alarm_probe_facts_come_from_the_recorded_handler_report(stub_mcp: dict[
     assert facts["partialLeafPathMatchesNothing"] is True
     assert facts["alarmNameWildcardMatchesOneAlarm"] is True
     assert facts["rootWildcardMatchesEveryFixtureAlarm"] is True
-    assert facts["perPathCountStableAcrossCycles"] is True
     assert facts["exactPathBoundedBasis"]["literalMatchingOnly"] is True
+
+
+def test_recorded_alarm_report_shows_events_accumulating_without_acknowledgement(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The recorded live run is what parks alarm_acknowledge: one exact Alarm path
+    grows one event per unacknowledged activate/clear cycle, so an exact-path
+    queryStatus is not bounded before or during execution."""
+    facts = driver.stage_alarm(_config(tmp_path))["facts"]
+    assert facts["perPathCountStableAcrossCycles"] is False
+    assert facts["cycleCounts"] == [(1, 1), (2, 2), (3, 3)]
+    assert facts["acknowledgeAttempted"] == 3
+    assert facts["acknowledgeStatesAfter"] == ["Cleared, Acknowledged"]
+    assert facts["exactPathBoundedBasis"]["noAccumulationWithoutAck"] is False
 
 
 def test_recorded_probe_reports_show_the_policy_surviving_a_restart() -> None:
@@ -200,7 +213,7 @@ def _record_every_stage(evidence: Path, gateway: RecordedGateway) -> dict[str, A
     return alarm
 
 
-def test_summarize_reports_no_drift_and_a_bounded_verdict(
+def test_summarize_reports_no_drift_and_the_recorded_verdict(
     stub_mcp: dict[str, Any], tmp_path: Path,
 ) -> None:
     with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
@@ -208,8 +221,10 @@ def test_summarize_reports_no_drift_and_a_bounded_verdict(
     evidence, code = driver.stage_summarize(_config(tmp_path))
     assert code == driver.EXIT_OK
     assert evidence["drift"] == {}
-    assert evidence["verdict"]["exactPathAlarmQuery"]["bounded"] is True
+    assert evidence["verdict"]["exactPathAlarmQuery"]["bounded"] is False
+    assert evidence["verdict"]["exactPathAlarmQuery"]["literalMatchingOnly"] is True
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["chosenLocation"] == "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+    assert evidence["verdict"]["runtimeTargetPolicyStorage"]["survivesGatewayRestart"] is True
 
 
 def test_summarize_detects_a_descendant_matching_regression(

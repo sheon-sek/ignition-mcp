@@ -3,7 +3,7 @@
   "measurements": [
     {
       "count": 1,
-      "elapsedMs": 20,
+      "elapsedMs": 23,
       "items": [
         {
           "quality": "Good",
@@ -65,7 +65,7 @@
     },
     {
       "count": 1,
-      "elapsedMs": 4,
+      "elapsedMs": 3,
       "entries": [
         {
           "keys": [
@@ -116,7 +116,7 @@
         ],
         "path": "[IgnitionMCPPolicy]WriteProbe"
       },
-      "elapsedMs": 3,
+      "elapsedMs": 5,
       "name": "tag.writeBlocking.probe",
       "ok": true,
       "writeQualityCodes": [
@@ -136,7 +136,7 @@
       "resourceDescription": "",
       "resourceEnabled": "True",
       "resourceName": "IgnitionMCPPolicy",
-      "resourceSignature": "ba2596020122b51d1d3215c2670d36a23469e5b390fcd3827f615061c5035b00",
+      "resourceSignature": "5cf2060465ba5633adda7b751b1bde6d1dc280ff2af229071eea798667cf894d",
       "resourceText": "<PyResource: ResourceId{resourcePath=ignition/tag-provider/IgnitionMCPPolicy, collectionName=local}>"
     },
     {
