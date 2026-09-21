@@ -109,19 +109,65 @@ produced the same policy facts.
 
 ```text
 provider resource   ignition/tag-provider  name IgnitionMCPPolicy
-policy Tag          [IgnitionMCPPolicy]RuntimeTargetPolicy   (AtomicTag, String, JSON text)
-read primitive      system.tag.readBlocking([ "[IgnitionMCPPolicy]RuntimeTargetPolicy" ], timeoutMs)
+policy Tag          [IgnitionMCPPolicy]RuntimeTargetPolicy         (AtomicTag, String, JSON text)
+length Tag          [IgnitionMCPPolicy]RuntimeTargetPolicyLength   (AtomicTag, Int4, byte length)
+read primitive      system.tag.readBlocking([lengthPath], timeoutMs)   -> declared byte length
+                    refuse unless 0 < declared <= IgnitionMcpPolicyMaxBytes (32768)
+                    system.tag.readBlocking([policyPath], timeoutMs)   -> the document
+                    refuse unless the value's byte length equals the declared length
 apply write path    POST /data/api/v1/resources/ignition/tag-provider   (create the provider)
                     POST /data/api/v1/tags/import?type=json&collisionPolicy=Abort
 apply read-back     GET  /data/api/v1/tags/export?provider=IgnitionMCPPolicy&type=json
 ```
 
 The document is canonical JSON text in a String Tag, not a Tag data type of its
-own, so a handler does one bounded normalization: read one path, check the byte
-length against a fixed ceiling, `system.util.jsonDecode`, then validate the
-schema. Because the Tag value and the REST export carry the same bytes, the
+own, so a handler does one normalization: `system.util.jsonDecode`, then schema
+validation. Because the Tag value and the REST export carry the same bytes, the
 policy's SHA-256 can be compared between `apply`, a REST read-back and a live
 handler read.
+
+### How the read is bounded — and what is not
+
+**There is no native pre-read size limit to rely on.** Ignition documents no
+maximum character count for a `String` Tag value, and `system.tag.readBlocking`
+takes only paths and a timeout: by the time a handler holds the value, the whole
+string has been materialized. A handler-side length check *after* that read is
+therefore not an execution or memory bound — the same reasoning D12's Phase 2
+amendment used to park `alarm_status` and `alarm_journal`.
+
+**The bound is the companion length Tag, checked before the document is read.**
+The reader:
+
+1. reads `RuntimeTargetPolicyLength` — a small `Int4`, bounded by its data type,
+   not by the document;
+2. fails closed (`operation_disabled`) if that Read is missing, not Good, not an
+   integer, or **greater than `IgnitionMcpPolicyMaxBytes` (32 KiB)** — without
+   ever touching the policy Tag;
+3. only then reads the policy Tag and refuses the document if its byte length
+   does not match the declared length.
+
+The write side carries the same cap: `setup-native apply` refuses to write a
+document larger than the cap, writes the length Tag in the same import, and
+`verify` re-reads the export and fails when the stored bytes or the declared
+length disagree. Together with the refusal rule above, `apply` is the only writer
+of the reserved provider, so the declared length is an enforced maximum rather
+than a hint.
+
+**Residual limitation, stated plainly.** The cap is enforced by the product, not
+by the Gateway: an operator who edits the Tag in the Designer or drops a file
+into `config/resources` can still store an oversize document, and the next
+handler read would materialize it. The reader's post-read comparison detects that
+and fails closed, but detection is not a memory bound. The gate therefore makes
+the storage choice **conditional**: it holds for a deployment whose policy is
+written by `apply` (the supported path, and the only path the product exposes);
+if the owner will not accept this product-level cap as the enforcement, Runtime
+Mutations must stay disabled and the location must move to a mechanism with a
+native bound.
+
+The harness measures the whole mechanism live: the served, length-verified read
+of the real policy, and a deliberately oversize companion pair that must be
+skipped with the value never materialized. Recorded values are in the evidence
+table below.
 
 ### Why the other candidates lose
 
@@ -145,16 +191,29 @@ handler read.
 The harness measured a handler writing *inside* the policy provider
 (`system.tag.writeBlocking` succeeded from `onToolCalled.py`). Jython handler
 scope is not a security boundary, so "the Runtime MCP server cannot write it"
-must be enforced by the product rule that a Runtime Tag Mutation refuses any
-target inside the reserved policy provider **before** Preflight executes,
-whatever the Target allowlist says — including an explicit `*`, exactly as D30 §5
-makes Refused resource types refuse even under `*`.
+must be enforced by the product.
 
-The rule has to hold for every Runtime Tag Mutation that can reach a Tag:
-`tag_write`, `tag_update`, `tag_delete`, `tag_move`, `tag_rename`, and
-`tag_copy`'s destination (D30 §6 already makes `tag_move` check source and
-destination). It needs an owner decision because D30 §1 states the requirement
-but does not name the enforcement point; it is recorded under Open questions.
+**Recommended rule (needs an owner decision, see Open question 1).** Every
+Runtime Tag Mutation refuses any target that resolves inside the reserved policy
+provider **before** Preflight executes, whatever the Target allowlist says,
+including an explicit `*` — exactly as D30 §5 makes Refused resource types refuse
+even under `*`. The refusal is by provider, so it covers the policy Tag, its
+companion length Tag and anything else a deployment puts there.
+
+| Mutation | Refused when |
+|---|---|
+| `tag_write`, `tag_update`, `tag_delete` | the target is inside `IgnitionMCPPolicy` |
+| `tag_create` | the new Tag would be created inside `IgnitionMCPPolicy` |
+| `tag_move`, `tag_rename` | the **source** or the **destination** is inside `IgnitionMCPPolicy` |
+| `tag_copy` | the **destination** (a copy *into* the provider) or the **source** (a copy *out of* the provider, which would publish the policy document elsewhere) is inside `IgnitionMCPPolicy` |
+
+`tag_create` matters as much as the rest: with a permissive CONFIG target
+allowlist it could otherwise create a Tag inside the provider, and `tag_copy`
+can both write into the provider and lift the policy document out of it. Refusing
+source *and* destination closes both directions for every read-or-write pair of
+operations. The same refusal belongs in the D08 Preflight stage, so a batch that
+contains a policy-provider target is rejected whole rather than partially
+applied (D30 §3).
 
 ## 2. Exact-path `system.alarm.queryStatus` (D12 Phase 4 amendment)
 
@@ -265,21 +324,22 @@ also returns no materialized result for the handler to collect.
 ## 3. Consequences for Phase 4
 
 - **Ticket #7 (`tag_write`) and the Tag CONFIG Mutations (#10–#12)** read the
-  policy from `[IgnitionMCPPolicy]RuntimeTargetPolicy` with
-  `system.tag.readBlocking([path], timeoutMs)`, size-bound the document, validate
-  the schema and fail closed with `operation_disabled` when it is missing or
-  malformed. They must also refuse any target inside the policy provider before
-  Preflight runs (see Open question 1).
+  policy through the gated two-step read above (length Tag first, cap, then the
+  document), validate the schema and fail closed with `operation_disabled` when
+  the document is missing, over the cap, or malformed. They must also apply the
+  reserved-provider refusal rule — including `tag_create` and the source side of
+  `tag_copy`/`tag_move`/`tag_rename` — before Preflight runs.
 - **Ticket #21 (`setup-native apply`)** creates the provider with
-  `POST /data/api/v1/resources/ignition/tag-provider`, imports the policy with a
-  bounded retry loop (the first import on a fresh provider can fail while the
-  provider starts), uses `Abort` for a create and `MergeOverwrite` for a
-  deliberate update, and verifies with a *handler-scope* read of the Tag plus
-  `GET /data/api/v1/tags/export` and the provider resource signature. An
-  accepted import is not proof that the running provider serves the Tags, so
-  `verify` must read the Tag and `apply` must repair by re-importing; the
-  document survives a Gateway restart, so it does not have to be rewritten on
-  every boot.
+  `POST /data/api/v1/resources/ignition/tag-provider`, imports the policy *and*
+  its length Tag with a bounded retry loop (the first import on a fresh provider
+  can fail while the provider starts), refuses a document over
+  `IgnitionMcpPolicyMaxBytes` before importing, uses `Abort` for a create and
+  `MergeOverwrite` for a deliberate update, and verifies with a *handler-scope*
+  read of the Tag plus `GET /data/api/v1/tags/export` and the provider resource
+  signature. An accepted import is not proof that the running provider serves
+  the Tags, so `verify` must read the Tag and `apply` must repair by
+  re-importing; the document survives a Gateway restart, so it does not have to
+  be rewritten on every boot.
 - **Ticket #9 (`alarm_acknowledge`) is parked** and its row in the Phase 4 scope
   table must stop being planned work until the owner decides. `alarm_status` and
   `alarm_journal` stay parked for the same class of reason.
@@ -304,10 +364,20 @@ also returns no materialized result for the handler to collect.
 Recorded in the runbook; repeated here so this note is self-contained.
 
 1. Approve the reserved policy provider (`IgnitionMCPPolicy`) and the product
-   rule that every Runtime Tag Mutation refuses targets inside it before
-   Preflight, including under an explicit `*` allowlist. D30 §1 states the
-   property; the enforcement point has to be named.
-2. Approve parking `alarm_acknowledge` (ticket #9). The D12 Phase 4 amendment
+   rule that every Runtime Tag Mutation refuses any target inside it before
+   Preflight, including under an explicit `*` allowlist. The rule must cover
+   `tag_write`, `tag_update`, `tag_delete`, `tag_create`, and both the source and
+   the destination of `tag_move`, `tag_rename` and `tag_copy`. D30 §1 states the
+   property; the enforcement point, and `tag_create`/source-side coverage, have
+   to be named.
+2. Approve the deployment-enforced policy size cap
+   (`IgnitionMcpPolicyMaxBytes`, 32 KiB) carried by the companion length Tag, or
+   reject it. There is no native size limit on a Tag value and no size option on
+   `system.tag.readBlocking`, so without this cap the read cost equals whatever
+   is stored and the storage choice is not bounded. If the cap is rejected, the
+   fail-closed default is to keep Runtime Mutations disabled and move the policy
+   to a mechanism with a native bound.
+3. Approve parking `alarm_acknowledge` (ticket #9). The D12 Phase 4 amendment
    holds only with recorded evidence of a bounded exact-path `queryStatus`, and
    the recorded run shows the opposite: one exact Alarm path grows an event per
    unacknowledged activate/clear cycle. Re-opening it needs a credible

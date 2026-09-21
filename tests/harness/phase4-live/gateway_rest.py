@@ -21,6 +21,16 @@ class RestError(RuntimeError):
     """A Gateway REST call failed or returned an unusable payload."""
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect would move the request to an origin the guard never approved."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise RestError(f"redirect refused: HTTP {code} to {newurl}")
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
 def request(
     base_url: str,
     token: str,
@@ -43,7 +53,7 @@ def request(
     if content_type is not None:
         request_object.add_header("Content-Type", content_type)
     try:
-        with urllib.request.urlopen(request_object, timeout=timeout) as response:
+        with _OPENER.open(request_object, timeout=timeout) as response:
             payload = response.read(max_bytes + 1)
             status = int(response.status)
     except urllib.error.HTTPError as error:

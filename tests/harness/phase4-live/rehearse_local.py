@@ -2,8 +2,8 @@
 """Rehearse the Phase 4 ticket #6 driver against the recorded Gateway fake.
 
 Run this before spending a live `phase4-live` run. It starts the shared recorded
-Gateway fake on an ephemeral port, writes the CI marker the live workflow writes,
-and runs every driver stage over it:
+Gateway fake on the one origin the driver accepts (`127.0.0.1:8093`), writes the
+CI marker the live workflow writes, and runs every driver stage over it:
 
 * ``policy-provision`` exercises the Native REST Tag provider + Tag import path.
 * ``policy-read`` / ``alarm`` exercise the driver's probe-call and fact-derivation
@@ -32,14 +32,15 @@ sys.path.insert(0, str(ROOT / "tests/harness/phase4-live"))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
+import driver  # noqa: E402
 import policy_document  # noqa: E402
 
 DRIVER = Path(__file__).resolve().parent / "driver.py"
 GATEWAY_VERSION = "8.3.8"
 GATEWAY_BUILD = "2026071409"
 RUN_ID = "0000000000"
-ALARM_ROOT = "MCP_P4_REHEARSAL"
-MCP_PATH = "/data/mcp/phase4-policy-probe"
+ALARM_ROOT = "mcp_p4_" + RUN_ID
+MCP_PATH = driver.EXPECTED_MCP_PATH
 FIXTURE_DIR = ROOT / "tests/fixtures/recorded/gateway-8.3/phase4"
 
 
@@ -55,7 +56,7 @@ def write_marker(path: Path) -> None:
         "runId": RUN_ID,
         "gatewayVersion": GATEWAY_VERSION,
         "gatewayBuild": GATEWAY_BUILD,
-        "gatewayId": "phase4-rehearsal",
+        "gatewayId": f"phase4-g4a-{GATEWAY_VERSION}-{RUN_ID}",
         "trustedRepo": "sheon-sek/ignition-mcp",
         "policyProvider": policy_document.POLICY_PROVIDER,
         "alarmRoot": ALARM_ROOT,
@@ -102,6 +103,7 @@ def main() -> int:
         with RecordedGateway(
             policy_provider=policy_document.POLICY_PROVIDER,
             runtime_tools=("policy_probe", "alarm_probe"),
+            port=driver.EXPECTED_ORIGIN_PORT,
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH

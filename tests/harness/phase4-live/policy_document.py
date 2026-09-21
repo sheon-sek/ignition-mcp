@@ -21,6 +21,22 @@ from typing import Any
 POLICY_PROVIDER = "IgnitionMCPPolicy"
 POLICY_TAG_NAME = "RuntimeTargetPolicy"
 POLICY_TAG_PATH = f"[{POLICY_PROVIDER}]{POLICY_TAG_NAME}"
+#: A deployment-enforced maximum for the policy document. The Gateway has no
+#: native size cap on a Tag value and `system.tag.readBlocking` has no size
+#: option, so the cap has to be carried by the *writer* and checked by the
+#: reader before the value is materialized (see the note).
+POLICY_MAX_BYTES = 32768
+#: Companion Tag holding the document's byte length. The handler reads this
+#: small Int4 first and refuses an over-cap policy without ever reading it.
+POLICY_LENGTH_TAG_NAME = "RuntimeTargetPolicyLength"
+POLICY_LENGTH_TAG_PATH = f"[{POLICY_PROVIDER}]{POLICY_LENGTH_TAG_NAME}"
+#: Harness-only oversize pair: the live proof that the gate skips a value that
+#: is over the cap instead of materializing it.
+OVERSIZE_POLICY_TAG_NAME = "OversizePolicyProbe"
+OVERSIZE_POLICY_TAG_PATH = f"[{POLICY_PROVIDER}]{OVERSIZE_POLICY_TAG_NAME}"
+OVERSIZE_LENGTH_TAG_NAME = "OversizePolicyProbeLength"
+OVERSIZE_LENGTH_TAG_PATH = f"[{POLICY_PROVIDER}]{OVERSIZE_LENGTH_TAG_NAME}"
+OVERSIZE_POLICY_BYTES = 40000
 #: Second Tag in the same provider: proves a handler can write inside the policy
 #: provider at all, so "the Runtime server cannot write it" is an in-product rule.
 WRITE_PROBE_TAG_NAME = "WriteProbe"
@@ -54,6 +70,16 @@ def policy_sha256() -> str:
     return hashlib.sha256(policy_json().encode("utf-8")).hexdigest()
 
 
+def oversize_policy_json() -> str:
+    """A deterministic document larger than `POLICY_MAX_BYTES`, for the gate proof."""
+    filler = "x" * (OVERSIZE_POLICY_BYTES - 64)
+    return json.dumps({"schemaVersion": 1, "filler": filler}, sort_keys=True, separators=(",", ":"))
+
+
+def policy_byte_length() -> int:
+    return len(policy_json().encode("utf-8"))
+
+
 def provider_resource() -> dict[str, Any]:
     """Native REST body for creating the dedicated policy Tag provider."""
     return {
@@ -74,6 +100,30 @@ def tag_document() -> dict[str, Any]:
                 "valueSource": "memory",
                 "dataType": "String",
                 "value": policy_json(),
+                "enabled": True,
+            },
+            {
+                "name": POLICY_LENGTH_TAG_NAME,
+                "tagType": "AtomicTag",
+                "valueSource": "memory",
+                "dataType": "Int4",
+                "value": policy_byte_length(),
+                "enabled": True,
+            },
+            {
+                "name": OVERSIZE_POLICY_TAG_NAME,
+                "tagType": "AtomicTag",
+                "valueSource": "memory",
+                "dataType": "String",
+                "value": oversize_policy_json(),
+                "enabled": True,
+            },
+            {
+                "name": OVERSIZE_LENGTH_TAG_NAME,
+                "tagType": "AtomicTag",
+                "valueSource": "memory",
+                "dataType": "Int4",
+                "value": len(oversize_policy_json().encode("utf-8")),
                 "enabled": True,
             },
             {

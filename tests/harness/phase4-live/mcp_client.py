@@ -21,6 +21,16 @@ class McpError(RuntimeError):
     """The MCP endpoint failed, or returned an unusable/error result."""
 
 
+class _NoRedirects(urllib.request.HTTPRedirectHandler):
+    """A redirect would move the session to an origin the guard never approved."""
+
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        raise McpError(f"redirect refused: HTTP {code} to {newurl}")
+
+
+_OPENER = urllib.request.build_opener(_NoRedirects)
+
+
 def _parse_body(content_type: str, payload: bytes) -> dict[str, Any] | None:
     text = payload.decode("utf-8", errors="replace")
     if "text/event-stream" in content_type:
@@ -66,7 +76,7 @@ class McpClient:
         for name, value in self._headers().items():
             request_object.add_header(name, value)
         try:
-            with urllib.request.urlopen(request_object, timeout=self._timeout) as response:
+            with _OPENER.open(request_object, timeout=self._timeout) as response:
                 content_type = response.headers.get("Content-Type", "")
                 session = response.headers.get("Mcp-Session-Id")
                 body = response.read(MAX_RESPONSE_BYTES + 1)

@@ -55,6 +55,30 @@
         "description": "name passed to system.config.getResource.",
         "type": "string",
         "required": true
+      },
+      {
+        "name": "policyLengthPath",
+        "description": "Companion Tag holding the policy document's byte length.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "oversizePolicyPath",
+        "description": "Harness-only Tag holding a document larger than the configured maximum.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "oversizeLengthPath",
+        "description": "Companion Tag holding the oversize document's byte length.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "maxPolicyBytes",
+        "description": "Deployment-enforced maximum policy size the gate refuses to read past.",
+        "type": "integer",
+        "required": true
       }
     ]
   }

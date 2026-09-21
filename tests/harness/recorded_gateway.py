@@ -428,8 +428,9 @@ class _Server(http.server.ThreadingHTTPServer):
         source_revision: str,
         bundle_version: str,
         policy_provider: str = "",
+        port: int = 0,
     ) -> None:
-        super().__init__(("127.0.0.1", 0), _Handler)
+        super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
         self.projects = {name: _gateway_export(project) for name, project in projects.items()}
         self.imports: list[str] = []
@@ -461,6 +462,7 @@ class RecordedGateway:
         source_revision: str = "UNSTAMPED",
         bundle_version: str = "0.2.0",
         policy_provider: str = "",
+        port: int = 0,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -471,6 +473,7 @@ class RecordedGateway:
             source_revision,
             bundle_version,
             policy_provider,
+            port,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
 

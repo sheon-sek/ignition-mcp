@@ -1,4 +1,4 @@
-def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath, writeProbeValue, configModuleId, configTypeId, configName):
+def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath, writeProbeValue, configModuleId, configTypeId, configName, policyLengthPath, oversizePolicyPath, oversizeLengthPath, maxPolicyBytes):
 	from java.lang import System, Exception as JavaException
 	from java.security import MessageDigest
 	import time
@@ -87,6 +87,49 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 		entry["name"] = name
 		measurements.append(entry)
 		return entry
+
+	def gateDetail(label, lengthPath, valuePath):
+		# The reader pattern the storage recommendation depends on: read the small
+		# companion length Tag first and refuse an over-cap document before the
+		# value Tag is read at all. The Gateway has no native size cap on a Tag
+		# value, so the cap has to be enforced here and on the write path.
+		detail = {"label": label, "cap": maxPolicyBytes, "materialized": False}
+		lengthRead = system.tag.readBlocking([lengthPath], readTimeoutMs)
+		lengthItem = lengthRead[0]
+		lengthQuality = text(lengthItem.quality)
+		detail["lengthQuality"] = lengthQuality
+		if lengthQuality.find("Good") != 0:
+			detail["gate"] = "blocked"
+			detail["reason"] = "declared length is not readable"
+			return detail
+		try:
+			declaredLength = int(lengthItem.value)
+		except (Exception, JavaException):
+			detail["gate"] = "blocked"
+			detail["reason"] = "declared length is not an integer"
+			return detail
+		detail["declaredLength"] = declaredLength
+		if declaredLength > maxPolicyBytes:
+			detail["gate"] = "oversize"
+			detail["reason"] = "declared length exceeds the configured maximum"
+			return detail
+		read = readBlockingDetail(valuePath)
+		item = read["items"][0] if read["items"] else {}
+		detail["gate"] = "served"
+		detail["materialized"] = True
+		detail["quality"] = text(item.get("quality", ""))
+		detail["valueLength"] = item.get("valueLength", 0)
+		detail["valueByteLength"] = item.get("valueByteLength", 0)
+		detail["valueSha256"] = text(item.get("valueSha256", ""))
+		detail["valueText"] = text(item.get("valueText", ""))
+		detail["lengthMatchesValue"] = item.get("valueByteLength", -1) == declaredLength
+		return detail
+
+	def gatedPolicyRead():
+		return gateDetail("policy", policyLengthPath, policyPath)
+
+	def gatedOversizeRead():
+		return gateDetail("oversize", oversizeLengthPath, oversizePolicyPath)
 
 	def readPolicy():
 		return readBlockingDetail(policyPath)
@@ -179,6 +222,8 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 		policyRead["valueText"] = policyText
 
 		measure("tag.readBlocking.missing", readMissing)
+		measure("tag.gatedRead.policy", gatedPolicyRead)
+		measure("tag.gatedRead.oversize", gatedOversizeRead)
 		measure("tag.getConfiguration.providerRoot", readProviderRootConfiguration)
 		measure("tag.getConfiguration.policy", readPolicyConfiguration)
 		measure("tag.writeBlocking.probe", writeInsideProvider)
@@ -188,12 +233,16 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 		measure("system.namespaces", scopeNamespaces)
 		measure("system.util.getProjectName", projectName)
 		report = {
-			"schemaVersion": 1,
+			"schemaVersion": 2,
 			"probe": "policy_probe",
 			"policyPath": policyPath,
 			"providerName": providerName(policyPath),
 			"missingPath": missingPath,
 			"writeProbePath": writeProbePath,
+			"policyLengthPath": policyLengthPath,
+			"oversizePolicyPath": oversizePolicyPath,
+			"oversizeLengthPath": oversizeLengthPath,
+			"maxPolicyBytes": maxPolicyBytes,
 			"configResource": configModuleId + "/" + configTypeId + "/" + configName,
 			"measurements": measurements,
 		}

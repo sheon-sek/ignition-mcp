@@ -90,8 +90,19 @@ jobs:
       - name: Rehearse the driver against the recorded Gateway
         shell: bash
         run: |
-          set -euo pipefail
-          uv run --no-sync python tests/harness/phase4-live/rehearse_local.py
+          # Exit 3 means the recorded fixtures characterise a fact differently
+          # than tests/harness/phase4-live/characterization.json expects. The
+          # rehearsal reports it without failing the job so the live stages still
+          # run and record the truth; the summarize stage is what enforces no
+          # drift, so a stale fixture cannot make the live result green.
+          set +e
+          uv run --no-sync python tests/harness/phase4-live/rehearse_local.py | tee "$EVIDENCE_DIR/driver-rehearsal.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [[ "$rc" != "0" && "$rc" != "3" ]]; then
+            echo "the rehearsal failed with exit $rc" >&2
+            exit "$rc"
+          fi
 
       - name: Pull the exact Gateway image
         shell: bash
@@ -197,38 +208,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          deadline=$((SECONDS + 300))
-          rest_ready=0
-          mcp_ready=0
-          while (( SECONDS < deadline )); do
-            if (( rest_ready == 0 )); then
-              code="$(curl --silent --output "$EVIDENCE_DIR/gateway-info.json.tmp" --write-out '%{http_code}' \
-                --max-time 5 -H "X-Ignition-API-Token: $CI_API_TOKEN" \
-                "$P4_BASE_URL/data/api/v1/gateway-info" || true)"
-              if [[ "$code" == "200" ]]; then
-                mv "$EVIDENCE_DIR/gateway-info.json.tmp" "$EVIDENCE_DIR/gateway-info.json"
-                rest_ready=1
-              fi
-            fi
-            if (( mcp_ready == 0 )); then
-              body="$(curl --silent --max-time 10 \
-                -H "Content-Type: application/json" \
-                -H "Accept: application/json, text/event-stream" \
-                -H "X-Ignition-API-Token: $CI_API_TOKEN" \
-                -H "Authorization: Bearer $CI_API_TOKEN" \
-                --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"phase4-ci-wait","version":"0"}}}' \
-                "$P4_BASE_URL/data/mcp/phase4-policy-probe" || true)"
-              if grep -Fq "protocolVersion" <<< "$body"; then
-                mcp_ready=1
-              fi
-            fi
-            if (( rest_ready == 1 && mcp_ready == 1 )); then
-              exit 0
-            fi
-            sleep 3
-          done
-          echo "Gateway REST or MCP endpoint did not become ready (rest=$rest_ready mcp=$mcp_ready)" >&2
-          exit 1
+          uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+            --base-url "$P4_BASE_URL" \
+            --api-token "$CI_API_TOKEN" \
+            --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+            --timeout 300 \
+            --evidence-dir "$EVIDENCE_DIR"
 
       - name: Provision the Runtime Target Policy through Native REST
         shell: bash
@@ -249,35 +234,11 @@ jobs:
         run: |
           set -euo pipefail
           docker compose -f "$COMPOSE_FILE" restart gateway
-          deadline=$((SECONDS + 480))
-          rest_ready=0
-          mcp_ready=0
-          while (( SECONDS < deadline )); do
-            if (( rest_ready == 0 )); then
-              code="$(curl --silent --output /dev/null --write-out '%{http_code}' \
-                --max-time 5 -H "X-Ignition-API-Token: $CI_API_TOKEN" \
-                "$P4_BASE_URL/data/api/v1/gateway-info" || true)"
-              [[ "$code" == "200" ]] && rest_ready=1
-            fi
-            if (( mcp_ready == 0 )); then
-              body="$(curl --silent --max-time 10 \
-                -H "Content-Type: application/json" \
-                -H "Accept: application/json, text/event-stream" \
-                -H "X-Ignition-API-Token: $CI_API_TOKEN" \
-                -H "Authorization: Bearer $CI_API_TOKEN" \
-                --data '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"phase4-ci-wait","version":"0"}}}' \
-                "$P4_BASE_URL/data/mcp/phase4-policy-probe" || true)"
-              grep -Fq "protocolVersion" <<< "$body" && mcp_ready=1
-            fi
-            if (( rest_ready == 1 && mcp_ready == 1 )); then
-              break
-            fi
-            sleep 3
-          done
-          if (( rest_ready != 1 || mcp_ready != 1 )); then
-            echo "Gateway did not come back after the restart (rest=$rest_ready mcp=$mcp_ready)" >&2
-            exit 1
-          fi
+          uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+            --base-url "$P4_BASE_URL" \
+            --api-token "$CI_API_TOKEN" \
+            --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+            --timeout 480
           docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway-after-restart.log" 2>&1 || true
           uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label after-restart \
             | tee "$EVIDENCE_DIR/driver-policy-read-after-restart.log"
@@ -334,12 +295,15 @@ jobs:
             exit 1
           fi
           # 0 = characterized as expected, 3 = characterized but drifted from
-          # tests/harness/phase4-live/characterization.json (the drift is part of
-          # the recorded evidence), 2 = a stage could not be characterized.
-          if [[ "$rc" != "0" && "$rc" != "3" ]]; then
-            echo "Phase 4 ticket #6 characterization failed (exit $rc)" >&2
-            exit "$rc"
-          fi
+          # tests/harness/phase4-live/characterization.json, 2 = a stage could not
+          # be characterized. Expectations are frozen, so drift fails the job: a
+          # green run that quietly contradicts the research note is worse than a
+          # red one.
           if [[ "$rc" == "3" ]]; then
             echo "characterization drifted from the committed expectations; see evidence.json" >&2
+            exit 3
+          fi
+          if [[ "$rc" != "0" ]]; then
+            echo "Phase 4 ticket #6 characterization failed (exit $rc)" >&2
+            exit "$rc"
           fi

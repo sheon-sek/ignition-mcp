@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import http.server
 import importlib.util
 import json
 from pathlib import Path
 import sys
+import threading
 from types import ModuleType
 from typing import Any
 
@@ -79,9 +81,46 @@ class _StubMcp:
         return self.reports[name]
 
 
+def _with_gate_measurements(
+    report: dict[str, Any], *, gate_state: str = "served", declared: int | None = None,
+    materialized: bool | None = None,
+) -> dict[str, Any]:
+    """Add the gate measurements the handler produces to a recorded report.
+
+    Every number here comes from the recorded report's own policy read; the
+    committed fixture is replaced by the full live recording after the next run.
+    """
+    document = json.loads(json.dumps(report))
+    policy_read = next(m for m in document["measurements"] if m["name"] == "tag.readBlocking.policy")
+    item = policy_read["items"][0]
+    length = item["valueByteLength"] if declared is None else declared
+    served = gate_state == "served"
+    document["measurements"].insert(2, {
+        "name": "tag.gatedRead.policy", "ok": True, "elapsedMs": 1, "label": "policy",
+        "cap": policy_document.POLICY_MAX_BYTES, "lengthQuality": "Good", "declaredLength": length,
+        "materialized": served if materialized is None else materialized, "gate": gate_state,
+        "quality": item["quality"], "valueLength": item["valueLength"],
+        "valueByteLength": item["valueByteLength"], "valueSha256": item["valueSha256"],
+        "valueText": item.get("valueText", ""),
+        "lengthMatchesValue": length == item["valueByteLength"],
+    })
+    document["measurements"].insert(3, {
+        "name": "tag.gatedRead.oversize", "ok": True, "elapsedMs": 1, "label": "oversize",
+        "cap": policy_document.POLICY_MAX_BYTES, "lengthQuality": "Good",
+        "declaredLength": policy_document.OVERSIZE_POLICY_BYTES, "materialized": False,
+        "gate": "oversize", "reason": "declared length exceeds the configured maximum",
+    })
+    document["schemaVersion"] = 2
+    document["maxPolicyBytes"] = policy_document.POLICY_MAX_BYTES
+    return document
+
+
 @pytest.fixture()
 def stub_mcp(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
-    reports = {"policy_probe": _fixture("policy-probe.json"), "alarm_probe": _fixture("alarm-probe.json")}
+    reports = {
+        "policy_probe": _with_gate_measurements(_fixture("policy-probe.json")),
+        "alarm_probe": _fixture("alarm-probe.json"),
+    }
     _StubMcp.reports = reports
     _StubMcp.sequences = {}
     monkeypatch.setattr(driver.mcp_client, "McpClient", _StubMcp)
@@ -156,6 +195,54 @@ def test_policy_probe_facts_come_from_the_recorded_handler_report(stub_mcp: dict
     assert facts["handlerScopeHasSystemConfig"] is True
     assert facts["systemConfigResourceReadOk"] is True
     assert facts["handlerProjectName"] == "mcp_p4_probe"
+
+
+def test_policy_read_gate_checks_the_declared_length_before_reading(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    facts = driver.stage_policy_read(_config(tmp_path))["facts"]
+    assert facts["policyMaxBytes"] == policy_document.POLICY_MAX_BYTES
+    assert facts["policyGateState"] == "served"
+    assert facts["policyDeclaredLength"] == policy_document.policy_byte_length()
+    assert facts["policyDeclaredLengthMatchesAppliedDocument"] is True
+    assert facts["policyGatedReadServedAndVerified"] is True
+    assert facts["oversizePolicyGateState"] == "oversize"
+    assert facts["oversizePolicyDeclaredLengthExceedsCap"] is True
+    assert facts["oversizePolicyMaterialized"] is False
+
+
+def test_policy_read_fails_closed_when_the_gate_refuses_the_document(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """An over-cap declared length must fail closed without reading the value."""
+    _StubMcp.reports = {
+        "policy_probe": _with_gate_measurements(
+            _fixture("policy-probe.json"),
+            declared=policy_document.OVERSIZE_POLICY_BYTES,
+            gate_state="oversize",
+            materialized=False,
+        ),
+        "alarm_probe": _fixture("alarm-probe.json"),
+    }
+    config = _config(tmp_path, policy_read_deadline_seconds=0.0)
+    with pytest.raises(driver.StageFailure) as caught:
+        driver.stage_policy_read(config)
+    assert "size gate refused the document" in str(caught.value)
+
+
+def test_policy_read_reports_a_stale_fixture_as_drift_not_failure(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    # A served document whose report predates the gate is drift, not a hang and
+    # not a hard failure: the live workflow's drift check catches it.
+    _StubMcp.reports = {
+        "policy_probe": _fixture("policy-probe.json"),
+        "alarm_probe": _fixture("alarm-probe.json"),
+    }
+    facts = driver.stage_policy_read(_config(tmp_path))["facts"]
+    assert facts["policyGateReported"] is False
+    assert facts["policyGatedReadServedAndVerified"] is False
+    assert facts["policyReadMatchesAppliedDocument"] is True
 
 
 def test_alarm_probe_facts_come_from_the_recorded_handler_report(stub_mcp: dict[str, Any], tmp_path: Path) -> None:
@@ -272,34 +359,183 @@ def test_summarize_detects_a_descendant_matching_regression(
     assert evidence["verdict"]["exactPathAlarmQuery"]["bounded"] is False
 
 
-def test_driver_guard_fails_closed_on_a_missing_or_mismatched_marker(tmp_path: Path) -> None:
+def _marker_document(config: Any, **overrides: Any) -> dict[str, Any]:
+    document = {
+        "marker": "ignition-mcp-phase4-live",
+        "environment": "phase4-live",
+        "runId": config.run_id,
+        "gatewayVersion": config.gateway_version,
+        "gatewayBuild": config.gateway_build,
+        "gatewayId": f"phase4-g4a-{config.gateway_version}-{config.run_id}",
+        "trustedRepo": "sheon-sek/ignition-mcp",
+        "policyProvider": config.provider,
+        "alarmRoot": config.root_name,
+    }
+    document.update(overrides)
+    return document
+
+
+def _marker_file(path: Path, config: Any, **overrides: Any) -> Path:
+    path.write_text(json.dumps(_marker_document(config, **overrides), indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _guarded_config(tmp_path: Path, *, base_url: str, **overrides: Any) -> Any:
+    values: dict[str, Any] = {
+        "base_url": base_url,
+        "api_token": API_TOKEN,
+        "mcp_url": base_url.rstrip("/") + driver.EXPECTED_MCP_PATH,
+        "evidence_dir": tmp_path,
+        "run_id": "424242",
+        "gateway_version": "8.3.8",
+        "gateway_build": "2026071409",
+        "root_name": "mcp_p4_424242",
+    }
+    values.update(overrides)
+    return driver.Config(**values)
+
+
+@pytest.fixture()
+def disposable_gateway() -> Any:
+    """The recorded fake bound to the one origin the guard accepts."""
+    try:
+        gateway = RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER, port=driver.EXPECTED_ORIGIN_PORT)
+    except OSError as error:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
+    with gateway:
+        yield gateway
+
+
+def test_guard_rejects_a_foreign_origin_before_any_request(tmp_path: Path) -> None:
+    """A wrong port must be refused locally: the first request is the bug."""
     with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
-        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN)
+        config = _guarded_config(tmp_path, base_url=gateway.base_url)
+        marker = _marker_file(tmp_path / "ci-marker.json", config)
+        config = driver.Config(**{**config.__dict__, "ci_marker": marker})
+        with pytest.raises(driver.GuardError) as caught:
+            driver.verify_guard(config)
+        assert str(driver.EXPECTED_ORIGIN_PORT) in str(caught.value)
+        assert gateway.requests == []
+
+
+def test_guard_rejects_the_real_gateway_port_and_foreign_hosts(tmp_path: Path) -> None:
+    for base_url in ("http://127.0.0.1:8088", "http://192.0.2.10:8093", "https://127.0.0.1:8093",
+                     "http://127.0.0.1:8093/extra"):
+        config = _guarded_config(tmp_path, base_url=base_url)
+        marker = _marker_file(tmp_path / "ci-marker.json", config)
+        with pytest.raises(driver.GuardError):
+            driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+
+
+def test_guard_rejects_a_foreign_mcp_path(tmp_path: Path) -> None:
+    origin = f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}"
+    config = _guarded_config(tmp_path, base_url=origin, mcp_url=origin + "/data/mcp/other-server")
+    marker = _marker_file(tmp_path / "ci-marker.json", config)
+    with pytest.raises(driver.GuardError):
+        driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+
+
+def test_guard_requires_the_marker_to_name_this_run_policy_and_alarm_root(
+    disposable_gateway: Any, tmp_path: Path,
+) -> None:
+    origin = disposable_gateway.base_url
+    config = _guarded_config(tmp_path, base_url=origin)
+    marker = tmp_path / "ci-marker.json"
+    for override in (
+        {"gatewayId": "phase4-g4a-8.3.8-999"},
+        {"policyProvider": "SomeOtherProvider"},
+        {"alarmRoot": "mcp_p4_1"},
+        {"runId": "999"},
+        {"trustedRepo": "someone-else/ignition-mcp"},
+        {"marker": "ignition-mcp-phase3-live"},
+        {"environment": "phase3-live"},
+    ):
+        _marker_file(marker, config, **override)
+        with pytest.raises(driver.GuardError) as caught:
+            driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+        assert next(iter(override)) in str(caught.value)
+    _marker_file(marker, config)
+    driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+
+
+class _RedirectOnly(http.server.BaseHTTPRequestHandler):
+    """A Gateway look-alike that answers every path with a redirect."""
+
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *_args: object) -> None:
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(302)
+        self.send_header("Location", f"{self.server.target}{self.path}")  # type: ignore[attr-defined]
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+
+def test_guard_refuses_a_redirected_gateway_info(tmp_path: Path) -> None:
+    """A redirect must not bounce the guard onto another origin."""
+    target = RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER)
+    try:
+        redirector = http.server.ThreadingHTTPServer(("127.0.0.1", driver.EXPECTED_ORIGIN_PORT), _RedirectOnly)
+    except OSError as error:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
+    redirector.target = target.base_url  # type: ignore[attr-defined]
+    thread = threading.Thread(target=redirector.serve_forever, daemon=True)
+    thread.start()
+    try:
+        with target:
+            origin = f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}"
+            config = _guarded_config(tmp_path, base_url=origin)
+            marker = _marker_file(tmp_path / "ci-marker.json", config)
+            with pytest.raises(driver.GuardError) as caught:
+                driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+            assert "redirect" in str(caught.value)
+            assert target.requests == []
+    finally:
+        redirector.shutdown()
+        redirector.server_close()
+        thread.join(timeout=5)
+
+
+def test_driver_guard_fails_closed_on_a_missing_marker(tmp_path: Path) -> None:
+    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+        config = _guarded_config(tmp_path, base_url=gateway.base_url)
         with pytest.raises(driver.GuardError):
             driver.verify_guard(config)
+        assert gateway.requests == []
 
-        marker = tmp_path / "ci-marker.json"
-        marker.write_text(json.dumps({
-            "marker": "ignition-mcp-phase4-live",
-            "environment": "phase4-live",
-            "runId": "9999",
-            "gatewayVersion": "8.3.8",
-            "gatewayBuild": "2026071409",
-            "trustedRepo": "sheon-sek/ignition-mcp",
-        }), encoding="utf-8")
-        with pytest.raises(driver.GuardError):
-            driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
 
-        marker.write_text(json.dumps({
-            "marker": "ignition-mcp-phase4-live",
-            "environment": "phase4-live",
-            "runId": "1",
-            "gatewayVersion": "8.3.8",
-            "gatewayBuild": "2026071409",
-            "trustedRepo": "someone-else/ignition-mcp",
-        }), encoding="utf-8")
-        with pytest.raises(driver.GuardError):
-            driver.verify_guard(driver.Config(**{**config.__dict__, "ci_marker": marker}))
+def _waiter() -> ModuleType:
+    return _load("phase4_wait_for_gateway", PHASE4 / "wait_for_gateway.py")
+
+
+def test_wait_for_gateway_reports_readiness_against_the_recorded_fake(
+    disposable_gateway: Any, tmp_path: Path,
+) -> None:
+    waiter = _waiter()
+    code = waiter.main([
+        "--base-url", disposable_gateway.base_url,
+        "--api-token", API_TOKEN,
+        "--mcp-url", disposable_gateway.base_url + driver.EXPECTED_MCP_PATH,
+        "--timeout", "10",
+        "--evidence-dir", str(tmp_path),
+    ])
+    assert code == waiter.EXIT_READY
+    assert (tmp_path / "gateway-info.json").is_file()
+
+
+def test_wait_for_gateway_fails_closed_when_nothing_answers(tmp_path: Path) -> None:
+    waiter = _waiter()
+    # Port 9 (discard) is never bound here, so this cannot race the 8093 tests.
+    dead = "http://127.0.0.1:9"
+    code = waiter.main([
+        "--base-url", dead,
+        "--api-token", API_TOKEN,
+        "--mcp-url", dead + driver.EXPECTED_MCP_PATH,
+        "--timeout", "1",
+    ])
+    assert code == waiter.EXIT_NOT_READY
 
 
 def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
@@ -311,3 +547,9 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
         assert stage in text, stage
     assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
     assert "python tests/harness/phase4-live/rehearse_local.py" in text
+    # One readiness waiter for both readiness points, not two shell loops.
+    assert text.count("wait_for_gateway.py") == 2
+    assert "MAX_RESPONSE" not in text
+    # Frozen expectations: drift must fail the job now.
+    assert 'if [[ "$rc" == "3" ]]; then' in text
+    assert 'echo "characterization drifted' in text

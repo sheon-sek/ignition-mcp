@@ -42,6 +42,8 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
 - `gateway_rest.py`: bounded stdlib Native REST client.
 - `mcp_client.py`: bounded stdlib MCP Streamable-HTTP client for the Module.
 - `driver.py`: the characterization driver (stages below).
+- `wait_for_gateway.py`: the single readiness waiter both readiness points use
+  (Native REST `/data/api/v1/gateway-info` plus an MCP `initialize`).
 - `characterization.json`: the structural facts each Gateway version is expected
   to show. Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs the whole driver against the recorded Gateway fake.
@@ -59,10 +61,16 @@ uv run --no-sync python tests/harness/phase4-live/driver.py alarm
 uv run --no-sync python tests/harness/phase4-live/driver.py summarize
 ```
 
-Every stage first verifies the L5 CI marker, the trusted repository, the run id
-and the **live Gateway identity**, and fails closed otherwise. Exit codes:
-`0` characterized as expected, `3` characterized but drifted from
-`characterization.json`, `2` a stage could not be characterized.
+Every stage first verifies — **before the first request** — that both URLs are
+exactly the disposable origin `http://127.0.0.1:8093` with the phase4 MCP path,
+that the alarm root is run-unique, and that the CI marker names this marker, this
+environment, this trusted repository, this run id, this Gateway build, this
+`gatewayId`, this policy provider and this alarm root. Redirects are refused by
+the REST and MCP clients, so a rewritten endpoint cannot bounce the identity check
+elsewhere, and `--base-url http://127.0.0.1:8088` (a real workstation Gateway) is
+rejected with no network call at all. Exit codes: `0` characterized as expected,
+`3` characterized but drifted from `characterization.json`, `2` a stage could not
+be characterized. The workflow fails on `3` now that the expectations are frozen.
 
 `policy-provision` writes the policy the way `setup-native apply` will: create
 the dedicated Tag provider through
@@ -72,7 +80,9 @@ prove the idempotent `MergeOverwrite` update path, and read the document back
 through `GET /data/api/v1/tags/export`.
 
 `policy-read` verifies that the *running* provider actually serves the policy
-Tag, not just that its config holds it: it probes, and while the probe reports
+Tag through the gate the storage recommendation depends on — the companion
+length Tag, the enforced `IgnitionMcpPolicyMaxBytes` cap, and the length-equals-
+value check —, not just that its config holds it: it probes, and while the probe reports
 anything other than a Good read of the applied document it re-imports
 (idempotently) and probes again under a 240 s deadline. Two recorded 8.3.8
 provider-startup failures motivate that loop — a first import rejected while the
@@ -107,6 +117,19 @@ Gateway version as `phase4-g4a-<version>-<run id>`.
 `tests/fixtures/recorded/gateway-8.3/phase4/` holds the bodies this harness
 replays and the handler reports the live run produced, with their run ids
 recorded in `tests/fixtures/recorded/gateway-8.3/provenance.json`.
+
+## Safety
+
+- One origin, checked locally before any request: `http://127.0.0.1:8093`, plus
+  the phase4 MCP path. The rehearsal fake binds the same port so the rehearsal
+  exercises the real guard.
+- Redirects are refused by both clients (an `HTTPRedirectHandler` that raises),
+  so the guard cannot be moved to another host.
+- The CI marker must name the marker string, environment, trusted repository,
+  run id, Gateway version/build, `gatewayId`, `policyProvider` and `alarmRoot`;
+  the live Gateway identity is then checked against the same marker.
+- Run-unique Alarm paths (`mcp_p4_<run id>`), and the policy provider name is a
+  fixed repo constant so the characterization describes the recommended layout.
 
 ## Limitations
 

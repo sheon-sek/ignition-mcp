@@ -37,6 +37,7 @@ from pathlib import Path
 import sys
 import time
 from typing import Any
+import urllib.parse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -47,6 +48,12 @@ import policy_document  # noqa: E402
 EXPECTED_MARKER = "ignition-mcp-phase4-live"
 TRUSTED_REPO = "sheon-sek/ignition-mcp"
 PHASE4_ENVIRONMENT = "phase4-live"
+#: The one origin this harness may ever talk to. A developer workstation keeps a
+#: real Gateway on 127.0.0.1:8088, so the disposable compose Gateway publishes
+#: 8093 and the driver refuses anything else before the first request.
+EXPECTED_ORIGIN_HOST = "127.0.0.1"
+EXPECTED_ORIGIN_PORT = 8093
+EXPECTED_MCP_PATH = "/data/mcp/phase4-policy-probe"
 READ_TIMEOUT_MS = 5000
 WRITE_PROBE_VALUE = "phase4-write-probe-value"
 REQUIRED_ROUTES = {
@@ -91,6 +98,7 @@ class Config:
     provider: str = policy_document.POLICY_PROVIDER
     label: str = "before-restart"
     root_name: str = ""
+    policy_read_deadline_seconds: float = POLICY_READ_DEADLINE_SECONDS
     noise_count: int = 60
     cycles: int = 3
     repeats: int = 3
@@ -104,6 +112,10 @@ class Config:
     @property
     def write_probe_path(self) -> str:
         return f"[{self.provider}]{policy_document.WRITE_PROBE_TAG_NAME}"
+
+    @property
+    def policy_length_path(self) -> str:
+        return f"[{self.provider}]{policy_document.POLICY_LENGTH_TAG_NAME}"
 
     @property
     def alarm_provider(self) -> str:
@@ -143,19 +155,68 @@ def write_stage(config: Config, name: str, payload: dict[str, Any]) -> Path:
     return path
 
 
+def require_disposable_origin(config: Config) -> dict[str, str]:
+    """Refuse any URL that is not the exact disposable Gateway origin.
+
+    This runs before the first request, so a mistyped `--base-url` (the real
+    Gateway on port 8088 is one keystroke away) cannot be contacted at all.
+    """
+    expected = f"http://{EXPECTED_ORIGIN_HOST}:{EXPECTED_ORIGIN_PORT}"
+    base = urllib.parse.urlsplit(config.base_url)
+    if (
+        base.scheme != "http"
+        or base.hostname != EXPECTED_ORIGIN_HOST
+        or base.port != EXPECTED_ORIGIN_PORT
+        or base.path not in ("", "/")
+        or base.query
+        or base.fragment
+    ):
+        raise GuardError(f"base URL {config.base_url!r} is not the disposable Gateway origin {expected}")
+    mcp = urllib.parse.urlsplit(config.mcp_url)
+    if (
+        mcp.scheme != "http"
+        or mcp.hostname != EXPECTED_ORIGIN_HOST
+        or mcp.port != EXPECTED_ORIGIN_PORT
+        or mcp.path != EXPECTED_MCP_PATH
+        or mcp.query
+        or mcp.fragment
+    ):
+        raise GuardError(
+            f"MCP URL {config.mcp_url!r} is not {expected}{EXPECTED_MCP_PATH}"
+        )
+    return {"baseOrigin": expected, "mcpPath": EXPECTED_MCP_PATH}
+
+
 def verify_guard(config: Config) -> None:
+    checks = require_disposable_origin(config)
+    if not config.run_id or not config.provider or not config.root_name:
+        raise GuardError("run id, policy provider and alarm root must be configured")
+    if str(config.run_id) not in config.root_name:
+        raise GuardError(
+            f"alarm root {config.root_name!r} is not run-unique for run {config.run_id!r}"
+        )
     marker_path = Path(config.ci_marker)
     if not marker_path.is_file():
         raise GuardError(f"CI marker {marker_path} is missing; refusing to touch a Gateway")
     marker = json.loads(marker_path.read_text(encoding="utf-8"))
-    checks = {
+    checks.update({
         "marker": marker.get("marker") == EXPECTED_MARKER,
         "environment": marker.get("environment") == PHASE4_ENVIRONMENT,
         "trustedRepo": marker.get("trustedRepo") == TRUSTED_REPO,
         "runId": str(marker.get("runId")) == str(config.run_id),
         "gatewayVersion": str(marker.get("gatewayVersion")) == config.gateway_version,
-    }
-    info = gateway_rest.gateway_info(config.base_url, config.api_token)
+        "gatewayId": marker.get("gatewayId") == f"phase4-g4a-{config.gateway_version}-{config.run_id}",
+        "policyProvider": marker.get("policyProvider") == config.provider,
+        "alarmRoot": marker.get("alarmRoot") == config.root_name,
+    })
+    if not all(checks.values()):
+        raise GuardError(f"L5 guard failed before any request: {json.dumps(checks, sort_keys=True)}")
+    try:
+        info = gateway_rest.gateway_info(config.base_url, config.api_token)
+    except gateway_rest.RestError as exc:
+        # A redirect is refused by the REST client, so a hijacked or rewritten
+        # endpoint cannot bounce the identity check onto another origin.
+        raise GuardError(f"gateway identity check failed: {exc}") from exc
     version_text = str(info.get("ignitionVersion", ""))
     checks["liveGatewayVersion"] = config.gateway_version in version_text
     expected_build = str(marker.get("gatewayBuild") or config.gateway_build)
@@ -361,6 +422,10 @@ def policy_probe_arguments(config: Config) -> dict[str, Any]:
         "configModuleId": "ignition",
         "configTypeId": "tag-provider",
         "configName": config.provider,
+        "policyLengthPath": config.policy_length_path,
+        "oversizePolicyPath": policy_document.OVERSIZE_POLICY_TAG_PATH,
+        "oversizeLengthPath": policy_document.OVERSIZE_LENGTH_TAG_PATH,
+        "maxPolicyBytes": policy_document.POLICY_MAX_BYTES,
     }
 
 
@@ -387,6 +452,30 @@ def derive_policy_read_facts(config: Config, report: dict[str, Any]) -> dict[str
     missing_item = first_item(missing_read)
     facts["missingPathReadOk"] = bool(missing_read.get("ok"))
     facts["missingPathQuality"] = str(missing_item.get("quality", ""))
+
+    gate = measurement(report, "tag.gatedRead.policy")
+    facts["policyGateReported"] = bool(gate)
+    facts["policyMaxBytes"] = gate.get("cap", policy_document.POLICY_MAX_BYTES)
+    facts["policyGateState"] = str(gate.get("gate", ""))
+    facts["policyDeclaredLength"] = gate.get("declaredLength")
+    facts["policyDeclaredLengthMatchesAppliedDocument"] = (
+        gate.get("declaredLength") == policy_document.policy_byte_length()
+    )
+    facts["policyGateServedWithoutMaterializingOversize"] = gate.get("gate") == "served"
+    facts["policyGatedReadServedAndVerified"] = (
+        gate.get("gate") == "served"
+        and bool(gate.get("lengthMatchesValue"))
+        and gate.get("valueSha256") == policy_document.policy_sha256()
+    )
+    facts["policyGatedReadElapsedMs"] = gate.get("elapsedMs")
+    oversize_gate = measurement(report, "tag.gatedRead.oversize")
+    facts["oversizePolicyGateState"] = str(oversize_gate.get("gate", ""))
+    facts["oversizePolicyDeclaredLength"] = oversize_gate.get("declaredLength")
+    facts["oversizePolicyDeclaredLengthExceedsCap"] = (
+        isinstance(oversize_gate.get("declaredLength"), int)
+        and oversize_gate["declaredLength"] > policy_document.POLICY_MAX_BYTES
+    )
+    facts["oversizePolicyMaterialized"] = bool(oversize_gate.get("materialized"))
     facts["missingPathFailsClosed"] = not quality_is_good(facts["missingPathQuality"])
 
     policy_config = measurement(report, "tag.getConfiguration.policy")
@@ -437,7 +526,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     if "policy_probe" not in tools:
         raise StageFailure(f"policy_probe is not discoverable; tools/list = {sorted(tools)}")
     arguments = policy_probe_arguments(config)
-    deadline = time.monotonic() + POLICY_READ_DEADLINE_SECONDS
+    deadline = time.monotonic() + config.policy_read_deadline_seconds
     attempts: list[dict[str, Any]] = []
     repairs = 0
     facts: dict[str, Any] = {}
@@ -450,16 +539,25 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         except mcp_client.McpError as exc:
             error = str(exc)
         facts = derive_policy_read_facts(config, report) if report else {}
-        healthy = bool(facts.get("policyReadQualityIsGood")) and bool(
+        served_document = bool(facts.get("policyReadQualityIsGood")) and bool(
             facts.get("policyReadMatchesAppliedDocument")
         )
+        gate_reported = bool(facts.get("policyGateReported"))
+        gate_refused = gate_reported and not bool(facts.get("policyGatedReadServedAndVerified"))
+        healthy = served_document and gate_reported and not gate_refused
         attempt: dict[str, Any] = {
-            "servedPolicyTag": healthy,
+            "servedPolicyTag": served_document,
             "policyReadQuality": str(facts.get("policyReadQuality", "")),
+            "policyGateReported": gate_reported,
+            "policyGateState": str(facts.get("policyGateState", "")),
             "handlerWriteQualityCodes": facts.get("handlerWriteQualityCodes", []),
             "error": error,
         }
-        if healthy or time.monotonic() >= deadline:
+        # Retry only while the provider is not serving the document yet. A served
+        # document whose report carries no gate measurement is a stale recorded
+        # payload (the expectation drift check reports it), and a gate that
+        # answered "oversize"/"blocked" is a deterministic refusal.
+        if healthy or gate_reported or served_document or time.monotonic() >= deadline:
             attempts.append(attempt)
             break
         # Two recorded 8.3.8 provider-startup failures motivate this loop: the
@@ -480,7 +578,12 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     facts["policyReadRepairImports"] = repairs
     raw["policyProbe"] = bounded(report)
     raw["policyProbeAttempts"] = bounded(attempts, 40_000)
-    if not facts.get("policyReadQualityIsGood") or not facts.get("policyReadMatchesAppliedDocument"):
+    if gate_refused:
+        raise StageFailure(
+            "the policy size gate refused the document: "
+            + json.dumps(attempts[-1], sort_keys=True)[:800]
+        )
+    if not served_document:
         raise StageFailure(
             "the policy Tag was never served by the provider: "
             + json.dumps(attempts[-1], sort_keys=True)[:800]
