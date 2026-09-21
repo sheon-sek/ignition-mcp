@@ -510,7 +510,30 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   assuming `CONFIG`, so a CONTROL Tool can no longer be declared with a CONFIG surface.
 - Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **82/82 cases**
   against the recorded Gateway, both deployment gates and all three credentials.
-- Live: pending — recorded below once the runs are in.
+- Live ([run 35665840461](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840461)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **82/82 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — with three
+  credentials whose inventories are exact: the read-only one sees the read Tools, the
+  config one sees those plus the six CONFIG Tools, and the CONTROL one sees the read
+  Tools plus `alarm_pipeline_cancel` and none of the config Tools. The pipeline cases
+  prove the decision surface live: the cancel refused with `permission_denied` for the
+  config credential (D07 scope by operation effect), for a pipeline the Target allowlist
+  does not name, and for a path under the Target and the Target's own parent (D30 §6:
+  exact paths, never prefixes); both inputs `limit_exceeded` past their bounds and an
+  empty component `invalid_argument`; and, for an alarm event no run holds, `not_found`
+  with the bounded status read of the same path unchanged before and after
+  (`observations.json`: `pipelineStateBefore`/`pipelineStateAfter` both `not_found`, and
+  the path is the run-unique `project:<Project>:/pipeline:MCP_CI_Notify`). With both
+  classes disabled the gate-off row shows the read inventory and nothing else.
+- Frozen gates, green on the same head (`603e0f6`): CI
+  [35665840454](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840454) and
+  Phase 4 Live Gateway G4a
+  [35665840467](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840467). The
+  Phase 3 G3 run on this head is
+  [35665840469](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840469); the
+  ticket's documentation head is recorded with its own runs below.
+- The documentation head's runs are recorded once they have finished, in the same
+  per-head form the earlier tickets use.
 
 ## Open questions
 
