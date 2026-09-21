@@ -53,7 +53,7 @@ EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES = frozenset({
 EXPECTED_RECOVERY_LOCK_RELEASED_ON = frozenset({"COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"})
 EXPECTED_RECOVERY_LOCK_HELD_ON = frozenset({"OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"})
 
-CURRENT_RUNTIME_TOOLS = [
+CURRENT_RUNTIME_READ_TOOLS = [
     "bundle_info",
     "tag_browse",
     "tag_query",
@@ -68,6 +68,25 @@ CURRENT_RUNTIME_TOOLS = [
     "database_query_list",
     "database_query"
 ]
+#: Phase 4 milestone 4a (D30). Milestone 4b adds the CONFIG Tag Mutations.
+CURRENT_RUNTIME_CONTROL_TOOLS = ["tag_write"]
+CURRENT_RUNTIME_CONFIG_TOOLS: list[str] = []
+CURRENT_RUNTIME_MUTATION_TOOLS = CURRENT_RUNTIME_CONTROL_TOOLS + CURRENT_RUNTIME_CONFIG_TOOLS
+CURRENT_RUNTIME_TOOLS = CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_MUTATION_TOOLS
+#: `readonly` never changes (D09); each mutation-capable profile is the READ
+#: inventory plus exactly its own class's Mutations, never a wildcard.
+EXPECTED_PROFILE_TOOLS = {
+    "readonly": CURRENT_RUNTIME_READ_TOOLS,
+    "operator": CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_CONTROL_TOOLS,
+    "configurator": CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_CONFIG_TOOLS,
+    "full": CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_CONTROL_TOOLS + CURRENT_RUNTIME_CONFIG_TOOLS,
+}
+RESERVED_POLICY_PROVIDER = "IgnitionMCPPolicy"
+RUNTIME_TARGET_POLICY_SCHEMA = "contracts/shared/runtime-target-policy.schema.json"
+#: The fields the shipped Jython reader requires of every Runtime Target Policy,
+#: whatever Tool reads it. `auditProfile` and `alarmShelveMaxSeconds` are
+#: validated when present.
+REQUIRED_POLICY_FIELDS = ("schemaVersion", "allowlists", "serviceIdentity", "auditMode")
 
 
 class ContractError(ValueError):
@@ -82,6 +101,40 @@ def _load(path: Path) -> dict[str, Any]:
     if type(value) is not dict:
         raise ContractError(f"{path}: document must be an object")
     return cast(dict[str, Any], value)
+
+
+def _check_runtime_mutation(tool: dict[str, Any], tool_name: str, repo_root: Path) -> None:
+    """D30 rules every Runtime Mutation contract carries, whichever class it is."""
+
+    output_schema = tool.get("outputSchema")
+    if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
+        raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
+    if tool.get("nativeResponseBinding") != "VERIFIED_WITH_LIMITATION":
+        raise ContractError(f"{tool_name}: D27 native binding status drift")
+    if tool.get("nativeOutputSchema") != "UNAVAILABLE_ON_D27_BASELINE":
+        raise ContractError(f"{tool_name}: D27 native outputSchema limitation drift")
+    if tool.get("automaticRetryAfterAmbiguousOutcome") is not False:
+        raise ContractError(f"{tool_name}: D08 forbids an automatic retry after an ambiguous outcome")
+    if tool.get("budgetClass") != "FAST":
+        raise ContractError(f"{tool_name}: a Runtime Tag Mutation without an artifact is FAST")
+    if tool.get("preflight") != "input, reserved provider and Target allowlist for every item before any item executes, with no rollback":
+        raise ContractError(f"{tool_name}: D30 §3 requires an all-items Preflight with no rollback")
+    policy = tool.get("runtimeTargetPolicy")
+    if not isinstance(policy, dict):
+        raise ContractError(f"{tool_name}: a Runtime Mutation must declare its Runtime Target Policy rules")
+    if policy.get("required") is not True or policy.get("missingOrMalformed") != "operation_disabled":
+        raise ContractError(f"{tool_name}: D30 §1 requires a fail-closed Runtime Target Policy")
+    if policy.get("allowlistKey") != tool_name:
+        raise ContractError(f"{tool_name}: the policy allowlist key must be the Tool name")
+    if policy.get("documentSchema") != RUNTIME_TARGET_POLICY_SCHEMA:
+        raise ContractError(f"{tool_name}: the Runtime Target Policy schema must be {RUNTIME_TARGET_POLICY_SCHEMA}")
+    if policy.get("reservedProvider") != RESERVED_POLICY_PROVIDER:
+        raise ContractError(f"{tool_name}: the reserved policy provider must be {RESERVED_POLICY_PROVIDER}")
+    refusal = policy.get("reservedProviderRefusal", "")
+    if not isinstance(refusal, str) or "including an explicit *" not in refusal:
+        raise ContractError(f"{tool_name}: the reserved-provider refusal must cover an explicit *")
+    if policy.get("reservedProviderRefusalCode") != "permission_denied":
+        raise ContractError(f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §7)")
 
 
 def lint_contracts(root: str | Path) -> None:
@@ -121,8 +174,10 @@ def lint_contracts(root: str | Path) -> None:
         tools = profile.get("tools")
         if not isinstance(tools, list) or len(tools) != len(set(tools)):
             raise ContractError(f"{name}: tools must be an explicit duplicate-free list")
-        if tools != CURRENT_RUNTIME_TOOLS:
-            raise ContractError(f"{name}: current Runtime READ inventory drift")
+        if tools != EXPECTED_PROFILE_TOOLS[name]:
+            raise ContractError(f"{name}: profile Tool inventory drift")
+        if not set(tools) <= set(CURRENT_RUNTIME_TOOLS):
+            raise ContractError(f"{name}: profile references an unbundled Runtime Tool")
 
     compatibility = _load(root_path / "shared/compatibility-status.json")
     if compatibility.get("supportedRequiresMachineEvidence") is not True:
@@ -130,7 +185,7 @@ def lint_contracts(root: str | Path) -> None:
     if compatibility.get("supportedRequiresVerifiedNativeResponseBinding") is not True:
         raise ContractError("SUPPORTED compatibility requires verified native response binding")
 
-    for tool_name in CURRENT_RUNTIME_TOOLS:
+    for tool_name in CURRENT_RUNTIME_READ_TOOLS:
         tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
         if tool.get("name") != tool_name:
             raise ContractError(f"{tool_name}: contract name drift")
@@ -143,6 +198,41 @@ def lint_contracts(root: str | Path) -> None:
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")
+
+    for tool_name in CURRENT_RUNTIME_CONTROL_TOOLS:
+        tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
+        if tool.get("name") != tool_name:
+            raise ContractError(f"{tool_name}: contract name drift")
+        if tool.get("permissionClass") != "CONTROL" or tool.get("mutationClass") != "CONTROL_MUTATION":
+            raise ContractError(f"{tool_name}: Runtime CONTROL mutation contract drift")
+        if tool.get("destructive") is not False:
+            raise ContractError(f"{tool_name}: a CONTROL Tag write is not destructive")
+        _check_runtime_mutation(tool, tool_name, repo_root)
+
+    for tool_name in CURRENT_RUNTIME_CONFIG_TOOLS:
+        tool = _load(root_path / f"tools/runtime/{tool_name}.contract.json")
+        if tool.get("permissionClass") != "CONFIG" or tool.get("mutationClass") != "CONFIG_MUTATION":
+            raise ContractError(f"{tool_name}: Runtime CONFIG mutation contract drift")
+        if not isinstance(tool.get("destructive"), bool):
+            raise ContractError(f"{tool_name}: a CONFIG mutation must declare destructive explicitly")
+        _check_runtime_mutation(tool, tool_name, repo_root)
+
+    declared_mutations = sorted(
+        path.name[: -len(".contract.json")]
+        for path in (root_path / "tools/runtime").glob("*.contract.json")
+        if _load(path).get("mutationClass") != "NONE"
+    )
+    if declared_mutations != sorted(CURRENT_RUNTIME_MUTATION_TOOLS):
+        raise ContractError("Runtime Mutation contract inventory drift")
+
+    if CURRENT_RUNTIME_MUTATION_TOOLS:
+        policy_schema = _load(root_path / "shared/runtime-target-policy.schema.json")
+        if tuple(policy_schema.get("required", ())) != REQUIRED_POLICY_FIELDS:
+            raise ContractError("Runtime Target Policy document schema drift")
+        if policy_schema.get("properties", {}).get("auditMode", {}).get("enum") != [
+            "best_effort", "required", "off",
+        ]:
+            raise ContractError("Runtime Target Policy audit-mode vocabulary drift")
 
     for tool_name in CURRENT_REST_READ_TOOLS:
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")

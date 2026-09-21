@@ -42,7 +42,7 @@ class RuntimeProjectTest(unittest.TestCase):
     def test_runtime_handlers_have_no_pending_binding_marker(self) -> None:
         files = validate_project(PROJECT)
         handlers = [value for name, value in files.items() if name.endswith("/onToolCalled.py")]
-        self.assertEqual(len(handlers), 13)
+        self.assertEqual(len(handlers), 14)
         for handler in handlers:
             self.assertNotIn(b"NATIVE_BINDING_PENDING", handler)
 
@@ -69,6 +69,7 @@ class RuntimeProjectTest(unittest.TestCase):
         "tag_get_config",
         "tag_query",
         "tag_read",
+        "tag_write",
         "udt_type_get",
         "udt_type_list"
 ]

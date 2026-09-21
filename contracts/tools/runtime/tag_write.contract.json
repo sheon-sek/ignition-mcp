@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_write",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONTROL",
+  "mutationClass": "CONTROL_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "writes": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "itemRequired": ["path", "value"],
+      "itemProperties": {
+        "path": {"type": "string", "providerQualified": true, "currentValueOnly": true},
+        "value": {"type": "scalar-or-scalar-array"}
+      }
+    },
+    "timeout": {"type": "integer", "required": false, "default": 10000, "minimum": 0, "maximum": 30000}
+  },
+  "outputSchema": "contracts/schemas/tag-write.output.schema.json",
+  "nativeRequirements": ["system.tag.readBlocking", "system.tag.writeBlocking", "system.util.audit"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "acceptedValueTypes": ["boolean", "integer", "number", "string", "datetime-iso8601-string", "array-of-scalars"],
+  "rejectedValueTypes": ["dataset", "document"],
+  "nativeOutcome": "system.tag.writeBlocking QualityCode per item; observed state does not decide success",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_write",
+    "allowlistMatch": "provider-qualified prefix at segment boundaries; explicit * allows every provider",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight, whatever the allowlist says, including an explicit *",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "itemOutcomeUnknownScope": "only items whose native outcome is itself indeterminate",
+  "nullEncoding": "ignition-null-v1"
+}

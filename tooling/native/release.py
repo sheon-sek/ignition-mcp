@@ -115,18 +115,23 @@ def _runtime_inventory(contracts_root: Path) -> dict[str, list[str]]:
     """Bundled primitives from the Designer source, cross-checked against contracts.
 
     ``contracts/tools/runtime`` also keeps the D12-deferred alarm contracts; the
-    bundled inventory is the frozen Phase 2 13-Tool set, and every bundled Tool
-    must have a read-only runtime contract with a matching name.
+    bundled inventory is the current Runtime Tool set from ``tooling.contracts.lint``,
+    and every bundled Tool must have a committed runtime contract with a matching
+    name. An unbundled (deferred) contract must stay read-only; a bundled Tool's
+    class is checked by the contract linter.
     """
     from tooling.contracts.lint import CURRENT_RUNTIME_TOOLS
 
+    bundled = set(CURRENT_RUNTIME_TOOLS)
     for path in sorted((contracts_root / "tools/runtime").glob("*.contract.json")):
         document = load_json_object(path.read_bytes(), str(path))
         name = document.get("name")
         require(isinstance(name, str) and name == path.name.removesuffix(".contract.json"),
                 path, "runtime contract name must match its filename")
         require(document.get("server") == "ignition-runtime", path, "runtime contract server drift")
-        require(document.get("mutationClass") == "NONE", path, "Phase 3: Runtime contracts must be read-only")
+        if name not in bundled:
+            require(document.get("mutationClass") == "NONE", path,
+                    "an unbundled Runtime contract must stay read-only")
 
     files = _source_files(contracts_root)
     require(files["tools"] == sorted(CURRENT_RUNTIME_TOOLS), contracts_root,
