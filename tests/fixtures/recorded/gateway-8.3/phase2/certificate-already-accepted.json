@@ -1,0 +1,5 @@
+{
+  "message": "Module Certificate already accepted.",
+  "url": "/data/api/v1/modules/certificate",
+  "status": "409"
+}
