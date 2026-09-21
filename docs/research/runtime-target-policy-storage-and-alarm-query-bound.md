@@ -216,6 +216,12 @@ Alarms were activated before the measurements. Query repetitions: 3 per form.
 | `system.alarm.acknowledge(ids, note, user)` on the returned event ids | 3 ids acknowledged, 0 left unacknowledged, state afterwards `Cleared, Acknowledged` |
 | median query time | exact 0 ms, root wildcard 1 ms, unfiltered 0 ms |
 
+`phase4-live-g4a` run
+[35636981286](https://github.com/sheon-sek/ignition-mcp/actions/runs/35636981286)
+(commit `ca8fd33`) reproduced every fact above on both Gateway rows with no drift
+from `characterization.json`, so these numbers are stable across runs and not a
+one-off.
+
 ### What the live run shows
 
 **Matching is literal, and that is good news for target checks.** A pattern
