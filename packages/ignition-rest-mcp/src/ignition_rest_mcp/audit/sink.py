@@ -27,7 +27,6 @@ SAFE_AUDIT_FIELDS: dict[str, frozenset[str]] = {
     "tag_config_export": frozenset({"provider", "path", "recursive", "includeUdts"}),
     "artifact_access": frozenset({"artifactId", "kind", "sensitivity", "method"}),
     "artifact_info_restricted": frozenset({"artifactId", "kind"}),
-    "operation_disabled_denial": frozenset(),
 }
 
 
