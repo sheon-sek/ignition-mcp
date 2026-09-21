@@ -471,8 +471,11 @@ class ProjectTransactionService:
                 if isinstance(item, dict) and item.get("name") == name:
                     return name
             matching = metadata.get("matching")
-            if not isinstance(matching, int) or isinstance(matching, bool):
+            # JSON carries no int/float distinction; tolerate an integral float
+            # exactly as the Phase 2 list reader does (g3diag R4).
+            if isinstance(matching, bool) or not isinstance(matching, (int, float)) or int(matching) != matching:
                 raise GatewayError("schema_mismatch", "project listing metadata is invalid")
+            matching = int(matching)
             offset += 500
             if offset >= matching or not items:
                 break
@@ -528,9 +531,9 @@ class ProjectTransactionService:
 
     def _result(
         self, txn_id: str, state: TransactionState, name: str,
-        baseline: CapturedProject | None, candidate: CapturedProject | None,
-        result_capture: CapturedProject | None, *, error: GatewayError | None = None,
-        import_dispatched: bool = True, external_drift: bool = False, designer_warning: bool = False,
+        baseline: CapturedProject | None, candidate: CapturedProject | None, result_capture: Any, *,
+        error: GatewayError | None = None, import_dispatched: bool = False, external_drift: bool = False,
+        designer_warning: bool = False,
     ) -> TransactionResult:
         return TransactionResult(
             transaction_id=txn_id, state=state, project_name=name,

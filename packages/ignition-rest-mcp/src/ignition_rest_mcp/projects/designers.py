@@ -47,8 +47,11 @@ async def active_sessions_for_project(
                     "user": user if isinstance(user, str) else "",
                 })
         matching = metadata.get("matching")
-        if not isinstance(matching, int) or isinstance(matching, bool):
+        # JSON carries no int/float distinction; the Phase 2 reader tolerates an
+        # integral float and so must this one (g3diag R4).
+        if isinstance(matching, bool) or not isinstance(matching, (int, float)) or int(matching) != matching:
             raise GatewayError("schema_mismatch", "Designer session metadata is invalid")
+        matching = int(matching)
         if (page + 1) * PAGE_SIZE >= matching or not items:
             return sessions
     raise GatewayError(

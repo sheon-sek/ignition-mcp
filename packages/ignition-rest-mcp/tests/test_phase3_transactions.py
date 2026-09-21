@@ -275,6 +275,7 @@ def test_no_change_returns_before_backup_or_import(tmp_path: Path) -> None:
         try:
             result = await env.execute(_CopyBuilder())
             assert result.state is TransactionState.NO_CHANGE
+            assert result.import_dispatched is False  # the returned object, not just the row
             assert result.error is None
             assert env.gateway.dispatch_calls == []
             rows = await env.txn_rows()
@@ -322,6 +323,7 @@ def test_backup_persistence_failure_aborts_pre_import(
             monkeypatch.setattr(env.store, "promote_recovery", refuse)
             result = await env.execute(_EditBuilder())
             assert result.state is TransactionState.FAILED_PRE_IMPORT
+            assert result.import_dispatched is False  # G3 rehearsal caught the True default
             assert result.error is not None and result.error.code == "internal_error"
             assert env.gateway.dispatch_calls == []
             assert await env.artifact_states() == []
