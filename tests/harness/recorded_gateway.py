@@ -588,6 +588,10 @@ class _Server(http.server.ThreadingHTTPServer):
         #: answers 200 with ``success=false`` and this ``problem`` message, the
         #: documented shape for a change the Gateway refused to apply.
         self.update_problem: str | None = None
+        #: Modelled (not recorded) competing writer: when set, the addressed resource
+        #: is changed (and its signature moved) at PUT time, after the caller's own
+        #: read and before the signature check — the race window D30 §2 documents.
+        self.update_race: dict[str, Any] = {}
 
     # ------------------------------------------------------- config resources
 
@@ -646,6 +650,11 @@ class _Server(http.server.ThreadingHTTPServer):
             if current is None:
                 return 404, {"message": "No such resource", "status": "404"}
             targets.append((change, current))
+        if self.update_race:
+            fields, self.update_race = self.update_race, {}
+            for _change, current in targets:
+                current.update(fields)
+                current["signature"] = self.next_signature()
         for change, current in targets:
             if change.get("signature") != current.get("signature"):
                 return 409, {
@@ -805,6 +814,16 @@ class RecordedGateway:
 
     def signature(self, resource_type: str, name: str, collection: str = "") -> str:
         return str(self.resource(resource_type, name, collection)["signature"])
+
+    def race_update_with(self, **fields: Any) -> None:
+        """Model another writer changing the addressed resource at PUT time.
+
+        The competing change lands after this harness's pre-dispatch read and before
+        the Gateway's signature check, so the Gateway refuses the caller's own change
+        with a signature mismatch: the deterministic race D30 §2 documents.
+        """
+
+        self._server.update_race = dict(fields)
 
     def change_resource_out_of_band(
         self, resource_type: str, name: str, collection: str = "", **fields: Any,

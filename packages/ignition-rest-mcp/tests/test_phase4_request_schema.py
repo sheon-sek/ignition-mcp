@@ -10,6 +10,7 @@ hold the bundler, the committed specification and the snapshot together.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 import json
 from pathlib import Path
 from typing import Any
@@ -83,7 +84,7 @@ def test_a_bundled_schema_references_only_its_own_defs() -> None:
         schema = bundle_update_item_schema(document, resource_type)
         assert schema is not None
         defs = schema.get("$defs", {})
-        assert isinstance(defs, dict)
+        assert isinstance(defs, Mapping)
         for reference in references(schema):
             name = reference[len("#/$defs/"):] if reference.startswith("#/$defs/") else None
             if name is None or name not in defs:
@@ -120,6 +121,78 @@ def test_a_change_item_declares_a_name_exactly_when_the_type_is_not_a_singleton(
         declared = "name" in schema.get("properties", {})
         singleton = f"{COLLECTION_PREFIX}singleton/{resource_type}" in document["paths"]
         assert declared is not singleton, resource_type
+
+
+def test_a_repeated_reference_keeps_every_occurrences_sibling_keywords() -> None:
+    """OpenAPI 3.1 allows keywords beside a ``$ref``. Two fields that reference one
+    definition and each tighten it must both stay tightened: an already-bundled
+    reference must not drop the siblings of the occurrence that used it."""
+
+    document = {
+        "components": {"schemas": {"Name": {"type": "string"}}},
+        "paths": {
+            f"{COLLECTION_PREFIX}example/type": {
+                "put": {
+                    "requestBody": {
+                        "content": {"application/json": {"schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "first": {"$ref": "#/components/schemas/Name", "minLength": 5},
+                                    "second": {"$ref": "#/components/schemas/Name", "minLength": 5},
+                                },
+                            },
+                        }}},
+                    },
+                },
+            },
+        },
+    }
+    schema = bundle_update_item_schema(document, "example/type")
+    assert schema is not None
+    assert schema["properties"]["second"]["minLength"] == 5
+    validator = Draft202012Validator(schema)
+
+    assert [list(error.absolute_path) for error in validator.iter_errors({"second": "x"})] == [["second"]]
+    assert [list(error.absolute_path) for error in validator.iter_errors(
+        {"first": "x", "second": "abcde"},
+    )] == [["first"]]
+    assert list(validator.iter_errors({"first": "abcde", "second": "abcde"})) == []
+
+
+def test_the_bundled_schema_is_deeply_immutable() -> None:
+    """The snapshot may not be mutable: a caller holding ``registry.snapshot`` could
+    otherwise change the rules a later write is validated against, with no refresh
+    and no generation change."""
+
+    document = {
+        "paths": {
+            f"{COLLECTION_PREFIX}example/type": {
+                "put": {
+                    "requestBody": {
+                        "content": {"application/json": {"schema": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["signature"],
+                                "properties": {"signature": {"type": "string"}},
+                            },
+                        }}},
+                    },
+                },
+            },
+        },
+    }
+    schema = bundle_update_item_schema(document, "example/type")
+    assert schema is not None
+
+    with pytest.raises(TypeError):
+        schema["type"] = "string"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        schema["properties"]["signature"] = {}  # type: ignore[index]
+    with pytest.raises(AttributeError):
+        schema["required"].append("more")  # type: ignore[union-attr]
 
 
 def test_an_unresolvable_reference_makes_the_schema_unusable() -> None:
@@ -210,6 +283,8 @@ def test_a_documented_update_route_carries_its_schema_in_the_snapshot(
     assert capability.update_path == f"{COLLECTION_PREFIX}example/thing"
     assert capability.update_request_schema is not None
     assert "config_resource_update" in capabilities
+    with pytest.raises(TypeError):
+        capability.update_request_schema["type"] = "string"  # type: ignore[index]
 
 
 def test_an_update_route_without_a_usable_schema_is_withheld(

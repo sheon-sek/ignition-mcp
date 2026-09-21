@@ -27,6 +27,7 @@ Three rules decide the wire item:
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import json
 from typing import Any, AsyncIterator, Callable
 from urllib.parse import quote
@@ -153,10 +154,14 @@ async def config_resource_update(
                 return VerificationOutcome.CONFIRMED
             return VerificationOutcome.UNCHANGED if unchanged else VerificationOutcome.MISMATCH
         # A refused or ambiguous dispatch is only a recovered success if the resource
-        # actually moved: a request whose values were already in place proves nothing,
-        # and treating it as CONFIRMED would turn a Gateway refusal (a stale signature
-        # above all) into a false success.
-        if unchanged:
+        # actually moved *in the direction this call asked for*. Two things make that
+        # unattributable: the resource still shows the pre-state, or the pre-state
+        # already satisfied everything this call requested — a request whose values
+        # were already in place cannot be credited with any observation, however the
+        # resource moved afterwards. Both return UNCHANGED, which the executor maps to
+        # a rejection (keeping an explicit Gateway error authoritative) or to
+        # not-applied, never to a success.
+        if unchanged or _already_satisfied(fields, before):
             return VerificationOutcome.UNCHANGED
         if _matches_intended_state(current, fields):
             return VerificationOutcome.CONFIRMED
@@ -288,9 +293,11 @@ def _change_item(
 
 
 def _item_schema_declares_name(capability: ConfigResourceCapability) -> bool:
-    schema = capability.update_request_schema or {}
+    schema = capability.update_request_schema
+    if not isinstance(schema, Mapping):
+        return False
     properties = schema.get("properties")
-    return isinstance(properties, dict) and "name" in properties
+    return isinstance(properties, Mapping) and "name" in properties
 
 
 def _validate_change_item(capability: ConfigResourceCapability, item: dict[str, Any]) -> None:
@@ -303,7 +310,7 @@ def _validate_change_item(capability: ConfigResourceCapability, item: dict[str, 
     """
 
     schema = capability.update_request_schema
-    if not isinstance(schema, dict):
+    if not isinstance(schema, Mapping):
         raise GatewayError(
             "unsupported_capability",
             "this resourceType has no documented update request schema on the connected Gateway",
@@ -409,6 +416,16 @@ def _is_claimed_success(dispatch: WriteDispatchResult) -> bool:
         and 200 <= dispatch.status < 300
         and _gateway_rejection(dispatch) is None
     )
+
+
+def _already_satisfied(fields: dict[str, Any], before: dict[str, Any]) -> bool:
+    """Whether the pre-state already showed every value this call requested.
+
+    Such a call has no observable effect of its own, so nothing it observes can be
+    attributed to it.
+    """
+
+    return _matches_intended_state(before, fields)
 
 
 def _still_pre_state(

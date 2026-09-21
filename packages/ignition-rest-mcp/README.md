@@ -103,9 +103,13 @@ everything. The caller passes the `expectedSignature` it read from `config_resou
 compared against a bounded re-read immediately before dispatch and then sent to the Gateway as its
 native `signature` — a stale token fails with `conflict` and dispatches nothing. The change item is
 validated against the target Gateway's own documented `PUT` request schema (D03), taken from the
-capability snapshot and bundled into a self-contained JSON Schema at refresh time: a value the
+capability snapshot and bundled into a self-contained, deeply immutable JSON Schema at refresh time
+(a holder of the snapshot cannot change the rules a later write is validated against): a value the
 type's schema forbids is `invalid_argument` without a request leaving the server, and a Gateway that
-documents an update route without a usable request schema exposes no update for it at all.
+documents an update route without a usable request schema exposes no update for it at all. A refused
+or ambiguous dispatch counts as a success only when the resource moved in the direction the call
+asked for, so another writer winning the race between the signature read and the write can never be
+reported as this caller's success.
 `allowInvalidReferences=false` is always sent and is not a parameter, and the change body is bounded
 (262144 bytes). The result carries the resource as Observed state plus the new Resource signature for
 the caller's next change. The **Refused resource types** in

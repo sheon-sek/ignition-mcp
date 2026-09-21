@@ -17,6 +17,8 @@ document.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any
 
 COLLECTION_PREFIX = "/data/api/v1/resources/"
@@ -30,11 +32,14 @@ MAX_BUNDLED_NODES = 200_000
 
 def bundle_update_item_schema(
     document: dict[str, Any], resource_type: str,
-) -> dict[str, Any] | None:
-    """The self-contained PUT change-item schema for ``resource_type``, or ``None``.
+) -> Mapping[str, Any] | None:
+    """The self-contained, **deeply immutable** PUT change-item schema, or ``None``.
 
     ``None`` means "no usable schema": the route is absent, the request body is not
     documented as JSON, or a reference could not be resolved inside the document.
+    The result is frozen (mappings become read-only views, arrays become tuples)
+    because it lives inside the D04 snapshot: a caller holding the snapshot must not
+    be able to change the rules a later write is validated against.
     """
 
     item = _documented_item_schema(document, resource_type)
@@ -50,7 +55,19 @@ def bundle_update_item_schema(
     result = {str(key): value for key, value in bundled.items()}
     if bundler.defs:
         result[DEFS_KEY] = bundler.defs
-    return result
+    frozen = _freeze(result)
+    assert isinstance(frozen, Mapping)  # a change-item schema is an object
+    return frozen
+
+
+def _freeze(node: Any) -> Any:
+    """Recursively read-only view of a bundled schema (D04 snapshot immutability)."""
+
+    if isinstance(node, Mapping):
+        return MappingProxyType({str(key): _freeze(value) for key, value in node.items()})
+    if isinstance(node, (list, tuple)):
+        return tuple(_freeze(value) for value in node)
+    return node
 
 
 def _documented_item_schema(document: dict[str, Any], resource_type: str) -> dict[str, Any] | None:
@@ -114,18 +131,22 @@ class _Bundler:
             # schema is fail-closed, and D03 wants it validated, not guessed.
             raise _UnresolvableReference(reference)
         if reference in self._keys:
-            return {"$ref": f"#/{DEFS_KEY}/{self._keys[reference]}"}
-        target = _resolve_pointer(self._document, reference)
-        if target is None:
-            raise _UnresolvableReference(reference)
-        key = self._key(reference)
-        # Record the key before walking the target, so a self-referential schema
-        # terminates as a reference to its own $defs entry.
-        self._keys[reference] = key
-        self.defs[key] = self.bundle(target)
-        merged = {"$ref": f"#/{DEFS_KEY}/{key}"}
-        # OpenAPI allows $ref next to sibling keywords (JSON Schema 2020-12); the
-        # siblings are validated as well, so they are kept.
+            target_reference = f"#/{DEFS_KEY}/{self._keys[reference]}"
+        else:
+            target = _resolve_pointer(self._document, reference)
+            if target is None:
+                raise _UnresolvableReference(reference)
+            key = self._key(reference)
+            # Record the key before walking the target, so a self-referential schema
+            # terminates as a reference to its own $defs entry.
+            self._keys[reference] = key
+            self.defs[key] = self.bundle(target)
+            target_reference = f"#/{DEFS_KEY}/{key}"
+        merged = {"$ref": target_reference}
+        # OpenAPI 3.1 allows keywords beside a $ref (JSON Schema 2020-12 applies
+        # both), so *every* occurrence keeps its siblings — including an occurrence
+        # whose target was already bundled, which would otherwise silently lose the
+        # extra constraint that occurrence added.
         for name, value in node.items():
             if name != "$ref":
                 merged[name] = self.bundle(value)

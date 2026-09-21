@@ -163,6 +163,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   nothing, `ignition/api-token` refused with `permission_denied` and left usable, and
   a resource outside the Target allowlist denied with nothing changed. The observed
   Target-denial code is `operation_disabled` (see Open questions).
+- Review round 2 fixes (see the ticket report): the bundler keeps sibling keywords on
+  every `$ref` occurrence (a repeated reference to one definition used to drop the
+  later occurrence's constraint); the snapshot's request schemas are deeply immutable,
+  so no holder can change the rules a later write is validated against; and a refused
+  or ambiguous dispatch is a success only when the resource moved in the direction the
+  call asked for, so a competing writer winning the race between the signature read and
+  the write is never reported as this caller's success (with a deterministic race test
+  that changes an unrelated field at PUT time).
 - Review round 1 fixes (see the ticket report): a non-allowlisted Target is `permission_denied`
   (D30 §7) through a Tool-scoped mapping that leaves the frozen G3 behavior and evidence untouched;
   the change item is validated against the target Gateway's own documented PUT request schema (D03)

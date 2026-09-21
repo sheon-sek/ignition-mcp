@@ -818,6 +818,47 @@ def test_a_singleton_change_item_carries_no_name_the_gateway_does_not_document(
     }]]
 
 
+def test_another_writer_winning_the_race_is_never_reported_as_our_success(
+    tmp_path: Path,
+) -> None:
+    """Deterministic race: the requested description already matches, and another
+    writer changes an unrelated field at PUT time. The Gateway rejects our stale
+    signature, and since the requested values were already in place nothing can be
+    attributed to this call — the explicit rejection stays authoritative (D30 §2)."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        already = str(gateway.resource(PROFILE, RESOURCE)["description"])
+        before = gateway.signature(PROFILE, RESOURCE)
+        gateway.race_update_with(enabled=False)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "description": already,
+            })
+
+        rows = _audit_rows(tmp_path)
+        stored = gateway.resource(PROFILE, RESOURCE)
+        puts = _put_requests(gateway)
+
+    envelope = _envelope(result)
+    assert envelope["code"] == "conflict"
+    assert len(puts) == 1, "the change was dispatched once"
+    assert stored["enabled"] is False, "the other writer's change is the only one applied"
+    assert stored["description"] == already
+    assert gateway.signature(PROFILE, RESOURCE) != before
+    assert [(row["phase"], row["outcome"], row["error_code"]) for row in rows] == [
+        ("decision", "allowed", None),
+        ("attempt", "attempted", None),
+        ("result", "rejected", "conflict"),
+        ("result", "failed", "conflict"),
+    ]
+
+
 # ------------------------------------------------- destructive declaration (#13)
 
 
