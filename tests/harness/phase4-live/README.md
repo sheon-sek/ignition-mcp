@@ -46,7 +46,9 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
 - `mcp_client.py`: bounded stdlib MCP Streamable-HTTP client for the Module.
 - `driver.py`: the characterization driver (stages below).
 - `wait_for_gateway.py`: the single readiness waiter both readiness points use
-  (Native REST `/data/api/v1/gateway-info` plus an MCP `initialize`).
+  (Native REST `/data/api/v1/gateway-info` plus an MCP `initialize`). It applies
+  the same exact-origin and MCP-path check as the driver before either request
+  (exit 3 on a refused origin, 2 when the origin never answers).
 - `characterization.json`: the structural facts each Gateway version is expected
   to show. Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs the whole driver against the recorded Gateway fake.
@@ -116,6 +118,10 @@ driver-enforced marker plus Gateway-identity check. Evidence is uploaded per
 Gateway version as `phase4-g4a-<version>-<run id>`.
 
 ## Recorded fixtures
+
+`characterization.json`'s `runtimeWritePrevention` verdict sentence is generated
+from `policy_document.RESERVED_PROVIDER_REFUSALS`, so the sentence a later
+implementer reads in `evidence.json` cannot drift from the documented rule.
 
 `tests/fixtures/recorded/gateway-8.3/phase4/` holds the bodies this harness
 replays and the handler reports the live run produced, with their run ids

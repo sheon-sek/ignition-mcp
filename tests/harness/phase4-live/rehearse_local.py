@@ -19,6 +19,7 @@ rehearsal is never evidence.
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -63,8 +64,13 @@ def write_marker(path: Path) -> None:
     }, indent=2) + "\n", encoding="utf-8")
 
 
+EXIT_OK = 0
+EXIT_DRIFTED = 3
+
+
 def run_stage(
     stage: list[str], base_url: str, mcp_url: str, work: Path, marker: Path, evidence: Path,
+    characterization: str,
 ) -> int:
     command = [
         sys.executable, str(DRIVER), *stage,
@@ -77,6 +83,7 @@ def run_stage(
         "--gateway-version", GATEWAY_VERSION,
         "--gateway-build", GATEWAY_BUILD,
         "--root-name", ALARM_ROOT,
+        "--characterization", characterization,
         "--noise-count", "60",
         "--cycles", "3",
         "--repeats", "3",
@@ -92,7 +99,15 @@ def run_stage(
     return completed.returncode
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Rehearse the Phase 4 driver against the recorded Gateway fake")
+    parser.add_argument(
+        "--characterization",
+        default=str(Path(__file__).resolve().parent / "characterization.json"),
+        help="expectation file the summarize stage compares against",
+    )
+    args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
     fixtures = recorded_fixtures()
     print(f"recorded fixtures in use: {', '.join(fixtures) if fixtures else '<none>'}")
     with tempfile.TemporaryDirectory(prefix="p4-rehearsal-") as temporary:
@@ -114,11 +129,11 @@ def main() -> int:
                 (["alarm"], "alarm"),
             ]
             for stage, record in stages:
-                code = run_stage(stage, base_url, mcp_url, work, marker, evidence)
+                code = run_stage(stage, base_url, mcp_url, work, marker, evidence, args.characterization)
                 if code != 0:
                     print(f"rehearsal stage {record} failed with exit {code}", file=sys.stderr)
                     return 2
-            code = run_stage(["summarize"], base_url, mcp_url, work, marker, evidence)
+            code = run_stage(["summarize"], base_url, mcp_url, work, marker, evidence, args.characterization)
             evidence_path = evidence / "evidence.json"
             if not evidence_path.is_file():
                 print("summarize produced no evidence.json", file=sys.stderr)
@@ -126,11 +141,15 @@ def main() -> int:
             document = json.loads(evidence_path.read_text(encoding="utf-8"))
             print("verdict:", json.dumps(document.get("verdict"), indent=2, sort_keys=True))
             print("drift:", json.dumps(document.get("drift"), indent=2, sort_keys=True))
-            if code not in {0, 3}:
+            if code not in {EXIT_OK, EXIT_DRIFTED}:
                 return code
-            if code == 3:
-                print("rehearsal characterized every stage but drifted from characterization.json")
-            return 0
+            if code == EXIT_DRIFTED:
+                # The pre-live check exists to catch drift before live CI spends a
+                # run, so it has to fail on it: exit 3 is the drift signal, not a
+                # warning.
+                print("rehearsal drifted from characterization.json", file=sys.stderr)
+                return EXIT_DRIFTED
+            return EXIT_OK
 
 
 if __name__ == "__main__":

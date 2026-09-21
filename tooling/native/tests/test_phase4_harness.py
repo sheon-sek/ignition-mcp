@@ -4,9 +4,11 @@ import http.server
 import importlib.util
 import json
 from pathlib import Path
+import socket
 import socketserver
 import sys
 import threading
+import time
 from types import ModuleType
 from typing import Any
 
@@ -366,6 +368,22 @@ def test_recorded_policy_probe_carries_the_gate_measurements() -> None:
     assert oversize["declaredLength"] > policy_document.POLICY_MAX_BYTES
 
 
+def test_policy_read_fails_closed_on_a_non_positive_declared_length(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The proposed reader is `0 < declared <= cap`; zero must not reach the read."""
+    _StubMcp.reports = {
+        "policy_probe": _with_gate(
+            _fixture("policy-probe.json"), declared=0, gate_state="invalid", materialized=False,
+        ),
+        "alarm_probe": _fixture("alarm-probe.json"),
+    }
+    config = _config(tmp_path, policy_read_deadline_seconds=0.0)
+    with pytest.raises(driver.StageFailure) as caught:
+        driver.stage_policy_read(config)
+    assert "refused an invalid declared length" in str(caught.value)
+
+
 def test_recorded_probe_reports_show_the_policy_surviving_a_restart() -> None:
     before = _fixture("policy-probe.json")
     after = _fixture("policy-probe-after-restart.json")
@@ -409,6 +427,24 @@ def test_summarize_reports_no_drift_and_the_recorded_verdict(
     assert evidence["verdict"]["exactPathAlarmQuery"]["literalMatchingOnly"] is True
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["chosenLocation"] == "[IgnitionMCPPolicy]RuntimeTargetPolicy"
     assert evidence["verdict"]["runtimeTargetPolicyStorage"]["survivesGatewayRestart"] is True
+
+
+def test_summarize_verdict_carries_the_complete_refusal_rule(
+    stub_mcp: dict[str, Any], tmp_path: Path,
+) -> None:
+    """The evidence verdict is what a later implementer reads, so it has to state
+    every refused mutation and both ends of the source/destination pairs."""
+    with RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER) as gateway:
+        _record_every_stage(tmp_path, gateway)
+    evidence, _code = driver.stage_summarize(_config(tmp_path))
+    sentence = evidence["verdict"]["runtimeTargetPolicyStorage"]["runtimeWritePrevention"]
+    for mutation in ("tag_write", "tag_update", "tag_delete", "tag_create",
+                     "tag_move", "tag_rename", "tag_copy"):
+        assert mutation in sentence, mutation
+    assert "source or destination" in sentence
+    assert "including an explicit *" in sentence
+    assert policy_document.POLICY_PROVIDER in sentence
+    assert "tag_copy destination" not in sentence
 
 
 def test_summarize_detects_a_descendant_matching_regression(
@@ -575,6 +611,24 @@ def _waiter() -> ModuleType:
     return _load("phase4_wait_for_gateway", PHASE4 / "wait_for_gateway.py")
 
 
+def test_wait_for_gateway_refuses_a_foreign_origin_before_any_request(tmp_path: Path) -> None:
+    """The waiter sends the CI token, so it must apply the same origin check the
+    driver does: a real workstation Gateway on 8088 must not be contacted."""
+    waiter = _waiter()
+    for base_url, mcp_url in (
+        ("http://127.0.0.1:8088", "http://127.0.0.1:8088" + driver.EXPECTED_MCP_PATH),
+        (f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}", f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}/data/mcp/other"),
+        ("http://192.0.2.10:8093", "http://192.0.2.10:8093" + driver.EXPECTED_MCP_PATH),
+    ):
+        code = waiter.main([
+            "--base-url", base_url,
+            "--api-token", API_TOKEN,
+            "--mcp-url", mcp_url,
+            "--timeout", "1",
+        ])
+        assert code == waiter.EXIT_ORIGIN_REFUSED, (base_url, code)
+
+
 def test_wait_for_gateway_reports_readiness_against_the_recorded_fake(
     disposable_gateway: Any, tmp_path: Path,
 ) -> None:
@@ -626,17 +680,53 @@ def test_clients_survive_a_gateway_that_resets_connections(tmp_path: Path) -> No
         thread.join(timeout=5)
 
 
-def test_wait_for_gateway_fails_closed_when_nothing_answers(tmp_path: Path) -> None:
+def test_wait_for_gateway_times_out_when_the_origin_does_not_answer(tmp_path: Path) -> None:
+    """The accepted origin with nothing listening is 'not ready', not a refusal."""
     waiter = _waiter()
-    # Port 9 (discard) is never bound here, so this cannot race the 8093 tests.
-    dead = "http://127.0.0.1:9"
+    free = False
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", driver.EXPECTED_ORIGIN_PORT))
+                free = True
+                break
+            except OSError:
+                time.sleep(0.2)
+    if not free:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} never became free")
+    origin = f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}"
     code = waiter.main([
-        "--base-url", dead,
+        "--base-url", origin,
         "--api-token", API_TOKEN,
-        "--mcp-url", dead + driver.EXPECTED_MCP_PATH,
+        "--mcp-url", origin + driver.EXPECTED_MCP_PATH,
         "--timeout", "1",
     ])
     assert code == waiter.EXIT_NOT_READY
+
+
+def test_rehearsal_propagates_drift_from_the_summarize_stage(tmp_path: Path) -> None:
+    """Exit 3 is the pre-live drift signal, so the rehearsal must not swallow it."""
+    rehearsal = _load("phase4_rehearse_local", PHASE4 / "rehearse_local.py")
+    drifted = json.loads((PHASE4 / "characterization.json").read_text(encoding="utf-8"))
+    drifted["8.3.8"]["policyGateState"] = "blocked"
+    path = tmp_path / "characterization.json"
+    path.write_text(json.dumps(drifted, indent=2) + "\n", encoding="utf-8")
+    try:
+        code = rehearsal.main(["--characterization", str(path)])
+    except OSError as error:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
+    assert code == rehearsal.EXIT_DRIFTED
+
+
+def test_rehearsal_is_clean_on_the_committed_fixtures() -> None:
+    rehearsal = _load("phase4_rehearse_local", PHASE4 / "rehearse_local.py")
+    try:
+        code = rehearsal.main([])
+    except OSError as error:  # pragma: no cover - depends on the workstation
+        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
+    assert code == rehearsal.EXIT_OK
 
 
 def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:

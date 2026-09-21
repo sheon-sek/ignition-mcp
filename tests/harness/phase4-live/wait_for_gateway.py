@@ -3,9 +3,10 @@
 
 Both readiness points the workflow needs — after the fixture install and after
 the Gateway restart — are the same two checks, so they live here instead of in
-two shell loops that can drift apart. The origin is never contacted outside the
-one the driver accepts (`127.0.0.1:8093`); the URL check stays in `driver.py`, and
-this waiter is only ever given that URL by the workflow.
+two shell loops that can drift apart. Every client in this harness sends the CI
+API token, so this waiter applies the same exact-origin and MCP-path check the
+driver does, before either request: a mistyped or changed `--base-url` must not
+touch a real workstation Gateway on 127.0.0.1:8088.
 """
 
 from __future__ import annotations
@@ -18,11 +19,13 @@ import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import driver  # noqa: E402
 import gateway_rest  # noqa: E402
 import mcp_client  # noqa: E402
 
 EXIT_READY = 0
 EXIT_NOT_READY = 2
+EXIT_ORIGIN_REFUSED = 3
 
 
 def rest_ready(base_url: str, api_token: str) -> tuple[bool, str, dict | None]:
@@ -59,6 +62,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--evidence-dir")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+    try:
+        driver.require_origin(args.base_url, args.mcp_url)
+    except driver.GuardError as error:
+        print(json.dumps({"originRefused": str(error)}), file=sys.stderr)
+        return EXIT_ORIGIN_REFUSED
 
     deadline = time.monotonic() + args.timeout
     rest_ok = False

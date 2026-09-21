@@ -109,6 +109,10 @@ def onToolCalled(builder, policyPath, readTimeoutMs, missingPath, writeProbePath
 			detail["reason"] = "declared length is not an integer"
 			return detail
 		detail["declaredLength"] = declaredLength
+		if declaredLength <= 0:
+			detail["gate"] = "invalid"
+			detail["reason"] = "declared length is not positive"
+			return detail
 		if declaredLength > maxPolicyBytes:
 			detail["gate"] = "oversize"
 			detail["reason"] = "declared length exceeds the configured maximum"

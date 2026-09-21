@@ -140,9 +140,10 @@ The reader:
 
 1. reads `RuntimeTargetPolicyLength` — a small `Int4`, bounded by its data type,
    not by the document;
-2. fails closed (`operation_disabled`) if that Read is missing, not Good, not an
-   integer, or **greater than `IgnitionMcpPolicyMaxBytes` (32 KiB)** — without
-   ever touching the policy Tag;
+2. fails closed (`operation_disabled`) if that Read is missing, not Good, not a
+   positive integer, or **greater than `IgnitionMcpPolicyMaxBytes` (32 KiB)** —
+   without ever touching the policy Tag (the gate reports `invalid` for a
+   non-positive declaration and `oversize` above the cap);
 3. only then reads the policy Tag and refuses the document if its byte length
    does not match the declared length.
 

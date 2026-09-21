@@ -61,6 +61,31 @@ POLICY: dict[str, Any] = {
 }
 
 
+#: Every Runtime Tag Mutation that can reach a Tag, and what it must refuse
+#: inside the reserved policy provider (D30 §1, research note §1). The driver's
+#: evidence verdict is generated from this list so the recorded sentence cannot
+#: drift from the documented rule.
+RESERVED_PROVIDER_REFUSALS: tuple[tuple[str, str], ...] = (
+    ("tag_write", "any target inside the reserved provider"),
+    ("tag_update", "any target inside the reserved provider"),
+    ("tag_delete", "any target inside the reserved provider"),
+    ("tag_create", "a Tag that would be created inside the reserved provider"),
+    ("tag_move", "a source or destination inside the reserved provider"),
+    ("tag_rename", "a source or destination inside the reserved provider"),
+    ("tag_copy", "a source or destination inside the reserved provider"),
+)
+
+
+def reserved_provider_rule(provider: str) -> str:
+    """The product rule that makes the reserved provider unreachable from the Runtime plane."""
+    refused = "; ".join(f"{name} refuses {refusal}" for name, refusal in RESERVED_PROVIDER_REFUSALS)
+    return (
+        "product rule: before Preflight executes, " + refused + ", whatever the Target allowlist "
+        "says, including an explicit *; the refusal is by provider, so it covers every Tag in "
+        "[" + provider + "] (the policy Tag, its companion length Tag and anything beside them)"
+    )
+
+
 def policy_json() -> str:
     """The canonical policy text a handler must read back byte for byte."""
     return json.dumps(POLICY, sort_keys=True, separators=(",", ":"))

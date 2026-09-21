@@ -98,6 +98,7 @@ class Config:
     provider: str = policy_document.POLICY_PROVIDER
     label: str = "before-restart"
     root_name: str = ""
+    characterization: Path | None = None
     policy_read_deadline_seconds: float = POLICY_READ_DEADLINE_SECONDS
     noise_count: int = 60
     cycles: int = 3
@@ -155,14 +156,16 @@ def write_stage(config: Config, name: str, payload: dict[str, Any]) -> Path:
     return path
 
 
-def require_disposable_origin(config: Config) -> dict[str, str]:
+def require_origin(base_url: str, mcp_url: str) -> dict[str, str]:
     """Refuse any URL that is not the exact disposable Gateway origin.
 
     This runs before the first request, so a mistyped `--base-url` (the real
-    Gateway on port 8088 is one keystroke away) cannot be contacted at all.
+    Gateway on port 8088 is one keystroke away) cannot be contacted at all. The
+    readiness waiter calls it too: every client in this harness sends the CI API
+    token, so every one of them needs the same gate.
     """
     expected = f"http://{EXPECTED_ORIGIN_HOST}:{EXPECTED_ORIGIN_PORT}"
-    base = urllib.parse.urlsplit(config.base_url)
+    base = urllib.parse.urlsplit(base_url)
     if (
         base.scheme != "http"
         or base.hostname != EXPECTED_ORIGIN_HOST
@@ -171,8 +174,8 @@ def require_disposable_origin(config: Config) -> dict[str, str]:
         or base.query
         or base.fragment
     ):
-        raise GuardError(f"base URL {config.base_url!r} is not the disposable Gateway origin {expected}")
-    mcp = urllib.parse.urlsplit(config.mcp_url)
+        raise GuardError(f"base URL {base_url!r} is not the disposable Gateway origin {expected}")
+    mcp = urllib.parse.urlsplit(mcp_url)
     if (
         mcp.scheme != "http"
         or mcp.hostname != EXPECTED_ORIGIN_HOST
@@ -182,9 +185,13 @@ def require_disposable_origin(config: Config) -> dict[str, str]:
         or mcp.fragment
     ):
         raise GuardError(
-            f"MCP URL {config.mcp_url!r} is not {expected}{EXPECTED_MCP_PATH}"
+            f"MCP URL {mcp_url!r} is not {expected}{EXPECTED_MCP_PATH}"
         )
     return {"baseOrigin": expected, "mcpPath": EXPECTED_MCP_PATH}
+
+
+def require_disposable_origin(config: Config) -> dict[str, str]:
+    return require_origin(config.base_url, config.mcp_url)
 
 
 def verify_guard(config: Config) -> None:
@@ -551,6 +558,8 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         # blocked gate (its length Tag unreadable) is the provider-startup case
         # the repair loop exists for, so it keeps retrying instead.
         oversize_refusal = gate_state == "oversize"
+        invalid_refusal = gate_state == "invalid"
+        deterministic_refusal = oversize_refusal or invalid_refusal
         healthy = served_document and gate_reported and bool(
             facts.get("policyGatedReadServedAndVerified")
         )
@@ -566,7 +575,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         # document whose report carries no gate measurement is a stale recorded
         # payload (the expectation drift check reports it), and a gate that
         # answered "oversize"/"blocked" is a deterministic refusal.
-        if healthy or oversize_refusal or (served_document and not gate_reported) or time.monotonic() >= deadline:
+        if healthy or deterministic_refusal or (served_document and not gate_reported) or time.monotonic() >= deadline:
             attempts.append(attempt)
             break
         # Two recorded 8.3.8 provider-startup failures motivate this loop: the
@@ -587,9 +596,14 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     facts["policyReadRepairImports"] = repairs
     raw["policyProbe"] = bounded(report)
     raw["policyProbeAttempts"] = bounded(attempts, 40_000)
-    if oversize_refusal:
+    if gate_state == "oversize":
         raise StageFailure(
             "the policy size gate refused an oversize document: "
+            + json.dumps(attempts[-1], sort_keys=True)[:800]
+        )
+    if gate_state == "invalid":
+        raise StageFailure(
+            "the policy size gate refused an invalid declared length: "
             + json.dumps(attempts[-1], sort_keys=True)[:800]
         )
     if not served_document:
@@ -765,7 +779,7 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
     for stage in stages:
         facts.update(stage.get("facts", {}))
 
-    expectations_path = Path(__file__).resolve().parent / "characterization.json"
+    expectations_path = config.characterization or (Path(__file__).resolve().parent / "characterization.json")
     expectations = json.loads(expectations_path.read_text(encoding="utf-8"))
     expected = expectations.get(config.gateway_version)
     if expected is None:
@@ -790,7 +804,7 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
             "restReadBackMatches": facts.get("restReadBackMatches"),
             "survivesGatewayRestart": facts.get("policyReadSurvivesGatewayRestart"),
             "handlerCanWriteInsidePolicyProvider": facts.get("handlerWriteInsidePolicyProviderSucceeded"),
-            "runtimeWritePrevention": "product rule: every Runtime Tag mutation (tag_write, tag_update, tag_delete, tag_move, tag_rename, tag_copy destination) must refuse any target inside the policy provider before Preflight execution, whatever the allowlist says, including *",
+            "runtimeWritePrevention": policy_document.reserved_provider_rule(config.provider),
         },
         "exactPathAlarmQuery": {
             "literalMatchingOnly": literal,
@@ -842,6 +856,7 @@ def build_config(argv: list[str]) -> Config:
     parser.add_argument("--provider", default=os.environ.get("P4_POLICY_PROVIDER", policy_document.POLICY_PROVIDER))
     parser.add_argument("--label", default="before-restart", choices=["before-restart", "after-restart"])
     parser.add_argument("--root-name", default=os.environ.get("P4_ALARM_ROOT", ""))
+    parser.add_argument("--characterization", default=str(Path(__file__).resolve().parent / "characterization.json"))
     parser.add_argument("--noise-count", type=int, default=int(os.environ.get("P4_NOISE_COUNT", "60")))
     parser.add_argument("--cycles", type=int, default=int(os.environ.get("P4_CYCLES", "3")))
     parser.add_argument("--repeats", type=int, default=int(os.environ.get("P4_REPEATS", "3")))
@@ -869,6 +884,7 @@ def build_config(argv: list[str]) -> Config:
         provider=args.provider,
         label=args.label,
         root_name=args.root_name or f"MCP_P4_{args.run_id}",
+        characterization=Path(args.characterization),
         noise_count=args.noise_count,
         cycles=args.cycles,
         repeats=args.repeats,
