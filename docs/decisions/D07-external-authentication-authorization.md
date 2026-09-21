@@ -113,3 +113,18 @@ upstream_identity: service-identity
 D07 originally required authentication plus TLS-grade transport for all production deployments, rejected static tokens for production, and allowed `none` only for loopback development. D18's D07-A amendment had already overtaken those clauses, leaving two `DECIDED` documents with opposite production rules.
 
 This file has been consolidated onto D07-A: production is a choice between `secured` and `trusted-internal`, plain HTTP is a first-class production transport, `auth=none | static-token` are valid for explicitly configured trusted-internal deployments, and only unconfigured unauthenticated non-loopback binding fails closed. D18 remains the authoritative text of D07-A; the authorization scopes, generic-config mapping, upstream identity, and enforcement rules above are unchanged.
+
+## Phase 4 amendment — Mutation principals (2026-09-22)
+
+**Approved by the project owner during the Phase 4 scoping interview.** This resolves the question Phase 3 deferred: how `static-token` and `auth=none` deployments obtain mutation scopes.
+
+- `static-token` supports several **named** static tokens. Each token has its own deployment-configured scope set, drawn from the four canonical scopes, with no hierarchy. The token's name is its Mutation principal in audit and operation records. The token value is never logged or recorded.
+- `auth=none` has no principal. Its effective scopes stay `ignition.read` only, so it can never mutate.
+- `jwt` is unchanged: scopes come from the verified token claims.
+- The authentication module remains the only constructor of a verified principal (Phase 3 G3 rule).
+
+```yaml
+static_token_named_tokens: true
+static_token_scopes: per_token_configured
+auth_none_scopes: [ignition.read]
+```

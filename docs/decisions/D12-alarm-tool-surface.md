@@ -171,3 +171,19 @@ phase2_alarm_journal_enabled: false
 alarm_query_reenable_requires_pre_execution_bound_evidence: true
 pipeline_definition_authoring_v1: false
 ```
+
+## Phase 4 amendment — acknowledge targets and shelve duration (2026-09-22)
+
+**Approved by the project owner during the Phase 4 scoping interview.**
+
+- `alarm_acknowledge` takes `{alarmPath, eventId}` pairs rather than bare event UUIDs. For each pair, the handler runs `queryStatus` on that exact Alarm path, confirms the event belongs to it, checks the Runtime Target Policy, and then acknowledges. The same exact-path query gives the Observed state afterwards.
+- This amendment holds only if recorded evidence shows an exact-path `queryStatus` is bounded before or during execution, the standard set by the Phase 2 amendment. If it is not, `alarm_acknowledge` is parked like `alarm_status`.
+- `alarm_shelve` requires an explicit duration, with no default. The minimum is 1 s and the hard maximum is 24 h. A deployment may lower the maximum in the Runtime Target Policy but not raise it.
+
+```yaml
+alarm_acknowledge_input: alarm_path_event_id_pairs
+alarm_acknowledge_requires_bounded_exact_path_query_evidence: true
+alarm_shelve_duration_required: true
+alarm_shelve_duration_min_seconds: 1
+alarm_shelve_duration_hard_max_seconds: 86400
+```

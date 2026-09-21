@@ -1,10 +1,10 @@
-# Ignition MCP Architecture Decisions — D01–D29
+# Ignition MCP Architecture Decisions — D01–D30
 
 **Status:** DECIDED
 
 **Canonical location:** `docs/decisions/` (see D25). This single index replaces the three per-batch index files, which are kept unchanged in `docs/_archive/`.
 
-D01–D29 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
+D01–D30 are binding unless explicitly reopened through a new decision or amendment. Design content was frozen by the pre-D26 consistency cleanup only; see [Pre-D26 consistency cleanup](#pre-d26-consistency-cleanup-applied).
 
 ## Decision index
 
@@ -16,7 +16,7 @@ D01–D29 are binding unless explicitly reopened through a new decision or amend
 | D04 | DECIDED | OpenAPI Capability Registry Lifecycle | |
 | D05 | DECIDED | MCP Server and Tool Naming Convention | canonical Tool names stay `snake_case`; Resource/Prompt identifiers are discovery-verified |
 | D06 | DECIDED | Tool Result and Error Contract | Tool-scoped; Text Resources/Prompts use native MCP semantics |
-| D07 | DECIDED | External FastMCP Authentication and Authorization | amended by D07-A (consolidated in D07) |
+| D07 | DECIDED | External FastMCP Authentication and Authorization | amended by D07-A (consolidated in D07); Phase 4 amendment: named static-token scopes |
 | D08 | DECIDED | Mutation Safety Model | |
 | D09 | DECIDED | Ignition Runtime MCP Permission and Security Model | one Runtime MCP Bundle: Tools + Text Resources + Prompts |
 | D10 | DECIDED | Request Budgets, Pagination and Output Limits | bounded interface extended to Resource/Prompt payloads |
@@ -39,6 +39,7 @@ D01–D29 are binding unless explicitly reopened through a new decision or amend
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 | D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 | D29 | DECIDED | [Recorded Jython runner for Runtime Tool handlers](D29-recorded-jython-runtime-runner.md) | owner-approved test-only `jython-standalone` 2.7.4 + Java 11, required locally and in CI; adds to D23 L4, does not replace it |
+| D30 | DECIDED | [Phase 4 Mutation Contract Rules](D30-phase4-mutation-contract-rules.md) | owner-approved 2026-09-22: Runtime Target Policy, Precondition tokens, batch Preflight, fixed Gateway knobs, Refused resource types; amends D07 (named static-token scopes), D11 (Tag Mutation contracts), D12 (acknowledge pairs, shelve cap) |
 
 ## Cross-decision amendment
 
@@ -199,4 +200,4 @@ The original D01–D26 architecture / implementation decision backlog is now com
 
 **G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence. Phase 4 starts only on a new user-directed feature branch.
 
-Treat D01–D29 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
+Treat D01–D30 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.

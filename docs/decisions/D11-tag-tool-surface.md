@@ -157,3 +157,19 @@ tag_exists_public: false
 async_variants_public: false
 bulk_config_owner: ignition-rest
 ```
+
+## Phase 4 amendment — Tag Mutation contracts (2026-09-22)
+
+**Approved by the project owner during the Phase 4 scoping interview.** Details are in D30.
+
+- `tag_write` accepts scalars and arrays of scalars. Dataset and Document values fail with `invalid_argument`. The per-item QualityCode is the outcome. A bounded read-back is reported as Observed state and does not decide success.
+- `tag_update`, `tag_delete`, `tag_move` and `tag_rename` require a per-target Tag config fingerprint, which `tag_get_config` emits.
+- UDT definitions (`_types_`) are valid CONFIG targets only when the Runtime Target Policy lists an explicit `_types_` prefix.
+- `tag_config_import` always uses `collisionPolicy=Abort`. It creates Tags only.
+
+```yaml
+tag_write_value_types: [scalar, scalar_array]
+tag_config_fingerprint_required: [tag_update, tag_delete, tag_move, tag_rename]
+udt_definition_targets: explicit_types_prefix_only
+tag_config_import_collision_policy: Abort
+```
