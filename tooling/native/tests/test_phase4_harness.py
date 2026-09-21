@@ -82,6 +82,7 @@ def _tag_update_paths() -> dict[str, str]:
     return {
         "writeTarget": policy_document.TAG_UPDATE_TARGET,
         "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
@@ -736,6 +737,7 @@ def test_tag_update_case_selector_replays_the_recorded_refusals() -> None:
         tag_update_paths: dict[str, str] = {}
         tag_config = {
             policy_document.TAG_UPDATE_TARGET: [{"name": "WriteTarget", "value": 0}],
+            policy_document.TAG_UPDATE_FOLDER: [{"name": "Nested", "tagType": "Folder"}],
         }
 
     class _Policy(_Server):
@@ -752,8 +754,12 @@ def test_tag_update_case_selector_replays_the_recorded_refusals() -> None:
 
     target = policy_document.TAG_UPDATE_TARGET
     fresh = recorded_gateway._tag_config_fingerprint(_Server.tag_config[target])
+    folder_fresh = recorded_gateway._tag_config_fingerprint(
+        _Server.tag_config[policy_document.TAG_UPDATE_FOLDER]
+    )
     cases = [
         (_Policy, [item(target, fresh)], "allowlisted"),
+        (_Policy, [item(policy_document.TAG_UPDATE_FOLDER, folder_fresh)], "allowlisted"),
         (_Policy, [item(target, "tcf1:" + "0" * 64)], "stale-fingerprint"),
         (_Policy, [item("[IgnitionMCPPolicy]WriteProbe", fresh)], "reserved-provider-refusal"),
         (_Policy, [item(policy_document.TAG_FIXTURE_SIBLING_PATH, fresh)], "sibling-denial"),
@@ -810,11 +816,16 @@ def test_tag_update_stages_record_the_live_facts(stub_mcp: dict[str, Any], tmp_p
     assert facts["tagUpdateFingerprintStableAcrossReads"] is True
     assert facts["tagUpdateUpdateStatus"] == "executed"
     assert facts["tagUpdateIndependentReadShowsTheChange"] is True
+    # A Folder is a target too, and the existence check answers for one.
+    assert facts["tagUpdateFolderTargetStatus"] == "executed"
+    assert facts["tagUpdateFolderTargetIndependentReadShowsTheChange"] is True
+    assert facts["tagUpdateFolderTargetFingerprintChanged"] is True
     assert facts["tagUpdateObservedFingerprintChanged"] is True
     assert facts["tagUpdateIndependentReadMatchesObserved"] is True
     assert facts["tagUpdateStaleFingerprintIsConflict"] is True
     assert facts["tagUpdateStaleFingerprintChangedNothing"] is True
     assert facts["tagUpdateNeverCreatesTarget"] is True
+    assert facts["tagUpdateMissingTargetAbsentFromExport"] is True
     assert facts["tagUpdateSiblingDenialIsSegmentBoundary"] is True
     assert facts["tagUpdateUdtNeedsExplicitTypesEntry"] is True
     assert facts["tagUpdateTypesEntryIsHonoured"] is True

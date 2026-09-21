@@ -235,6 +235,12 @@ class _Recorder(object):
             return _QualityCodes(result)
         if kind == "configurations":
             return _Configurations(result)
+        if kind == "boolean":
+            return bool(result.get("value", False))
+        if kind == "raw":
+            # A recorded answer that is not the type the handler expects, so a
+            # fixture can exercise the branch that refuses a non-answer.
+            return result.get("value")
         if kind == "results":
             return _RecordedResults(result)
         if kind == "resource":
@@ -269,6 +275,9 @@ class _Tag(object):
 
     def configure(self, *args, **kwargs):
         return self.recorder.take("system.tag.configure", args, kwargs)
+
+    def exists(self, *args, **kwargs):
+        return self.recorder.take("system.tag.exists", args, kwargs)
 
 
 class _Config(object):

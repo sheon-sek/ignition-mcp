@@ -32,6 +32,9 @@ def onToolCalled(builder, items):
 	FINGERPRINT_PREFIX = "tcf1:"
 	FINGERPRINT_HEX = "0123456789abcdef"
 	FINGERPRINT_LENGTH = 69
+	# Ticket #10 live evidence: a Gateway answers system.tag.getConfiguration for a
+	# path that is not there with a synthesized default node, so a CONFIG Mutation's
+	# existence check is a separate, dedicated primitive. `system.tag.exists` is it.
 	# The handler fixes the Gateway's collision policy: MergeOverwrite is what makes
 	# this a merge-update, and Preflight has already read every target, so a merge
 	# cannot create one that the read found missing.
@@ -390,11 +393,23 @@ def onToolCalled(builder, items):
 			return "configNameChangeNotAllowed"
 		return None
 
+	def existenceProblem(value):
+		# system.tag.exists answers a boolean; anything else is not an answer, and a
+		# non-answer must not be read as "the target is there".
+		if isinstance(value, bool):
+			return None if value else "targetMissing"
+		if isinstance(value, Boolean):
+			return None if value.booleanValue() else "targetMissing"
+		return "existenceCheckIndeterminate"
+
 	def configurationFingerprint(path):
+		# The configuration read alone is not an existence check: a Gateway answers a
+		# path that is not there with a synthesized default node (the ticket #10 live
+		# run recorded the same one on 8.3.8 and 8.3.9), so `system.tag.exists` decides.
 		nativeConfiguration = system.tag.getConfiguration(path, False, False)
 		configuration = jsonValue(nativeConfiguration)
 		if not isinstance(configuration, (list, tuple, List)) or len(configuration) == 0:
-			return (None, "targetMissing")
+			return (None, "configurationUnavailable")
 		encoded = encodeNulls(configuration)
 		return (tagConfigFingerprint(encoded), None)
 
@@ -469,27 +484,41 @@ def onToolCalled(builder, items):
 		if auditMode == "required" and not auditProfileAvailable(auditProfile):
 			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no item was executed.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
 		stage = "preflight_fingerprint"
-		# D30 2 and 3: every target's token is read and compared before any item
-		# executes. A mismatch is conflict and a target the read cannot find is
-		# not_found, so this Tool never creates one.
+		# D30 2 and 3: every target is checked to exist and its token is compared
+		# before any item executes. A target that is not there is not_found (so this
+		# Tool never creates one) and a mismatch is conflict.
 		preconditionProblems = []
 		for index in range(len(paths)):
+			path = paths[index]
 			try:
-				actual, failure = configurationFingerprint(paths[index])
+				present = system.tag.exists(path)
+			except (Exception, JavaException) as exc:
+				logger.warn("correlationId=" + correlationId + " target=" + unicode(index) + " existence check failed: " + text(exc))
+				preconditionProblems.append({"index": index, "path": path, "reason": "existenceCheckFailed", "code": "upstream_error"})
+				continue
+			existence = existenceProblem(present)
+			if existence == "targetMissing":
+				preconditionProblems.append({"index": index, "path": path, "reason": "targetMissing", "code": "not_found"})
+				continue
+			if existence is not None:
+				preconditionProblems.append({"index": index, "path": path, "reason": existence, "code": "upstream_error"})
+				continue
+			try:
+				actual, failure = configurationFingerprint(path)
 			except (Exception, JavaException) as exc:
 				logger.warn("correlationId=" + correlationId + " target=" + unicode(index) + " configuration read failed: " + text(exc))
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": "configurationReadFailed", "code": "not_found"})
+				preconditionProblems.append({"index": index, "path": path, "reason": "configurationReadFailed", "code": "upstream_error"})
 				continue
 			if failure is not None:
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": failure, "code": "not_found"})
+				preconditionProblems.append({"index": index, "path": path, "reason": failure, "code": "upstream_error"})
 				continue
 			if actual != fingerprints[index]:
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": "fingerprintMismatch", "code": "conflict", "expectedFingerprint": fingerprints[index], "observedFingerprint": actual})
+				preconditionProblems.append({"index": index, "path": path, "reason": "fingerprintMismatch", "code": "conflict", "expectedFingerprint": fingerprints[index], "observedFingerprint": actual})
 		if preconditionProblems:
 			# D30 7 decides the code; the first failing item in item order decides
 			# which one, and every failing item is listed.
 			code = unicode(preconditionProblems[0].get("code", "conflict"))
-			return toolError(code, "Every target's Tag config fingerprint must match the token from its own tag_get_config read, and every target must exist; no item was executed.", {"reason": "preflightPreconditionFailed", "allowlistKey": ALLOWLIST_KEY, "items": preconditionProblems})
+			return toolError(code, "Every target must exist and its Tag config fingerprint must match the token from its own tag_get_config read; no item was executed.", {"reason": "preflightPreconditionFailed", "allowlistKey": ALLOWLIST_KEY, "items": preconditionProblems})
 		stage = "audit_attempt"
 		targetText = ",".join(paths)
 		attemptRecorded = auditWrite("attempt", targetText, "outcome=attempt requested=" + unicode(len(paths)))

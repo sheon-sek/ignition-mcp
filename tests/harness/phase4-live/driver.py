@@ -1225,6 +1225,7 @@ def tag_update_paths() -> dict[str, str]:
         "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
         "nestedTarget": f"[{policy_document.TAG_FIXTURE_PROVIDER}]{root}/Nested/Inner",
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
     }
@@ -1256,6 +1257,19 @@ def tag_config(client: mcp_client.McpClient, path: str) -> dict[str, Any]:
     if not isinstance(configuration, list):
         raise StageFailure(f"tag_get_config returned no configuration for {path}: {json.dumps(structured)[:400]}")
     return {"fingerprint": fingerprint, "configuration": configuration}
+
+
+def tag_config_or_none(client: mcp_client.McpClient, path: str) -> dict[str, Any] | None:
+    """One `tag_get_config` read that tolerates a Tool Error, for diagnostics.
+
+    The ticket #10 live evidence needs the *shape* of what a Gateway answers for a
+    path that is not there; the recorded fake answers a Tool Error for it, so a
+    rehearsal records the refusal instead of the template.
+    """
+    try:
+        return tag_config(client, path)
+    except (StageFailure, mcp_client.McpError):
+        return None
 
 
 def derived_fingerprint(configuration: Any) -> str:
@@ -1454,6 +1468,28 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
         str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in matching
     )
 
+    # Case 2b: a Folder is a target like any other, and `system.tag.exists` answers
+    # for one: the merge lands on the folder node and the independent read shows it.
+    folder = paths["nestedFolder"]
+    folder_before = tag_config(client, folder)
+    folder_structured = expect_structured(client, "tag_update", {
+        "items": [{
+            "path": folder,
+            "expectedFingerprint": folder_before["fingerprint"],
+            "config": {"documentation": policy_document.TAG_UPDATE_FOLDER_CONFIG},
+        }],
+    })
+    raw["folderUpdate"] = bounded(folder_structured, 20_000)
+    folder_after = tag_config(client, folder)
+    folder_items = folder_structured.get("items") or [{}]
+    folder_node = folder_after["configuration"][0] if folder_after["configuration"] else {}
+    facts["tagUpdateFolderTargetStatus"] = str(folder_items[0].get("status", ""))
+    facts["tagUpdateFolderTargetNativeOutcome"] = str((folder_items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagUpdateFolderTargetIndependentReadShowsTheChange"] = (
+        folder_node.get("documentation") == policy_document.TAG_UPDATE_FOLDER_CONFIG
+    )
+    facts["tagUpdateFolderTargetFingerprintChanged"] = folder_after["fingerprint"] != folder_before["fingerprint"]
+
     # Case 3: the token from before the change is stale now, so the same call is
     # refused and the target keeps the values the first call wrote.
     stale = expect_tool_error(client, "tag_update", {
@@ -1499,9 +1535,21 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     )
     if not facts["tagUpdateNeverCreatesTarget"]:
         raise StageFailure(f"a missing target must be not_found: {json.dumps(absent)[:600]}")
-    missing_read = expect_tool_error(client, "tag_get_config", {"path": paths["missingTarget"]})
-    raw["missingTargetRead"] = bounded(missing_read)
-    facts["tagUpdateMissingTargetStillAbsent"] = True
+    # The read alone cannot answer "is it there": a Gateway answers a configuration
+    # read for a path that is not there with a synthesized default node. The evidence
+    # records that shape and then proves absence through the provider's own export.
+    missing_read = tag_config_or_none(client, paths["missingTarget"])
+    raw["missingTargetRead"] = bounded(missing_read, 8_000)
+    facts["tagUpdateMissingTargetReadAnswersATemplate"] = bool(
+        missing_read and missing_read.get("configuration")
+    )
+    facts["tagUpdateMissingTargetReadFingerprint"] = (missing_read or {}).get("fingerprint", "")
+    export_status, exported = gateway_rest.export_tags(config.base_url, config.api_token, "default")
+    found = policy_document.find_tag(gateway_rest.decode(exported), "Missing") if export_status == 200 else None
+    raw["missingTargetExport"] = {"status": export_status, "found": bounded(found, 2_000)}
+    facts["tagUpdateMissingTargetAbsentFromExport"] = export_status == 200 and found is None
+    if not facts["tagUpdateMissingTargetAbsentFromExport"]:
+        raise StageFailure("the refused update left a Tag that the provider export shows")
 
     # Case 5: the segment-boundary sibling is refused and untouched.
     sibling = expect_tool_error(client, "tag_update", {

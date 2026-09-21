@@ -104,10 +104,15 @@ def test_batch_reloads_every_fingerprint_before_any_item_is_dispatched() -> None
     targets = [call["target"] for call in document["calls"]]
 
     reads = [index for index, target in enumerate(targets) if target == "system.tag.getConfiguration"]
+    existence = [index for index, target in enumerate(targets) if target == "system.tag.exists"]
     first_configure = targets.index("system.tag.configure")
     assert targets[first_configure - 1] == "system.util.audit"
-    assert sorted(reads[:2]) == [2, 3]
-    assert all(index < first_configure for index in reads[:2])
+    # One existence check per target, each followed by its own configuration read,
+    # and all of them before the first dispatch. The later reads are the observed
+    # half of the result.
+    assert len(existence) == 2
+    assert len(reads) == 4
+    assert all(index < first_configure for index in existence + reads[:2])
 
     structured = _structured("batch-with-a-bad-native-outcome")
     assert _statuses(structured) == [(WRITE, "executed"), (TEXT, "executed")]
@@ -137,16 +142,32 @@ def test_one_stale_item_refuses_the_whole_batch_before_anything_executes() -> No
 
 
 def test_a_missing_target_is_not_found_and_is_never_created() -> None:
+    """A configuration read cannot answer this question: the Gateway synthesizes a
+    default node for a path that is not there (the ticket #10 live run recorded the
+    same one on 8.3.8 and 8.3.9), so `system.tag.exists` decides, and the missing
+    fixture records only that call — the handler never dispatches anything."""
     error = _error("missing-target", "not_found")
 
     assert error["details"]["reason"] == "preflightPreconditionFailed"
     assert _problem_reasons(error) == [("[default]IgnitionMCP_CI/Missing", "targetMissing")]
 
 
-def test_a_preflight_read_that_raises_is_still_a_refusal() -> None:
-    error = _error("preflight-read-raises", "not_found")
+def test_an_existence_check_that_raises_refuses_the_batch() -> None:
+    error = _error("existence-check-fails", "upstream_error")
 
-    assert _problem_reasons(error) == [(WRITE, "configurationReadFailed")]
+    assert _problem_reasons(error) == [(WRITE, "existenceCheckFailed")]
+
+
+def test_an_existence_check_that_answers_something_else_is_not_a_yes() -> None:
+    error = _error("existence-check-indeterminate", "upstream_error")
+
+    assert _problem_reasons(error) == [(WRITE, "existenceCheckIndeterminate")]
+
+
+def test_an_empty_configuration_read_for_an_existing_target_is_refused() -> None:
+    error = _error("configuration-unavailable", "upstream_error")
+
+    assert _problem_reasons(error) == [(WRITE, "configurationUnavailable")]
 
 
 def test_the_first_failing_item_decides_the_refusal_code() -> None:
@@ -356,6 +377,9 @@ def test_recorded_policy_documents_satisfy_the_shipped_schema() -> None:
 
     valid = [
         "allowlisted",
+        "configuration-unavailable",
+        "existence-check-fails",
+        "existence-check-indeterminate",
         "batch-with-a-bad-native-outcome",
         "fingerprint-mismatch",
         "preflight-refuses-whole-batch-on-stale-fingerprint",

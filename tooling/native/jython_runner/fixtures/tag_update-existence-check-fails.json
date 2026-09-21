@@ -10,14 +10,7 @@
         "path": "[default]IgnitionMCP_CI/WriteTarget",
         "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
         "config": {
-          "documentation": "phase4-updated"
-        }
-      },
-      {
-        "path": "[default]IgnitionMCP_CI/TextTarget",
-        "expectedFingerprint": "tcf1:1111111111111111111111111111111111111111111111111111111111111111",
-        "config": {
-          "documentation": "phase4-updated"
+          "enabled": true
         }
       }
     ]
@@ -77,64 +70,8 @@
         "[default]IgnitionMCP_CI/WriteTarget"
       ],
       "result": {
-        "kind": "boolean",
-        "value": true
-      }
-    },
-    {
-      "target": "system.tag.getConfiguration",
-      "args": [
-        "[default]IgnitionMCP_CI/WriteTarget",
-        false,
-        false
-      ],
-      "result": {
-        "kind": "configurations",
-        "items": [
-          {
-            "dataType": "Int4",
-            "defaultValue": 0,
-            "enabled": true,
-            "name": "WriteTarget",
-            "path": "[default]IgnitionMCP_CI/WriteTarget",
-            "tagType": "AtomicTag",
-            "value": 0,
-            "valueSource": "memory"
-          }
-        ]
-      }
-    },
-    {
-      "target": "system.tag.exists",
-      "args": [
-        "[default]IgnitionMCP_CI/TextTarget"
-      ],
-      "result": {
-        "kind": "boolean",
-        "value": true
-      }
-    },
-    {
-      "target": "system.tag.getConfiguration",
-      "args": [
-        "[default]IgnitionMCP_CI/TextTarget",
-        false,
-        false
-      ],
-      "result": {
-        "kind": "configurations",
-        "items": [
-          {
-            "dataType": "String",
-            "defaultValue": "phase4-initial",
-            "enabled": true,
-            "name": "TextTarget",
-            "path": "[default]IgnitionMCP_CI/TextTarget",
-            "tagType": "AtomicTag",
-            "value": "phase4-initial",
-            "valueSource": "memory"
-          }
-        ]
+        "kind": "raise",
+        "message": "existence check failed"
       }
     }
   ]

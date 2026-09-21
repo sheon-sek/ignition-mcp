@@ -10,7 +10,7 @@
         "path": "[IgnitionMCPPolicy]WriteProbe",
         "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       }
     ]

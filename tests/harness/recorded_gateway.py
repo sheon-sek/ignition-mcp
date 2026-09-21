@@ -228,6 +228,7 @@ def _alarm_body(server: Any, path: str) -> dict[str, Any]:
 _TAG_UPDATE_TEMPLATES = (
     ("__TARGET__", "writeTarget"),
     ("__TEXT_TARGET__", "textTarget"),
+    ("__FOLDER__", "nestedFolder"),
     ("__SIBLING__", "siblingTarget"),
     ("__MISSING__", "missingTarget"),
     ("__UDT__", "udtTarget"),
@@ -759,6 +760,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     _fixture("phase4/tag-export.json"), separators=(",", ":"),
                 ).encode("utf-8"), "application/octet-stream")
                 return
+            if provider == server.tag_state_provider:
+                # Ticket #10: the disposable Tag provider the Tag CONFIG Mutation
+                # cases run against. The fake answers from the configuration it
+                # serves, so an export that does not carry a path is evidence the
+                # Tool never created it.
+                self._json(200, {
+                    "path": "",
+                    "tags": [
+                        {"name": path.rsplit("/", 1)[-1], "path": path, "tagType": "AtomicTag"}
+                        for path in sorted(server.tag_config)
+                        if path.startswith("[" + provider + "]")
+                    ],
+                })
+                return
             self._json(200, {"path": "", "tags": [{"name": "Status", "tagType": "Boolean"}]})
             return
         if path == "/data/api/v1/designers":
@@ -1133,6 +1148,9 @@ class _Server(http.server.ThreadingHTTPServer):
         #: The correlation ID the modelled `tag_update` result carried, so the audit
         #: log can answer for it the way the recorded `tag_write` rows do.
         self.tag_update_correlation_id = ""
+        #: The provider the ticket #10 Tag fixture lives in; its export is modelled
+        #: from the configuration the fake serves.
+        self.tag_state_provider = "default"
         self.policy_value = ""
         self.write_probe_value = "phase4-write-probe-value"
         #: Ticket #10: the Tag configuration the fake serves, keyed by exact path.

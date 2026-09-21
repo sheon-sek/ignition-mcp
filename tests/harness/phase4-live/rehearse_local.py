@@ -80,6 +80,7 @@ def tag_update_paths() -> dict[str, str]:
     return {
         "writeTarget": policy_document.TAG_UPDATE_TARGET,
         "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,

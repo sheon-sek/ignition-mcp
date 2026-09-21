@@ -10,14 +10,14 @@
         "path": "[default]IgnitionMCP_CI/Missing",
         "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       },
       {
         "path": "[default]IgnitionMCP_CI/TextTarget",
         "expectedFingerprint": "tcf1:2222222222222222222222222222222222222222222222222222222222222222",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       }
     ]
@@ -72,15 +72,23 @@
       }
     },
     {
-      "target": "system.tag.getConfiguration",
+      "target": "system.tag.exists",
       "args": [
-        "[default]IgnitionMCP_CI/Missing",
-        false,
-        false
+        "[default]IgnitionMCP_CI/Missing"
       ],
       "result": {
-        "kind": "configurations",
-        "items": []
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/TextTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
       }
     },
     {

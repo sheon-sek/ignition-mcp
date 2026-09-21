@@ -443,6 +443,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - The live stage also recomputes the published fingerprint from the published
   configuration with the repository's own Python copy of the rule, so the Jython
   handler and the contract definition have to agree on a real Gateway's data.
+- The first live run (workflow `Phase 4 Live Gateway G4b`, run
+  [35666588649](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666588649)) failed its
+  missing-target case on both rows — see the Open question on what a Gateway answers for a path
+  that is not there — and it validated everything before that case on a real Gateway: the
+  published fingerprint recomputed from the published configuration, the allowlisted
+  merge-update, and the stale-fingerprint refusal with `conflict` and nothing changed. The fix
+  is `system.tag.exists` as the existence check, with a live Folder-target case and an
+  independent provider-export absence check added.
 
 ## Open questions
 
@@ -462,7 +470,25 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   `defaultValue`, `enabled`, `name`, `path`, `tagType`, `value`, `valueSource`), because no live
   Gateway is reachable from the workstation. The live run's own results are the evidence; a
   follow-up commit replaces the modelled bodies with the recorded ones once the run exists, the way
-  tickets #7 and #8 recorded theirs.
+  tickets #7 and #8 recorded theirs. Two differences are modelled rather than recorded and are
+  called out here: the fake answers a Tool Error where a live Gateway answers a synthesized node
+  for a configuration read of a missing path, and its `default` provider export is derived from the
+  configuration it serves.
+- **Ticket #10 — a Gateway answers a configuration read for a path that is not there.** The
+  first live `tag-update` run (workflow `Phase 4 Live Gateway G4b`, run 35666588649, both rows)
+  failed at the missing-target case: `system.tag.getConfiguration("[default]IgnitionMCP_CI/Missing",
+  false, false)` returned a node, and its fingerprint was the *same* on 8.3.8 and 8.3.9
+  (`tcf1:1d225d79b0b34008df860a452a087d89e743974be538f42a7c4e4dc075216e30`), so a synthesized
+  default configuration, not an empty read. The configuration read therefore cannot be the
+  existence check D30/D11 need (`not_found`, and a create that must never happen), and
+  `tag_update` now calls `system.tag.exists(path)` per item before it reads that item's
+  configuration. That is the documented 8.3 scripting primitive for exactly this question. A raise
+  or a non-boolean answer from it is `upstream_error` (`existenceCheckFailed` /
+  `existenceCheckIndeterminate`), never read as "present". The harness proves absence
+  independently through the provider's own `GET /tags/export`. **For the owner:** nothing to
+  decide; recorded because it is a Gateway behavior the plan did not predict and because the
+  recorded fake still answers a Tool Error for a missing path, so a rehearsal models this
+  difference rather than the Gateway.
 - **Ticket #10 — `tag_update` refuses three configuration keys beyond D30's text.** D30 §6
   says nothing about which properties a Tag CONFIG Mutation may merge, so the shipped handler
   refuses, with `invalid_argument`, the three keys that would leave its class or its target:

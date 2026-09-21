@@ -1,4 +1,13 @@
 {
+  "[default]IgnitionMCP_CI/Nested": [
+    {
+      "enabled": true,
+      "name": "Nested",
+      "path": "[default]IgnitionMCP_CI/Nested",
+      "tagType": "Folder",
+      "tags": null
+    }
+  ],
   "[default]IgnitionMCP_CI/Nested/Inner": [
     {
       "dataType": "Int4",

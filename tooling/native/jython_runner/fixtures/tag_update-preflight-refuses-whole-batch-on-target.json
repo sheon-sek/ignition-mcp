@@ -10,14 +10,14 @@
         "path": "[default]IgnitionMCP_CI/WriteTarget",
         "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
         "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       }
     ]

@@ -10,7 +10,7 @@
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
         "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000",
         "config": {
-          "enabled": true
+          "documentation": "phase4-updated"
         }
       }
     ]

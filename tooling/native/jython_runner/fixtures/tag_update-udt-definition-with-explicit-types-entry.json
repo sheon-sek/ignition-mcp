@@ -65,6 +65,16 @@
       }
     },
     {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI/ProbeType"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
       "target": "system.tag.getConfiguration",
       "args": [
         "[default]_types_/IgnitionMCP_CI/ProbeType",

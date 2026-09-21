@@ -65,6 +65,16 @@
       }
     },
     {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
       "target": "system.tag.getConfiguration",
       "args": [
         "[default]IgnitionMCP_CI/WriteTarget",
@@ -72,8 +82,8 @@
         false
       ],
       "result": {
-        "kind": "raise",
-        "message": "Path not found"
+        "kind": "configurations",
+        "items": []
       }
     }
   ]

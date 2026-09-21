@@ -66,6 +66,16 @@
       }
     },
     {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
       "target": "system.tag.getConfiguration",
       "args": [
         "[default]IgnitionMCP_CI/WriteTarget",
