@@ -36,7 +36,10 @@ uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q packa
 
 # Pre-push: lint every workflow file and every `run:` block shell.
 # actionlint is pinned to 1.7.12, fetched over HTTPS and sha256-verified into
-# ~/.cache/ignition-mcp-ci. Exit 1 lists each finding as path:line.
+# ~/.cache/ignition-mcp-ci. Its shellcheck and pyflakes integrations are
+# always disabled (-shellcheck= -pyflakes=), so the result does not depend on
+# which of those a machine has installed; `bash -n` covers shell syntax.
+# Exit 1 lists each finding as path:line.
 uv run --no-sync python -m tooling.ci.check_workflows
 
 uv build --package ignition-rest-mcp

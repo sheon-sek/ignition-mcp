@@ -311,6 +311,20 @@ class RunTest(unittest.TestCase):
         self.assertEqual(len(diagnostics), 1)
         self.assertEqual(diagnostics[0].line, 10)
 
+    def test_external_integrations_are_disabled_on_every_invocation(self) -> None:
+        # actionlint runs shellcheck and pyflakes itself when it finds them on
+        # PATH, so the same command reported SC2046 in GitHub CI (run
+        # 35626729044) and passed on a machine without shellcheck. Disabling
+        # both makes the check a function of the repository, not the machine.
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            recorded = root / "argv.txt"
+            stub = self._stub(root, f'printf "%s\\n" "$@" > {recorded}')
+            run_actionlint(stub, [Path(RECONSTRUCTED)])
+            argv = recorded.read_text(encoding="utf-8").split()
+        self.assertIn("-shellcheck=", argv)
+        self.assertIn("-pyflakes=", argv)
+
     def test_actionlint_invocation_failure_is_loud(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             stub = self._stub(Path(temporary), "echo 'config error' >&2\nexit 3")

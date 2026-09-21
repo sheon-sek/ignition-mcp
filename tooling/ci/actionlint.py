@@ -10,6 +10,13 @@ nothing.
 Every archive read is bounded by the byte size pinned for that platform (D10): a
 redirected or stalled upstream, or a corrupted local cache, cannot make the
 process read an unbounded body before the sha256 check rejects it.
+
+Each invocation disables actionlint's shellcheck and pyflakes integrations
+(:data:`DISABLED_INTEGRATIONS`). actionlint runs them whenever it finds them on
+``PATH``, so leaving them on makes the same command report different results on
+different machines — the reason CI failed with ``SC2046`` (run 35626729044)
+while the identical command passed locally. Shell syntax is already checked by
+``bash -n`` in :mod:`tooling.ci.check_workflows`.
 """
 
 from __future__ import annotations
@@ -37,6 +44,15 @@ CHUNK_BYTES = 64 * 1024
 #: set it, so the documented command cannot be pointed at another executable;
 #: tests that need to script actionlint's output set it explicitly.
 OVERRIDE_ENV = "IGNITION_MCP_ACTIONLINT_ALLOW_OVERRIDE"
+
+#: actionlint runs shellcheck and pyflakes itself when it finds them on ``PATH``,
+#: so the same command reported a shellcheck finding in GitHub CI (run
+#: 35626729044, ``SC2046`` in ``phase3-live-g3.yml``) and passed on a machine
+#: without shellcheck. Both integrations are disabled on every invocation, which
+#: makes the check a function of the repository rather than of the machine. An
+#: empty value is actionlint's documented "off"; shell syntax is covered by
+#: ``bash -n`` in :mod:`tooling.ci.check_workflows`.
+DISABLED_INTEGRATIONS = ("-shellcheck=", "-pyflakes=")
 
 #: ``path:line:column: message``. The caret illustration actionlint prints after
 #: each diagnostic does not match, so it is skipped.
@@ -215,9 +231,12 @@ def run_actionlint(binary: Path, files: Sequence[Path], *, cwd: Path | None = No
     Exit 1 with nothing parseable on stdout is not "no findings": it is a binary
     that failed to lint, or an output format this parser no longer understands.
     It raises so the check fails closed instead of reporting a clean run.
+
+    Every invocation carries :data:`DISABLED_INTEGRATIONS`, so actionlint never
+    shells out to a shellcheck or pyflakes that happens to be installed.
     """
     result = subprocess.run(
-        [str(binary), "-color=false", *[str(path) for path in files]],
+        [str(binary), *DISABLED_INTEGRATIONS, "-color=false", *[str(path) for path in files]],
         capture_output=True,
         text=True,
         check=False,

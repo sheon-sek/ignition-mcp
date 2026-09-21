@@ -4,10 +4,20 @@ Two independent checks over ``.github/workflows``:
 
 * ``bash -n`` over every ``run:`` block, so a shell syntax error cannot burn a
   live-Gateway run again (failed runs 35592969557, 35593736110, 35594408385 —
-  a missing ``fi``).
+  a missing ``fi``). bash 5.3 names the construct whose terminator is missing as
+  well as where the parse stopped; bash 5.2 names only the latter, one line past
+  the script. A finding uses the construct line when bash reports one and the end
+  of the block otherwise, so the reported line is a line the block occupies on
+  either release — the GitHub ``ubuntu-24.04`` runner ships 5.2.
 * actionlint over the workflow files, so an invalid context, expression or
   schema reference is caught before the push (failed run 35586649945 —
   ``${{ runner.temp }}`` in a job-level ``env``).
+
+actionlint is invoked with its shellcheck and pyflakes integrations off
+(:data:`tooling.ci.actionlint.DISABLED_INTEGRATIONS`), so neither check depends
+on which external linters the calling machine happens to have installed: the
+same commit reported ``SC2046`` in CI (run 35626729044) that passed on a
+workstation without shellcheck.
 
 Both run locally and in CI from this same module, so the pre-push loop and the
 pipeline cannot disagree.
@@ -112,9 +122,11 @@ class Finding:
     message: str
 
 
-#: ``bash`` reports ``line N: ...`` for the failure and, for an unterminated
-#: construct, ``on line N`` for where that construct starts. The second is the
-#: actionable one: it points at the ``if`` whose ``fi`` went missing.
+#: ``bash`` reports ``line N: ...`` for where the parse stopped and, since 5.3,
+#: ``on line N`` for where an unterminated construct starts. The second is the
+#: actionable one: it points at the ``if`` whose ``fi`` went missing. 5.2 prints
+#: only the first, which for an unterminated construct is one past the script's
+#: last line; :func:`_error_line` maps either onto the block.
 CONSTRUCT_LINE = re.compile(r"on line (?P<line>\d+)")
 ERROR_LINE = re.compile(r"line (?P<line>\d+)")
 BASH_C_PREFIX = re.compile(r"^\S+: -c: ")
@@ -143,7 +155,7 @@ def _bash_syntax_finding(block: RunBlock, bash: str) -> Finding | None:
     if result.returncode == 0:
         return None
     raw = BASH_C_PREFIX.sub("", " ".join(result.stderr.split()))
-    line = _error_line(raw, block.first_line)
+    line = _error_line(raw, block)
     # Both numbers bash prints are script lines. The Finding carries the workflow
     # line, so the message keeps only the description of the broken construct.
     detail = CONSTRUCT_LINE_TAIL.sub("", ERROR_LINE_PREFIX.sub("", raw))
@@ -153,11 +165,24 @@ def _bash_syntax_finding(block: RunBlock, bash: str) -> Finding | None:
     return Finding(block.path, line, f"{step}{detail}")
 
 
-def _error_line(detail: str, first_line: int) -> int:
+def _error_line(detail: str, block: RunBlock) -> int:
+    """The workflow line a ``bash -n`` diagnostic belongs to.
+
+    Both numbers bash prints are script lines, and which one it prints depends
+    on its release. bash 5.3 reports the construct whose terminator is missing
+    (``unexpected end of file from `if' command on line 5``); that line is the
+    actionable one, so it wins. bash 5.2 reports only where the parse ran out of
+    input, one past the block's last script line because the script it is handed
+    has no final newline; that line is clamped onto the block, so the finding
+    names a line the block occupies instead of the step after it. A message with
+    neither number is reported at the block's first line.
+    """
     match = CONSTRUCT_LINE.search(detail) or ERROR_LINE.search(detail)
     if match is None:
-        return first_line
-    return max(first_line, first_line + int(match.group("line")) - 1)
+        return block.first_line
+    line = block.first_line + int(match.group("line")) - 1
+    last_line = block.first_line + max(len(block.script.splitlines()), 1) - 1
+    return min(max(line, block.first_line), last_line)
 
 
 class WorkflowCheckError(RuntimeError):

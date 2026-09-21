@@ -21,6 +21,7 @@ import contextlib
 import io
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -73,6 +74,31 @@ def _write(text: str) -> Path:
     return path
 
 
+def _block_line_span(workflow: Path, index: int = 0) -> range:
+    """The workflow lines run block ``index`` occupies, end-exclusive.
+
+    Fixtures break the block they exist for, which is block 0 for every one of
+    them. Assertions are phrased against this span rather than a literal line
+    because the reported line legitimately moves with the bash release: 5.3
+    names the construct whose terminator is missing, 5.2 only the line where the
+    parse ran out of input.
+    """
+    block = extract_run_blocks(workflow)[index]
+    return range(block.first_line, block.first_line + len(block.script.splitlines()))
+
+
+def _reported_line(output: str, workflow: str) -> int:
+    """The workflow line the CLI report carries for ``workflow``.
+
+    The check prints the path it was handed, which for the CLI tests is a
+    temporary directory, so the file name is matched at a path boundary.
+    """
+    match = re.search(rf"(?:^|/){re.escape(workflow)}:(?P<line>\d+): ", output)
+    if match is None:
+        raise AssertionError(f"no finding reported for {workflow} in {output!r}")
+    return int(match.group("line"))
+
+
 class ExtractRunBlocksTest(unittest.TestCase):
     def test_finds_every_form_with_step_name_shell_and_line(self) -> None:
         blocks = extract_run_blocks(_write(MIXED_FORMS))
@@ -108,7 +134,7 @@ class ShellSyntaxTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         finding = findings[0]
         self.assertEqual(finding.path, fixture)
-        self.assertEqual(finding.line, 19)  # the unclosed `if [[ -n "$cid" ]]`
+        self.assertIn(finding.line, _block_line_span(fixture))
         self.assertIn("unexpected end of file", finding.message)
         self.assertIn("Refresh diagnostics", finding.message)
 
@@ -155,6 +181,48 @@ class ShellSyntaxTest(unittest.TestCase):
             self.assertEqual(shell_syntax_findings(workflow), [], workflow.name)
 
 
+#: ``bash -n -c`` stderr recorded verbatim for the block the missing-``fi``
+#: fixture carries (workflow lines 15-32, script lines 1-18). bash 5.3 also names
+#: the construct whose terminator is missing (``on line 5``); bash 5.2 does not.
+#: These two strings are the whole input to the message-to-workflow-line mapping,
+#: so both shapes are exercised on every machine rather than only the one the
+#: installed bash happens to print.
+BASH_5_3_STDERR = "bash: -c: line 19: syntax error: unexpected end of file from `if' command on line 5\n"
+BASH_5_2_STDERR = "bash: -c: line 19: syntax error: unexpected end of file\n"
+
+
+class ShellErrorMessageMappingTest(unittest.TestCase):
+    """Both recorded ``bash -n`` message shapes map onto the broken ``run:`` block.
+
+    bash 5.3 (this workstation) reports where the unterminated construct starts;
+    bash 5.2 (the GitHub ``ubuntu-24.04`` runner) reports only the line where the
+    parse ran out of input. The finding must name a line inside the block either
+    way, so the bash release changes how precise the report is, never whether the
+    broken block is reported or which block it is attributed to.
+    """
+
+    def _finding_line(self, recorded: str) -> int:
+        fixture = FIXTURES / "reconstructed-missing-fi.workflow.yml"
+        with tempfile.TemporaryDirectory() as temporary:
+            stub = Path(temporary) / "bash"
+            stub.write_text(f"#!/bin/sh\ncat >&2 <<'STDERR'\n{recorded}STDERR\nexit 2\n", encoding="utf-8")
+            stub.chmod(0o755)
+            findings = shell_syntax_findings(fixture, bash=str(stub))
+        self.assertEqual(len(findings), 1)
+        return findings[0].line
+
+    def test_construct_line_is_used_when_bash_names_it(self) -> None:
+        # Line 19 is the `if [[ -n "$cid" ]]` that lost its `fi`, not the end of
+        # the block where the parse gave up.
+        self.assertEqual(self._finding_line(BASH_5_3_STDERR), 19)
+
+    def test_end_of_file_line_is_used_when_bash_names_no_construct(self) -> None:
+        # Line 19 of the input is one past the block's last script line, 32,
+        # because bash counts the script's missing final newline. The finding has
+        # to name a line the block occupies, not the step that follows it.
+        self.assertEqual(self._finding_line(BASH_5_2_STDERR), 32)
+
+
 class QuotedKeyTest(unittest.TestCase):
     """The key forms a YAML parser accepts but a bare-key regex does not."""
 
@@ -170,9 +238,10 @@ class QuotedKeyTest(unittest.TestCase):
         self.assertEqual([b.first_line for b in blocks], [8, 15, 21])
 
     def test_unclosed_construct_under_a_quoted_key_is_reported(self) -> None:
-        findings = shell_syntax_findings(FIXTURES / "reconstructed-quoted-run-key.workflow.yml")
+        fixture = FIXTURES / "reconstructed-quoted-run-key.workflow.yml"
+        findings = shell_syntax_findings(fixture)
         self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0].line, 9)  # the unclosed `if [[ -n "$cid" ]]`
+        self.assertIn(findings[0].line, _block_line_span(fixture))
         self.assertIn("unexpected end of file", findings[0].message)
 
     def test_flow_mapping_run_key_fails_loudly_instead_of_being_skipped(self) -> None:
@@ -224,9 +293,10 @@ class EscapedKeyTest(unittest.TestCase):
         self.assertEqual([b.script for b in extract_run_blocks(path)], ["set -euo pipefail\necho hi"])
 
     def test_unclosed_construct_under_an_escaped_key_is_reported(self) -> None:
-        findings = shell_syntax_findings(FIXTURES / "reconstructed-escaped-run-key.workflow.yml")
+        fixture = FIXTURES / "reconstructed-escaped-run-key.workflow.yml"
+        findings = shell_syntax_findings(fixture)
         self.assertEqual(len(findings), 1)
-        self.assertEqual(findings[0].line, 11)  # the unclosed `if -n "$cid"`
+        self.assertIn(findings[0].line, _block_line_span(fixture))
         self.assertIn("unexpected end of file", findings[0].message)
         self.assertIn("Escaped key step", findings[0].message)
 
@@ -316,14 +386,16 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn("OK: 1 workflow file(s)", output)
 
     def test_missing_fi_reconstruction_fails_with_step_and_line(self) -> None:
+        fixture = FIXTURES / "reconstructed-missing-fi.workflow.yml"
         with tempfile.TemporaryDirectory() as temporary:
             stub = self._stub(Path(temporary))
             workflow_dir = Path(temporary) / "workflows"
             workflow_dir.mkdir()
-            shutil.copy(FIXTURES / "reconstructed-missing-fi.workflow.yml", workflow_dir / "g3.yml")
+            shutil.copy(fixture, workflow_dir / "g3.yml")
             code, output = self._run(workflow_dir, stub)
         self.assertEqual(code, 1)
-        self.assertIn("g3.yml:19: step \"Refresh diagnostics\": syntax error: unexpected end of file", output)
+        self.assertIn('step "Refresh diagnostics": syntax error: unexpected end of file', output)
+        self.assertIn(_reported_line(output, "g3.yml"), _block_line_span(fixture))
 
     def test_actionlint_diagnostic_is_reported_verbatim(self) -> None:
         recorded = (FIXTURES / "actionlint-runner-temp-output.txt").read_text(encoding="utf-8")
@@ -379,26 +451,30 @@ class CommandLineTest(unittest.TestCase):
         self.assertIn(actionlint.OVERRIDE_ENV, output)
 
     def test_quoted_run_key_unclosed_construct_fails_the_check(self) -> None:
+        fixture = FIXTURES / "reconstructed-quoted-run-key.workflow.yml"
         with tempfile.TemporaryDirectory() as temporary:
             stub = self._stub(Path(temporary))
             workflow_dir = Path(temporary) / "workflows"
             workflow_dir.mkdir()
-            shutil.copy(FIXTURES / "reconstructed-quoted-run-key.workflow.yml", workflow_dir / "quoted.yml")
+            shutil.copy(fixture, workflow_dir / "quoted.yml")
             code, output = self._run(workflow_dir, stub)
         self.assertEqual(code, 1)
-        self.assertIn("quoted.yml:9:", output)
+        self.assertIn("unexpected end of file", output)
+        self.assertIn(_reported_line(output, "quoted.yml"), _block_line_span(fixture))
 
     def test_escaped_run_key_unclosed_construct_fails_the_check(self) -> None:
         # The reviewed bypass through the same seam the developer runs: 0 blocks
         # were extracted under `"r\u0075n": |`, so the unclosed `if` printed "OK".
+        fixture = FIXTURES / "reconstructed-escaped-run-key.workflow.yml"
         with tempfile.TemporaryDirectory() as temporary:
             stub = self._stub(Path(temporary))
             workflow_dir = Path(temporary) / "workflows"
             workflow_dir.mkdir()
-            shutil.copy(FIXTURES / "reconstructed-escaped-run-key.workflow.yml", workflow_dir / "escaped.yml")
+            shutil.copy(fixture, workflow_dir / "escaped.yml")
             code, output = self._run(workflow_dir, stub)
         self.assertEqual(code, 1)
-        self.assertIn("escaped.yml:11:", output)
+        self.assertIn("unexpected end of file", output)
+        self.assertIn(_reported_line(output, "escaped.yml"), _block_line_span(fixture))
 
     def test_unparseable_run_key_form_fails_the_check_loudly(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -431,11 +507,12 @@ class CommandLineTest(unittest.TestCase):
     def test_module_entry_point_runs_the_check(self) -> None:
         # `python -m tooling.ci.check_workflows` is the documented command; a
         # module without an entry point would exit 0 having checked nothing.
+        fixture = FIXTURES / "reconstructed-missing-fi.workflow.yml"
         with tempfile.TemporaryDirectory() as temporary:
             stub = self._stub(Path(temporary))
             workflow_dir = Path(temporary) / "workflows"
             workflow_dir.mkdir()
-            shutil.copy(FIXTURES / "reconstructed-missing-fi.workflow.yml", workflow_dir / "g3.yml")
+            shutil.copy(fixture, workflow_dir / "g3.yml")
             completed = subprocess.run(
                 [sys.executable, "-m", "tooling.ci.check_workflows", "--workflow-dir", str(workflow_dir),
                  "--actionlint", str(stub)],
@@ -446,7 +523,57 @@ class CommandLineTest(unittest.TestCase):
                 check=False,
             )
         self.assertEqual(completed.returncode, 1, completed.stderr)
-        self.assertIn("g3.yml:19:", completed.stdout)
+        self.assertIn("Refresh diagnostics", completed.stdout)
+        self.assertIn("unexpected end of file", completed.stdout)
+        self.assertIn(_reported_line(completed.stdout, "g3.yml"), _block_line_span(fixture))
+
+
+#: A stand-in for a shellcheck a runner has on ``PATH``: actionlint parses this
+#: JSON and reports each entry as a finding in the run block it was run against.
+SHELLCHECK_STUB = (
+    "#!/bin/sh\n"
+    'echo \'[{"file":"-","line":3,"endLine":3,"column":11,"endColumn":14,"level":"error",'
+    '"code":2046,"message":"Double quote to prevent globbing and word splitting.","fix":null}]\'\n'
+    "exit 1\n"
+)
+
+
+class PinnedActionlintMachineIndependenceTest(unittest.TestCase):
+    """The pinned check must report the same result on every machine.
+
+    actionlint runs shellcheck and pyflakes itself when it finds them on
+    ``PATH``, so the same command failed in GitHub CI (run 35626729044,
+    ``SC2046`` in ``phase3-live-g3.yml``) that passed on a workstation without
+    shellcheck. This runs the real pinned binary over the repository's own
+    workflows, with a shellcheck on ``PATH`` that reports an error for every
+    script it is handed.
+    """
+
+    def _run(self, path: str) -> tuple[int, str]:
+        stream = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {"PATH": path}),
+            contextlib.redirect_stdout(stream),
+            contextlib.redirect_stderr(stream),
+        ):
+            code = main(["--workflow-dir", str(REPO / ".github" / "workflows")])
+        return code, stream.getvalue()
+
+    def test_shellcheck_on_path_cannot_change_the_result(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            stub = directory / "shellcheck"
+            stub.write_text(SHELLCHECK_STUB, encoding="utf-8")
+            stub.chmod(0o755)
+            with_stub = f"{directory}{os.pathsep}{os.environ['PATH']}"
+            # The stub must be the shellcheck PATH resolves, or this test would
+            # pass without exercising the integration at all.
+            self.assertEqual(shutil.which("shellcheck", path=with_stub), str(stub))
+            found, with_shellcheck = self._run(with_stub)
+            _, without_shellcheck = self._run(os.environ["PATH"])
+        self.assertEqual(found, 0, with_shellcheck)
+        self.assertEqual(with_shellcheck, without_shellcheck)
+        self.assertIn("OK:", with_shellcheck)
 
 
 if __name__ == "__main__":
