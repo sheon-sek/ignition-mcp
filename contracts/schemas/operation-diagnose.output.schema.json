@@ -4,11 +4,29 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "correlationId": {"type": "string", "minLength": 1},
-    "tool": {"type": "string", "minLength": 1},
-    "outcome": {"enum": ["in_progress", "succeeded", "failed", "outcome_unknown", "cancelled", "interrupted"]},
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "tool": {
+      "type": "string",
+      "minLength": 1
+    },
+    "outcome": {
+      "enum": [
+        "in_progress",
+        "succeeded",
+        "failed",
+        "outcome_unknown",
+        "cancelled",
+        "interrupted"
+      ]
+    },
     "errorCode": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "enum": [
         null,
         "invalid_argument",
@@ -27,8 +45,16 @@
         "internal_error"
       ]
     },
-    "startedAt": {"type": "string", "minLength": 1},
-    "finishedAt": {"type": ["string", "null"]},
+    "startedAt": {
+      "type": "string",
+      "minLength": 1
+    },
+    "finishedAt": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "phases": {
       "type": "array",
       "maxItems": 32,
@@ -36,15 +62,40 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "name": {"type": "string", "minLength": 1, "maxLength": 64},
-          "at": {"type": "string", "minLength": 1}
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64
+          },
+          "at": {
+            "type": "string",
+            "minLength": 1
+          }
         },
-        "required": ["name", "at"]
+        "required": [
+          "name",
+          "at"
+        ]
       }
     },
-    "transactionId": {"type": ["string", "null"]},
-    "downstreamCorrelationId": {"type": ["string", "null"]},
-    "auditResultMissing": {"type": "boolean"}
+    "transactionId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "downstreamCorrelationId": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "auditResultMissing": {
+      "type": "boolean"
+    },
+    "phasesTruncated": {
+      "type": "boolean"
+    }
   },
   "required": [
     "correlationId",
@@ -54,6 +105,7 @@
     "startedAt",
     "finishedAt",
     "phases",
+    "phasesTruncated",
     "transactionId",
     "downstreamCorrelationId",
     "auditResultMissing"

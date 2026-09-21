@@ -42,6 +42,9 @@ READ_TOOLS = frozenset({
     "alarm_pipeline_status",
     "project_export",
     "tag_config_export",
+    "artifact_list",
+    "artifact_info",
+    "operation_diagnose",
 })
 
 MUTATION_TOOLS = frozenset({

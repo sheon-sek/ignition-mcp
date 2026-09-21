@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse, PlainTextResponse, Response
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_settings
 from ignition_rest_mcp.artifacts.routes import register_artifact_routes
 from ignition_rest_mcp.projects.identity import gateway_identity
+from ignition_rest_mcp.projects.locks import SINGLE_WRITER_LIMITATION
 from ignition_rest_mcp.projects.locks import ProcessWriterGuard, ProjectLockRegistry
 from ignition_rest_mcp.projects.transactions import ProjectTransactionService
 from ignition_rest_mcp.auth import build_auth, current_principal
@@ -27,7 +28,10 @@ from ignition_rest_mcp.invocation.lifecycle import enforce_output_budget, invoke
 from ignition_rest_mcp.models import (
     AlarmPipelineListResult,
     AlarmPipelineStatusResult,
+    ArtifactInfoResult,
+    ArtifactListResult,
     AuditQueryResult,
+    OperationDiagnoseResult,
     CapabilitiesResource,
     ConfigResourceDescribeResult,
     ConfigResourceGetResult,
@@ -39,14 +43,21 @@ from ignition_rest_mcp.models import (
     OpenApiInfoResource,
     ProjectListResult,
     ProjectExportResult,
+    StorageDiagnostics,
     TagConfigExportResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
+from ignition_rest_mcp.observability.metrics import Metrics
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.runtime import RuntimeState
 from ignition_rest_mcp.services.exports import (
     project_export as project_export_service,
     tag_config_export as tag_config_export_service,
+)
+from ignition_rest_mcp.services.artifacts import (
+    artifact_info as artifact_info_service,
+    artifact_list as artifact_list_service,
+    operation_diagnose as operation_diagnose_service,
 )
 from ignition_rest_mcp.services.gateway import (
     capabilities_resource,
@@ -65,7 +76,7 @@ from ignition_rest_mcp.services.readonly import (
     config_resource_search as config_resource_search_service,
     project_list as project_list_service,
 )
-from ignition_rest_mcp.storage.database import Storage
+from ignition_rest_mcp.storage.database import Storage, StorageUnavailable
 from ignition_rest_mcp.storage.paths import validate_data_directory
 from ignition_rest_mcp.storage.records import OperationRecordStore
 
@@ -113,7 +124,7 @@ def create_server(settings: Settings) -> FastMCP:
                 max_entries=settings.project_lock_max_entries,
             ),
             identity=gateway_identity(settings.gateway_id, settings.gateway_url),
-            db=storage.state,
+            db=storage.state, metrics=metrics,
         )
         state.client = client
         state.registry = registry
@@ -150,7 +161,7 @@ def create_server(settings: Settings) -> FastMCP:
             )
             retention = asyncio.create_task(_retention_loop(storage, records, audit_sink, settings))
             prober = asyncio.create_task(_probe_loop(storage, settings))
-            janitor = asyncio.create_task(_artifact_janitor_loop(artifacts, settings))
+            janitor = asyncio.create_task(_artifact_janitor_loop(artifacts, settings, metrics))
             if settings.project_writer_enabled:
                 reconciler = asyncio.create_task(_transaction_reconcile_loop(transaction_service, settings))
             yield
@@ -231,6 +242,7 @@ def create_server(settings: Settings) -> FastMCP:
         async def flow(context: OperationContext) -> GatewayDiagnoseResult:
             result = await diagnose_service(
                 state.require_client(), state.require_registry(), context,
+                await _storage_diagnostics(state, settings),
             )
             if not (result.gatewayReachable and result.authenticationOk):
                 state.require_metrics().record_tool("gateway_diagnose", "degraded")
@@ -439,6 +451,52 @@ def create_server(settings: Settings) -> FastMCP:
             audited=True,
         )
 
+    @mcp.tool(
+        name="artifact_list",
+        description="List READY artifact metadata visible to the calling principal (bounded, paginated).",
+        output_schema=ArtifactListResult.model_json_schema(),
+        tags={"read", "storage", "principal-scoped"},
+    )
+    async def artifact_list(kind: str = "", limit: int = 100, offset: int = 0) -> ArtifactListResult:
+        principal = current_principal(settings)
+        return await _invoke(
+            "artifact_list", "FAST",
+            lambda context: artifact_list_service(
+                state.require_artifacts(), context, principal=principal, kind=kind, limit=limit, offset=offset,
+            ),
+        )
+
+    @mcp.tool(
+        name="artifact_info",
+        description="Read the metadata of one READY artifact visible to the calling principal.",
+        output_schema=ArtifactInfoResult.model_json_schema(),
+        tags={"read", "storage", "principal-scoped"},
+    )
+    async def artifact_info(artifactId: str) -> ArtifactInfoResult:
+        principal = current_principal(settings)
+        return await _invoke(
+            "artifact_info", "FAST",
+            lambda context: artifact_info_service(
+                state.require_artifacts(), state.audit_sink, context,
+                principal=principal, artifact_id=artifactId, metrics=state.metrics,
+            ),
+        )
+
+    @mcp.tool(
+        name="operation_diagnose",
+        description="Diagnose one prior operation by its exact UUIDv7 correlationId (D19, principal-scoped).",
+        output_schema=OperationDiagnoseResult.model_json_schema(),
+        tags={"read", "diagnostic", "storage", "principal-scoped"},
+    )
+    async def operation_diagnose(correlationId: str) -> OperationDiagnoseResult:
+        principal = current_principal(settings)
+        return await _invoke(
+            "operation_diagnose", "FAST",
+            lambda context: operation_diagnose_service(
+                state.require_records(), context, principal=principal, correlation_id=correlationId,
+            ),
+        )
+
     @mcp.resource(
         "ignition://gateway/capabilities",
         name="gateway-capabilities",
@@ -493,6 +551,19 @@ def create_server(settings: Settings) -> FastMCP:
     async def metrics(_: Request) -> Response:
         current = state.metrics
         body = current.render() if current is not None else ""
+        if current is not None and state.artifacts is not None:
+            try:
+                ready_count, ready_bytes = await state.artifacts.totals()
+            except StorageUnavailable:
+                ready_count = ready_bytes = -1
+            body += (
+                "# HELP ignition_mcp_artifacts_ready Gauge of READY artifacts (unlabeled aggregate).\n"
+                "# TYPE ignition_mcp_artifacts_ready gauge\n"
+                f"ignition_mcp_artifacts_ready {ready_count}\n"
+                "# HELP ignition_mcp_artifact_bytes_total Gauge of READY artifact bytes (unlabeled aggregate).\n"
+                "# TYPE ignition_mcp_artifact_bytes_total gauge\n"
+                f"ignition_mcp_artifact_bytes_total {max(ready_bytes, 0)}\n"
+            )
         if state.storage is not None and current is not None:
             lines = [
                 "# HELP ignition_mcp_storage_subsystem_healthy Storage subsystem health (1 healthy, 0 failing).",
@@ -586,18 +657,22 @@ async def _probe_loop(storage: Storage, settings: Settings) -> None:
         previous = results
 
 
-async def _artifact_janitor_loop(artifacts: LocalArtifactStore, settings: Settings) -> None:
+async def _artifact_janitor_loop(
+    artifacts: LocalArtifactStore, settings: Settings, metrics: Metrics,
+) -> None:
     passes = 0
     while True:
         await asyncio.sleep(settings.artifact_cleanup_interval_seconds)
         passes += 1
         try:
-            await artifacts.cleanup_expired()
+            deleted = await artifacts.cleanup_expired()
+            stats = {"orphan_files": 0}
             if passes % 4 == 0:
                 # Reconciliation converges orphan sweeps in bounded periodic passes.
-                await artifacts.reconcile(
+                stats = await artifacts.reconcile(
                     batch=settings.artifact_cleanup_batch, deadline_seconds=HARD_ARTIFACT_DEADLINE_SECONDS,
                 )
+            metrics.record_artifact_cleanup(deleted, int(stats.get("orphan_files", 0)))
         except asyncio.CancelledError:
             raise
         except Exception:
@@ -605,6 +680,27 @@ async def _artifact_janitor_loop(artifacts: LocalArtifactStore, settings: Settin
                 "Artifact janitor pass failed",
                 extra={"event": "artifact_janitor", "outcome": "error"},
             )
+
+
+async def _storage_diagnostics(state: RuntimeState, settings: Settings) -> StorageDiagnostics | None:
+    storage = state.storage
+    if storage is None:
+        return None
+    health = {item["name"]: bool(item["healthy"]) for item in storage.health()}
+    artifacts_ready = 0
+    if state.artifacts is not None and health.get("state", False):
+        try:
+            artifacts_ready, _bytes = await state.artifacts.totals()
+        except StorageUnavailable:
+            artifacts_ready = 0
+    return StorageDiagnostics(
+        dataDirectoryConfigured=bool(settings.data_dir),
+        stateHealthy=health.get("state", False),
+        auditHealthy=health.get("audit", False),
+        artifactsReady=artifacts_ready,
+        projectWriterEnabled=settings.project_writer_enabled,
+        singleWriterLimitation=SINGLE_WRITER_LIMITATION,
+    )
 
 
 SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})

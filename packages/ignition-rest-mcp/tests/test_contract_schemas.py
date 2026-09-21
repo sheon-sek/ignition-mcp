@@ -5,6 +5,9 @@ from pathlib import Path
 
 from ignition_rest_mcp.models import (
     AlarmPipelineListResult,
+    ArtifactInfoResult,
+    ArtifactListResult,
+    OperationDiagnoseResult,
     AlarmPipelineStatusResult,
     AuditQueryResult,
     ConfigResourceDescribeResult,
@@ -50,6 +53,9 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
         (ProjectExportResult, "project-export.output.schema.json"),
         (TagConfigExportResult, "tag-config-export.output.schema.json"),
+        (ArtifactListResult, "artifact-list.output.schema.json"),
+        (ArtifactInfoResult, "artifact-info.output.schema.json"),
+        (OperationDiagnoseResult, "operation-diagnose.output.schema.json"),
     )
     for model, schema_name in cases:
         _assert_shape_matches(model.model_json_schema(), _contract_schema(schema_name))
@@ -58,6 +64,7 @@ def test_external_models_match_contract_top_level_shapes() -> None:
 def test_public_collection_models_preserve_contract_item_caps() -> None:
     cases = (
         (ProjectListResult, "project-list.output.schema.json"),
+        (ArtifactListResult, "artifact-list.output.schema.json"),
         (ConfigResourceSearchResult, "config-resource-search.output.schema.json"),
         (ConfigResourceNamesResult, "config-resource-names.output.schema.json"),
         (ConfigResourceListResult, "config-resource-list.output.schema.json"),

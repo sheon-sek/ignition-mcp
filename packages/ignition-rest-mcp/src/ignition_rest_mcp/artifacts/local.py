@@ -244,7 +244,8 @@ class LocalArtifactStore:
         if not force and now - self._last_free_check < FREE_DISK_CHECK_INTERVAL_SECONDS:
             return
         self._last_free_check = now
-        usage = await asyncio.to_thread(shutil.disk_usage, str(self._root))
+        probe_root = self._root if self._root.exists() else self._root.parent
+        usage = await asyncio.to_thread(shutil.disk_usage, str(probe_root))
         quota = self._quotas
         if usage.free < quota.min_free_bytes or (
             quota.min_free_ratio > 0 and usage.free < usage.total * quota.min_free_ratio
@@ -429,6 +430,17 @@ class LocalArtifactStore:
         if artifact is None or artifact.state is not ArtifactState.READY:
             raise GatewayError("not_found", "artifact not found")
         return artifact
+
+    async def totals(self) -> tuple[int, int]:
+        """(READY count, READY bytes) for the low-cardinality metrics gauges."""
+
+        def _read(conn: Any) -> tuple[int, int]:
+            row = conn.execute(
+                "SELECT COUNT(*), COALESCE(SUM(size_bytes), 0) FROM artifacts WHERE state = 'READY'"
+            ).fetchone()
+            return int(row[0]), int(row[1])
+
+        return await self._db.run(_read)
 
     async def count_ready(self) -> int:
         """GAUGE source for metrics and quota diagnostics (low-cardinality use only)."""

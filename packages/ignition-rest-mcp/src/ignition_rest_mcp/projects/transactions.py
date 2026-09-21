@@ -126,6 +126,7 @@ class ProjectTransactionService:
     def __init__(
         self, *, client: GatewayClient, registry: CapabilityRegistry, store: LocalArtifactStore,
         settings: Settings, locks: ProjectLockRegistry, identity: GatewayIdentity, db: Database,
+        metrics: Any = None,
     ) -> None:
         self._client = client
         self._registry = registry
@@ -134,6 +135,7 @@ class ProjectTransactionService:
         self._locks = locks
         self._identity = identity
         self._db = db
+        self._metrics = metrics
 
     # ------------------------------------------------------------------ rows
 
@@ -172,6 +174,8 @@ class ProjectTransactionService:
         columns.append("updated_at")
         values.append(iso_utc(utc_now()))
         values.append(txn_id)
+        if state not in NON_TERMINAL and self._metrics is not None:
+            self._metrics.record_transaction_terminal(state.value)
 
         def _write(conn: Any) -> None:
             with transaction(conn):

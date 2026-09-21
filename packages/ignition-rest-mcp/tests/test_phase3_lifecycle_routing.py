@@ -54,7 +54,7 @@ def _registered_tool_functions() -> list[ast.AsyncFunctionDef]:
 def test_every_registered_tool_routes_through_the_single_invoke() -> None:
     tools = _registered_tool_functions()
     # 11 Phase 2 tools + the two sensitive exports (slice 5); slices 8 adds three more.
-    assert len(tools) == 13, "registered REST Tool functions drifted from the routed inventory"
+    assert len(tools) == 16, "registered REST Tool functions drifted from the routed inventory"
     for node in tools:
         calls = {
             call.func.id

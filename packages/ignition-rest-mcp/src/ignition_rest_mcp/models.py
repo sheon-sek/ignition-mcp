@@ -22,6 +22,17 @@ class GatewayInfoResult(StrictModel):
     jvmVersion: str
 
 
+class StorageDiagnostics(StrictModel):
+    """Additive (D19) low-cost self-diagnostics for the local data plane."""
+
+    dataDirectoryConfigured: bool
+    stateHealthy: bool
+    auditHealthy: bool
+    artifactsReady: int = Field(ge=0)
+    projectWriterEnabled: bool
+    singleWriterLimitation: str
+
+
 class GatewayDiagnoseResult(StrictModel):
     correlationId: str
     gatewayReachable: bool
@@ -32,6 +43,7 @@ class GatewayDiagnoseResult(StrictModel):
     gatewayVersion: str | None
     moduleCount: int = Field(ge=0)
     message: str
+    storage: StorageDiagnostics | None = None
 
 
 class PageMetadata(StrictModel):
@@ -189,6 +201,50 @@ class ArtifactRefModel(StrictModel):
     createdAt: str = Field(min_length=1)
     expiresAt: str | None
     download: ArtifactDownload
+
+
+class _ForwardRefMarker:  # placeholder to keep file order valid; real class defined below
+    pass
+
+
+class ArtifactPage(StrictModel):
+    total: int = Field(ge=0)
+    matching: int = Field(ge=0)
+    limit: int = Field(ge=0, le=500)
+    offset: int = Field(ge=0)
+    nextOffset: int | None = Field(default=None, ge=0)
+
+
+class ArtifactListResult(StrictModel):
+    correlationId: str
+    items: list[ArtifactRefModel] = Field(max_length=500)
+    page: ArtifactPage
+
+
+class ArtifactInfoResult(StrictModel):
+    correlationId: str
+    artifact: ArtifactRefModel
+
+
+class OperationPhase(StrictModel):
+    name: str = Field(min_length=1, max_length=64)
+    at: str = Field(min_length=1)
+
+
+class OperationDiagnoseResult(StrictModel):
+    correlationId: str
+    tool: str
+    outcome: str = Field(
+        pattern="^(in_progress|succeeded|failed|outcome_unknown|cancelled|interrupted)$"
+    )
+    errorCode: str | None
+    startedAt: str
+    finishedAt: str | None
+    phases: list[OperationPhase] = Field(max_length=32)
+    phasesTruncated: bool
+    transactionId: str | None
+    downstreamCorrelationId: str | None
+    auditResultMissing: bool
 
 
 class ProjectExportResult(StrictModel):

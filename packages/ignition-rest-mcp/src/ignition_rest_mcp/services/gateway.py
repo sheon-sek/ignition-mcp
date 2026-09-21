@@ -13,6 +13,7 @@ from ignition_rest_mcp.models import (
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
+    StorageDiagnostics,
 )
 from ignition_rest_mcp.operation import OperationContext
 
@@ -41,6 +42,7 @@ async def gateway_diagnose(
     client: GatewayClient,
     registry: CapabilityRegistry,
     context: OperationContext,
+    storage: StorageDiagnostics | None = None,
 ) -> GatewayDiagnoseResult:
     snapshot = registry.snapshot
     try:
@@ -61,6 +63,7 @@ async def gateway_diagnose(
             gatewayVersion=version if isinstance(version, str) else snapshot.gateway_version,
             moduleCount=module_count,
             message="Gateway REST authentication and low-cost diagnostics succeeded.",
+            storage=storage,
         )
     except GatewayError as error:
         await registry.observe_failure(error)
@@ -78,6 +81,7 @@ async def gateway_diagnose(
             gatewayVersion=snapshot.gateway_version,
             moduleCount=len(snapshot.module_versions),
             message=str(error),
+            storage=storage,
         )
 
 
