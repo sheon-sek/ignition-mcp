@@ -42,6 +42,12 @@ def _item_reasons(error: dict) -> list[tuple[str, str]]:
     return [(item.get("path"), item.get("reason")) for item in error["details"]["items"]]
 
 
+def _recorded_targets(name: str) -> list[str]:
+    """The ordered native calls a fixture replays (the negative half of a case)."""
+    document = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    return [entry["target"] for entry in document["calls"]]
+
+
 def test_allowlisted_unshelve_reports_executed_items_and_the_cleared_state() -> None:
     structured = run_recorded_tool(
         "alarm_unshelve", _fixture("allowlisted")
@@ -151,6 +157,84 @@ def test_a_failed_observed_read_does_not_change_the_item_outcome() -> None:
     assert structured["observed"][0]["error"]["code"] == "upstream_error"
 
 
+def test_the_target_default_is_twenty_and_the_input_budget_is_finite() -> None:
+    """D10 applies to both Alarm Mutations: a 20-target default inside the Policy,
+    and a finite aggregate byte budget on the request."""
+    over_default = _error("paths-over-policy-limit", "limit_exceeded")
+    assert over_default["details"] == {
+        "reason": "pathsOverPolicyLimit",
+        "requested": 21,
+        "limit": 20,
+    }
+    over_budget = _error("input-over-byte-budget", "limit_exceeded")
+    assert over_budget["details"]["reason"] == "inputOverByteBudget"
+    assert over_budget["details"]["requested"] == 80080
+    assert over_budget["details"]["limit"] == 65536
+
+
+def test_a_denied_target_is_audited_as_a_decision_and_unshelves_nothing() -> None:
+    assert _recorded_targets("target-not-allowlisted") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.util.audit",
+    ]
+    error = _error("target-not-allowlisted", "permission_denied")
+
+    assert error["details"]["reason"] == "preflightTargetRefused"
+    assert error["details"]["auditRecorded"] is True
+
+
+def test_audit_off_still_records_no_denial_row() -> None:
+    assert _recorded_targets("decision-audit-off") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+    ]
+    error = _error("decision-audit-off", "permission_denied")
+
+    assert error["details"]["auditRecorded"] is False
+
+
+def test_required_mode_gates_the_denial_row_on_the_audit_profile() -> None:
+    failed = _error("decision-audit-required-write-fails", "operation_disabled")
+
+    assert failed["details"]["reason"] == "auditAttemptFailed"
+    assert failed["details"]["phase"] == "decision"
+
+
+def test_an_oversize_shelving_identity_does_not_decide_the_item_outcome() -> None:
+    structured = run_recorded_tool(
+        "alarm_unshelve", _fixture("observed-user-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"] == [{"path": EXACT, "status": "executed"}]
+    assert structured["summary"]["executed"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+
+
+def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
+    structured = run_recorded_tool(
+        "alarm_unshelve", _fixture("serialization-fails")
+    )["structuredContent"]
+
+    assert structured["items"] == [{"path": EXACT, "status": "executed"}]
+    assert structured["summary"]["executed"] == 1
+    assert structured["observed"][0]["status"] == "error"
+    assert structured["observed"][0]["error"]["code"] == "schema_mismatch"
+
+
+def test_the_contract_declares_the_d10_input_bounds() -> None:
+    contract = json.loads(
+        (ROOT / "contracts/tools/runtime/alarm_unshelve.contract.json").read_text(encoding="utf-8")
+    )
+
+    assert contract["inputBounds"]["defaultItems"] == 20
+    assert contract["inputBounds"]["hardItems"] == 100
+    assert contract["inputBounds"]["hardItemsPolicyField"] == "alarmMaxPaths"
+    assert contract["inputBounds"]["overBudgetCode"] == "limit_exceeded"
+
+
 VALID_POLICY_FIXTURES = (
     "alarm_unshelve-allowlisted",
     "alarm_unshelve-dispatch-raises",
@@ -163,6 +247,12 @@ VALID_POLICY_FIXTURES = (
     # Shape-valid: only this Tool's own key is held to its entry grammar, and the
     # entry itself is what this Tool refuses.
     "alarm_unshelve-policy-broken-allowlist-entry",
+    # D10 bounds, the denial decision rows and the Observed-state budget.
+    "alarm_unshelve-paths-over-policy-limit",
+    "alarm_unshelve-decision-audit-off",
+    "alarm_unshelve-decision-audit-required-write-fails",
+    "alarm_unshelve-observed-user-over-budget",
+    "alarm_unshelve-serialization-fails",
 )
 INVALID_POLICY_FIXTURES = ()
 

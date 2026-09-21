@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:ignition-mcp:shared:runtime-target-policy",
   "title": "Runtime Target Policy document (D30 §1)",
-  "description": "The deployment-owned document the Runtime plane reads from the reserved Tag provider. A Runtime Mutation fails closed with operation_disabled when it is missing, unreadable, over the product-enforced size cap, or does not satisfy this schema. `allowlists` is keyed by Tool name so a Tag target allowlist and an Alarm source allowlist cannot stand in for each other; an absent key means no target for that Tool, and `*` must be written explicitly (D08). This schema validates the document's shape only: the grammar of an entry (a provider-qualified Tag path prefix, or an Alarm source pattern) belongs to the Tool that reads that key, and a handler validates its own key strictly while the other keys are checked only as non-empty strings. Fields a Tool does not use are still shape-validated when present. A null-valued property is omitted, not set to null: the D28 wire encoding does not apply to this document's storage, and an explicit null is a malformed field.",
+  "description": "The deployment-owned document the Runtime plane reads from the reserved Tag provider. A Runtime Mutation fails closed with operation_disabled when it is missing, unreadable, over the product-enforced size cap, or does not satisfy this schema. `allowlists` is keyed by Tool name so a Tag target allowlist and an Alarm source allowlist cannot stand in for each other; an absent key means no target for that Tool, and `*` must be written explicitly (D08). This schema validates the document's shape only: the grammar of an entry (a provider-qualified Tag path prefix, or an Alarm source pattern) belongs to the Tool that reads that key, and a handler validates its own key strictly while the other keys are checked only as non-empty strings. Fields a Tool does not use are still shape-validated when present. A null-valued property is omitted, not set to null: the D28 wire encoding does not apply to this document's storage, and an explicit null is a malformed field. `tagWriteMaxWrites` and `alarmMaxPaths` are the deployment's raise of D10's 20-item project default; neither may pass the 100-item hard ceiling, and a Tool that finds one outside that range fails closed.",
   "type": "object",
   "properties": {
     "schemaVersion": {"const": 1},
@@ -16,7 +16,9 @@
     "serviceIdentity": {"type": "string", "minLength": 1},
     "auditMode": {"enum": ["best_effort", "required", "off"]},
     "auditProfile": {"type": "string", "minLength": 1},
-    "alarmShelveMaxSeconds": {"type": "integer", "minimum": 1}
+    "alarmShelveMaxSeconds": {"type": "integer", "minimum": 1},
+    "tagWriteMaxWrites": {"type": "integer", "minimum": 1, "maximum": 100},
+    "alarmMaxPaths": {"type": "integer", "minimum": 1, "maximum": 100}
   },
   "required": ["schemaVersion", "allowlists", "serviceIdentity", "auditMode"],
   "additionalProperties": true

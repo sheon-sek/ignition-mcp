@@ -22,7 +22,23 @@ def onToolCalled(builder, writes, timeout):
 	AUDIT_ACTION = "ignition-mcp.tag_write"
 	AUDIT_MODES = ("best_effort", "required", "off")
 	DEFAULT_TIMEOUT_MS = 10000
+	# D10 budgets: the project safe default is 20 writes, the deployment may raise
+	# it through the Runtime Target Policy up to the 100-write hard ceiling, and
+	# every request is bounded by path, value and array-element ceilings plus one
+	# finite aggregate input-byte budget.
+	DEFAULT_MAX_WRITES = 20
 	HARD_MAX_WRITES = 100
+	POLICY_MAX_WRITES_FIELD = "tagWriteMaxWrites"
+	PATH_MAX_BYTES = 2048
+	VALUE_STRING_MAX_BYTES = 16384
+	ARRAY_MAX_ELEMENTS = 1000
+	INPUT_MAX_BYTES = 65536
+	NUMERIC_INPUT_BYTES = 32
+	# D10 output: the Observed state carries its own budget, so a value it cannot
+	# return never becomes the reason a completed write's outcomes disappear.
+	OBSERVED_VALUE_MAX_BYTES = 8192
+	OBSERVED_STATE_MAX_BYTES = 65536
+	OBSERVED_DATASET_MAX_CELLS = 2000
 	OUTPUT_MAX_BYTES = 262144
 
 	def toolError(code, message, details):
@@ -156,6 +172,126 @@ def onToolCalled(builder, writes, timeout):
 			return "datasetValue"
 		return "unsupportedValueType"
 
+	def utf8Bytes(value):
+		return len(text(value).encode("utf-8"))
+
+	def scalarInputBytes(value):
+		if isinstance(value, basestring):
+			return utf8Bytes(value)
+		return NUMERIC_INPUT_BYTES
+
+	def inputBytes(value):
+		if isinstance(value, (list, tuple, List)):
+			total = 2
+			for child in value:
+				total += scalarInputBytes(child)
+			return total
+		return scalarInputBytes(value)
+
+	def inputLimitProblem(path, value):
+		# D10 input ceilings. Every one of them is pure validation over the
+		# request, so an over-budget batch is refused before any native call.
+		pathBytes = utf8Bytes(path)
+		if pathBytes > PATH_MAX_BYTES:
+			return ("pathOverLength", pathBytes, PATH_MAX_BYTES)
+		if isinstance(value, (list, tuple, List)):
+			if len(value) > ARRAY_MAX_ELEMENTS:
+				return ("arrayElementsOverLimit", len(value), ARRAY_MAX_ELEMENTS)
+			for child in value:
+				if isinstance(child, basestring):
+					childBytes = utf8Bytes(child)
+					if childBytes > VALUE_STRING_MAX_BYTES:
+						return ("stringValueOverLimit", childBytes, VALUE_STRING_MAX_BYTES)
+			return None
+		if isinstance(value, basestring):
+			valueBytes = utf8Bytes(value)
+			if valueBytes > VALUE_STRING_MAX_BYTES:
+				return ("stringValueOverLimit", valueBytes, VALUE_STRING_MAX_BYTES)
+		return None
+
+	def valueBytesBounded(value, limit):
+		# A structural size with an early exit, so measuring an Observed value the
+		# provider returned cannot itself materialize or walk an unbounded value.
+		if value is None:
+			return 4
+		if isinstance(value, basestring):
+			return utf8Bytes(value)
+		if isinstance(value, (bool, Boolean)):
+			return 5
+		if isinstance(value, (int, long, float, Number)):
+			return 24
+		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+			return int(value.getRowCount()) * int(value.getColumnCount()) * 24
+		if isinstance(value, (list, tuple, List)):
+			total = 2
+			for child in value:
+				total += valueBytesBounded(child, limit)
+				if total > limit:
+					return total
+			return total
+		if isinstance(value, Map):
+			total = 2
+			for entry in value.entrySet():
+				total += utf8Bytes(entry.getKey()) + valueBytesBounded(entry.getValue(), limit)
+				if total > limit:
+					return total
+			return total
+		if isinstance(value, dict):
+			total = 2
+			for key in value:
+				total += utf8Bytes(key) + valueBytesBounded(value[key], limit)
+				if total > limit:
+					return total
+			return total
+		return 64
+
+	def observedValueProblem(value):
+		# The per-value half of the Observed-state budget. An over-budget value is
+		# reported as an explicit observed error, never truncated silently.
+		if isinstance(value, basestring):
+			size = utf8Bytes(value)
+			if size > OBSERVED_VALUE_MAX_BYTES:
+				return "The observed value is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
+			return None
+		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+			cells = int(value.getRowCount()) * int(value.getColumnCount())
+			if cells > OBSERVED_DATASET_MAX_CELLS:
+				return "The observed Dataset is " + unicode(cells) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned."
+			return None
+		if not isinstance(value, (bool, Boolean, int, long, float, Number)):
+			size = valueBytesBounded(value, OBSERVED_VALUE_MAX_BYTES)
+			if size > OBSERVED_VALUE_MAX_BYTES:
+				return "The observed value is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
+		return None
+
+	def observedError(path, code, message):
+		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
+
+	def omittedObserved(reason):
+		return [observedError(paths[index], "schema_mismatch", reason) for index in range(len(paths))]
+
+	OBSERVED_OMITTED_SERIALIZATION = "The Observed state was omitted because the structured result could not be serialized; the per-item outcomes above are complete."
+	OBSERVED_OMITTED_CEILING = "The Observed state was omitted to keep the structured result inside the 256 KiB output ceiling; the per-item outcomes above are complete."
+
+	def buildDomain(observedEntries):
+		domain = {
+			"items": items,
+			"observed": observedEntries,
+			"summary": {"requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditMode": auditMode, "auditRecorded": auditRecorded},
+			"meta": {"correlationId": correlationId},
+		}
+		return encodeNulls(domain)
+
+	def encodeDomain(observedEntries):
+		# The serializer is not allowed to decide a mutation's result: a failure
+		# here is caught so the per-item Native outcomes still reach the caller.
+		try:
+			domain = buildDomain(observedEntries)
+			return (domain, system.util.jsonEncode(domain))
+		except (Exception, JavaException) as encodeExc:
+			logger.warn("correlationId=" + correlationId + " structured result serialization failed: " + text(encodeExc))
+			return (None, None)
+
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified prefixes matched at
 		# segment boundaries; * must be written explicitly.
@@ -227,6 +363,12 @@ def onToolCalled(builder, writes, timeout):
 			shelveCap = document.get("alarmShelveMaxSeconds")
 			if isinstance(shelveCap, bool) or not isinstance(shelveCap, (int, long)) or shelveCap <= 0:
 				return "policyAlarmShelveMaxSeconds"
+		if hasKey(document, POLICY_MAX_WRITES_FIELD):
+			# D10: the deployment may raise the 20-write default, never above the
+			# 100-write hard ceiling.
+			maxWrites = document.get(POLICY_MAX_WRITES_FIELD)
+			if isinstance(maxWrites, bool) or not isinstance(maxWrites, (int, long)) or maxWrites < 1 or maxWrites > HARD_MAX_WRITES:
+				return "policyTagWriteMaxWrites"
 		return None
 
 	def readPolicy():
@@ -332,6 +474,16 @@ def onToolCalled(builder, writes, timeout):
 			values.append(item.get("value"))
 		if inputProblems:
 			return toolError("invalid_argument", "Every write item must carry an absolute provider-qualified current Tag path and a scalar or scalar-array value; no item was executed.", {"reason": "preflightInputFailed", "items": inputProblems})
+		# D10 input ceilings: pure validation over the request, so an over-budget
+		# batch never reaches the policy read, let alone the Gateway.
+		totalInputBytes = 0
+		for index in range(len(paths)):
+			problem = inputLimitProblem(paths[index], values[index])
+			if problem is not None:
+				return toolError("limit_exceeded", "A write item is over a documented D10 input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+			totalInputBytes += utf8Bytes(paths[index]) + inputBytes(values[index])
+		if totalInputBytes > INPUT_MAX_BYTES:
+			return toolError("limit_exceeded", "The write batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -345,6 +497,17 @@ def onToolCalled(builder, writes, timeout):
 		auditProfile = policy.get("auditProfile")
 		if auditProfile is not None:
 			auditProfile = unicode(auditProfile).strip()
+		# D10: a usable Policy is what raises the 20-write project default, and the
+		# validation above keeps its value inside the 100-write hard ceiling.
+		effectiveMaxWrites = DEFAULT_MAX_WRITES
+		if hasKey(policy, POLICY_MAX_WRITES_FIELD):
+			effectiveMaxWrites = int(policy.get(POLICY_MAX_WRITES_FIELD))
+		if len(paths) > effectiveMaxWrites:
+			return toolError("limit_exceeded", "writes exceeds the deployment's limit of " + unicode(effectiveMaxWrites) + " items; split the batch or raise " + POLICY_MAX_WRITES_FIELD + " in the Runtime Target Policy.", {"reason": "writesOverPolicyLimit", "requested": len(paths), "limit": effectiveMaxWrites})
+		if auditMode == "required" and not auditProfileAvailable(auditProfile):
+			# D30 6: the required-mode audit profile is checked before anything is
+			# executed and before any audit row is attempted.
+			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no item was executed.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
 		stage = "preflight"
 		policyProblems = []
 		for index in range(len(paths)):
@@ -357,9 +520,13 @@ def onToolCalled(builder, writes, timeout):
 			if not matchesAllowlist(path, entries):
 				policyProblems.append({"index": index, "path": path, "reason": "targetNotAllowlisted", "code": "permission_denied"})
 		if policyProblems:
-			return toolError("permission_denied", "Every write target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems})
-		if auditMode == "required" and not auditProfileAvailable(auditProfile):
-			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no item was executed.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
+			# D18: a denied mutation is audited. The decision row is the only row
+			# a denial produces, and `off` mode still records nothing.
+			refusedText = ",".join([problem["path"] for problem in policyProblems])
+			decisionRecorded = auditWrite("decision", refusedText, "outcome=denied code=permission_denied refused=" + unicode(len(policyProblems)) + " requested=" + unicode(len(paths)))
+			if auditMode == "required" and not decisionRecorded:
+				return toolError("operation_disabled", "The Runtime audit mode is required but the denied-mutation record could not be written; no item was executed.", {"reason": "auditAttemptFailed", "phase": "decision"})
+			return toolError("permission_denied", "Every write target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems, "auditRecorded": decisionRecorded})
 		stage = "audit_attempt"
 		targetText = ",".join(paths)
 		attemptRecorded = auditWrite("attempt", targetText, "outcome=attempt requested=" + unicode(len(paths)))
@@ -397,34 +564,58 @@ def onToolCalled(builder, writes, timeout):
 		auditRecorded = bool(attemptRecorded and resultRecorded)
 		stage = "observed_read"
 		observed = []
+		observedBytes = 0
+		observedBudgetSpent = False
 		try:
 			observedReads = system.tag.readBlocking(paths, int(timeout))
 		except (Exception, JavaException) as observedExc:
 			logger.warn("correlationId=" + correlationId + " observed read failed: " + text(observedExc))
 			observedReads = None
 		if observedReads is None or len(observedReads) != len(paths):
-			observed = [{"path": paths[index], "status": "error", "error": {"code": "upstream_error", "message": "The observed state could not be read.", "correlationId": correlationId}} for index in range(len(paths))]
+			observed = [observedError(paths[index], "upstream_error", "The observed state could not be read.") for index in range(len(paths))]
 		else:
 			for index in range(len(paths)):
+				path = paths[index]
 				try:
 					value = observedReads[index]
 					if value is None or not (hasattr(value, "getValue") and hasattr(value, "getQuality") and hasattr(value, "getTimestamp")):
 						raise TypeError("Native item is not a QualifiedValue")
-					observed.append({"path": paths[index], "status": "ok", "value": jsonValue(value.getValue()), "quality": quality(value.getQuality()), "timestamp": jsonValue(value.getTimestamp())})
+					rawValue = value.getValue()
+					# D10: the Observed state carries its own budget, checked before
+					# the value is materialized for the result. An over-budget value
+					# is reported as an explicit observed error, never truncated.
+					problem = observedValueProblem(rawValue)
+					if problem is None and observedBudgetSpent:
+						problem = "The Observed-state budget of " + unicode(OBSERVED_STATE_MAX_BYTES) + " bytes is already spent; this value was not returned."
+					if problem is None and observedBytes + valueBytesBounded(rawValue, OBSERVED_VALUE_MAX_BYTES) > OBSERVED_STATE_MAX_BYTES:
+						problem = "The Observed state already holds " + unicode(observedBytes) + " bytes, so returning this value would pass the " + unicode(OBSERVED_STATE_MAX_BYTES) + "-byte budget; it was not returned."
+						observedBudgetSpent = True
+					if problem is not None:
+						observed.append(observedError(path, "limit_exceeded", problem))
+						continue
+					rendered = jsonValue(rawValue)
+					observedBytes += valueBytesBounded(rawValue, OBSERVED_VALUE_MAX_BYTES)
+					observed.append({"path": path, "status": "ok", "value": rendered, "quality": quality(value.getQuality()), "timestamp": jsonValue(value.getTimestamp())})
 				except (Exception, JavaException) as itemExc:
 					logger.error("correlationId=" + correlationId + " observed item serialization failed: " + text(itemExc))
-					observed.append({"path": paths[index], "status": "error", "error": {"code": "schema_mismatch", "message": "The observed Tag item could not be represented.", "correlationId": correlationId}})
+					observed.append(observedError(path, "schema_mismatch", "The observed Tag item could not be represented."))
 		stage = "serialization"
-		domain = {
-			"items": items,
-			"observed": observed,
-			"summary": {"requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditMode": auditMode, "auditRecorded": auditRecorded},
-			"meta": {"correlationId": correlationId},
-		}
-		domain = encodeNulls(domain)
-		encoded = system.util.jsonEncode(domain)
-		if len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "Structured output exceeds the 256 KiB default limit; write to fewer paths or use narrower values.", {"reason": "outputOverLimit"})
+		# The per-item Native outcomes are established facts by now, so neither an
+		# over-budget Observed state nor a serializer failure may replace them with
+		# a Tool error. The result is rendered with the full Observed state and,
+		# when that cannot be returned, without it.
+		domain, encoded = encodeDomain(observed)
+		if encoded is None:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_SERIALIZATION))
+		elif len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_CEILING))
+		if encoded is None:
+			return toolError("upstream_error", "The Tag write completed but its structured result could not be serialized.", {"reason": "serializationFailure", "stage": stage, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
+		payloadBytes = len(encoded.encode("utf-8"))
+		if payloadBytes > OUTPUT_MAX_BYTES:
+			# D10: over-budget states what was requested, the limit, and what did
+			# execute, so a completed write is never silent.
+			return toolError("limit_exceeded", "The structured result is " + unicode(payloadBytes) + " bytes, over the " + unicode(OUTPUT_MAX_BYTES) + "-byte output ceiling, even without the Observed state; write to fewer or shorter paths.", {"reason": "outputOverLimit", "requestedBytes": payloadBytes, "limitBytes": OUTPUT_MAX_BYTES, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " stage=" + stage + " tag_write failed: " + text(exc))

@@ -1,13 +1,18 @@
 {
   "schemaVersion": 2,
-  "tool": "alarm_unshelve",
+  "tool": "tag_write",
   "parameterOrder": [
-    "paths"
+    "writes",
+    "timeout"
   ],
   "arguments": {
-    "paths": [
-      "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi"
-    ]
+    "writes": [
+      {
+        "path": "[default]AHU2/Setpoint",
+        "value": 1
+      }
+    ],
+    "timeout": 5000
   },
   "calls": [
     {
@@ -29,7 +34,7 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": 260
+            "value": 130
           }
         ]
       }
@@ -53,7 +58,7 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+            "value": "{\"allowlists\":{\"tag_write\":[\"[default]AHU\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
           }
         ]
       }
@@ -61,8 +66,8 @@
     {
       "target": "system.util.audit",
       "kwargs": {
-        "action": "ignition-mcp.alarm_unshelve",
-        "actionTarget": "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi",
+        "action": "ignition-mcp.tag_write",
+        "actionTarget": "[default]AHU2/Setpoint",
         "actor": "ignition-mcp-service"
       },
       "result": {

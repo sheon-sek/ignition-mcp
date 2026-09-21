@@ -23,7 +23,18 @@ def onToolCalled(builder, paths):
 	AUDIT_MODES = ("best_effort", "required", "off")
 	# D10 alarm path ceiling, as alarm_status applies it to the same language.
 	PATH_MAX_LENGTH = 2048
+	# D10 budgets: the project safe default is 20 targets, the deployment may
+	# raise it through the Runtime Target Policy up to the 100-target hard
+	# ceiling, and one aggregate input-byte budget bounds the whole request.
+	DEFAULT_MAX_PATHS = 20
 	HARD_MAX_PATHS = 100
+	POLICY_MAX_PATHS_FIELD = "alarmMaxPaths"
+	INPUT_MAX_BYTES = 65536
+	# The Observed state bounds the two Gateway-provided strings it reports, so a
+	# value it cannot return never becomes the reason an outcome disappears.
+	OBSERVED_USER_MAX_CHARS = 256
+	OBSERVED_EXPIRATION_MAX_CHARS = 64
+	OBSERVED_STATE_MAX_BYTES = 65536
 	# alarm_shelved_list's own output ceiling; the Observed read uses it to stay
 	# bounded and reports an error item rather than materializing more.
 	SHELVED_READ_LIMIT = 500
@@ -70,6 +81,46 @@ def onToolCalled(builder, paths):
 		if hasattr(value, "isGood"):
 			return bool(value.isGood())
 		return unicode(value).find("Good") == 0
+
+	def utf8Bytes(value):
+		return len(text(value).encode("utf-8"))
+
+	def observedError(path, code, message):
+		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
+
+	def observedEntryProblem(user, expiration):
+		# D10 output: bound the two Gateway-provided strings the Observed state
+		# reports. An over-budget entry is reported explicitly, never truncated.
+		if isinstance(user, basestring) and len(user) > OBSERVED_USER_MAX_CHARS:
+			return "The shelving identity is " + unicode(len(user)) + " characters, over the " + unicode(OBSERVED_USER_MAX_CHARS) + "-character Observed-state budget; it was not returned."
+		if isinstance(expiration, basestring) and len(expiration) > OBSERVED_EXPIRATION_MAX_CHARS:
+			return "The shelving expiration is " + unicode(len(expiration)) + " characters, over the " + unicode(OBSERVED_EXPIRATION_MAX_CHARS) + "-character Observed-state budget; it was not returned."
+		return None
+
+	OBSERVED_OMITTED_SERIALIZATION = "The Observed state was omitted because the structured result could not be serialized; the per-item outcomes above are complete."
+	OBSERVED_OMITTED_CEILING = "The Observed state was omitted to keep the structured result inside the 256 KiB output ceiling; the per-item outcomes above are complete."
+
+	def omittedObserved(reason):
+		return [observedError(path, "schema_mismatch", reason) for path in exactPaths]
+
+	def buildDomain(observedEntries):
+		domain = {
+			"items": items,
+			"observed": observedEntries,
+			"summary": {"requested": len(exactPaths), "executed": executed, "outcomeUnknown": outcomeUnknown, "auditMode": auditMode, "auditRecorded": auditRecorded},
+			"meta": {"correlationId": correlationId},
+		}
+		return encodeNulls(domain)
+
+	def encodeDomain(observedEntries):
+		# The serializer is not allowed to decide a mutation's result: a failure
+		# here is caught so the per-item outcomes still reach the caller.
+		try:
+			domain = buildDomain(observedEntries)
+			return (domain, system.util.jsonEncode(domain))
+		except (Exception, JavaException) as encodeExc:
+			logger.warn("correlationId=" + correlationId + " structured result serialization failed: " + text(encodeExc))
+			return (None, None)
 
 	def alarmPathProblem(value):
 		# D12: mutation targets are exact Alarm paths. A pattern without * matches
@@ -170,6 +221,12 @@ def onToolCalled(builder, paths):
 			shelveCap = document.get("alarmShelveMaxSeconds")
 			if isinstance(shelveCap, bool) or not isinstance(shelveCap, (int, long)) or shelveCap <= 0:
 				return "policyAlarmShelveMaxSeconds"
+		if hasKey(document, POLICY_MAX_PATHS_FIELD):
+			# D10: the deployment may raise the 20-target default, never above the
+			# 100-target hard ceiling.
+			maxPaths = document.get(POLICY_MAX_PATHS_FIELD)
+			if isinstance(maxPaths, bool) or not isinstance(maxPaths, (int, long)) or maxPaths < 1 or maxPaths > HARD_MAX_PATHS:
+				return "policyAlarmMaxPaths"
 		return None
 
 	def readPolicy():
@@ -257,6 +314,13 @@ def onToolCalled(builder, paths):
 			exactPaths.append(unicode(paths[index]).strip())
 		if inputProblems:
 			return toolError("invalid_argument", "Every target must be a provider-qualified exact Alarm path with no wildcard; no path was unshelved.", {"reason": "preflightInputFailed", "items": inputProblems})
+		# D10: one finite aggregate input-byte budget over the target list, checked
+		# before the policy read so an over-budget request never reaches the Gateway.
+		totalInputBytes = 0
+		for path in exactPaths:
+			totalInputBytes += utf8Bytes(path)
+		if totalInputBytes > INPUT_MAX_BYTES:
+			return toolError("limit_exceeded", "The unshelve batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -270,6 +334,17 @@ def onToolCalled(builder, paths):
 		auditProfile = policy.get("auditProfile")
 		if auditProfile is not None:
 			auditProfile = unicode(auditProfile).strip()
+		# D10: a usable Policy is what raises the 20-target project default, and the
+		# validation above keeps its value inside the 100-target hard ceiling.
+		effectiveMaxPaths = DEFAULT_MAX_PATHS
+		if hasKey(policy, POLICY_MAX_PATHS_FIELD):
+			effectiveMaxPaths = int(policy.get(POLICY_MAX_PATHS_FIELD))
+		if len(exactPaths) > effectiveMaxPaths:
+			return toolError("limit_exceeded", "paths exceeds the deployment's limit of " + unicode(effectiveMaxPaths) + " items; split the batch or raise " + POLICY_MAX_PATHS_FIELD + " in the Runtime Target Policy.", {"reason": "pathsOverPolicyLimit", "requested": len(exactPaths), "limit": effectiveMaxPaths})
+		if auditMode == "required" and not auditProfileAvailable(auditProfile):
+			# D30 6: the required-mode audit profile is checked before anything is
+			# executed and before any audit row is attempted.
+			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no path was unshelved.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
 		stage = "preflight"
 		policyProblems = []
 		for index in range(len(exactPaths)):
@@ -282,9 +357,13 @@ def onToolCalled(builder, paths):
 			if not matchesAllowlist(path, entries):
 				policyProblems.append({"index": index, "path": path, "reason": "targetNotAllowlisted", "code": "permission_denied"})
 		if policyProblems:
-			return toolError("permission_denied", "Every target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no path was unshelved.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems})
-		if auditMode == "required" and not auditProfileAvailable(auditProfile):
-			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no path was unshelved.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
+			# D18: a denied mutation is audited. The decision row is the only row
+			# a denial produces, and `off` mode still records nothing.
+			refusedText = ",".join([problem["path"] for problem in policyProblems])
+			decisionRecorded = auditWrite("decision", refusedText, "outcome=denied code=permission_denied refused=" + unicode(len(policyProblems)) + " requested=" + unicode(len(exactPaths)))
+			if auditMode == "required" and not decisionRecorded:
+				return toolError("operation_disabled", "The Runtime audit mode is required but the denied-mutation record could not be written; no path was unshelved.", {"reason": "auditAttemptFailed", "phase": "decision"})
+			return toolError("permission_denied", "Every target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no path was unshelved.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems, "auditRecorded": decisionRecorded})
 		stage = "audit_attempt"
 		targetText = ",".join(exactPaths)
 		attemptRecorded = auditWrite("attempt", targetText, "outcome=attempt requested=" + unicode(len(exactPaths)))
@@ -313,6 +392,8 @@ def onToolCalled(builder, paths):
 		auditRecorded = bool(attemptRecorded and resultRecorded)
 		stage = "observed_read"
 		observed = []
+		observedBytes = 0
+		observedBudgetSpent = False
 		shelvedValues = None
 		try:
 			shelvedValues = system.alarm.getShelvedPaths()
@@ -320,9 +401,9 @@ def onToolCalled(builder, paths):
 			logger.warn("correlationId=" + correlationId + " shelved-state read failed: " + text(observedExc))
 			shelvedValues = None
 		if shelvedValues is None:
-			observed = [{"path": path, "status": "error", "error": {"code": "upstream_error", "message": "The observed shelved state could not be read.", "correlationId": correlationId}} for path in exactPaths]
+			observed = [observedError(path, "upstream_error", "The observed shelved state could not be read.") for path in exactPaths]
 		elif len(shelvedValues) > SHELVED_READ_LIMIT:
-			observed = [{"path": path, "status": "error", "error": {"code": "upstream_error", "message": "The shelved Alarm state exceeds the bounded read limit of 500 entries.", "correlationId": correlationId}} for path in exactPaths]
+			observed = [observedError(path, "upstream_error", "The shelved Alarm state exceeds the bounded read limit of 500 entries.") for path in exactPaths]
 		else:
 			shelvedByPath = {}
 			for value in shelvedValues:
@@ -336,21 +417,39 @@ def onToolCalled(builder, paths):
 					observed.append({"path": path, "status": "ok", "shelved": False})
 					continue
 				try:
-					observed.append({"path": path, "status": "ok", "shelved": True, "user": jsonValue(value.getUser()), "expiration": jsonValue(value.getExpiration()), "expired": bool(value.isExpired())})
+					userText = jsonValue(value.getUser())
+					expirationText = jsonValue(value.getExpiration())
+					# D10: the Observed state bounds what it reports, and an entry it
+					# cannot return is an explicit observed error, never truncation.
+					problem = observedEntryProblem(userText, expirationText)
+					if problem is None and observedBytes + utf8Bytes(userText) + utf8Bytes(expirationText) + 64 > OBSERVED_STATE_MAX_BYTES:
+						problem = "The Observed state already holds " + unicode(observedBytes) + " bytes, so returning this entry would pass the " + unicode(OBSERVED_STATE_MAX_BYTES) + "-byte budget; it was not returned."
+						observedBudgetSpent = True
+					if problem is not None:
+						observed.append(observedError(path, "limit_exceeded", problem))
+						continue
+					observedBytes += utf8Bytes(userText) + utf8Bytes(expirationText) + 64
+					observed.append({"path": path, "status": "ok", "shelved": True, "user": userText, "expiration": expirationText, "expired": bool(value.isExpired())})
 				except (Exception, JavaException) as itemExc:
 					logger.error("correlationId=" + correlationId + " shelved entry serialization failed: " + text(itemExc))
-					observed.append({"path": path, "status": "error", "error": {"code": "schema_mismatch", "message": "The observed shelving record could not be represented.", "correlationId": correlationId}})
+					observed.append(observedError(path, "schema_mismatch", "The observed shelving record could not be represented."))
 		stage = "serialization"
-		domain = {
-			"items": items,
-			"observed": observed,
-			"summary": {"requested": len(exactPaths), "executed": executed, "outcomeUnknown": outcomeUnknown, "auditMode": auditMode, "auditRecorded": auditRecorded},
-			"meta": {"correlationId": correlationId},
-		}
-		domain = encodeNulls(domain)
-		encoded = system.util.jsonEncode(domain)
-		if len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "Structured output exceeds the 256 KiB default limit; unshelve fewer paths.", {"reason": "outputOverLimit"})
+		# The per-item outcomes are established facts by now, so neither the
+		# Observed-state budget nor a serializer failure may replace them with a
+		# Tool error. The result is rendered with the full Observed state and, when
+		# that cannot be returned, without it.
+		domain, encoded = encodeDomain(observed)
+		if encoded is None:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_SERIALIZATION))
+		elif len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_CEILING))
+		if encoded is None:
+			return toolError("upstream_error", "The Alarm unshelve completed but its structured result could not be serialized.", {"reason": "serializationFailure", "stage": stage, "requested": len(exactPaths), "executed": executed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
+		payloadBytes = len(encoded.encode("utf-8"))
+		if payloadBytes > OUTPUT_MAX_BYTES:
+			# D10: over-budget states what was requested, the limit, and what did
+			# execute, so a completed mutation is never silent.
+			return toolError("limit_exceeded", "The structured result is " + unicode(payloadBytes) + " bytes, over the " + unicode(OUTPUT_MAX_BYTES) + "-byte output ceiling, even without the Observed state; unshelve fewer or shorter paths.", {"reason": "outputOverLimit", "requestedBytes": payloadBytes, "limitBytes": OUTPUT_MAX_BYTES, "requested": len(exactPaths), "executed": executed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " stage=" + stage + " alarm_unshelve failed: " + text(exc))

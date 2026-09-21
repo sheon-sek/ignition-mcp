@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_shelve",
+  "parameterOrder": [
+    "paths",
+    "timeoutSeconds"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:MCP_P4_1/P00:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P01:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P02:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P03:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P04:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P05:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P06:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P07:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P08:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P09:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P10:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P11:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P12:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P13:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P14:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P15:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P16:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P17:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P18:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P19:/alm:ProbeHi",
+      "prov:default:/tag:MCP_P4_1/P20:/alm:ProbeHi"
+    ],
+    "timeoutSeconds": 3600
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 236
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

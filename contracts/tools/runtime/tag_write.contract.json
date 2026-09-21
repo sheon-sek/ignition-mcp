@@ -23,6 +23,23 @@
     },
     "timeout": {"type": "integer", "required": false, "default": 10000, "minimum": 0, "maximum": 30000}
   },
+  "inputBounds": {
+    "itemsParameter": "writes",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagWriteMaxWrites",
+    "hardItemsPolicyRule": "a deployment may raise the 20-item default through the Runtime Target Policy and never above the 100-item hard ceiling",
+    "pathMaxBytes": 2048,
+    "valueStringMaxBytes": 16384,
+    "arrayMaxElements": 1000,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": ["requested", "limit"],
+    "observedStateMaxBytes": 65536,
+    "observedValueMaxBytes": 8192,
+    "observedDatasetMaxCells": 2000,
+    "outputMaxBytes": 262144
+  },
   "outputSchema": "contracts/schemas/tag-write.output.schema.json",
   "nativeRequirements": ["system.tag.readBlocking", "system.tag.writeBlocking", "system.util.audit"],
   "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
@@ -41,6 +58,8 @@
     "reservedProviderRefusalCode": "permission_denied"
   },
   "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "deniedMutationAudit": "after a usable Policy is read, a refused target produces one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed value that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes",
   "automaticRetryAfterAmbiguousOutcome": false,
   "itemOutcomeUnknownScope": "only items whose native outcome is itself indeterminate",
   "nullEncoding": "ignition-null-v1"

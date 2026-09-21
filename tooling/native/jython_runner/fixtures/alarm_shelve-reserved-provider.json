@@ -59,6 +59,17 @@
           }
         ]
       }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_shelve",
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service"
+      },
+      "result": {
+        "kind": "none"
+      }
     }
   ]
 }

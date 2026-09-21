@@ -1,13 +1,15 @@
 {
   "schemaVersion": 2,
-  "tool": "alarm_unshelve",
+  "tool": "alarm_shelve",
   "parameterOrder": [
-    "paths"
+    "paths",
+    "timeoutSeconds"
   ],
   "arguments": {
     "paths": [
       "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi"
-    ]
+    ],
+    "timeoutSeconds": 3600
   },
   "calls": [
     {
@@ -29,7 +31,7 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": 260
+            "value": 263
           }
         ]
       }
@@ -53,20 +55,35 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"]},\"auditMode\":\"required\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
           }
         ]
       }
     },
     {
-      "target": "system.util.audit",
+      "target": "system.config.getResource",
       "kwargs": {
-        "action": "ignition-mcp.alarm_unshelve",
-        "actionTarget": "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi",
-        "actor": "ignition-mcp-service"
+        "moduleId": "ignition",
+        "typeId": "audit-profile",
+        "name": "MCP_CI_AUDIT"
       },
       "result": {
-        "kind": "none"
+        "kind": "resource",
+        "name": "MCP_CI_AUDIT",
+        "enabled": true
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_shelve",
+        "actionTarget": "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "raise",
+        "message": "recorded audit failure"
       }
     }
   ]

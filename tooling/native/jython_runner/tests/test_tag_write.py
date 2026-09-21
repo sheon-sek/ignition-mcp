@@ -34,6 +34,12 @@ def _error(name: str, code: str) -> dict:
     return run_recorded_tool_error("tag_write", _fixture(name), expected_code=code)
 
 
+def _recorded_targets(name: str) -> list[str]:
+    """The ordered native calls a fixture replays (the negative half of a case)."""
+    document = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    return [entry["target"] for entry in document["calls"]]
+
+
 def _item_reasons(error: dict) -> list[tuple[str, str]]:
     return [(item.get("path"), item.get("reason")) for item in error["details"]["items"]]
 
@@ -225,6 +231,154 @@ def test_hard_write_ceiling_is_enforced_before_the_policy_read() -> None:
     }
 
 
+def test_the_batch_default_is_twenty_and_a_deployment_may_raise_it_within_the_cap() -> None:
+    """D10: the project safe default is 20 writes, the deployment may raise it up
+    to the 100-item hard ceiling through the Runtime Target Policy."""
+    error = _error("over-policy-limit", "limit_exceeded")
+
+    assert error["details"] == {
+        "reason": "writesOverPolicyLimit",
+        "requested": 21,
+        "limit": 20,
+    }
+    # The same 21 writes run when the document raises the limit to 25, so the
+    # refusal above is the deployment default and not a hidden hard cap.
+    structured = run_recorded_tool(
+        "tag_write", _fixture("policy-raises-write-limit")
+    )["structuredContent"]
+    assert structured["summary"]["requested"] == 21
+    assert structured["summary"]["succeeded"] == 21
+
+
+def test_a_policy_write_limit_outside_the_d10_hard_cap_fails_closed() -> None:
+    error = _error("policy-write-limit-invalid", "operation_disabled")
+
+    assert error["details"]["reason"] == "policyTagWriteMaxWrites"
+
+
+def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("path-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "pathOverLength"
+    assert error["details"]["index"] == 0
+    assert error["details"]["requested"] == 2053
+    assert error["details"]["limit"] == 2048
+
+
+def test_a_string_value_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("string-value-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "stringValueOverLimit"
+    assert error["details"]["index"] == 0
+    assert error["details"]["requested"] == 16385
+    assert error["details"]["limit"] == 16384
+
+
+def test_an_array_over_the_element_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("array-elements-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "arrayElementsOverLimit"
+    assert error["details"]["requested"] == 1001
+    assert error["details"]["limit"] == 1000
+
+
+def test_the_aggregate_input_byte_budget_is_finite() -> None:
+    """Every per-item value is inside its own ceiling and the batch is still
+    refused, so the aggregate budget is what bounds the request."""
+    error = _error("input-over-byte-budget", "limit_exceeded")
+
+    assert error["details"]["reason"] == "inputOverByteBudget"
+    assert error["details"]["requested"] == 66075  # five 13200-byte values plus their paths
+    assert error["details"]["limit"] == 65536
+
+
+def test_a_denied_target_is_audited_as_a_decision_and_dispatches_no_write() -> None:
+    """D08/D18: a denied mutation is audited. The ordered call list is the proof:
+    one decision row after the policy read, and no `writeBlocking` at all."""
+    assert _recorded_targets("decision-audit-on-denial") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.util.audit",
+    ]
+    error = _error("decision-audit-on-denial", "permission_denied")
+
+    assert error["details"]["reason"] == "preflightTargetRefused"
+    assert error["details"]["auditRecorded"] is True
+
+
+def test_audit_off_still_records_no_denial_row() -> None:
+    assert _recorded_targets("decision-audit-off") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+    ]
+    error = _error("decision-audit-off", "permission_denied")
+
+    assert error["details"]["auditRecorded"] is False
+
+
+def test_required_mode_gates_the_denial_row_on_the_audit_profile() -> None:
+    recorded = _error("decision-audit-required", "permission_denied")
+    assert recorded["details"]["auditRecorded"] is True
+
+    # A required mode whose denial row cannot be written refuses the call rather
+    # than reporting an unaudited denial.
+    failed = _error("decision-audit-required-write-fails", "operation_disabled")
+    assert failed["details"]["reason"] == "auditAttemptFailed"
+    assert failed["details"]["phase"] == "decision"
+
+
+def test_an_observed_value_over_its_budget_does_not_decide_the_item_outcome() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-value-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "20000" in observed["error"]["message"]
+    assert "8192" in observed["error"]["message"]
+
+
+def test_the_observed_state_budget_marks_only_the_values_it_cannot_return() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-state-budget-exhausted")
+    )["structuredContent"]
+
+    assert [item["status"] for item in structured["items"]] == ["executed"] * 9
+    assert structured["summary"]["succeeded"] == 9
+    assert [entry["status"] for entry in structured["observed"]] == ["ok"] * 8 + ["error"]
+    assert structured["observed"][8]["error"]["code"] == "limit_exceeded"
+
+
+def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
+    """The write completed and its outcome is known; failing to serialize the
+    Observed state must not turn the batch into an `outcome_unknown`."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("serialization-fails")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    assert structured["summary"]["auditRecorded"] is True
+    assert structured["observed"][0]["status"] == "error"
+    assert structured["observed"][0]["error"]["code"] == "schema_mismatch"
+    assert "serializ" in structured["observed"][0]["error"]["message"]
+
+
+def test_the_contract_declares_the_d10_input_bounds() -> None:
+    contract = json.loads(
+        (ROOT / "contracts/tools/runtime/tag_write.contract.json").read_text(encoding="utf-8")
+    )
+
+    assert contract["inputBounds"]["defaultItems"] == 20
+    assert contract["inputBounds"]["hardItems"] == 100
+    assert contract["inputBounds"]["hardItemsPolicyField"] == "tagWriteMaxWrites"
+    assert contract["inputBounds"]["maxInputBytes"] == 65536
+    assert contract["inputBounds"]["overBudgetCode"] == "limit_exceeded"
+
+
 VALID_POLICY_FIXTURES = (
     "tag_write-allowlisted-batch",
     "tag_write-native-outcome-indeterminate",
@@ -245,11 +399,23 @@ VALID_POLICY_FIXTURES = (
     "tag_write-audit-result-fails",
     "tag_write-audit-off",
     "tag_write-observed-read-fails",
+    # D10 bounds, the denial decision rows and the Observed-state budget.
+    "tag_write-over-policy-limit",
+    "tag_write-policy-raises-write-limit",
+    "tag_write-decision-audit-on-denial",
+    "tag_write-decision-audit-off",
+    "tag_write-decision-audit-required",
+    "tag_write-decision-audit-required-write-fails",
+    "tag_write-observed-value-over-budget",
+    "tag_write-observed-state-budget-exhausted",
+    "tag_write-serialization-fails",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (
     "tag_write-policy-malformed",
     "tag_write-policy-null-audit-profile",
+    # A policy may not raise the write ceiling above D10's 100-item hard cap.
+    "tag_write-policy-write-limit-invalid",
 )
 
 

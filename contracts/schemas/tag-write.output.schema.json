@@ -26,6 +26,6 @@
       {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false}
     ]},
     "quality": {"type": "object", "additionalProperties": false, "properties": {"code": {"type": "integer"}, "name": {"type": "string", "minLength": 1}, "level": {"type": "string", "minLength": 1}, "good": {"type": "boolean"}, "diagnosticMessage": {"oneOf": [{"type": "string"}, {"$ref": "#/$defs/null"}]}}, "required": ["code", "name", "level", "good", "diagnosticMessage"]},
-    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
+    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error", "limit_exceeded"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
   }
 }

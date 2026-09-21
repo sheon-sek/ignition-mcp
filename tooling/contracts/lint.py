@@ -178,6 +178,29 @@ def _check_runtime_mutation(tool: dict[str, Any], tool_name: str, repo_root: Pat
         raise ContractError(f"{tool_name}: the reserved-provider refusal must cover an explicit *")
     if policy.get("reservedProviderRefusalCode") != "permission_denied":
         raise ContractError(f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §7)")
+    _check_input_bounds(tool, tool_name)
+
+
+def _check_input_bounds(tool: dict[str, Any], tool_name: str) -> None:
+    """D10's numeric budgets are declared by the contract the handler implements."""
+
+    bounds = tool.get("inputBounds")
+    if not isinstance(bounds, dict):
+        raise ContractError(f"{tool_name}: D10 requires declared inputBounds")
+    if bounds.get("defaultItems") != 20 or bounds.get("hardItems") != 100:
+        raise ContractError(
+            f"{tool_name}: D10 fixes the 20-item project default and the 100-item hard ceiling"
+        )
+    if bounds.get("overBudgetCode") != "limit_exceeded":
+        raise ContractError(f"{tool_name}: an over-budget request is limit_exceeded (D10)")
+    if bounds.get("itemsParameter") not in tool.get("parameters", {}):
+        raise ContractError(f"{tool_name}: inputBounds.itemsParameter must name a declared parameter")
+    if not isinstance(bounds.get("hardItemsPolicyField"), str) or not bounds["hardItemsPolicyField"]:
+        raise ContractError(f"{tool_name}: D10's deployment override must name its Policy field")
+    for key in ("maxInputBytes", "outputMaxBytes"):
+        value = bounds.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise ContractError(f"{tool_name}: inputBounds.{key} must be a positive byte ceiling")
 
 
 def lint_contracts(root: str | Path) -> None:
@@ -276,6 +299,15 @@ def lint_contracts(root: str | Path) -> None:
             "best_effort", "required", "off",
         ]:
             raise ContractError("Runtime Target Policy audit-mode vocabulary drift")
+        # D10's deployment override lives in the Policy document, so the field a
+        # Mutation contract names must be part of that document's schema.
+        for mutation_name in CURRENT_RUNTIME_MUTATION_TOOLS:
+            mutation = _load(root_path / f"tools/runtime/{mutation_name}.contract.json")
+            field = mutation["inputBounds"]["hardItemsPolicyField"]
+            if field not in policy_schema.get("properties", {}):
+                raise ContractError(
+                    f"{mutation_name}: {field} must be a Runtime Target Policy document field"
+                )
 
     for tool_name in CURRENT_REST_READ_TOOLS:
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")
