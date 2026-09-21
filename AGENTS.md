@@ -91,3 +91,17 @@ Pytest discovers `test_*.py`; name tests after observable behavior. Add focused 
 ## Commit & Pull Request Guidelines
 
 History follows Conventional Commit-style subjects such as `fix(runtime): normalize tag config mappings` and `test(phase2): cover REST capability catalog`; use an imperative subject and `!` for breaking changes. PRs should explain the behavior and contract impact, reference relevant decisions or issues, list validation commands, and include live-Gateway evidence when applicable. Do not silently change a frozen decision or phase gate.
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in the GitHub Issues of `sheon-sek/ignition-mcp` and are managed with the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The repo uses the five default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+The repo is single-context: one root `CONTEXT.md`, with decisions in `docs/decisions/`. See `docs/agents/domain.md`.
