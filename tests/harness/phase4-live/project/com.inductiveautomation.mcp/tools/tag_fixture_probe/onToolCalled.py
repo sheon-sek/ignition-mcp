@@ -37,12 +37,20 @@ def onToolCalled(builder, providerRoot, rootName, siblingRootName, targets):
 	# the caller passes the bare provider name the policy allowlist uses.
 	bracketProvider = "[" + providerRoot + "]"
 
+	def tree():
+		# Both roots in one configure call: the allowlisted root with its nested
+		# descendant, and the sibling root whose path only shares a string prefix.
+		return [
+			folder(rootName, children()),
+			folder(siblingRootName, [atomicTag(siblingTarget())]),
+		]
+
 	def configure():
 		# The ticket #6 harness proved the two-form create; the same fallback is
 		# kept here so a provider that refuses the nested tree still gets the
 		# sibling root created instead of failing the stage.
 		detail = {}
-		codes = qualityList(system.tag.configure(bracketProvider, [tree()], "o"))
+		codes = qualityList(system.tag.configure(bracketProvider, tree(), "o"))
 		detail["folderFallbackUsed"] = False
 		detail["qualityCodes"] = codes
 		if allGood(codes):

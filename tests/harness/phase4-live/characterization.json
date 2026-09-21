@@ -4,7 +4,6 @@
     "alarmConclusion": "measured",
     "alarmNameWildcardMatchesOneAlarm": true,
     "auditProfileAvailable": true,
-    "auditProfileCreateStatus": 200,
     "exactPathCountIsOnePerAlarm": true,
     "exactPathMatchesOnlyOwnSource": true,
     "exactPathSourceFormMatchesPathForm": true,
@@ -110,7 +109,6 @@
       "udt_type_list"
     ],
     "tagWritePolicyDocumentUnclobbered": true,
-    "tagWritePolicyInstallAttempts": 1,
     "tagWritePolicyInstalled": true,
     "tagWritePolicyServedSha256": "75c25bc748447ace30c100bf41c0d217993ae56d3cb5c0920256c4c96ab19446",
     "tagWritePreflightExecutedNothing": true,
@@ -132,7 +130,6 @@
     "alarmConclusion": "measured",
     "alarmNameWildcardMatchesOneAlarm": true,
     "auditProfileAvailable": true,
-    "auditProfileCreateStatus": 200,
     "exactPathCountIsOnePerAlarm": true,
     "exactPathMatchesOnlyOwnSource": true,
     "exactPathSourceFormMatchesPathForm": true,
@@ -238,7 +235,6 @@
       "udt_type_list"
     ],
     "tagWritePolicyDocumentUnclobbered": true,
-    "tagWritePolicyInstallAttempts": 1,
     "tagWritePolicyInstalled": true,
     "tagWritePolicyServedSha256": "75c25bc748447ace30c100bf41c0d217993ae56d3cb5c0920256c4c96ab19446",
     "tagWritePreflightExecutedNothing": true,
