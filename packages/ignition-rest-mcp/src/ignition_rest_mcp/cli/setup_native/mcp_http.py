@@ -145,8 +145,9 @@ class McpHttpClient:
                     pass  # the status code already answered the reachability question
         except httpx.HTTPError as error:
             raise McpProbeError(f"endpoint unreachable: {_reason(error)}") from error
-        if status < 400 or status in (404, 405, 406):
-            # A method or content-negotiation refusal still proves something is listening.
+        if status < 400 or status in (404, 405, 406, 415):
+            # A method or content-negotiation refusal still proves something is listening
+            # (the live Gateway module answers the GET probe with 415, run 35589554998).
             return f"HTTP {status}"
         raise McpProbeError(
             f"endpoint answered HTTP {status}: {_redact(_snippet(bytes(snippet)), self.token or '')}"

@@ -1108,6 +1108,26 @@ def test_mcp_client_follows_pagination_cursors() -> None:
     assert seen == [None, "page-2"]
 
 
+@pytest.mark.parametrize(("status", "reachable"), [(415, True), (405, True), (500, False)])
+def test_mcp_client_reachability_accepts_content_negotiation_refusals(status: int, reachable: bool) -> None:
+    """The live module answers the GET probe with 415 Unsupported Media Type;
+    negotiation/method refusals prove a listener, a server error does not."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(status, content=b"nope")
+
+    async def exercise() -> str:
+        async with McpHttpClient(endpoint=MCP_ENDPOINT, transport=httpx.MockTransport(handler),
+                                 timeout_seconds=5.0) as client:
+            return await client.reachability()
+
+    if reachable:
+        assert asyncio.run(exercise()) == f"HTTP {status}"
+    else:
+        with pytest.raises(McpProbeError, match=str(status)):
+            asyncio.run(exercise())
+
+
 def test_gateway_probe_error_redacts_the_service_token() -> None:
     fake = FakeGateway(module="error")
 
