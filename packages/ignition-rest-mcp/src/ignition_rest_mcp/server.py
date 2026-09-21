@@ -27,6 +27,7 @@ from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.invocation.lifecycle import enforce_output_budget, invoke_tool
 from ignition_rest_mcp.models import (
+    AlarmPipelineCancelResult,
     AlarmPipelineListResult,
     AlarmPipelineStatusResult,
     ArtifactInfoResult,
@@ -60,6 +61,9 @@ from ignition_rest_mcp.runtime import RuntimeState
 from ignition_rest_mcp.services.exports import (
     project_export as project_export_service,
     tag_config_export as tag_config_export_service,
+)
+from ignition_rest_mcp.services.alarm_pipeline_cancel import (
+    alarm_pipeline_cancel as alarm_pipeline_cancel_service,
 )
 from ignition_rest_mcp.services.artifacts import (
     artifact_info as artifact_info_service,
@@ -555,6 +559,34 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="alarm_pipeline_cancel",
+        description=(
+            "Cancel one Alarm Notification Pipeline run — an exact pipeline path plus the "
+            "Alarm Event it is running for — through Native REST, verified by a bounded "
+            "pipeline status re-read (deployment-gated; destructive; the Alarm Event "
+            "itself is never acknowledged or cleared)."
+        ),
+        output_schema=AlarmPipelineCancelResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.control",
+            "capability:alarm_pipeline_cancel",
+        },
+    )
+    async def alarm_pipeline_cancel(path: str, alarmEventId: str) -> AlarmPipelineCancelResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> AlarmPipelineCancelResult:
+            return await alarm_pipeline_cancel_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal, path=path, alarm_event_id=alarmEventId,
+            )
+
+        return await _invoke(
+            "alarm_pipeline_cancel", "FAST", flow,
+            permission_class="CONTROL", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
@@ -948,6 +980,7 @@ DEPLOYMENT_GATED_TOOLS = {
     "config_resource_rename": "config_mutation_enabled",
     "project_import": "config_mutation_enabled",
     "tag_config_import": "config_mutation_enabled",
+    "alarm_pipeline_cancel": "control_mutation_enabled",
 }
 
 
@@ -969,6 +1002,7 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",
+        "alarm_pipeline_cancel": "alarm_pipeline_cancel",
         "project_export": "project_export",
         "tag_config_export": "tag_config_export",
     }

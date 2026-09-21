@@ -2,7 +2,8 @@
 
 Live proof for the REST Mutation Tools — `config_resource_update`,
 `config_resource_create`, `config_resource_delete`, `config_resource_rename`,
-`project_import` and `tag_config_import` — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
+`project_import` and `tag_config_import` (CONFIG) and `alarm_pipeline_cancel`
+(CONTROL) — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
 on pull requests in the trusted repository, under the `phase4-live` GitHub
 environment.
 
@@ -15,7 +16,8 @@ observe:
 
 | Case | Expectation |
 |---|---|
-| `inventory-agent-exact` | with the class enabled, the config-scoped credential sees exactly the read inventory plus the six Mutation Tools |
+| `inventory-agent-exact` | with both classes enabled, the config-scoped credential sees exactly the read inventory plus the six CONFIG Tools |
+| `inventory-operator-exact` | the CONTROL credential sees exactly the read inventory plus `alarm_pipeline_cancel` (D07: discovery follows the credential's scopes) |
 | `inventory-reader-exact` | the read-only credential sees exactly the read inventory: D07 discovery still filters every Mutation Tool |
 | `allowlisted-update-applies` | an allowlisted change returns structured success |
 | `update-moves-the-signature` | the Resource signature moved, so the caller has a fresh Precondition token |
@@ -84,7 +86,16 @@ observe:
 | `tag-import-non-allowlisted-path-is-permission-denied` | D30 §7 for a destination path the Target allowlist does not name |
 | `tag-import-non-allowlisted-path-creates-nothing` | …and that path holds none of the source Tags |
 | `tag-import-invisible-artifact-is-not-found` | D30 §6: a Tag export another principal owns answers `not_found` |
-| `inventory-gate-off-exact` | with the class disabled every Mutation Tool is gone from discovery |
+| `pipeline-cancel-config-credential-is-permission-denied` | the cancel's effect is CONTROL, so the config credential never reaches the handler |
+| `pipeline-cancel-non-allowlisted-pipeline-is-permission-denied` | D30 §7 for a pipeline the Target allowlist does not name |
+| `pipeline-cancel-path-under-the-target-is-permission-denied` | D30 §6: the allowlist holds exact paths, never prefixes, so a path *under* the Target is a different Target |
+| `pipeline-cancel-target-parent-path-is-permission-denied` | …and so is the Target's own parent |
+| `pipeline-cancel-oversize-path-is-limit-exceeded` | D10: the pipeline path bound is enforced with the requested length and the limit |
+| `pipeline-cancel-oversize-event-is-limit-exceeded` | …and so is the alarm event bound |
+| `pipeline-cancel-blank-path-is-invalid-argument` | an empty component is refused before anything is dispatched |
+| `pipeline-cancel-without-a-run-for-the-event-is-not-found` | the bounded pre-dispatch read refuses a cancel for a run the pipeline does not hold, and dispatches nothing |
+| `pipeline-cancel-refusals-change-nothing` | the bounded status read serves the same runs before and after every refusal above |
+| `inventory-gate-off-exact` | with the classes disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
 
 The candidate archive the import cases upload is the export the Project already had,
@@ -110,12 +121,22 @@ Tool-scoped; see `docs/development/phase-4.md`). That is the code both
 harness drives keeps its recorded `operation_disabled` because the code is declared per
 operation.
 
-The deployment this driver runs against enables the config mutation class, the
-sensitive exports (the Project cases read their Precondition token from
+The deployment this driver runs against enables the config *and* control mutation
+classes, the sensitive exports (the Project cases read their Precondition token from
 `project_export`, and the Tag cases take their import document from
 `tag_config_export`), artifact upload, and the D16 Project writer with an explicit
 `IGNITION_MCP_GATEWAY_ID`. Those gates decide the inventory the driver asserts, so the
-read inventory here includes the two sensitive-export Tools.
+read inventory here includes the two sensitive-export Tools. Three credentials are
+configured — read-only, read+config and read+control — because D07 assigns scope by
+operation effect, and the inventory cases prove each one sees only its own lane.
+
+A fresh CI Gateway serves no Alarm Notification Pipeline *runs*, which is the state the
+pipeline cancel cases prove: the class and scope gates, the exact-path Target rule, both
+D10 input bounds, and the bounded pre-dispatch read that refuses a run the pipeline does
+not hold. Producing a run needs an Alarm Event notifying through a provisioned profile,
+which this harness does not provision; the dispatched-and-verified path is proven by the
+unit fixture in `packages/ignition-rest-mcp/tests/test_phase4_alarm_pipeline_cancel.py`,
+and `docs/development/phase-4.md` records the limitation and what would close it.
 
 ## Layout
 
@@ -135,7 +156,10 @@ read inventory here includes the two sensitive-export Tools.
   import document shapes (a named root and a provider-root document), read back from a
   provider-root export, so the rule the Tool's verification depends on is live evidence
   in every row rather than an assumption.
-- `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`.
+- `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`. The two
+  pipeline paths the cancel cases address are derived by the workflow from the disposable
+  Projects (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and
+  the paths the driver sends are the same run-unique strings.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
   `tests/harness/recorded_gateway.py` and runs both driver modes with the same
   per-Tool Target allowlists the workflow configures.

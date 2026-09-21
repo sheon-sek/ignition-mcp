@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:alarm-pipeline-cancel:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "alarmEventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "observedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "items": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pipelinePath": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "type": "string"
+              },
+              "displayPath": {
+                "type": "string"
+              },
+              "blockName": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "millis": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "alarmEventId": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "pipelinePath",
+              "source",
+              "displayPath",
+              "blockName",
+              "status",
+              "millis",
+              "alarmEventId"
+            ]
+          }
+        },
+        "alarmEventReported": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "items",
+        "alarmEventReported"
+      ]
+    }
+  },
+  "required": [
+    "correlationId",
+    "path",
+    "alarmEventId",
+    "observedState"
+  ]
+}

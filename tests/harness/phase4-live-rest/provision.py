@@ -61,6 +61,11 @@ TAG_SOURCE_NAMES = ("Folder", "Int", "Inner", "Text", "Sibling")
 TAG_PROBE_PATH = "convention_probe_named"
 TAG_PROBE_NAMELESS_PATH = "convention_probe_flat"
 
+#: Phase 4 ticket #18: the documented Alarm Notification Pipeline runtime route. The
+#: cancel and the bounded status read the Tool verifies with are the same path, and both
+#: must be documented for the harness to provision a Gateway the Tool can run against.
+PIPELINE_PATH = "/data/alarm-notification/api/v1/pipeline"
+
 REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/type/{RESOURCE_TYPE}"),
     ("GET", f"/data/api/v1/resources/find/{RESOURCE_TYPE}/{{name}}"),
@@ -74,6 +79,11 @@ REQUIRED_ENDPOINTS = frozenset({
     ("POST", TAG_PROVIDER_PATH),
     ("POST", TAG_IMPORT_PATH),
     ("GET", TAG_EXPORT_PATH),
+    # Phase 4 ticket #18: the cancel Tool needs both documented pipeline routes — the
+    # status read it verifies with and the cancel itself — or the harness must not spend
+    # a live run on a Gateway that cannot expose it.
+    ("GET", PIPELINE_PATH),
+    ("DELETE", PIPELINE_PATH),
 })
 MAX_RESPONSE_BYTES = 1_048_576
 MAX_OPENAPI_BYTES = 16 * 1_048_576

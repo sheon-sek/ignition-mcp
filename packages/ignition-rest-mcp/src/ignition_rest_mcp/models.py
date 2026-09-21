@@ -259,6 +259,34 @@ class AlarmPipelineStatusResult(StrictModel):
     page: PageMetadata
 
 
+class AlarmPipelineCancelObservedState(StrictModel):
+    """D30 §6: the bounded ``alarm_pipeline_status`` re-read of the same pipeline path.
+
+    ``items`` is what that read returned (one page, at most the Tool's own page size),
+    and ``alarmEventReported`` is the comparison the verification made: whether a run
+    for the requested Alarm Event is still among them. A successful cancel is confirmed
+    by the run being gone, so the flag is False on every result this Tool returns.
+    """
+
+    items: list[AlarmPipelineInstance] = Field(max_length=100)
+    alarmEventReported: bool
+
+
+class AlarmPipelineCancelResult(StrictModel):
+    """D12/D30: a pipeline cancel addresses one exact pipeline path and one Alarm Event.
+
+    Only a satisfied outcome is returned as data — the Gateway claimed the cancel and
+    the bounded re-read no longer reports that run. Every other outcome is a Tool error
+    (D06), and the observed state it carries is the re-read that was taken.
+    """
+
+    correlationId: str
+    #: The exact pipeline path the cancel addressed (D30 §6: never a prefix).
+    path: str = Field(min_length=1, max_length=512)
+    alarmEventId: str = Field(min_length=1, max_length=128)
+    observedState: AlarmPipelineCancelObservedState
+
+
 class CapabilitiesResource(StrictModel):
     state: str
     generation: int = Field(ge=0)

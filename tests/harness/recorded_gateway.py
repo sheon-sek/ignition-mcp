@@ -30,6 +30,10 @@ _OPENAPI_OPERATIONS = (
     ("get", "/data/api/v1/audit/log/{name}"),
     ("get", "/data/alarm-notification/api/v1/pipelines"),
     ("get", "/data/alarm-notification/api/v1/pipeline"),
+    # Phase 4 ticket #18: the pipeline cancel surface. The route is a DELETE that
+    # takes its two facts in a JSON body, and the status route above is the bounded
+    # read its verification uses.
+    ("delete", "/data/alarm-notification/api/v1/pipeline"),
     ("get", "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"),
     ("get", "/data/api/v1/resources/type/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/names/ignition.gateway/idp-links"),
@@ -324,6 +328,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 else "phase2/modules-healthy-before-restart.json"
             )
             self._json(200, _fixture(fixture))
+            return
+        if path == "/data/alarm-notification/api/v1/pipeline":
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            payload = server.read_pipeline(_first(query, "path", ""), query)
+            if payload is None:
+                self._json(404, {"message": "No such pipeline", "status": "404"})
+                return
+            self._json(200, payload)
             return
         if path == "/data/api/v1/projects/list":
             names = sorted(server.projects)
@@ -630,12 +642,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:  # noqa: N802
         server: Any = self.server
+        body = self._read_body()
         server.requests.append({
-            "method": "DELETE", "path": self.path, "headers": dict(self.headers), "body": b"",
+            "method": "DELETE", "path": self.path, "headers": dict(self.headers), "body": body,
         })
         path = urllib.parse.unquote(urllib.parse.urlsplit(self.path).path)
         if self.headers.get("X-Ignition-API-Token") != API_TOKEN:
             self._json(403, _fixture("http/forbidden.json"))
+            return
+        # Phase 4 ticket #18: the documented cancel route takes its two facts in the
+        # request body (`DELETE` with a JSON body), unlike the resource deletes below,
+        # whose signature travels in the path.
+        if path == "/data/alarm-notification/api/v1/pipeline":
+            status, payload = server.apply_pipeline_cancel(body)
+            self._json(status, payload)
             return
         # The signature travels in the path, exactly as the documented route has it:
         # `/<type>/{name}/{signature}`, or `/<type>/{signature}` for a singleton.
@@ -702,6 +722,24 @@ class _Server(http.server.ThreadingHTTPServer):
         #: tell two resources with one name in different collections apart. Seed it
         #: through :meth:`RecordedGateway.seed_resource`.
         self.resources: dict[str, dict[tuple[str, str], dict[str, Any]]] = {}
+        #: Modelled Alarm Notification Pipeline runtime state, keyed by the fully
+        #: qualified pipeline path: the instances the status route serves. Seed it
+        #: through :meth:`RecordedGateway.seed_pipeline`; a path with no state is a
+        #: 404, exactly as a Gateway with no such pipeline answers.
+        self.pipelines: dict[str, list[dict[str, Any]]] = {}
+        #: The pipeline cancels the fixture actually applied, the observation a test
+        #: asserts alongside the recorded requests.
+        self.pipeline_cancels: list[dict[str, Any]] = []
+        #: Modelled (not recorded) cancel behaviour: a refusal the Gateway reports
+        #: inside a 200 (`pipeline_cancel_refusal`, its message), a 2xx that claims
+        #: nothing (`pipeline_cancel_unclaimed`), an ambiguous status that applies
+        #: nothing (`pipeline_cancel_status`), and a competing cancel at dispatch time
+        #: (`pipeline_cancel_race`).
+        self.pipeline_cancel_refusal: str | None = None
+        self.pipeline_cancel_unclaimed = False
+        self.pipeline_cancel_lies = False
+        self.pipeline_cancel_status: int | None = None
+        self.pipeline_cancel_race: dict[str, str] | None = None
         self.signature_serial = 0
         #: Modelled (not recorded) per-operation write behaviour, keyed by the
         #: operation the Tool performs ("update", "create", "delete", "rename"):
@@ -894,6 +932,98 @@ class _Server(http.server.ThreadingHTTPServer):
                 messages, self.tag_import_wire_shape, success_count=len(applied),
             )
         return 200, _tag_import_success(len(incoming), self.tag_import_wire_shape)
+
+    # ------------------------------------------------------- alarm pipelines
+
+    def seed_pipeline(self, path: str, instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Publish the running instances of one modelled pipeline path."""
+
+        published = [_pipeline_instance(path, instance) for instance in instances]
+        self.pipelines[path] = published
+        return published
+
+    def pipeline_instances(self, path: str) -> list[dict[str, Any]] | None:
+        """The instances one modelled pipeline path serves (``None`` = no such path)."""
+
+        instances = self.pipelines.get(path)
+        if instances is None:
+            return None
+        return [dict(instance) for instance in instances]
+
+    def read_pipeline(self, path: str, query: dict[str, list[str]]) -> dict[str, Any] | None:
+        """The recorded read behavior of the status route (``None`` = 404/path absent)."""
+
+        instances = self.pipelines.get(path)
+        if instances is None:
+            return None
+        limit = int(_first(query, "limit", "100"))
+        offset = int(_first(query, "offset", "0"))
+        window = instances[offset:offset + limit]
+        return {
+            "items": [dict(instance) for instance in window],
+            "metadata": {
+                "total": float(len(instances)), "matching": float(len(instances)),
+                "limit": limit, "offset": offset,
+            },
+        }
+
+    def cancel_pipeline_instance(self, path: str, alarm_event_id: str) -> bool:
+        """Cancel one pipeline run without any Gateway dispatch, as an operator would."""
+
+        instances = self.pipelines.get(path)
+        if instances is None:
+            return False
+        remaining = [
+            instance for instance in instances
+            if instance.get("alarmEventId") != alarm_event_id
+        ]
+        if len(remaining) == len(instances):
+            return False
+        self.pipelines[path] = remaining
+        return True
+
+    def apply_pipeline_cancel(self, body: bytes) -> tuple[int, dict[str, Any]]:
+        """Apply one recorded Gateway pipeline cancel against a modelled pipeline.
+
+        The recorded transition is the documented one: the route removes the run the
+        ``(path, alarmEventId)`` pair names and answers ``{"success": true,
+        "alarmEventId": ...}``; a pair the pipeline does not hold is refused inside the
+        200 with ``success: false``. The write hooks model the boundaries around it: a
+        competing cancel at dispatch time (``pipeline_cancel_race``), an ambiguous
+        status that applies nothing (``pipeline_cancel_status``), and a 2xx that claims
+        nothing (``pipeline_cancel_unclaimed``).
+        """
+
+        try:
+            document = json.loads(body)
+        except (ValueError, UnicodeDecodeError):
+            return 400, _INVALID_BODY
+        if not isinstance(document, dict):
+            return 400, _INVALID_BODY
+        path, alarm_event_id = document.get("path"), document.get("alarmEventId")
+        if not isinstance(path, str) or not path or not isinstance(alarm_event_id, str) or not alarm_event_id:
+            return 400, _INVALID_BODY
+        if (race := self.pipeline_cancel_race) is not None:
+            self.pipeline_cancel_race = None
+            self.cancel_pipeline_instance(race["path"], race["alarmEventId"])
+        if (status := self.pipeline_cancel_status) is not None:
+            return status, {"message": "Internal Server Error", "status": str(status)}
+        if (problem := self.pipeline_cancel_refusal) is not None:
+            return 200, {
+                "success": False,
+                "alarmEventId": alarm_event_id,
+                "problem": {"message": problem, "stacktrace": []},
+            }
+        if self.pipeline_cancel_lies:
+            #: Modelled, not recorded: a Gateway that reports a clean cancel and leaves
+            #: the run in place. The bounded re-read is what has to catch it.
+            return 200, {"success": True, "alarmEventId": alarm_event_id}
+        applied = self.cancel_pipeline_instance(path, alarm_event_id)
+        if applied:
+            self.pipeline_cancels.append({"path": path, "alarmEventId": alarm_event_id})
+        if self.pipeline_cancel_unclaimed:
+            return 200, {}
+        return 200, {"success": applied, "alarmEventId": alarm_event_id}
 
     # ------------------------------------------------------- config resources
 
@@ -1238,6 +1368,27 @@ def _first(query: dict[str, list[str]], key: str, default: str) -> str:
     return values[0] if values else default
 
 
+def _pipeline_instance(path: str, instance: dict[str, Any]) -> dict[str, Any]:
+    """One modelled Alarm Notification Pipeline run, as the status route serves it.
+
+    ``alarmEventId`` is the identity the cancel route addresses a run by, so it is
+    required; the other fields default to what a healthy run reports.
+    """
+
+    alarm_event_id = instance.get("alarmEventId")
+    if not isinstance(alarm_event_id, str) or not alarm_event_id:
+        raise ValueError("a modelled pipeline instance needs a non-empty alarmEventId")
+    return {
+        "pipelinePath": instance.get("pipelinePath", path),
+        "source": instance.get("source", ""),
+        "displayPath": instance.get("displayPath", ""),
+        "blockName": instance.get("blockName", ""),
+        "status": instance.get("status", "Running"),
+        "millis": instance.get("millis", 0),
+        "alarmEventId": alarm_event_id,
+    }
+
+
 def _tag_copy(node: dict[str, Any]) -> dict[str, Any]:
     """A deep copy of one Tag node, so a caller cannot mutate the fixture's state."""
 
@@ -1498,6 +1649,82 @@ class RecordedGateway:
         if shape not in {"summary", "list"}:
             raise ValueError("shape must be 'summary' or 'list'")
         self._server.tag_import_wire_shape = shape
+
+    # ------------------------------------------------------- alarm pipelines
+
+    @property
+    def pipeline_cancels(self) -> list[dict[str, Any]]:
+        """The pipeline cancels the fixture actually applied (path, alarm event)."""
+
+        return self._server.pipeline_cancels
+
+    def seed_pipeline(self, path: str, instances: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Publish one modelled pipeline path holding ``instances`` runs.
+
+        Each instance needs a non-empty ``alarmEventId``; ``status``, ``source``,
+        ``displayPath``, ``blockName`` and ``millis`` are optional, and
+        ``pipelinePath`` defaults to ``path``. A path with no published state answers
+        exactly as a Gateway with no such pipeline does: ``not_found``.
+        """
+
+        return self._server.seed_pipeline(path, instances)
+
+    def pipeline(self, path: str) -> list[dict[str, Any]] | None:
+        """The runs the fixture holds for ``path`` (``None`` = no such path)."""
+
+        return self._server.pipeline_instances(path)
+
+    def cancel_pipeline_out_of_band(self, path: str, alarm_event_id: str) -> bool:
+        """Cancel one pipeline run without the MCP server, as an operator would.
+
+        The Tool's verification re-reads afterwards, so a run removed here and a run
+        this server cancelled are indistinguishable in the observed state — exactly
+        the attribution boundary D30 §2 addresses.
+        """
+
+        return self._server.cancel_pipeline_instance(path, alarm_event_id)
+
+    def refuse_cancels_with(self, problem: str | None = None) -> None:
+        """Model a Gateway that refuses a pipeline cancel inside a 200 response.
+
+        The documented route answers ``{"success": bool, "alarmEventId": str}``; a pair
+        the pipeline does not hold is refused with ``success: false``. The shape is
+        modelled, not recorded, like every other refusal this fixture carries.
+        """
+
+        self._server.pipeline_cancel_refusal = (
+            problem if problem is not None else "No such alarm event is running on this pipeline"
+        )
+
+    def answer_cancels_without_claiming(self) -> None:
+        """Model a Gateway that answers 200 with no ``success`` field at all.
+
+        Modelled, not recorded: the route's answer is readable as neither a claim nor a
+        refusal, which is exactly the case D30 §2 must not report as a success. The
+        cancel is applied, so only the claim is missing.
+        """
+
+        self._server.pipeline_cancel_unclaimed = True
+
+    def claim_cancels_without_applying(self) -> None:
+        """Model a Gateway that claims a clean cancel and leaves the run in place.
+
+        Modelled, not recorded: it is the case D30 §2's verification exists for, where
+        the claim stands and the observed state does not.
+        """
+
+        self._server.pipeline_cancel_lies = True
+
+    def fail_cancels_with(self, status: int = 500) -> None:
+        """Model a Gateway that answers a cancel with ``status`` and applies nothing —
+        the ambiguous dispatch boundary of D08."""
+
+        self._server.pipeline_cancel_status = status
+
+    def race_cancel_with(self, path: str, alarm_event_id: str) -> None:
+        """Model another operator cancelling the same run at dispatch time (D30 §2)."""
+
+        self._server.pipeline_cancel_race = {"path": path, "alarmEventId": alarm_event_id}
 
     # ------------------------------------------------------- config resources
 
