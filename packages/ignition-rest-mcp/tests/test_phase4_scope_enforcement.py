@@ -20,9 +20,12 @@ from fastmcp import Client
 from starlette.testclient import TestClient
 
 import ignition_rest_mcp.server as server_module
-from ignition_rest_mcp.authorization import declared_scope, scope_tag
+from ignition_rest_mcp.audit.sink import AuditWriteError, SqliteAuditSink
+from ignition_rest_mcp.authorization import SCOPE_PERMISSION_CLASS, declared_scope, scope_tag
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import CANONICAL_SCOPES, StaticToken
+from ignition_rest_mcp.storage.database import Database
+from ignition_rest_mcp.storage.schema import AUDIT_DDL
 from test_config import _settings
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -91,6 +94,14 @@ def test_declared_scope_resolves_only_one_canonical_scope(tags: set[str], expect
     assert declared_scope(tags) == expected
 
 
+def test_scope_to_operation_class_matches_the_permission_contract() -> None:
+    contract = json.loads((ROOT / "contracts/shared/permission-classes.json").read_text(encoding="utf-8"))
+
+    assert SCOPE_PERMISSION_CLASS == {
+        entry["externalScope"]: name for name, entry in contract["classes"].items()
+    }
+
+
 def test_every_registered_component_declares_the_contract_scope() -> None:
     """The tag is the runtime declaration; ``contracts/`` is the authority."""
 
@@ -141,6 +152,89 @@ def test_a_principal_without_ignition_config_never_dispatches(
 
     asyncio.run(scenario())
     assert calls == [], "a denied Tool must never reach its handler"
+
+
+def test_a_denied_tool_call_leaves_one_audited_decision_row(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """D18: a scope denial is a durable audit decision, not only a log line.
+
+    The row names the verified principal, carries the denied Tool's effect class
+    and shares one correlation ID with the caller's error envelope. Nothing is
+    dispatched, so no attempt row may appear.
+    """
+
+    _stub_gateway(monkeypatch)
+    server = server_module.create_server(_settings(auth_mode="none", data_dir=str(tmp_path)))
+    calls: list[str] = []
+
+    @server.tool(name="config_probe", tags={"config", scope_tag(CONFIG)})
+    async def config_probe() -> str:
+        calls.append("ran")
+        return "ran"
+
+    async def scenario() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        async with Client(server) as client:
+            denied = await client.call_tool("config_probe", {}, raise_on_error=False)
+            envelope = _envelope(_result_body(denied))
+        return envelope, await _audit_rows(tmp_path)
+
+    envelope, rows = asyncio.run(scenario())
+
+    assert calls == []
+    assert envelope["code"] == "permission_denied"
+    assert [
+        (row["tool"], row["phase"], row["outcome"], row["operation_class"], row["actor_key"])
+        for row in rows
+    ] == [
+        ("config_probe", "decision", "denied:authz-scope:missing-scope:ignition.config", "CONFIG", "none:test"),
+    ]
+    assert rows[0]["correlation_id"] == envelope["correlationId"]
+
+
+def test_a_denial_survives_an_unwritable_audit_sink(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """A storage failure must never turn a denial into an allow (D18 rule)."""
+
+    _stub_gateway(monkeypatch)
+    server = server_module.create_server(_settings(auth_mode="none", data_dir=str(tmp_path)))
+    calls: list[str] = []
+
+    @server.tool(name="config_probe", tags={"config", scope_tag(CONFIG)})
+    async def config_probe() -> str:
+        calls.append("ran")
+        return "ran"
+
+    async def failing_write(self: SqliteAuditSink, row: Any) -> None:
+        raise AuditWriteError("audit storage is unavailable")
+
+    monkeypatch.setattr(SqliteAuditSink, "write", failing_write)
+
+    async def scenario() -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        async with Client(server) as client:
+            denied = await client.call_tool("config_probe", {}, raise_on_error=False)
+            envelope = _envelope(_result_body(denied))
+        return envelope, await _audit_rows(tmp_path)
+
+    envelope, rows = asyncio.run(scenario())
+
+    assert calls == []
+    assert envelope["code"] == "permission_denied"
+    assert rows == []
+
+
+async def _audit_rows(tmp_path: Path) -> list[dict[str, Any]]:
+    columns = ("correlation_id", "tool", "actor_key", "operation_class", "phase", "outcome")
+    db = Database("audit", tmp_path / "audit.db", AUDIT_DDL)
+    await db.open()
+    try:
+        rows = await db.run(
+            lambda conn: conn.execute(f"SELECT {', '.join(columns)} FROM audit_log ORDER BY seq").fetchall()
+        )
+        return [dict(zip(columns, row, strict=True)) for row in rows]
+    finally:
+        await db.close()
 
 
 def test_capability_gated_tools_keep_the_router_refusal(
@@ -286,6 +380,19 @@ def test_named_token_scopes_drive_discovery_and_call_time_enforcement(
 
             for body in (str(denied), str(denied_config), str(allowed)):
                 assert "cfg-secret" not in body and "reader-secret" not in body
+
+            # Both denials are durable audit decisions sharing the caller's
+            # correlation ID, with the token name as the Mutation principal.
+            rows = asyncio.run(_audit_rows(tmp_path))
+            assert [
+                (row["tool"], row["outcome"], row["actor_key"], row["correlation_id"])
+                for row in rows
+            ] == [
+                ("gateway_info", "denied:authz-scope:missing-scope:ignition.read",
+                 "static-token:config-agent", _envelope(denied)["correlationId"]),
+                ("config_probe", "denied:authz-scope:missing-scope:ignition.config",
+                 "static-token:reader", _envelope(denied_config)["correlationId"]),
+            ]
 
             # Denials are logged by principal name, and the credential never is.
             logged = "\n".join(

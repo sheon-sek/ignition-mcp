@@ -15,10 +15,11 @@ component is hidden and calls to it are denied.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
 import logging
 from collections.abc import Iterable, Sequence
-from typing import Any, NoReturn
+from typing import TYPE_CHECKING, Any, NoReturn
 
 from fastmcp import FastMCP
 from fastmcp.exceptions import ResourceError, ToolError
@@ -28,13 +29,34 @@ from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 from fastmcp.tools.base import Tool, ToolResult
 import mcp_types as mt
 
+from ignition_rest_mcp.audit.sink import Auditor
 from ignition_rest_mcp.auth import Principal, current_principal
-from ignition_rest_mcp.config import CANONICAL_SCOPES, Settings
-from ignition_rest_mcp.operation import uuid7
+from ignition_rest_mcp.config import (
+    ADMIN_SCOPE,
+    CANONICAL_SCOPES,
+    CONFIG_SCOPE,
+    CONTROL_SCOPE,
+    READ_SCOPE,
+    Settings,
+)
+from ignition_rest_mcp.operation import OperationContext, uuid7
+
+if TYPE_CHECKING:
+    from ignition_rest_mcp.runtime import RuntimeState
 
 LOGGER = logging.getLogger("ignition_rest_mcp")
 
 SCOPE_TAG_PREFIX = "scope:"
+
+#: D07 assigns scope by operation effect. The declared scope therefore names the
+#: operation class of an audited denial; the contract test ties this map to
+#: ``contracts/shared/permission-classes.json``.
+SCOPE_PERMISSION_CLASS = {
+    READ_SCOPE: "READ",
+    CONFIG_SCOPE: "CONFIG",
+    CONTROL_SCOPE: "CONTROL",
+    ADMIN_SCOPE: "ADMIN",
+}
 
 
 def _component_server(context: MiddlewareContext[Any]) -> FastMCP | None:
@@ -66,8 +88,9 @@ def declared_scope(tags: Iterable[str]) -> str | None:
 class ScopeAuthorizationMiddleware(Middleware):
     """D07 enforcement for the Tools and Resources of one deployment."""
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, state: "RuntimeState") -> None:
         self._settings = settings
+        self._state = state
 
     # ------------------------------------------------------------------ tools
 
@@ -88,10 +111,10 @@ class ScopeAuthorizationMiddleware(Middleware):
         if context.fastmcp_context is None:
             # Without the server we cannot read the Tool's declared scope: deny
             # rather than let an unchecked call through.
-            self._deny_tool(name, None)
+            await self._deny_tool(name, None)
         tool = await self._resolve_tool(context, name)
         if tool is not None and not self._allows(tool.tags):
-            self._deny_tool(name, declared_scope(tool.tags))
+            await self._deny_tool(name, declared_scope(tool.tags))
         # An unknown or capability-disabled Tool keeps FastMCP's own refusal.
         return await call_next(context)
 
@@ -123,6 +146,35 @@ class ScopeAuthorizationMiddleware(Middleware):
         # resolves to the configured service identity with ignition.read only.
         return current_principal(self._settings)
 
+    async def _audit_denial(self, tool: str, actor: str, operation_class: str, reason: str) -> str:
+        """D18: deny durably, then let the caller's envelope share the correlation ID.
+
+        The row is the same ``decision`` shape the guarded executor writes for an
+        out-of-scope Mutation, so a denied call is visible to the audit even though
+        it never reaches a handler. Nothing was dispatched, so ``destructive`` is
+        false and no ``attempt`` row exists. A failed write never changes the
+        denial, exactly as on the artifact data plane.
+        """
+
+        correlation_id = uuid7()
+        sink = self._state.audit_sink
+        records = self._state.records
+        metrics = self._state.metrics
+        if sink is None or records is None or metrics is None:
+            return correlation_id
+        context = OperationContext(
+            correlation_id=correlation_id,
+            server="ignition-rest",
+            tool=tool,
+            actor=actor,
+            permission_class=operation_class,
+            budget_class="FAST",
+            destructive=False,
+            started_at=datetime.now(timezone.utc),
+        )
+        await Auditor(sink, records, context, metrics).decision(allowed=False, reason=reason)
+        return correlation_id
+
     def _allows(self, tags: Iterable[str]) -> bool:
         """The caller holds the scope this component declares."""
 
@@ -146,11 +198,12 @@ class ScopeAuthorizationMiddleware(Middleware):
             return resource
         return await server.get_resource_template(uri)
 
-    def _log_denial(self, component: str, name: str, reason: str) -> None:
+    def _log_denial(self, component: str, name: str, reason: str, correlation_id: str) -> None:
         LOGGER.warning(
             "Authorization denied",
             extra={
                 "event": "authorization",
+                "correlationId": correlation_id,
                 "targetType": component,
                 "targetId": name,
                 "actor": self._principal().key,
@@ -158,21 +211,31 @@ class ScopeAuthorizationMiddleware(Middleware):
             },
         )
 
-    def _deny_tool(self, name: str, scope: str | None) -> NoReturn:
-        reason = f"missing-scope:{scope}" if scope is not None else "no-declared-scope"
-        self._log_denial("tool", name, reason)
+    async def _deny_tool(self, name: str, scope: str | None) -> NoReturn:
+        missing = f"missing-scope:{scope}" if scope is not None else "no-declared-scope"
+        principal = self._principal()
+        # An unresolvable declaration has no effect class to record: that is a
+        # misdeclared component (the contract test refuses to ship one), not a
+        # caller authorization decision.
+        operation_class = SCOPE_PERMISSION_CLASS.get(scope) if scope is not None else None
+        correlation_id = (
+            await self._audit_denial(name, principal.key, operation_class, f"authz-scope:{missing}")
+            if operation_class is not None
+            else uuid7()
+        )
+        self._log_denial("tool", name, missing, correlation_id)
         raise ToolError(json.dumps({
             "code": "permission_denied",
             "message": (
-                f"The caller's scopes do not cover this Tool ({reason}). "
+                f"The caller's scopes do not cover this Tool ({missing}). "
                 "Use a credential configured with the required scope."
             ),
-            "correlationId": uuid7(),
+            "correlationId": correlation_id,
         }, separators=(",", ":")))
 
     def _deny_resource(self, uri: str, scope: str | None) -> NoReturn:
         reason = f"missing-scope:{scope}" if scope is not None else "no-declared-scope"
-        self._log_denial("resource", uri, reason)
+        self._log_denial("resource", uri, reason, uuid7())
         raise ResourceError(
             f"permission_denied: the caller's scopes do not cover this resource ({reason})"
         )

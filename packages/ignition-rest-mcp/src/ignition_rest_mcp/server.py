@@ -196,7 +196,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="ignition-rest",
         version="0.1.0a0",
         auth=build_auth(settings),
-        middleware=[ScopeAuthorizationMiddleware(settings)],
+        middleware=[ScopeAuthorizationMiddleware(settings, state)],
         lifespan=lifespan,
         mask_error_details=True,
     )

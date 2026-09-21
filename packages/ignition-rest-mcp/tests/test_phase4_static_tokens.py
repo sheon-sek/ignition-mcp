@@ -184,6 +184,30 @@ def test_env_single_token_form_is_one_read_only_named_token(
     )
 
 
+def test_env_single_token_form_preserves_the_exact_credential(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """The credential is verified byte for byte: surrounding spaces are part of it."""
+
+    _env(monkeypatch, tmp_path, IGNITION_MCP_STATIC_TOKEN="  spaced-secret  ")
+    settings = Settings.from_env()
+
+    assert settings.static_tokens == (
+        StaticToken(name=LEGACY_STATIC_TOKEN_NAME, token="  spaced-secret  ", scopes=(READ,)),
+    )
+    assert _verify(settings, "  spaced-secret  ") is not None
+    assert _verify(settings, "spaced-secret") is None
+
+
+@pytest.mark.parametrize("value", ["", "   ", "\t"])
+def test_env_rejects_an_empty_or_whitespace_only_single_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, value: str,
+) -> None:
+    _env(monkeypatch, tmp_path, IGNITION_MCP_STATIC_TOKEN=value)
+    with pytest.raises(ConfigurationError, match="whitespace"):
+        Settings.from_env()
+
+
 def test_env_rejects_both_static_token_forms(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
@@ -196,7 +220,7 @@ def test_env_rejects_both_static_token_forms(
 
 
 @pytest.mark.parametrize("raw", [
-    "not json",
+    'not json',
     '"a string"',
     '{"reader": "read-secret"}',
     '{"reader": {"token": "read-secret"}}',
@@ -209,6 +233,31 @@ def test_env_rejects_malformed_static_tokens(
 ) -> None:
     _env(monkeypatch, tmp_path, IGNITION_MCP_STATIC_TOKENS=raw)
     with pytest.raises(ConfigurationError):
+        Settings.from_env()
+
+
+@pytest.mark.parametrize("raw", [
+    # Two entries under one name: JSON keeps only the last, silently widening the grant.
+    '{"same": {"token": "read-secret", "scopes": ["ignition.read"]},'
+    ' "same": {"token": "admin-secret", "scopes": ["ignition.admin"]}}',
+    '{"reader": {"token": "read-secret", "token": "admin-secret", "scopes": ["ignition.read"]}}',
+    '{"reader": {"token": "read-secret", "scopes": ["ignition.read"], "scopes": ["ignition.admin"]}}',
+])
+def test_env_rejects_duplicate_json_keys(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw: str,
+) -> None:
+    _env(monkeypatch, tmp_path, IGNITION_MCP_STATIC_TOKENS=raw)
+    with pytest.raises(ConfigurationError, match="repeats the key"):
+        Settings.from_env()
+
+
+def test_env_rejects_a_whitespace_only_token_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    _env(monkeypatch, tmp_path, IGNITION_MCP_STATIC_TOKENS=json.dumps({
+        "reader": {"token": "   ", "scopes": [READ]},
+    }))
+    with pytest.raises(ConfigurationError, match="whitespace"):
         Settings.from_env()
 
 

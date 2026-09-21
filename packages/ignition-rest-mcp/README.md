@@ -23,17 +23,22 @@ mapping a token name to `{"token": "...", "scopes": [...]}`. Scopes are drawn fr
 canonical scopes (`ignition.read`, `ignition.config`, `ignition.control`, `ignition.admin`) with
 **no hierarchy**, and the token's *name* — never its value — is its Mutation principal: the audit
 actor, the operation-record actor and the artifact owner are `static-token:<name>`. Startup fails
-closed on an unknown scope, an empty or repeated scope, a duplicate name, two names sharing one
-value, more than 32 tokens, a name outside 1–64 characters of `[A-Za-z0-9._:-]`, or a token value
-that is empty or longer than 512 characters. `IGNITION_MCP_STATIC_TOKEN` remains the single-token
-form: one token named `trusted-internal-static-token` (the Phase 1–3 principal name) holding
-`ignition.read` only; setting both variables is a configuration error.
+closed on an unknown scope, an empty, repeated or whitespace-only scope/token value, a repeated JSON
+key, a duplicate name, two names sharing one value, more than 32 tokens, a name outside 1–64
+characters of `[A-Za-z0-9._:-]`, or a token value longer than 512 characters.
+`IGNITION_MCP_STATIC_TOKEN` remains the single-token form: one token named
+`trusted-internal-static-token` (the Phase 1–3 principal name) holding `ignition.read` only, verified
+exactly as given — the value is never trimmed, so surrounding spaces are part of the credential. An
+empty or whitespace-only value, or setting both variables, is a configuration error.
 
 Every Tool and Resource declares the scope it needs — a `scope:<scope>` tag next to its capability
 tag, mirrored by `requiredScope` in its contract. Authorization is centralized in middleware and
 runs twice (D07): an unauthorized component is filtered out of `tools/list`/`resources/list`, and a
-call to it is refused with `permission_denied` *before* the handler or the Gateway is reached. The
-credential itself never leaves `auth.py`: it is not logged, not audited, not returned in an error,
+call to it is refused with `permission_denied` *before* the handler or the Gateway is reached. Each
+refusal is also a durable audit `decision` row (`denied:authz-scope:missing-scope:<scope>`, the
+token name as actor, the Tool's effect class as `operation_class`) sharing one correlation ID with
+the caller's error envelope; a denial is never upgraded to an allow because the audit write failed.
+The credential itself never leaves `auth.py`: it is not logged, not audited, not returned in an error,
 and not retained on the verified token. `auth=none` has no principal and stays `ignition.read` only,
 so it can neither read a CONFIG/ADMIN surface nor mutate anything.
 

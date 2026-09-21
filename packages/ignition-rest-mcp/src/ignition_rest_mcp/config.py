@@ -7,6 +7,7 @@ import ipaddress
 import json
 import os
 import re
+from typing import Any
 from urllib.parse import urlparse
 
 TEMP_FILESYSTEM_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
@@ -241,9 +242,10 @@ class Settings:
             if entry.name in names:
                 raise ConfigurationError(f"duplicate token name: {entry.name}")
             names.add(entry.name)
-            if not entry.token or len(entry.token) > MAX_STATIC_TOKEN_BYTES:
+            if not entry.token.strip() or len(entry.token) > MAX_STATIC_TOKEN_BYTES:
                 raise ConfigurationError(
-                    f"static token {entry.name}: token value must be 1-{MAX_STATIC_TOKEN_BYTES} characters"
+                    f"static token {entry.name}: token value must be non-empty (never only "
+                    f"whitespace) and at most {MAX_STATIC_TOKEN_BYTES} characters"
                 )
             if entry.token in values:
                 raise ConfigurationError(
@@ -401,24 +403,60 @@ def _targets_env(name: str) -> dict[str, tuple[str, ...]]:
     return result
 
 
+class _DuplicateKeyError(ValueError):
+    """A JSON document repeated an object key, so its last value would silently win."""
+
+    def __init__(self, key: str) -> None:
+        super().__init__(key)
+        self.key = key
+
+
+def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """``json.loads`` object hook that refuses a repeated key.
+
+    ``json.loads`` keeps only the last value of a repeated key, so a document that
+    grants one name two different scope sets would start successfully under the
+    narrowest or widest grant by accident. Configuration JSON is operator-authored
+    and small: an ambiguous key is rejected instead of resolved.
+    """
+
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _DuplicateKeyError(key)
+        result[key] = value
+    return result
+
+
 def _static_tokens_env() -> tuple[StaticToken, ...]:
     """D07: named static tokens. The legacy single-token variable stays supported
-    as one token named :data:`LEGACY_STATIC_TOKEN_NAME` with ``ignition.read``."""
+    as one token named :data:`LEGACY_STATIC_TOKEN_NAME` with ``ignition.read``,
+    verified exactly as given (the credential is never trimmed)."""
 
-    legacy = (os.getenv("IGNITION_MCP_STATIC_TOKEN") or "").strip()
+    legacy = os.getenv("IGNITION_MCP_STATIC_TOKEN")
     raw = os.getenv("IGNITION_MCP_STATIC_TOKENS") or ""
     if raw and legacy:
         raise ConfigurationError(
             "Set IGNITION_MCP_STATIC_TOKENS or the single-token IGNITION_MCP_STATIC_TOKEN, not both"
         )
-    if legacy:
+    if legacy is not None:
+        if not legacy.strip():
+            raise ConfigurationError(
+                "IGNITION_MCP_STATIC_TOKEN must not be empty or whitespace-only; "
+                "unset it to run without a static token"
+            )
         return (StaticToken(name=LEGACY_STATIC_TOKEN_NAME, token=legacy, scopes=(READ_SCOPE,)),)
     if not raw:
         return ()
     if len(raw.encode("utf-8")) > 32 * 1024:
         raise ConfigurationError("IGNITION_MCP_STATIC_TOKENS exceeds the 32 KiB bound")
     try:
-        value = json.loads(raw)
+        value = json.loads(raw, object_pairs_hook=_unique_object)
+    except _DuplicateKeyError as error:
+        raise ConfigurationError(
+            f"IGNITION_MCP_STATIC_TOKENS repeats the key {error.key!r}; "
+            "one name must appear exactly once"
+        ) from error
     except ValueError as error:
         raise ConfigurationError(
             "IGNITION_MCP_STATIC_TOKENS must be a JSON object mapping token name to {token, scopes}"
