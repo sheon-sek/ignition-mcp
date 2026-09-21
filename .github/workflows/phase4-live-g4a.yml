@@ -91,16 +91,14 @@ jobs:
         shell: bash
         run: |
           # Exit 3 means the recorded fixtures characterise a fact differently
-          # than tests/harness/phase4-live/characterization.json expects. The
-          # rehearsal reports it without failing the job so the live stages still
-          # run and record the truth; the summarize stage is what enforces no
-          # drift, so a stale fixture cannot make the live result green.
+          # than tests/harness/phase4-live/characterization.json expects, and the
+          # committed recordings are current, so a drift here is a real failure.
           set +e
           uv run --no-sync python tests/harness/phase4-live/rehearse_local.py | tee "$EVIDENCE_DIR/driver-rehearsal.log"
           rc=${PIPESTATUS[0]}
           set -e
-          if [[ "$rc" != "0" && "$rc" != "3" ]]; then
-            echo "the rehearsal failed with exit $rc" >&2
+          if [[ "$rc" != "0" ]]; then
+            echo "the rehearsal drifted from the committed fixtures (exit $rc)" >&2
             exit "$rc"
           fi
 

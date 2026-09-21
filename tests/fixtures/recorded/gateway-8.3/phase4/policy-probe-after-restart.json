@@ -1,9 +1,10 @@
 {
   "configResource": "ignition/tag-provider/IgnitionMCPPolicy",
+  "maxPolicyBytes": 32768,
   "measurements": [
     {
       "count": 1,
-      "elapsedMs": 22,
+      "elapsedMs": 27,
       "items": [
         {
           "quality": "Good",
@@ -30,7 +31,7 @@
     },
     {
       "count": 1,
-      "elapsedMs": 2,
+      "elapsedMs": 3,
       "items": [
         {
           "quality": "Bad_NotFound(\"Path '[IgnitionMCPPolicy]MissingPolicy' not found.\")",
@@ -47,8 +48,37 @@
       "path": "[IgnitionMCPPolicy]MissingPolicy"
     },
     {
+      "cap": 32768,
+      "declaredLength": 283,
+      "elapsedMs": 6,
+      "gate": "served",
+      "label": "policy",
+      "lengthMatchesValue": true,
+      "lengthQuality": "Good",
+      "materialized": true,
+      "name": "tag.gatedRead.policy",
+      "ok": true,
+      "quality": "Good",
+      "valueByteLength": 283,
+      "valueLength": 283,
+      "valueSha256": "b98bedf5a697fcf178dfad7cdcbae1e40c4be57071d57674f6cdf11487ba58f6",
+      "valueText": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"tag_write\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+    },
+    {
+      "cap": 32768,
+      "declaredLength": 39967,
+      "elapsedMs": 2,
+      "gate": "oversize",
+      "label": "oversize",
+      "lengthQuality": "Good",
+      "materialized": false,
+      "name": "tag.gatedRead.oversize",
+      "ok": true,
+      "reason": "declared length exceeds the configured maximum"
+    },
+    {
       "count": 1,
-      "elapsedMs": 13,
+      "elapsedMs": 16,
       "entries": [
         {
           "keys": [
@@ -65,7 +95,7 @@
     },
     {
       "count": 1,
-      "elapsedMs": 9,
+      "elapsedMs": 7,
       "entries": [
         {
           "keys": [
@@ -116,7 +146,7 @@
         ],
         "path": "[IgnitionMCPPolicy]WriteProbe"
       },
-      "elapsedMs": 5,
+      "elapsedMs": 6,
       "name": "tag.writeBlocking.probe",
       "ok": true,
       "writeQualityCodes": [
@@ -136,7 +166,7 @@
       "resourceDescription": "",
       "resourceEnabled": "True",
       "resourceName": "IgnitionMCPPolicy",
-      "resourceSignature": "5cf2060465ba5633adda7b751b1bde6d1dc280ff2af229071eea798667cf894d",
+      "resourceSignature": "8c2f889f7bdf3bd5ba1f9256cedf0742fc57663efd2f9b1e0e8c26baf365d088",
       "resourceText": "<PyResource: ResourceId{resourcePath=ignition/tag-provider/IgnitionMCPPolicy, collectionName=local}>"
     },
     {
@@ -190,7 +220,7 @@
       "present": false
     },
     {
-      "elapsedMs": 0,
+      "elapsedMs": 2,
       "hasAlarm": true,
       "hasConfig": true,
       "hasFile": true,
@@ -256,9 +286,12 @@
     }
   ],
   "missingPath": "[IgnitionMCPPolicy]MissingPolicy",
+  "oversizeLengthPath": "[IgnitionMCPPolicy]OversizePolicyProbeLength",
+  "oversizePolicyPath": "[IgnitionMCPPolicy]OversizePolicyProbe",
+  "policyLengthPath": "[IgnitionMCPPolicy]RuntimeTargetPolicyLength",
   "policyPath": "[IgnitionMCPPolicy]RuntimeTargetPolicy",
   "probe": "policy_probe",
   "providerName": "IgnitionMCPPolicy",
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "writeProbePath": "[IgnitionMCPPolicy]WriteProbe"
 }

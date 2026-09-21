@@ -1,8 +1,23 @@
 {
-  "failureCount": 2,
+  "failureCount": 5,
   "failures": [
     {
       "diagnosticMessage": "Tag '[IgnitionMCPPolicy]RuntimeTargetPolicy' already exists, and 'abort' collision policy has been specified",
+      "quality": "Bad",
+      "qualitySubCode": 527
+    },
+    {
+      "diagnosticMessage": "Tag '[IgnitionMCPPolicy]RuntimeTargetPolicyLength' already exists, and 'abort' collision policy has been specified",
+      "quality": "Bad",
+      "qualitySubCode": 527
+    },
+    {
+      "diagnosticMessage": "Tag '[IgnitionMCPPolicy]OversizePolicyProbe' already exists, and 'abort' collision policy has been specified",
+      "quality": "Bad",
+      "qualitySubCode": 527
+    },
+    {
+      "diagnosticMessage": "Tag '[IgnitionMCPPolicy]OversizePolicyProbeLength' already exists, and 'abort' collision policy has been specified",
       "quality": "Bad",
       "qualitySubCode": 527
     },

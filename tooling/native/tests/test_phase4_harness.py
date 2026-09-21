@@ -347,6 +347,25 @@ def test_policy_read_repairs_a_provider_that_serves_no_tags(
     assert facts["policyReadMatchesAppliedDocument"] is True
 
 
+def test_recorded_policy_probe_carries_the_gate_measurements() -> None:
+    """The committed recording is the evidence for the size gate, so assert the
+    recorded shape rather than trusting the test double."""
+    report = _fixture("policy-probe.json")
+    assert report["schemaVersion"] == 2
+    assert report["maxPolicyBytes"] == policy_document.POLICY_MAX_BYTES
+    gate = driver.measurement(report, "tag.gatedRead.policy")
+    assert gate["gate"] == "served"
+    assert gate["materialized"] is True
+    assert gate["declaredLength"] == policy_document.policy_byte_length()
+    assert gate["valueByteLength"] == gate["declaredLength"]
+    assert gate["valueSha256"] == policy_document.policy_sha256()
+    assert gate["lengthMatchesValue"] is True
+    oversize = driver.measurement(report, "tag.gatedRead.oversize")
+    assert oversize["gate"] == "oversize"
+    assert oversize["materialized"] is False
+    assert oversize["declaredLength"] > policy_document.POLICY_MAX_BYTES
+
+
 def test_recorded_probe_reports_show_the_policy_surviving_a_restart() -> None:
     before = _fixture("policy-probe.json")
     after = _fixture("policy-probe-after-restart.json")

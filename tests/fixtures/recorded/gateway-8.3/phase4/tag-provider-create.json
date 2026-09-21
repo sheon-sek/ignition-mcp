@@ -3,7 +3,7 @@
     {
       "collection": "core",
       "name": "IgnitionMCPPolicy",
-      "newSignature": "5cf2060465ba5633adda7b751b1bde6d1dc280ff2af229071eea798667cf894d",
+      "newSignature": "8c2f889f7bdf3bd5ba1f9256cedf0742fc57663efd2f9b1e0e8c26baf365d088",
       "type": "ignition/tag-provider"
     }
   ],

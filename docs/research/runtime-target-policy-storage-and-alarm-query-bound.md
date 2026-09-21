@@ -166,8 +166,10 @@ native bound.
 
 The harness measures the whole mechanism live: the served, length-verified read
 of the real policy, and a deliberately oversize companion pair that must be
-skipped with the value never materialized. Recorded values are in the evidence
-table below.
+skipped with the value never materialized. That oversize pair is a harness
+fixture placed in the same provider so it goes through the same admission path; a
+deployment's provider holds only the policy Tag and its length Tag. Recorded
+values are in the evidence table below.
 
 ### Why the other candidates lose
 

@@ -3,10 +3,10 @@
     "enabled": true,
     "lastModification": {
       "actor": "api-token:ignition-mcp-ci:172.18.0.1",
-      "timestamp": "2026-09-21T18:04:57Z"
+      "timestamp": "2026-09-21T18:53:37Z"
     },
-    "lastModificationSignature": "e3bb1702c135f493cbceb7e4e6ee74296f2fa2387dbc028d6d7bd260392349dc",
-    "uuid": "436eabab-c878-49a2-b23b-a3bc4f7e226a"
+    "lastModificationSignature": "ac22e7344a0150047e5eb1781f15cb2b584abb2b7a4cb2b7029cb0ec02e8e79b",
+    "uuid": "a49e3c02-2382-4954-b03c-4f0aa425c07d"
   },
   "collection": "core",
   "collections": [
@@ -38,7 +38,7 @@
       "result": {
         "healthy": true,
         "message": "Running",
-        "time": 1790013897876
+        "time": 1790016817626
       }
     }
   },
@@ -46,13 +46,13 @@
     "tagCount": {
       "metric": {
         "type": "gauge",
-        "value": 3
+        "value": 6
       },
       "name": "tags.provider.IgnitionMCPPolicy.tagCount"
     }
   },
   "name": "IgnitionMCPPolicy",
-  "signature": "5cf2060465ba5633adda7b751b1bde6d1dc280ff2af229071eea798667cf894d",
+  "signature": "8c2f889f7bdf3bd5ba1f9256cedf0742fc57663efd2f9b1e0e8c26baf365d088",
   "type": "ignition/tag-provider",
   "version": 1
 }

@@ -21,15 +21,15 @@
     "phase2/postgresql-missing.json": "run 35522848533 provision.json",
     "phase2/provision-success.json": "run 35527517320 provision.json",
     "phase2/tag-import-bare-array.json": "run 35527191629 provision.json",
-    "phase4/alarm-probe.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically (alarm_probe handler report; its cycle counts are the evidence that a single exact Alarm path accumulates events without acknowledgement)",
-    "phase4/policy-probe-after-restart.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically (policy_probe handler report, after the Gateway restart)",
-    "phase4/policy-probe.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically (policy_probe handler report, before the Gateway restart)",
-    "phase4/tag-export.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically",
-    "phase4/tag-import-abort.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically",
-    "phase4/tag-import-merge.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically",
+    "phase4/alarm-probe.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically (alarm_probe handler report; its cycle counts are the evidence that a single exact Alarm path accumulates events without acknowledgement)",
+    "phase4/policy-probe-after-restart.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically (policy_probe handler report, after the Gateway restart)",
+    "phase4/policy-probe.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically (policy_probe handler report, schemaVersion 2, before the Gateway restart)",
+    "phase4/tag-export.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically (the provider's read-back body, replayed by the recorded Gateway fake; it also contains the harness-only oversize gate probe pair, which a deployment's provider does not have)",
+    "phase4/tag-import-abort.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically",
+    "phase4/tag-import-merge.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically",
     "phase4/tag-import-provider-not-ready.json": "recorded failure detail from phase4-live-g4a run 35635225572 job 106450890605 (8.3.8), where a freshly created Tag provider answered the first import while still starting",
-    "phase4/tag-import-success.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically (successful retry after the recorded provider-startup failure)",
-    "phase4/tag-provider-create.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically; CI-only provider name, no secret material",
-    "phase4/tag-provider-find.json": "recorded from phase4-live-g4a run 35635887711 (8.3.8 job 106453076872); the 8.3.9 row of the same run measured identically; carries the CI API-token actor name and the compose-network address only"
+    "phase4/tag-import-success.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically",
+    "phase4/tag-provider-create.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically; CI-only provider name, no secret material",
+    "phase4/tag-provider-find.json": "recorded from phase4-live-g4a run 35641086552 (8.3.8 job 106463444618); the 8.3.9 row of the same run measured identically; carries the CI API-token actor name and the compose-network address only"
   }
 }

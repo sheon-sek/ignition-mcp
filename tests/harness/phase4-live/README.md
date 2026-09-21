@@ -36,9 +36,12 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
 - `project/`: the probe project (D29/D21 profile shape, validated by
   `tooling.native.cli validate`). Deployed by directory copy, like Phase 0.
 - `gateway-config/`: the `phase4-policy-probe` MCP server-config resource.
-- `policy_document.py`: the deterministic policy document, its Tag provider
-  resource body and its Tag import document, plus the policy SHA-256 that both
-  the REST read-back and the live handler read are compared against.
+- `policy_document.py`: the deterministic policy document, its companion length
+  Tag, its Tag provider resource body and its Tag import document, plus the
+  policy SHA-256 that both the REST read-back and the live handler read are
+  compared against, and the harness-only oversize pair that proves the gate skips
+  an over-cap value (in the same provider, so it goes through the same admission
+  path; a deployment's provider holds only the policy Tag and its length Tag).
 - `gateway_rest.py`: bounded stdlib Native REST client.
 - `mcp_client.py`: bounded stdlib MCP Streamable-HTTP client for the Module.
 - `driver.py`: the characterization driver (stages below).
