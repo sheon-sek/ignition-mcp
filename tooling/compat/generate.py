@@ -92,7 +92,7 @@ def build_row(observations: dict[str, Any], identity: dict[str, str], *,
     stability = observations.get("fingerprintStability")
     concurrency = observations.get("projectMutationConcurrencySafe")
     if stability not in {"STABLE", "UNSTABLE"} or not isinstance(concurrency, bool):
-        raise GenerateError("observations: fingerprint stability fields missing or dishonest")
+        raise GenerateError("observations: fingerprint stability fields missing or inconsistent")
     if stability == "UNSTABLE" and concurrency:
         raise GenerateError("observations: unstable fingerprint must mark mutation not concurrency-safe")
 

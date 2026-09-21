@@ -374,8 +374,9 @@ trusted-repo guard + `environment: phase3-live` + owner-deviation recorded in ev
 row; 8.3.8 required / 8.3.9 candidate; deploys the exact release ZIP and records its
 SHA-256 + manifest; L5 CI marker written during provisioning and verified by the
 driver before any import; bounded diagnostics + unconditional teardown). Driver exit
-codes 0/3/2; evidence generated per row and merged-set validated in CI. Remaining:
-push + draft PR + live G3 run + commit generated evidence rows (then slice 12).
+Driver exit codes are 0, 3 or 2. Each row's evidence is generated in CI and the merged
+evidence set is validated there. Remaining work: push, draft PR, live G3 run, commit the
+generated evidence rows, then slice 12.
 
 Slice 11: `tests/harness/phase3-live/` (compose modeled on phase2-live: exact images 8.3.8 required +
 8.3.9 candidate, module checksum-pinned, minimal GATEWAY_MODULES_ENABLED whitelist, bounded diagnostics
