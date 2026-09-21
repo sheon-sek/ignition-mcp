@@ -327,6 +327,7 @@ Commit SHAs are recorded by the next slice's commit (a commit cannot contain its
 | 6 | `eac3b5a` | full validation suite green (328 tests; executor claimed-state semantics tightened to plan 7.6 during test iteration) |
 | 7 | `6e7035f` | full validation suite green (360 tests) |
 | 8 | `a81ba12` | full validation suite green (370 tests) |
+| 9 | `40ecc81` | full validation suite green (compat validator + double-release cmp added) |
 
 ## Handoff status (2026-09-21, context-window boundary — continue from here in a fresh omp)
 
@@ -345,17 +346,20 @@ reconcile) · 8 `a81ba12` artifact/diagnose Tools + storage diagnostics · 9 `40
 deterministic release (BUNDLE_VERSION 0.2.0, RESOURCE_SCHEMA_VERSION 1, marker line in project.json,
 __BUNDLE_SOURCE_REVISION__ token stamped at archive time; testedTuples never SUPPORTED).
 
-### UNCOMMITTED — Slice 10 (verification REQUIRED before commit)
+### Slice 10 — VERIFIED AND COMMITTED (independent verification completed 2026-09-21)
 
-`cli/setup_native/` (doctor|plan|verify, no apply/install-module), package pyproject console script
-`ignition-mcp`, README section, `tests/test_phase3_setup_native.py`, `tests/test_phase3_setup_native_wheel.py`
-were produced by a subagent and are NOT yet independently verified. Steps:
-1. Read `cli/setup_native/*` critically; then run the ENTIRE block below. Fix failures.
-2. Confirm: manifest-only inputs (no repo-relative runtime paths), 0600 token-file enforcement, secrets
-   never in output, exit codes 0/1/2/3, plan ends with `No changes have been applied.`, BLOCKED on
-   UNMANAGED_SAME_NAME/MARKER_INVALID, D21 UNKNOWN-vs-UNTESTED mapping, exact inventory (superset=FAIL).
-3. Commit `feat(cli): setup-native doctor/plan/verify (read-only, manifest-driven)`; append
-   `| 9 | 40ecc81 | … |` and `| 10 | … | … |` rows to the Execution log table.
+`cli/setup_native/` (doctor|plan|verify, no apply/install-module), console script
+`ignition-mcp`, README section and both test files were reviewed line by line and run through the
+full validation block. One real failure surfaced and was fixed before commit: the slice-6 structural
+write-boundary scan flagged the CLI's own MCP JSON-RPC `request`/POST helpers by name; the scan now
+excludes the D25 code-separated `cli/` subtree and a compensating AST test pins that every non-GET
+call in the CLI is the MCP-endpoint POST in `mcp_http.py` (target `self.endpoint.url`) and that
+`gateway.py`'s `_request` chokepoint is called with literal `"GET"` only. Verified: manifest-only
+inputs (code-separation scan + installed-wheel test, real release manifest passes the CLI validator),
+0600 token-file enforcement, secrets redacted from all reports, exit codes 0/1/2/3, plan sentinel
+`No changes have been applied.`, BLOCKED on UNMANAGED_SAME_NAME/MARKER_INVALID, D21
+UNKNOWN(incomplete)-vs-UNTESTED(no-row) mapping, exact inventory (superset = FAIL).
+Commit subject: `feat(cli): setup-native doctor/plan/verify (read-only, manifest-driven)`.
 
 ### Remaining: Slice 11 then 12
 

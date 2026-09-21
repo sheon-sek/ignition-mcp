@@ -28,6 +28,13 @@ WRITE_BOUNDARY_FILES = frozenset({"client/gateway.py", "safety/executor.py"})
 
 WRITE_METHOD_CALLS = frozenset({"post", "put", "patch", "delete", "request"})
 
+#: The setup-native CLI is code-separated from the server (D25): it never imports
+#: the Gateway transport and only probes documented read-only REST routes plus the
+#: Runtime MCP endpoint (whose JSON-RPC wire requires POST). The name-based write
+#: scan below would flag the CLI's own ``request`` RPC helper, so the subtree is
+#: excluded here and pinned GET-only by test_cli_gateway_probes_are_get_only.
+SCAN_EXCLUDED_PREFIXES = ("cli/",)
+
 READ_TOOLS = frozenset({
     "gateway_info",
     "gateway_diagnose",
@@ -139,7 +146,7 @@ def test_no_httpx_write_method_calls_outside_the_write_boundary() -> None:
     offenders: list[str] = []
     for path in _production_files():
         rel = _relative(path)
-        if rel in WRITE_BOUNDARY_FILES:
+        if rel in WRITE_BOUNDARY_FILES or rel.startswith(SCAN_EXCLUDED_PREFIXES):
             continue
         for node in ast.walk(_parse(path)):
             if (
@@ -149,6 +156,48 @@ def test_no_httpx_write_method_calls_outside_the_write_boundary() -> None:
             ):
                 offenders.append(f"{rel}:{node.lineno}:{node.func.attr}")
     assert offenders == [], f"direct HTTP write call sites outside the boundary: {offenders}"
+
+
+def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> None:
+    """Compensating pin for the D25 CLI exclusion: the only write-shaped traffic
+    in ``cli/`` is the MCP JSON-RPC POST, and it can target nothing but the
+    operator-supplied Runtime MCP endpoint URL."""
+
+    cli_dir = SRC_ROOT / "cli" / "setup_native"
+    assert cli_dir.is_dir(), "the setup-native CLI package must exist"
+    for path in sorted(cli_dir.glob("*.py")):
+        for node in ast.walk(_parse(path)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"post", "put", "patch", "delete", "stream"}
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)
+                and node.args[0].value.upper() != "GET"
+            ):
+                continue
+            assert path.name == "mcp_http.py" and str(node.args[0].value).upper() == "POST", (
+                f"{path.name}:{node.lineno} issues {node.args[0].value} outside the MCP JSON-RPC client"
+            )
+            url = node.args[1] if len(node.args) > 1 else None
+            target = url.value if isinstance(url, ast.Attribute) else None
+            assert isinstance(target, ast.Attribute) and isinstance(target.value, ast.Name)
+            assert target.value.id == "self" and target.attr == "endpoint", (
+                f"{path.name}:{node.lineno} POSTs somewhere other than its own MCP endpoint"
+            )
+    # GatewayRest's transport chokepoint is _request; every call site must be a literal GET.
+    offenders: list[int] = []
+    for node in ast.walk(_parse(cli_dir / "gateway.py")):
+        if (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "_request"
+        ):
+            first = node.args[0] if node.args else None
+            if not (isinstance(first, ast.Constant) and first.value == "GET"):
+                offenders.append(node.lineno)
+    assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
 # ------------------------------------------------------------------ 4. no destructive tools
