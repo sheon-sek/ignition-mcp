@@ -130,7 +130,11 @@ read inventory here includes the two sensitive-export Tools.
   fails before the driver runs, and creates the disposable Tag provider the Tag import
   cases use (waiting until it is readable, then importing the source Tags with
   `MergeOverwrite` and verifying the Gateway serves them, retrying the
-  freshly-created-provider failure the recorded 8.3.8 run showed).
+  freshly-created-provider failure the recorded 8.3.8 run showed). Its
+  `tagProvider.convention` block records where the Gateway puts each of the two Tag
+  import document shapes (a named root and a provider-root document), read back from a
+  provider-root export, so the rule the Tool's verification depends on is live evidence
+  in every row rather than an assumption.
 - `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
   `tests/harness/recorded_gateway.py` and runs both driver modes with the same

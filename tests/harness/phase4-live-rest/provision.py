@@ -55,8 +55,11 @@ TAG_IMPORT_ATTEMPTS = 6
 #: The Tag names the source document holds, which the live cases assert are served at
 #: the destination afterwards.
 TAG_SOURCE_NAMES = ("Folder", "Int", "Inner", "Text", "Sibling")
-#: The throwaway path the import-convention probe imports the source document into.
-TAG_PROBE_PATH = "convention_probe"
+#: The throwaway paths the import-convention probe imports into: one for a document
+#: whose root names its own node (the export of a sub-path) and one for a
+#: provider-root document, which names nothing.
+TAG_PROBE_PATH = "convention_probe_named"
+TAG_PROBE_NAMELESS_PATH = "convention_probe_flat"
 
 REQUIRED_ENDPOINTS = frozenset({
     ("GET", f"/data/api/v1/resources/type/{RESOURCE_TYPE}"),
@@ -306,8 +309,10 @@ def _await_tag_provider(base_url: str, token: str, name: str) -> dict[str, Any]:
     raise ProvisionError(f"the Tag provider {name} never became readable ({last})")
 
 
-def _import_source_tags(base_url: str, token: str, provider: str, path: str) -> dict[str, Any]:
-    """Publish the source document, retrying the freshly-created-provider failure.
+def _import_document(
+    base_url: str, token: str, provider: str, path: str, document: bytes,
+) -> dict[str, Any]:
+    """Import one Tag document, retrying the freshly-created-provider failure.
 
     The recorded 8.3.8 run showed a new Tag provider answering ``/tags/import`` with
     ``Bad 776 TagPath.getPathLength() ... cleanPath is null`` while it was still
@@ -316,7 +321,6 @@ def _import_source_tags(base_url: str, token: str, provider: str, path: str) -> 
     always sends ``Abort`` (D30 §4) and the driver is what exercises that.
     """
 
-    document = _source_document()
     last: dict[str, Any] = {}
     for attempt in range(1, TAG_IMPORT_ATTEMPTS + 1):
         status, payload = _request(
@@ -331,6 +335,12 @@ def _import_source_tags(base_url: str, token: str, provider: str, path: str) -> 
             return last
         time.sleep(3.0)
     raise ProvisionError(f"importing the source Tags never succeeded: {last}")
+
+
+def _import_source_tags(base_url: str, token: str, provider: str, path: str) -> dict[str, Any]:
+    """Publish the source document at ``path``."""
+
+    return _import_document(base_url, token, provider, path, _source_document())
 
 
 def _exported_names(base_url: str, token: str, provider: str, path: str) -> set[str]:
@@ -361,9 +371,7 @@ def provision_tags(base_url: str, token: str, *, provider: str, source_path: str
         "sourcePath": source_path,
         "sourceTags": sorted(served),
         "import": import_result,
-        "convention": probe_import_convention(
-            base_url, token, provider=provider, probe_path=TAG_PROBE_PATH,
-        ),
+        "convention": probe_import_convention(base_url, token, provider=provider),
     }
 
 
@@ -396,32 +404,57 @@ def _provider_paths(payload: Any) -> list[str]:
     return paths
 
 
-def probe_import_convention(
-    base_url: str, token: str, *, provider: str, probe_path: str,
-) -> dict[str, Any]:
-    """Record where the Gateway really puts a document that names its own root.
+def _probe_documents() -> dict[str, tuple[str, bytes]]:
+    """The two document shapes the import convention is recorded for.
 
-    The Tool decides which Tag paths an import declares, and a document exported from a
-    *sub-path* names its own root (``{"name": "source", ...}``), so whether the Gateway
-    imports that root as a Folder or imports its children under the requested path is a
-    live fact, not a preference. This probe imports the same source document into a
-    throwaway path and re-exports the *provider root*, so the recorded paths say exactly
-    what the Gateway did.
+    A document exported from a *sub-path* names its own root
+    (``{"name": "source", "tagType": "Folder", ...}``); one exported from the provider
+    root names nothing and contributes its ``tags`` entries. The Tool decides which Tag
+    paths an import declares, so where each shape lands is a live fact, not a
+    preference, and every live row records it.
     """
 
-    result = _import_source_tags(base_url, token, provider, probe_path)
+    def node(name: str, value: str) -> dict[str, Any]:
+        return {"name": name, "tagType": "AtomicTag", "valueSource": "memory",
+                "dataType": "String", "value": value, "enabled": True}
+
+    named = {"name": "Probe", "tagType": "Folder", "tags": [node("Leaf", "named")]}
+    nameless = {"tags": [node("Flat", "nameless")]}
+    return {
+        "namedRoot": (TAG_PROBE_PATH, json.dumps(named, separators=(",", ":")).encode("utf-8")),
+        "namelessRoot": (
+            TAG_PROBE_NAMELESS_PATH, json.dumps(nameless, separators=(",", ":")).encode("utf-8"),
+        ),
+    }
+
+
+def probe_import_convention(base_url: str, token: str, *, provider: str) -> dict[str, Any]:
+    """Record where the Gateway puts each import document shape.
+
+    Both probe documents are imported into their own throwaway path, then the *provider
+    root* is exported once: the paths it serves say exactly what the Gateway created,
+    without involving the Tool or any assumption about its document rule.
+    """
+
+    records: dict[str, Any] = {}
+    for shape, (path, document) in _probe_documents().items():
+        records[shape] = {
+            "importPath": path,
+            "import": _import_document(base_url, token, provider, path, document),
+        }
     status, exported = _request(
         base_url, token, "GET", f"{TAG_EXPORT_PATH}?provider={provider}&type=json",
         allowed_error_statuses=frozenset({404, 500}),
     )
     paths = _provider_paths(exported) if status == 200 else []
-    return {
-        "importPath": probe_path,
-        "import": result,
-        "exportStatus": status,
-        "providerPaths": sorted(paths),
-        "underProbePath": sorted(path for path in paths if path.split("/", 1)[0] == probe_path),
-    }
+    records["exportStatus"] = status
+    records["providerPaths"] = sorted(paths)
+    for shape, record in _probe_documents().items():
+        prefix = record[0]
+        records[shape]["pathsUnderImportPath"] = sorted(
+            path for path in paths if path.split("/", 1)[0] == prefix
+        )
+    return records
 
 
 def provision(

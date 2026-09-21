@@ -352,8 +352,158 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   but both of its Gateway rows passed on the head above.
 
 
+### Ticket #17 — REST `tag_config_import` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models a provider's Tag state —
+  `seed_tags`, a path-scoped JSON export, and an import that applies the document with
+  D30 §4's `Abort` collision refusal — plus the knobs the cases need: a competing writer
+  at dispatch time, a failure reported inside a 200 in either observed wire shape (the
+  summary object live 8.3.8/8.3.9 answer, and the QualityCode list the committed OpenAPI
+  documents), an ambiguous status that applies nothing, a partial application, and a
+  clean claim that creates nothing. The new module
+  `test_phase4_tag_config_import.py` (28 cases) drives the real server through MCP
+  against that Gateway; it fails before the change (the Tool and its operation do not
+  exist) and the full `AGENTS.md` command block is green (835 pytest cases).
+- **D30 §4** fixes the only caller-chosen knob: `collisionPolicy=Abort` is always sent,
+  so the Tool creates Tags and can never overwrite one. The dispatched body is the
+  artifact's own bytes (a test pins the request body's SHA-256 to the artifact ref), and
+  `tooling/contracts/lint.py` requires the contract to declare exactly that knob.
+- **D30 §2 has no Precondition token here** — the collision policy is the concurrency
+  rule instead. It is checked against the Gateway before dispatch (a destination that
+  already holds a declared Tag is a `conflict` that sends nothing), and the Gateway's own
+  `Abort` refusal inside a 200 is mapped to `conflict` (`qualitySubCode` 527) or, for any
+  other reported failure, to `upstream_error`. `rejection_is_final=True`, so a refusal is
+  never reconciled into a success — pinned by a case where a competing writer lands the
+  whole document at dispatch time.
+- **Attribution is the #14/#15 rule, shared.** The D30 §2 verdict moved to
+  `safety/verification.py` (`verdict`), so the config-resource Tool and this one cannot
+  drift: a claimed success is confirmed only by the bounded re-export, an ambiguous
+  dispatch is `outcome_unknown` (a re-export showing the intended Tags proves nothing
+  about who wrote them) or `not_applied` when nothing landed, and `recovered_success`
+  stays unreachable.
+- **Verification (D30 §6 Observed state).** A bounded re-export of the same provider and
+  path is compared with the Tag paths the document declares; `observedState.present`
+  names them and `observedState.missing` is empty on every returned result, because a
+  declared Tag the re-export does not show makes the call `recovery_required` whose
+  message names up to five of them. A Gateway that claims success and creates nothing is
+  pinned by a fixture case, and a partial application — some Tags created, some reported
+  failed — is `recovery_required` rather than a per-item success (D30 §3's per-item
+  surface is Preflight's; a partly-applied import is not a claim).
+- Input bounds (D10): the artifact must be a READY `tag_config_export` visible to the
+  Mutation principal (anything else `not_found`, another kind `invalid_argument`), read
+  under an 8 MiB ceiling and parsed before dispatch; at most 500 declared Tag paths and
+  32 KiB of declared path bytes, each path at most 1024 bytes; an oversize document fails
+  `limit_exceeded` with nothing sent. The Target is the exact provider-qualified path
+  `[provider]path` (D30 §3/§7), a denial is `permission_denied` before the artifact is
+  read, and the path is refused when it could name two targets (`/a`, `a/`, `a//b`,
+  `a/../b`). `_types_` (D30 §6): a document declaring the provider's UDT folder may only
+  be imported into that explicit path.
+- Wiring: registered as a CONFIG-scope, non-destructive, audited Tool with the ARTIFACT
+  budget class, gated by `IGNITION_MCP_CONFIG_MUTATION_ENABLED` and a new
+  `tag_config_import` capability derived from the documented `POST /tags/import` route;
+  contract, output schema, audit allowlist, inventories and the lifecycle-routing pin were
+  updated together.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **72/72 cases**
+  against the recorded Gateway, both deployment gates.
+- Live ([run 35662815877](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815877)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **72/72 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)**, 11 of them the
+  Tag import cases: the tool inventory with the class enabled and the read-only inventory
+  without it, a real `tag_config_export` artifact imported into an allowlisted destination
+  and confirmed by a second, independently downloaded export of that destination, the
+  source path untouched, a re-import of the same document a `conflict` that changed
+  nothing, a destination outside the Target allowlist `permission_denied` with none of the
+  source Tags at it, and an export another principal owns `not_found`. `provision.json`
+  records the disposable provider, the source Tags and the import conventions below.
+- **The first live attempt failed its Tag section on both rows, and it exposed two real
+  defects.** Run
+  [35661939628](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939628)
+  reported `outcome_unknown` for the import: the artifact was the export of a *sub-path*,
+  whose root names its own node (`{"name": "source", "tagType": "Folder", ...}`), and the
+  Tool had declared only the document's `tags` — a wrapper rule that only the nameless
+  provider-root document had ever proved live, so every declared path was reported
+  missing. The Tool now declares what the document declares (a named root is imported
+  under the request path; a nameless root contributes its children), which the live
+  destination confirms — the Tag the import created there is named `source`. Second, the
+  driver failed *open*: with no structured result it recorded the abort and returned
+  without a failing case, so the workflow was green with a broken Tool. It now records
+  the destination and the source as the Gateway serves them and adds the failing case
+  before returning. `provision.py` also probes both document shapes into throwaway paths
+  and re-exports the provider root, so every row records where the Gateway really puts
+  each shape (`tagProvider.convention`) instead of leaving the rule an assumption.
+- Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`): CI
+  [35661939654](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939654) and
+  [35662815732](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815732),
+  Phase 3 Live Gateway G3
+  [35661939740](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939740) and
+  [35662816113](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662816113), and
+  Phase 4 Live Gateway G4a
+  [35661939632](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939632) and
+  [35662815762](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815762) — all
+  success. The first REST run on `89c8b52` is also recorded as success by the workflow;
+  that green is what the driver's fail-open path produced, and the head after it is where
+  the Tag cases are proven.
+
 ## Open questions
 
+- **Ticket #17 — the Target of a Tag import is the exact provider-qualified path, not a
+  prefix.** The issue says "Target allowlist on the provider and path prefix". What is
+  implemented is the D08 Target identity every other Phase 4 Tool uses: the exact
+  `[provider]path` (`evaluate_deployment_policy` matches a Target by exact membership),
+  where the path is the prefix *under which* the import creates Tags — so an allowlist
+  entry `[default]CI/Imports` authorizes exactly that destination, and a call into
+  `[default]CI/Imports/Nested` is refused. The alternative reading (an entry authorizes
+  any sub-path under it) would need a second matching rule inside the shared deployment
+  policy the frozen Phase 3 machinery and its G3 evidence also use. **For the owner:**
+  confirm the exact-Target reading, or amend D08/D30 to add a provider-qualified prefix
+  rule (the Runtime Target Policy already has one, D30 §1).
+- **Ticket #17 — a document's root decides which Tag paths the import declares.** The
+  first live run showed the assumption mattered: the Tool declared only the document's
+  `tags`, while the Gateway also creates the document's *named* root (recorded live: the
+  destination holds a Tag named `source` after importing the export of `source`). The
+  implemented rule is now "the document declares what it declares" — a named root is
+  imported under the request path, a nameless root contributes its children — and
+  `provision.py` records both shapes' outcome in every live row
+  (`tagProvider.convention`). A caller whose artifact is a per-Tag (rather than
+  per-folder) export is the remaining unprobed case: its root is the Tag itself and the
+  rule reads it as one Tag under the path. **For the owner:** confirm, or ask for a
+  live case for a leaf-root document.
+- **Ticket #17 — an uninterpretable 2xx body is not a success.** The import route's
+  documented response is a list of non-Good QualityCodes; live 8.3.8/8.3.9 answer a
+  summary object. The Tool reads both, treats a zero-failure report as the Gateway's
+  claim (`failureCount: 0` with no failures, or an empty list), and treats anything it
+  cannot interpret — including an empty body — as no claim, which ends the call
+  `recovery_required`/`outcome_unknown` rather than a success. No live run has produced
+  that shape (both rows recorded the summary), so the reading is undecided for a Gateway
+  that answers 200 with no body at all. **For the owner:** confirm the fail-closed
+  reading, or name the accepted body.
+- **Ticket #17 — a partly applied import is `recovery_required`, not per-item data.**
+  D30 §3's per-item reporting is about Preflight; a Gateway that reports some successes
+  and some failures has neither refused the call nor completed it, so the Tool fails
+  closed with `outcome_unknown` and the message names the Tags the re-export was not
+  showing. The Runtime plane's per-item QualityCode surface is the `tag_write`
+  precedent. **For the owner:** confirm, or ask for a per-item result surface here too.
+- **Ticket #17 — `missing` is empty on every returned result by construction.** The
+  Observed state carries both lists because that is the comparison the verification made,
+  but a declared Tag the bounded re-export does not show is `recovery_required` (an error
+  naming up to five of them), so a caller only ever sees `present`. **For the owner:**
+  confirm, or ask for the comparison itself to be returned as data on a failed
+  verification.
+- **Ticket #17 — the `_types_` rule is read from D30 §6 onto the REST Target allowlist.**
+  D30 §6 states the explicit-`_types_` requirement for the Runtime Target Policy
+  (`[provider]_types_/…`); this Tool applies the same reading to its REST Target: a
+  document that declares the provider's UDT folder may only be imported into that path
+  (`[provider]_types_`), anything else is `invalid_argument`. A `_types_` folder deeper in
+  the path is an ordinary folder name and is not restricted. **For the owner:** confirm,
+  or state the REST-plane rule separately.
+- **Ticket #17 — provisioning a fresh Tag provider needs a retry, the Tool never
+  retries.** The recorded 8.3.8 behaviour (Bad 776 `cleanPath is null` on the first import
+  after a provider is created) is handled in `provision.py`, which imports the source Tags
+  with `MergeOverwrite` and retries until the Gateway serves them; the Tool itself still
+  sends exactly one dispatch and never replays (D30 §2). Both live rows show one attempt
+  was enough this time (`tagProvider.import.attempts: 1`). **For the owner:** no action
+  needed unless `setup-native` should adopt the same retry-and-verify discipline for the
+  Runtime Target Policy provider, which #6 already recommends.
 - **Ticket #16 — which artifacts `project_import` consumes.** D30 §6 names a READY
   `project_archive`; the ticket names "the artifact ID of a READY `project_archive` ...
   (uploaded through `POST /artifacts` or produced by `project_export`)", and D17 names
