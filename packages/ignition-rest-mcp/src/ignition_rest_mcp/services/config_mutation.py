@@ -67,6 +67,7 @@ from ignition_rest_mcp.safety.executor import (
 )
 from ignition_rest_mcp.safety.policy import CONFIG_MUTATION, MutationOperation
 from ignition_rest_mcp.safety.refused_resource_types import refuse_resource_type_decision
+from ignition_rest_mcp.safety.verification import verdict as _verdict
 from ignition_rest_mcp.services.config_resources import (
     bounded_text,
     catalog_resource_type,
@@ -841,32 +842,6 @@ async def _no_body() -> AsyncIterator[bytes]:
 
     return
     yield b""  # pragma: no cover - unreachable, and what makes this an async generator
-
-
-def _verdict(
-    *, claimed: bool, intended: bool, pre_state: bool, no_effect: bool = False,
-) -> VerificationOutcome:
-    """The one D30 §2 rule every config Mutation's verification follows.
-
-    A claimed success is confirmed when the intended state is observed. Anything
-    else has no claim to verify (an ambiguous dispatch: possibly sent, no response),
-    and a read-back can show the intended values without proving *this* call wrote
-    them — another writer may have made the same change inside the window — so only a
-    negative conclusion is drawn: the pre-state intact, or a request with no
-    observable effect of its own, is UNCHANGED ("nothing attributable to this call"),
-    and anything else is INDETERMINATE, which the executor reports as
-    ``outcome_unknown``. A success there would be a claim the evidence cannot support.
-    """
-
-    if claimed:
-        if intended:
-            return VerificationOutcome.CONFIRMED
-        return VerificationOutcome.UNCHANGED if pre_state else VerificationOutcome.MISMATCH
-    if pre_state or no_effect:
-        return VerificationOutcome.UNCHANGED
-    if intended:
-        return VerificationOutcome.INDETERMINATE
-    return VerificationOutcome.MISMATCH
 
 
 def _pre_state_intact(

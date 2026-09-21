@@ -106,6 +106,36 @@ class ContractLintDriftTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "release set drift"):
                 lint_contracts(contracts)
 
+    def test_missing_dispatch_classification_declaration_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/project_import.contract.json",
+                lambda doc: doc["transaction"].pop("dispatchBoundary"),
+            )
+            with self.assertRaisesRegex(ContractError, "dispatch classification"):
+                lint_contracts(contracts)
+
+    def test_dispatch_classification_value_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/project_import.contract.json",
+                lambda doc: doc["transaction"]["dispatchBoundary"]["values"].append("maybe_later"),
+            )
+            with self.assertRaisesRegex(ContractError, "dispatch classification"):
+                lint_contracts(contracts)
+
+    def test_missing_import_dispatched_declaration_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/project_import.contract.json",
+                lambda doc: doc["transaction"].update(importDispatched=""),
+            )
+            with self.assertRaisesRegex(ContractError, "importDispatched"):
+                lint_contracts(contracts)
+
     def test_error_taxonomy_growth_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             contracts = self._copy(temp)

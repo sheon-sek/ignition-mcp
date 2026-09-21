@@ -253,7 +253,463 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   success. One G3 row needed a rerun for a Gateway-side reason recorded in Open
   questions.
 
+### Ticket #16 — REST `project_import` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models the Project import the way it
+  models the config-resource writes — one competing writer at dispatch time
+  (`race_import_with`), one ambiguous status that applies nothing (`fail_imports_with`),
+  one refusal carried inside a 200 (`refuse_imports_with`), plus a scheduled external
+  change that lands after a given number of exports (`change_project_after_exports`) and
+  an out-of-band Project change (`change_project_out_of_band`). The new module
+  `test_phase4_project_import.py` (22 cases) drives the real server through MCP against
+  that Gateway; it fails before the change (the Tool and its operation do not exist) and
+  the full `AGENTS.md` command block is green (807 pytest cases).
+- **D30 §2 and the D16 reconcile rule, in one place.** `expectedFingerprint` is the
+  caller's `pcf1` token from `project_export`, and the transaction compares it with
+  baseline A before it stages a candidate, backs anything up or dispatches; a mismatch
+  ends the transaction `CONFLICTED` (`importAttempted=false`) with the D30 §2/§7
+  `conflict` code and the export is cleaned up. The transaction itself declares
+  `PROJECT_IMPORT_TOOL_OPERATION` — the same `project_import` operation with
+  `target_denial_code="permission_denied"` and `rejection_is_final=True` — because the
+  frozen G3 harness and its evidence record `operation_disabled` and the pre-Phase-4
+  rejection behaviour for the same op id; the frozen operation is untouched (a unit test
+  pins the split, and `PROJECT_IMPORT_OPERATION` keeps `operation_disabled`/`False`).
+  With `rejection_is_final`, a 4xx rejection is the result: no read-back can turn it into
+  a success, so a Project that shows the candidate after a rejected dispatch is never
+  credited to this caller (pinned by a test where a competing writer lands exactly the
+  candidate B at dispatch time). `recovered_success` stays reachable only the way D16
+  says it is — an ambiguous dispatch (possibly sent with no response, or 5xx) whose
+  post-import export C equals the staged candidate B — and it is reachable because the
+  candidate is staged and fingerprinted under the store before dispatch and D16's no-op
+  short-circuit guarantees B differs from A; all three branches (C == B, C == A, foreign
+  C) are pinned through the Tool, including the recovery lock the last one keeps.
+- **The D08 chain now runs before the transaction's work.** `safety/executor.py`
+  extracts `preflight_mutation` (principal, scope, class, operation allowlist, the D30 §5
+  Target-class rule, every Target allowlist, the Precondition hook) out of
+  `execute_mutation` and the Tool calls it before the writer lock, the baseline export
+  and any staging. A Target the allowlist does not name is therefore `permission_denied`
+  without exporting a Project the deployment said not to touch and without a transaction
+  row, the audited reason is the one the executor would have written (one
+  implementation, two callers), and the executor's own preflight remains authoritative —
+  no gap opens if the deployment changes mid-call.
+- Artifact input (D30 §6/D17): a READY `project_archive` or `project_export` visible to
+  the same Mutation principal; anything else answers `not_found`, a non-archive kind is
+  `invalid_argument`, and the candidate pass re-validates the archive through the D15 ZIP
+  gate, so an unsafe archive fails `invalid_argument` before any dispatch (pinned with an
+  artifact published straight through the store, since no public ingress can make one
+  READY).
+- Terminal-state surface (D06): `COMMITTED` and `NO_CHANGE` are returned as data
+  (`state`, `transactionId`, `baselineFingerprint`, `candidateFingerprint`,
+  `resultFingerprint`, `importDispatched`, `designerWarning`); every other D16 terminal
+  state raises the D30 §7 error with the state and the transaction id named in the
+  message, and the operation record is linked to the transaction (`set_transaction`), so
+  `operation_diagnose` follows a refused or unresolved import back to it. The contract
+  spells the whole mapping out (`transaction.terminalStateSurface`) and the linter
+  requires it to cover every terminal state.
+- Wiring: `project_import` is registered as a CONFIG-scope, destructive, audited Tool,
+  gated by `IGNITION_MCP_CONFIG_MUTATION_ENABLED` and the `project_import` capability
+  (already derived from the documented import route); contract, output schema, audit
+  allowlist, inventories and the structural/destructive pins were updated together, and
+  `tooling/contracts/lint.py` learned the per-Tool applicability D30 implies (the Refused
+  resource types rule and D03 body validation govern config resources, not a Project
+  import, while a reachable recovered success must cite D16).
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **61/61 cases**
+  against the recorded Gateway, both deployment gates. The live harness now provisions
+  and verifies two disposable Projects (the allowlisted Target and a Project the
+  allowlist does not name) and enables the sensitive exports, artifact upload and the D16
+  writer in its server environment, which is why the driver's expected read inventory
+  includes the two sensitive-export Tools.
+- Live ([run 35658893521](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893521)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **61/61 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — the exact
+  inventory with the class enabled and disabled, a Project archive imported and confirmed
+  by an independent re-export this harness fingerprints itself, the marker the candidate
+  carried present in the Project the Gateway now serves, re-importing that content a
+  `NO_CHANGE`, the pre-commit fingerprint a `conflict` that changed nothing, a Project
+  outside the Target allowlist `permission_denied` with that Project untouched, and an
+  archive another principal owns `not_found`. `provision.json` records the two provisioned
+  Projects and the required OpenAPI routes.
+- **Review round 1 (`16-review-1.md`) raised two blockers, both fixed on `p4/rest-fix`
+  (base `p4/rest`).**
+  - *A restart could turn a known refusal into a recovered success.* The row persisted
+    `IMPORT_SENT` before the dispatch and only wrote the answer afterwards, so a process
+    that died once the Gateway had answered and before the terminal write left a row the
+    reconciler read as an ambiguous dispatch: it re-exported, found the candidate B a
+    competing writer had landed, and reported `COMMITTED`. The fix makes the dispatch
+    classification durable. The guarded executor now classifies every answer once, the
+    moment it exists and before any verification or read-back, and hands it to
+    `MutationRequest.on_dispatch_boundary`; the transaction persists it in the new
+    `project_transactions.dispatch_boundary` column (forward-only DDL version 4) together
+    with the raw dispatch outcome, status and error code. The value written before the
+    dispatch depends on the operation: `unattributable` when a refusal is final for it
+    (D30 §2) and `attributable` otherwise, which is exactly what a pre-Phase-4 row meant.
+    Restart reconciliation now acts on the recorded class and never replays an import:
+    `not_sent` and `refused` end `NOT_APPLIED` **without any read-back** (exporting the
+    Project could only misread another writer's identical content as this call's success),
+    `claimed` needs a re-export equal to candidate B and is `RECOVERY_REQUIRED` otherwise,
+    `unattributable` is `NOT_APPLIED` only when the Project still equals baseline A and
+    `OUTCOME_UNKNOWN` otherwise — never `COMMITTED` — and `attributable`, like a row with
+    no recorded class, follows D16's comparison unchanged. Frozen G3 rows carry no class,
+    so every Phase 3 reconciliation branch behaves exactly as before (the five new
+    mapping cases are pinned in `test_phase3_transactions.py`; the process-death window
+    end-to-end, with candidate B present, in `test_phase4_project_import.py`).
+  - *`importDispatched` contradicted its own published description.* The schema and the
+    model documented `false` for a commit recovered from an ambiguous dispatch while the
+    implementation returned `true`. The field's meaning is now declared once and used
+    everywhere: it answers whether an import request left the server — true for a commit
+    the response confirmed and for one recovered from an ambiguous dispatch, false only
+    when nothing was sent (`NO_CHANGE`, or a refusal or non-attempt before any byte left
+    the process). That is also what the frozen G3 evidence already records (`true` on
+    `COMMITTED`, `false` on `CONFLICTED`/`NO_CHANGE`), so no committed evidence changes.
+    The contract declares it (`transaction.importDispatched`) and `tooling.contracts.lint`
+    requires the declaration, the same way it requires the terminal-state surface.
+  - The refusal reader the contract's `rejectionPolicy` already promised is now wired:
+    a refused import reported inside a 200 (`{"success": false, "problem": {...}}`) is a
+    known rejection (`conflict`, the Gateway's own text never reaches the caller) instead
+    of a claim to confirm. Before the fix that response was read as a claim, and with a
+    competing writer landing the identical content it was reported as this call's
+    `COMMITTED`.
+  - Contract/schema/lint alignment: `transaction.dispatchBoundary` declares the durable
+    vocabulary and the restart rule, `transaction.importDispatched` declares the field's
+    semantics, and three contract-lint drift cases require both to stay declared.
+  - Verified on the fix head `653f7b9` (merge of `origin/p4/rest` at `603e0f6`, so the
+    lane's #17/#18 work is under the fix): the full `AGENTS.md` command block is green
+    (878 pytest cases, ruff, mypy strict, `tooling.contracts.lint`, the workflows check,
+    both deterministic Runtime builds and the release, and `sync_schemas` leaving the tree
+    clean) and the local live rehearsal against the recorded Gateway is **82/82 cases**.
+    The pushed branch ran CI
+    [35666670814](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670814),
+    Phase 3 Live Gateway G3
+    [35666670824](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670824) —
+    **both Gateway rows success, so the frozen G3 behavior and its evidence still replay**
+    — and Phase 4 Live Gateway REST mutation
+    [35666670831](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666670831) —
+    **82/82 live cases, 0 failures on 8.3.8 (`2026071409`, required) and on 8.3.9
+    (`2026082511`, candidate)**, including all 13 Project import cases
+    (`project-import-commits` `COMMITTED`, `project-import-reports-the-dispatch` true,
+    `project-import-no-change-dispatches-nothing` false, and
+    `project-import-stale-fingerprint-is-conflict` `conflict`). Draft PR
+    [#31](https://github.com/sheon-sek/ignition-mcp/pull/31) (base `p4/rest`) carries the
+    fix, and **every head of it ran the same three workflows green**: the documentation
+    head `98ac7b0` (CI
+    [35667330968](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667330968), G3
+    [35667331990](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667331990),
+    REST [35667331015](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667331015))
+    and the logging/typing cleanup head `6a963c9` (CI
+    [35667808523](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667808523), G3
+    [35667808580](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667808580),
+    REST [35667806718](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667806718),
+    again 82/82 cases with 0 failures on both rows).
+- **The first live attempt failed both rows, and the fix is in the harness.** Run
+  [35658093734](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093734) on
+  the code head returned `RECOVERY_REQUIRED` for the commit case: the candidate archive
+  appended a root entry, and the live Gateway rewrites `project.json` on import and does
+  not carry an entry it does not recognise as a resource into its re-export, so C could
+  never equal B. The driver now appends the marker to the first named-query payload — the
+  edit the G3 transaction case proves the Gateway stores verbatim (see
+  `tests/harness/phase3-live/driver.py`) — and writes the per-entry round-trip diff of the
+  candidate against the Gateway's re-export into `observations.json` before it fails, so
+  one run diagnoses a mismatch instead of costing another. No server code changed.
+- Frozen gates, green on every head of this ticket (`c83e45a` and `a2a7ef0`): CI
+  [35658093748](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093748) and
+  [35658893377](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893377),
+  Phase 3 Live Gateway G3
+  [35658093689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093689) and
+  [35658893366](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893366), and
+  Phase 4 Live Gateway G4a
+  [35658093769](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658093769) and
+  [35658893421](https://github.com/sheon-sek/ignition-mcp/actions/runs/35658893421) — all
+  success. The 8.3.9 candidate row of the Phase 4 REST workflow is `continue-on-error`,
+  but both of its Gateway rows passed on the head above.
+
+
+### Ticket #17 — REST `tag_config_import` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models a provider's Tag state —
+  `seed_tags`, a path-scoped JSON export, and an import that applies the document with
+  D30 §4's `Abort` collision refusal — plus the knobs the cases need: a competing writer
+  at dispatch time, a failure reported inside a 200 in either observed wire shape (the
+  summary object live 8.3.8/8.3.9 answer, and the QualityCode list the committed OpenAPI
+  documents), an ambiguous status that applies nothing, a partial application, and a
+  clean claim that creates nothing. The new module
+  `test_phase4_tag_config_import.py` (28 cases) drives the real server through MCP
+  against that Gateway; it fails before the change (the Tool and its operation do not
+  exist) and the full `AGENTS.md` command block is green (835 pytest cases).
+- **D30 §4** fixes the only caller-chosen knob: `collisionPolicy=Abort` is always sent,
+  so the Tool creates Tags and can never overwrite one. The dispatched body is the
+  artifact's own bytes (a test pins the request body's SHA-256 to the artifact ref), and
+  `tooling/contracts/lint.py` requires the contract to declare exactly that knob.
+- **D30 §2 has no Precondition token here** — the collision policy is the concurrency
+  rule instead. It is checked against the Gateway before dispatch (a destination that
+  already holds a declared Tag is a `conflict` that sends nothing), and the Gateway's own
+  `Abort` refusal inside a 200 is mapped to `conflict` (`qualitySubCode` 527) or, for any
+  other reported failure, to `upstream_error`. `rejection_is_final=True`, so a refusal is
+  never reconciled into a success — pinned by a case where a competing writer lands the
+  whole document at dispatch time.
+- **Attribution is the #14/#15 rule, shared.** The D30 §2 verdict moved to
+  `safety/verification.py` (`verdict`), so the config-resource Tool and this one cannot
+  drift: a claimed success is confirmed only by the bounded re-export, an ambiguous
+  dispatch is `outcome_unknown` (a re-export showing the intended Tags proves nothing
+  about who wrote them) or `not_applied` when nothing landed, and `recovered_success`
+  stays unreachable.
+- **Verification (D30 §6 Observed state).** A bounded re-export of the same provider and
+  path is compared with the Tag paths the document declares; `observedState.present`
+  names them and `observedState.missing` is empty on every returned result, because a
+  declared Tag the re-export does not show makes the call `recovery_required` whose
+  message names up to five of them. A Gateway that claims success and creates nothing is
+  pinned by a fixture case, and a partial application — some Tags created, some reported
+  failed — is `recovery_required` rather than a per-item success (D30 §3's per-item
+  surface is Preflight's; a partly-applied import is not a claim).
+- Input bounds (D10): the artifact must be a READY `tag_config_export` visible to the
+  Mutation principal (anything else `not_found`, another kind `invalid_argument`), read
+  under an 8 MiB ceiling and parsed before dispatch; at most 500 declared Tag paths and
+  32 KiB of declared path bytes, each path at most 1024 bytes; an oversize document fails
+  `limit_exceeded` with nothing sent. The Target is the exact provider-qualified path
+  `[provider]path` (D30 §3/§7), a denial is `permission_denied` before the artifact is
+  read, and the path is refused when it could name two targets (`/a`, `a/`, `a//b`,
+  `a/../b`). `_types_` (D30 §6): a document declaring the provider's UDT folder may only
+  be imported into that explicit path.
+- Wiring: registered as a CONFIG-scope, non-destructive, audited Tool with the ARTIFACT
+  budget class, gated by `IGNITION_MCP_CONFIG_MUTATION_ENABLED` and a new
+  `tag_config_import` capability derived from the documented `POST /tags/import` route;
+  contract, output schema, audit allowlist, inventories and the lifecycle-routing pin were
+  updated together.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **72/72 cases**
+  against the recorded Gateway, both deployment gates.
+- Live ([run 35662815877](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815877)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **72/72 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)**, 11 of them the
+  Tag import cases: the tool inventory with the class enabled and the read-only inventory
+  without it, a real `tag_config_export` artifact imported into an allowlisted destination
+  and confirmed by a second, independently downloaded export of that destination, the
+  source path untouched, a re-import of the same document a `conflict` that changed
+  nothing, a destination outside the Target allowlist `permission_denied` with none of the
+  source Tags at it, and an export another principal owns `not_found`. `provision.json`
+  records the disposable provider, the source Tags and the import conventions below.
+- **The import document rule is live-proven, both shapes, in every row.** Run
+  [35663426202](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426202)
+  records `tagProvider.convention`: importing a document whose root names its own node
+  into a throwaway path created `convention_probe_named/Probe` and
+  `convention_probe_named/Probe/Leaf`, and importing a provider-root document created
+  `convention_probe_flat/Flat` — the two readings the Tool's declaration follows (a named
+  root is imported under the request path, a nameless root contributes its children). The
+  source Tags and both probes took one import attempt each on both Gateway rows.
+- **The first live attempt failed its Tag section on both rows, and it exposed two real
+  defects.** Run
+  [35661939628](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939628)
+  reported `outcome_unknown` for the import: the artifact was the export of a *sub-path*,
+  whose root names its own node (`{"name": "source", "tagType": "Folder", ...}`), and the
+  Tool had declared only the document's `tags` — a wrapper rule that only the nameless
+  provider-root document had ever proved live, so every declared path was reported
+  missing. The Tool now declares what the document declares (a named root is imported
+  under the request path; a nameless root contributes its children), which the live
+  destination confirms — the Tag the import created there is named `source`. Second, the
+  driver failed *open*: with no structured result it recorded the abort and returned
+  without a failing case, so the workflow was green with a broken Tool. It now records
+  the destination and the source as the Gateway serves them and adds the failing case
+  before returning. `provision.py` also probes both document shapes into throwaway paths
+  and re-exports the provider root, so every row records where the Gateway really puts
+  each shape (`tagProvider.convention`) instead of leaving the rule an assumption.
+- Frozen gates, green on every head of this ticket (`89c8b52`, `8e2745a`, `9d25d98`):
+  CI
+  [35661939654](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939654),
+  [35662815732](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815732) and
+  [35663426154](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426154);
+  Phase 3 Live Gateway G3
+  [35661939740](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939740),
+  [35662816113](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662816113) and
+  [35663426231](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426231); and
+  Phase 4 Live Gateway G4a
+  [35661939632](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939632),
+  [35662815762](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815762) and
+  [35663426276](https://github.com/sheon-sek/ignition-mcp/actions/runs/35663426276) — all
+  success. The first REST run on `89c8b52` is also recorded as success by the workflow;
+  that green is what the driver's fail-open path produced, and the head after it is where
+  the Tag cases are proven. The REST workflow ran on all three heads; the run cited above
+  is the one on `9d25d98`, and the earlier two are
+  [35661939628](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661939628) (the
+  failing attempt) and
+  [35662815877](https://github.com/sheon-sek/ignition-mcp/actions/runs/35662815877).
+
+### Ticket #18 — REST `alarm_pipeline_cancel` (milestone 4c)
+
+- Fixture-first coverage: the recorded Gateway now models Alarm Notification Pipeline
+  runtime state — `seed_pipeline` publishes the runs one exact path serves, the status
+  route answers from it, and the documented cancel route is a `DELETE` that takes its two
+  facts in a JSON body — plus the knobs the cases need: a competing cancel at dispatch
+  time (`race_cancel_with`), a claim that leaves the run in place
+  (`claim_cancels_without_applying`), a 2xx that claims nothing
+  (`answer_cancels_without_claiming`), a refusal inside a 200 (`refuse_cancels_with`) and
+  an ambiguous status that applies nothing (`fail_cancels_with`). The new module
+  `test_phase4_alarm_pipeline_cancel.py` (32 cases) drives the real server through MCP
+  against that Gateway; it fails before the change (the Tool and its operation do not
+  exist) and the full `AGENTS.md` command block is green (867 pytest cases).
+- **D30 §6, exactly.** The Target is the caller's own pipeline path, matched exactly:
+  `alarm_pipeline_list` reports that string, the deployment's Target allowlist names it,
+  and a path under it — or its own parent — is a different Target
+  (`permission_denied`). A caller-supplied `*` is `invalid_argument`, because the
+  wildcard is an allowlist entry and not a pipeline.
+- **D12, exactly.** The cancel touches the pipeline runtime route only: the bounded status
+  read and the documented `DELETE`. It never acknowledges or clears the Alarm Event, and a
+  case enumerates every Gateway route the call touched to keep it that way.
+- **D30 §2 gives this Tool no Precondition token, so the Tool establishes the pre-state
+  itself.** A destructive cancel's post-state is absence, and absence proves nothing on
+  its own — another operator can cancel the same run — so the Tool reads the same bounded
+  `alarm_pipeline_status` before it dispatches and refuses `not_found` when the pipeline
+  holds no run for that alarm event, dispatching nothing. That read is also the
+  verification, so the Observed state the caller gets is what `alarm_pipeline_status`
+  would have answered, plus the one comparison this Tool makes.
+- **The D10 bound is about coverage, not page size.** The Tool reads one page of 100 runs;
+  when that page cannot cover every run the Gateway matched, the call fails
+  `limit_exceeded` naming the matched count and the limit, and nothing is dispatched. A
+  pipeline whose last run is the page's last item hides nothing, so its absence is
+  definitive — both cases are pinned.
+- **Attribution (D30 §2) in one place.** `rejection_is_final=True`: a 4xx, or the 2xx the
+  route documents carrying `success=false`, is the result and is never reconciled into a
+  success — pinned by a case where another writer makes the run disappear at dispatch
+  time. A claimed success is confirmed only by a re-read that no longer reports the run; a
+  claim whose run is still reported is `recovery_required`; an ambiguous dispatch is
+  `not_applied` when the run is still there and `outcome_unknown` when it is gone, so
+  `recovered_success` stays unreachable. A 2xx this Tool cannot read as a claim is not a
+  success either (`recovery_required`, never a success).
+- Wiring (D07/D30 §7): registered as a CONTROL-scope, destructive, audited Tool gated by
+  `IGNITION_MCP_CONTROL_MUTATION_ENABLED` and a new `alarm_pipeline_cancel` capability
+  that requires *both* documented pipeline routes — a Gateway whose status route is
+  missing cannot be read back, so it exposes no cancel. Contract, output schema, audit
+  allowlist and inventories moved together, and `tooling/contracts/lint.py` now derives
+  each mutation contract's permission class and scope from its mutation class instead of
+  assuming `CONFIG`, so a CONTROL Tool can no longer be declared with a CONFIG surface.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **82/82 cases**
+  against the recorded Gateway, both deployment gates and all three credentials.
+- Live: pending — recorded below once the runs are in.
+
 ## Open questions
+
+- **Ticket #18 — a live cancel of a *running* pipeline is not provisioned by this
+  harness.** A fresh CI Gateway serves no Alarm Notification Pipeline runs (the Phase 2
+  live probe recorded that), and producing one needs an Alarm Event notifying through a
+  provisioned `alarm-notification-profile` whose pipeline holds a block that keeps the run
+  in flight. This harness provisions none of that, so the live rows prove the whole
+  decision surface around the dispatch — the CONTROL class, the scope-by-effect refusal,
+  the exact-path Target rule, both D10 input bounds and the bounded pre-dispatch read
+  refusing a run that does not exist — while the dispatched-and-verified path (the claim,
+  the re-read, the refusal inside a 200, the ambiguous dispatch) is fixture-proven, exactly
+  as #16's A-vs-A' drift variant is. **For the owner:** confirm, or ask for a provisioned
+  notification profile plus an alarm that notifies through it; that would also record
+  whether the Gateway keeps a cancelled run in its status page, the one behaviour this
+  Tool's verification reads and this repository has never observed live.
+- **Ticket #18 — the pre-dispatch read is the Tool's own attribution requirement.** D30 §6
+  names a bounded `alarm_pipeline_status` re-read as this Tool's verification and D30 §2
+  gives it no Precondition token, so the Tool reads before it dispatches as well as after.
+  That costs one extra bounded read per call, and it is what makes `not_found` — rather
+  than a vacuous success — the answer for an alarm event the pipeline is not running.
+  **For the owner:** confirm, or amend D30 §2 to give this Tool a token that would make the
+  extra read unnecessary.
+- **Ticket #18 — a read that cannot cover every match is `limit_exceeded`.** The Tool takes
+  one page (100 runs) and treats the read as evidence only when it covers everything the
+  Gateway matched; otherwise the state cannot be established and the call fails with the
+  D10 code, naming the matched count and the limit. The alternative readings — `not_found`
+  (claiming an absence the page did not establish) or `outcome_unknown` (a transport-shaped
+  answer for an input bound) — were rejected as less honest. **For the owner:** confirm, or
+  name the code you want for a collection whose verification bound cannot cover it.
+
+- **Ticket #17 — the Target of a Tag import is the exact provider-qualified path, not a
+  prefix.** The issue says "Target allowlist on the provider and path prefix". What is
+  implemented is the D08 Target identity every other Phase 4 Tool uses: the exact
+  `[provider]path` (`evaluate_deployment_policy` matches a Target by exact membership),
+  where the path is the prefix *under which* the import creates Tags — so an allowlist
+  entry `[default]CI/Imports` authorizes exactly that destination, and a call into
+  `[default]CI/Imports/Nested` is refused. The alternative reading (an entry authorizes
+  any sub-path under it) would need a second matching rule inside the shared deployment
+  policy the frozen Phase 3 machinery and its G3 evidence also use. **For the owner:**
+  confirm the exact-Target reading, or amend D08/D30 to add a provider-qualified prefix
+  rule (the Runtime Target Policy already has one, D30 §1).
+- **Ticket #17 — a document's root decides which Tag paths the import declares.** The
+  first live run showed the assumption mattered: the Tool declared only the document's
+  `tags`, while the Gateway also creates the document's *named* root. The implemented rule
+  is "the document declares what it declares" — a named root is imported under the request
+  path, a nameless root contributes its children — and both shapes are now recorded live
+  in every row (`tagProvider.convention`, run 35663426202). A caller whose artifact is a
+  per-Tag (rather than per-folder) export is the remaining unprobed case: its root is the
+  Tag itself and the rule reads it as one Tag under the path. **For the owner:** confirm,
+  or ask for a live case for a leaf-root document.
+- **Ticket #17 — an uninterpretable 2xx body is not a success.** The import route's
+  documented response is a list of non-Good QualityCodes; live 8.3.8/8.3.9 answer a
+  summary object. The Tool reads both, treats a zero-failure report as the Gateway's
+  claim (`failureCount: 0` with no failures, or an empty list), and treats anything it
+  cannot interpret — including an empty body — as no claim, which ends the call
+  `recovery_required`/`outcome_unknown` rather than a success. No live run has produced
+  that shape (both rows recorded the summary), so the reading is undecided for a Gateway
+  that answers 200 with no body at all. **For the owner:** confirm the fail-closed
+  reading, or name the accepted body.
+- **Ticket #17 — a partly applied import is `recovery_required`, not per-item data.**
+  D30 §3's per-item reporting is about Preflight; a Gateway that reports some successes
+  and some failures has neither refused the call nor completed it, so the Tool fails
+  closed with `outcome_unknown` and the message names the Tags the re-export was not
+  showing. The Runtime plane's per-item QualityCode surface is the `tag_write`
+  precedent. **For the owner:** confirm, or ask for a per-item result surface here too.
+- **Ticket #17 — `missing` is empty on every returned result by construction.** The
+  Observed state carries both lists because that is the comparison the verification made,
+  but a declared Tag the bounded re-export does not show is `recovery_required` (an error
+  naming up to five of them), so a caller only ever sees `present`. **For the owner:**
+  confirm, or ask for the comparison itself to be returned as data on a failed
+  verification.
+- **Ticket #17 — the `_types_` rule is read from D30 §6 onto the REST Target allowlist.**
+  D30 §6 states the explicit-`_types_` requirement for the Runtime Target Policy
+  (`[provider]_types_/…`); this Tool applies the same reading to its REST Target: a
+  document that declares the provider's UDT folder may only be imported into that path
+  (`[provider]_types_`), anything else is `invalid_argument`. A `_types_` folder deeper in
+  the path is an ordinary folder name and is not restricted. **For the owner:** confirm,
+  or state the REST-plane rule separately.
+- **Ticket #17 — provisioning a fresh Tag provider needs a retry, the Tool never
+  retries.** The recorded 8.3.8 behaviour (Bad 776 `cleanPath is null` on the first import
+  after a provider is created) is handled in `provision.py`, which imports the source Tags
+  with `MergeOverwrite` and retries until the Gateway serves them; the Tool itself still
+  sends exactly one dispatch and never replays (D30 §2). Both live rows show one attempt
+  was enough this time (`tagProvider.import.attempts: 1`). **For the owner:** no action
+  needed unless `setup-native` should adopt the same retry-and-verify discipline for the
+  Runtime Target Policy provider, which #6 already recommends.
+- **Resolved (#16 review round 1) — which artifacts `project_import` consumes: keep the
+  union.** D30 §6 names a READY `project_archive`; the ticket names "the artifact ID of a
+  READY `project_archive` ... (uploaded through `POST /artifacts` or produced by
+  `project_export`)", and D17 names server-produced exports as a legitimate binary ingress
+  source. The review kept the union of `project_archive` and `project_export`: both are
+  `application/zip` Project archives that passed the D15 ZIP gate before they became
+  READY, both kinds are declared in the Tool's contract (`artifactInput.kinds`), the
+  linter requires that declaration, every other kind is `invalid_argument`, and an
+  artifact the caller cannot see answers `not_found` first. No narrowing.
+- **Resolved (#16 review round 1) — a stale `expectedFingerprint` ends the transaction
+  `CONFLICTED`.** D16 defines `CONFLICTED` for the mandatory pre-import re-export finding
+  an external change (`concurrent_modification`, `import_attempted = false`). The D30 §2
+  token gate detects the same class of event, one step earlier and without a dispatch, so
+  the Tool reuses that state instead of inventing a new one: the transaction ends
+  `CONFLICTED` with the `conflict` code D30 §2/§7 decides, the release set is D16's, and
+  the caller receives `conflict` with the state and the `transactionId` named in the
+  message (the operation record carries the transaction id, D19), which is what separates
+  the two events. The review confirmed this is the right conservative choice; no distinct
+  state is introduced.
+- **Resolved (#16 review round 1) — the REST Tool path proves `CONFLICTED` live through
+  the token gate; its A-vs-A' drift variant is fixture-only there.** Landing an external
+  writer between the baseline export and the pre-import re-export deterministically is not
+  possible through this harness: the window is inside one MCP call and a race would make
+  the row flaky. The review accepted the fixture-only coverage for the HTTP harness: the
+  branch is driven live by the G3 in-process harness (with a hooked client, and it still
+  is), the unit fixture (`change_project_after_exports`) drives it on the Tool path, and
+  the live REST cases prove the same terminal state through the deterministic stale-token
+  gate. A proxy-based live race belongs to #20's fault-injection work.
+- **Recorded for the owner (#16 fix) — D30 §2 narrows D16's recovered success when a
+  dispatch answer was never recorded.** D16's restart rule recovers `C == B` as a
+  committed transaction; D30 §2 makes an explicit refusal final. A process that dies after
+  the Gateway answered but before the answer was written down leaves a row in which a
+  refusal is indistinguishable from an ambiguous boundary, and the two rules then point in
+  opposite directions. The fix takes the safety rule, because the alternative is crediting
+  a refusal to another writer's identical content: such a row is `NOT_APPLIED` only when
+  the Project still equals baseline A and `OUTCOME_UNKNOWN` otherwise, never `COMMITTED`.
+  A *recorded* ambiguous boundary still recovers a success (`C == B`), in-process and on
+  restart, so D16's recovery rule is intact everywhere the answer is known — including for
+  every phase-3 row, which carries no class and keeps D16's comparison unchanged.
+  **For the owner:** confirm that D30 §2 takes precedence in that unrecorded window, or
+  amend D16 to say an unrecorded answer is attributed by the re-export.
 
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
