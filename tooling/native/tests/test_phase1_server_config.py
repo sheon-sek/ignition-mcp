@@ -17,12 +17,20 @@ import pytest
 ROOT = Path(__file__).resolve().parents[3]
 GATEWAY_CONFIG = "com.inductiveautomation.mcp/server-config"
 
-#: Harness Server Config -> the profile whose exact Tool list it must select.
+#: Harness Server Config -> the profile whose exact Tool list it must select. The
+#: Phase 4 harness deploys two: the CONTROL profile (tickets #7/#8) and the CONFIG
+#: profile (ticket #10). A deployment's name says which profile it selects, so the
+#: expectation is per Server Config, not per harness directory.
 PROFILE_SELECTIONS = {
     "tests/harness/phase1-live": "readonly",
     "tests/harness/phase2-live": "readonly",
     "tests/harness/phase3-live": "readonly",
-    "tests/harness/phase4-live": "operator",
+    "tests/harness/phase4-live": None,
+}
+#: The Phase 4 Server Configs, each with the profile it must select.
+PHASE4_SELECTIONS = {
+    "phase4-operator": "operator",
+    "phase4-configurator": "configurator",
 }
 
 
@@ -38,7 +46,7 @@ def _configs(harness: str) -> list[Path]:
 def test_every_harness_server_config_selects_an_explicit_tool_list() -> None:
     checked = 0
     for harness, profile in PROFILE_SELECTIONS.items():
-        expected = _profile_tools(profile)
+        expected = _profile_tools(profile) if profile else []
         for path in _configs(harness):
             document = json.loads(path.read_text(encoding="utf-8"))
             selection = document["tools"]
@@ -48,10 +56,14 @@ def test_every_harness_server_config_selects_an_explicit_tool_list() -> None:
                 # A probe project hosts characterization Tools, not a profile.
                 assert tools == "*", (path, "a probe project may keep the wildcard")
                 continue
+            if profile is None:
+                # Phase 4 deploys one Server Config per profile it verifies.
+                assert path.parent.name in PHASE4_SELECTIONS, path
+                expected = _profile_tools(PHASE4_SELECTIONS[path.parent.name])
             assert tools != "*", (path, "a product deployment must not use the Tool wildcard")
             assert tools == expected, (path, profile, set(expected) ^ set(tools))
             checked += 1
-    assert checked >= 3, "expected the read-only harnesses and the operator harness to be checked"
+    assert checked >= 3, "expected the read-only harnesses and each Phase 4 profile to be checked"
 
 
 def test_the_phase4_operator_selection_is_the_operator_profile() -> None:

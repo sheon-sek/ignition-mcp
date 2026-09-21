@@ -20,6 +20,8 @@ PHASE4 = ROOT / "tests/harness/phase4-live"
 FIXTURES = ROOT / "tests/fixtures/recorded/gateway-8.3/phase4"
 COMPOSE = PHASE4 / "docker-compose.yml"
 WORKFLOW = ROOT / ".github/workflows/phase4-live-g4a.yml"
+WORKFLOW_G4B = ROOT / ".github/workflows/phase4-live-g4b.yml"
+SERVER_CONFIGS = PHASE4 / "gateway-config/com.inductiveautomation.mcp/server-config"
 POLICY_SHA256 = "b98bedf5a697fcf178dfad7cdcbae1e40c4be57071d57674f6cdf11487ba58f6"
 
 sys.path.insert(0, str(ROOT / "tests/harness"))
@@ -64,6 +66,7 @@ def _config(evidence: Path, **overrides: Any) -> Any:
         "api_token": "stub-token",
         "mcp_url": base_url + driver.PROBE_MCP_PATH,
         "operator_mcp_url": base_url + driver.OPERATOR_MCP_PATH,
+        "configurator_mcp_url": base_url + driver.CONFIGURATOR_MCP_PATH,
         "evidence_dir": evidence,
         "run_id": "1",
         "gateway_version": "8.3.8",
@@ -72,6 +75,17 @@ def _config(evidence: Path, **overrides: Any) -> Any:
     }
     values.update(overrides)
     return driver.Config(**values)
+
+
+def _tag_update_paths() -> dict[str, str]:
+    """The Tag CONFIG Mutation paths a ticket #10 run uses, for the fake's templates."""
+    return {
+        "writeTarget": policy_document.TAG_UPDATE_TARGET,
+        "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
+        "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
+    }
 
 
 class _StubMcp:
@@ -97,7 +111,10 @@ class _StubMcp:
         return {"protocolVersion": "2025-06-18", "serverInfo": {"name": "ignition-runtime"}}
 
     def tools_list(self) -> list[str]:
-        if self.url.endswith(driver.OPERATOR_MCP_PATH):
+        # The operator and configurator inventories are modelled state (the fake
+        # answers them from the recorded operator fixture and from the profile
+        # contract), so those URLs go to the real client.
+        if self.url.endswith(driver.OPERATOR_MCP_PATH) or self.url.endswith(driver.CONFIGURATOR_MCP_PATH):
             return list(self._delegate().tools_list())
         return ["alarm_probe", "policy_probe", "tag_fixture_probe"]
 
@@ -711,6 +728,132 @@ def test_tag_write_case_selector_replays_the_recorded_refusals() -> None:
         assert case == expected, (expected, case)
 
 
+def test_tag_update_case_selector_replays_the_recorded_refusals() -> None:
+    """The rehearsal's case selection mirrors the shipped handler's refusal order."""
+
+    class _Server:
+        policy_provider_created = True
+        tag_update_paths: dict[str, str] = {}
+        tag_config = {
+            policy_document.TAG_UPDATE_TARGET: [{"name": "WriteTarget", "value": 0}],
+        }
+
+    class _Policy(_Server):
+        policy_value = json.dumps(policy_document.tag_update_policy(), sort_keys=True, separators=(",", ":"))
+
+    class _TypesPolicy(_Server):
+        policy_value = json.dumps(
+            policy_document.tag_update_policy(allowlist=policy_document.TAG_UPDATE_TYPES_ALLOWLIST),
+            sort_keys=True, separators=(",", ":"),
+        )
+
+    def item(path: str, fingerprint: str) -> dict[str, Any]:
+        return {"path": path, "expectedFingerprint": fingerprint, "config": {"setpoint": 1}}
+
+    target = policy_document.TAG_UPDATE_TARGET
+    fresh = recorded_gateway._tag_config_fingerprint(_Server.tag_config[target])
+    cases = [
+        (_Policy, [item(target, fresh)], "allowlisted"),
+        (_Policy, [item(target, "tcf1:" + "0" * 64)], "stale-fingerprint"),
+        (_Policy, [item("[IgnitionMCPPolicy]WriteProbe", fresh)], "reserved-provider-refusal"),
+        (_Policy, [item(policy_document.TAG_FIXTURE_SIBLING_PATH, fresh)], "sibling-denial"),
+        (_Policy, [item("[default]IgnitionMCP_CI/Missing", fresh)], "missing-target"),
+        (_Policy, [item(policy_document.TAG_UPDATE_UDT_TARGET, fresh)], "udt-not-allowlisted"),
+        (_TypesPolicy, [item(policy_document.TAG_UPDATE_UDT_TARGET, fresh)], "missing-target"),
+    ]
+    for server_class, items, expected in cases:
+        case, _paths = recorded_gateway._tag_update_case(server_class(), {"items": items})
+        assert case == expected, (items, expected, case)
+
+    class _NoPolicy:
+        policy_provider_created = False
+        policy_value = ""
+
+    case, _paths = recorded_gateway._tag_update_case(
+        _NoPolicy(), {"items": [item(target, "tcf1:" + "0" * 64)]},
+    )
+    assert case == "no-policy"
+
+
+def test_tag_update_stages_record_the_live_facts(stub_mcp: dict[str, Any], tmp_path: Path) -> None:
+    """The ticket #10 stages derive their facts from the recorded Gateway."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN, stages=driver.MILESTONE_4B)
+        no_policy = driver.stage_tag_update_no_policy(config)["facts"]
+        _record_stage(tmp_path, "tag-update-no-policy", {"stage": "tag-update-no-policy", "facts": no_policy,
+                                                         "identity": driver.identity(config), "guard": config.guard})
+        driver.stage_policy_provision(config)
+        _record_stage(
+            tmp_path, "policy-provision",
+            {"stage": "policy-provision", "facts": driver.stage_policy_provision(config)["facts"],
+             "identity": driver.identity(config), "guard": config.guard},
+        )
+        setup = driver.stage_tag_update_setup(config)["facts"]
+        _record_stage(tmp_path, "tag-update-setup", {"stage": "tag-update-setup", "facts": setup,
+                                                     "identity": driver.identity(config), "guard": config.guard})
+        facts = driver.stage_tag_update(config)["facts"]
+        _record_stage(tmp_path, "tag-update", {"stage": "tag-update", "facts": facts,
+                                               "identity": driver.identity(config), "guard": config.guard})
+
+    # The CONFIG class is deployed on the configurator profile and nowhere else.
+    assert facts["tagUpdateConfiguratorInventoryMatchesProfile"] is True
+    assert facts["tagUpdateOperatorInventoryExcludesConfigMutation"] is True
+    # The fingerprint is the documented rule over what the read published, and the
+    # handler compared exactly the token the caller held.
+    assert facts["tagUpdateFingerprintRecomputesFromPublishedConfiguration"] is True
+    assert facts["tagUpdateFingerprintStableAcrossReads"] is True
+    assert facts["tagUpdateUpdateStatus"] == "executed"
+    assert facts["tagUpdateIndependentReadShowsTheChange"] is True
+    assert facts["tagUpdateObservedFingerprintChanged"] is True
+    assert facts["tagUpdateIndependentReadMatchesObserved"] is True
+    assert facts["tagUpdateStaleFingerprintIsConflict"] is True
+    assert facts["tagUpdateStaleFingerprintChangedNothing"] is True
+    assert facts["tagUpdateNeverCreatesTarget"] is True
+    assert facts["tagUpdateSiblingDenialIsSegmentBoundary"] is True
+    assert facts["tagUpdateUdtNeedsExplicitTypesEntry"] is True
+    assert facts["tagUpdateTypesEntryIsHonoured"] is True
+    assert facts["tagUpdateBareWildcardDoesNotCoverUdt"] is True
+    assert facts["tagUpdateReservedProviderRefusedUnderWildcard"] is True
+    assert facts["tagUpdatePolicyDocumentUnclobbered"] is True
+    assert facts["tagUpdatePreflightExecutedNothing"] is True
+    assert no_policy["tagUpdateNoPolicyFailsClosed"] is True
+    assert no_policy["tagUpdateNoPolicyReason"] == "declaredLengthUnavailable"
+    assert setup["tagUpdatePolicyInstalled"] is True
+
+
+def test_summarize_verdict_carries_the_tag_update_result(tmp_path: Path) -> None:
+    """The milestone selector picks the stage set, the expectations file and the verdict."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN, stages=driver.MILESTONE_4B)
+        stages = [
+            ("tag-update-no-policy", driver.stage_tag_update_no_policy),
+            ("policy-provision", driver.stage_policy_provision),
+            ("tag-update-setup", driver.stage_tag_update_setup),
+            ("tag-update", driver.stage_tag_update),
+        ]
+        for name, stage in stages:
+            _record_stage(tmp_path, name, stage(config))
+    evidence, code = driver.stage_summarize(config)
+    assert code == driver.EXIT_OK
+    assert evidence["milestone"] == driver.MILESTONE_4B
+    assert evidence["tickets"] == ["#10"]
+    assert evidence["drift"] == {}
+    assert evidence["verdict"]["runtimeTagConfigMutation"]["update"]["status"] == "executed"
+    assert evidence["verdict"]["runtimeTagConfigMutation"]["staleFingerprint"]["changedNothing"] is True
+
+
 def test_alarm_mutation_case_selector_replays_the_recorded_refusals() -> None:
     """The rehearsal's case selection is what makes the negative cases reachable."""
 
@@ -1144,3 +1287,49 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
     # Frozen expectations: drift must fail the job now.
     assert 'if [[ "$rc" == "3" ]]; then' in text
     assert 'echo "characterization drifted' in text
+
+
+def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:
+    text = WORKFLOW_G4B.read_text(encoding="utf-8")
+    assert "pull_request:" in text
+    assert "environment: phase4-live" in text
+    assert "github.event.pull_request.head.repo.full_name == github.repository" in text
+    for stage in ("tag-update-no-policy", "policy-provision", "tag-update-setup", "tag-update", "summarize"):
+        assert stage in text, stage
+    assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
+    assert "rehearse_local.py --stages 4b" in text
+    assert 'P4_MILESTONE: "4b"' in text
+    assert "P4_MARKER_LABEL: g4b" in text
+    assert '"gatewayId": "phase4-g4b-${GATEWAY_VERSION}-${GITHUB_RUN_ID}"' in text
+    assert "phase4-configurator" in text
+    assert "MAX_RESPONSE" not in text
+    assert 'if [[ "$rc" == "3" ]]; then' in text
+    assert "milestone 4b drifted" in text
+
+
+@pytest.mark.parametrize("profile", ["operator", "configurator"])
+def test_the_deployed_server_config_lists_the_profile_exactly(profile: str) -> None:
+    """D09: a deployment selects its profile's explicit list, never a wildcard.
+
+    The frozen G1-G3 harnesses used `*` while the bundle happened to hold exactly
+    the read-only Tools; once the bundle carries Mutations, a wildcard serves a
+    Mutation from a deployment that did not ask for it, so each Phase 4 Server
+    Config has to equal its profile contract.
+    """
+    document = json.loads((SERVER_CONFIGS / f"phase4-{profile}" / "config.json").read_text(encoding="utf-8"))
+    contract = json.loads((ROOT / "contracts/profiles" / f"{profile}.yaml").read_text(encoding="utf-8"))
+
+    assert document["tools"] == {"project/ignition_runtime": contract["tools"]}
+    bundle_version = (ROOT / "packages/ignition-runtime-bundle/BUNDLE_VERSION").read_text(encoding="utf-8").strip()
+    assert document["version"] == bundle_version
+
+
+def test_the_forbidden_profile_never_carries_a_mutation_of_another_class() -> None:
+    """CONTROL is not CONFIG: the operator deployment must not serve `tag_update`."""
+    operator = json.loads((SERVER_CONFIGS / "phase4-operator" / "config.json").read_text(encoding="utf-8"))
+    configurator = json.loads((SERVER_CONFIGS / "phase4-configurator" / "config.json").read_text(encoding="utf-8"))
+
+    assert "tag_update" in configurator["tools"]["project/ignition_runtime"]
+    assert "tag_update" not in operator["tools"]["project/ignition_runtime"]
+    assert "tag_write" in operator["tools"]["project/ignition_runtime"]
+    assert "tag_write" not in configurator["tools"]["project/ignition_runtime"]

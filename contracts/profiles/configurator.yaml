@@ -18,6 +18,7 @@
     "historian_query_series",
     "historian_query_aggregate",
     "database_query_list",
-    "database_query"
+    "database_query",
+    "tag_update"
   ]
 }

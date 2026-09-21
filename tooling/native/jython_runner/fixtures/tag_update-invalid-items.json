@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_update",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      "not-an-object",
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI//Setpoint",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "[default]",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "prov:default:/tag:IgnitionMCP_CI",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget*",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:0",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "config": {
+          "enabled": true
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {}
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "value": 5
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "tags": []
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "config": {
+          "name": "Other"
+        }
+      }
+    ]
+  },
+  "calls": []
+}

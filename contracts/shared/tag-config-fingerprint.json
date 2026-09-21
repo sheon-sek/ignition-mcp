@@ -1,0 +1,153 @@
+{
+  "schemaVersion": 1,
+  "decision": "D30",
+  "name": "tag_config_fingerprint",
+  "version": "tcf1",
+  "prefix": "tcf1:",
+  "tokenForm": "tcf1:<64 lowercase hexadecimal characters>",
+  "hash": "SHA-256 over the UTF-8 bytes of the canonical JSON text of `configuration`",
+  "definition": "The Tag config fingerprint is the repo-defined Precondition token for the Tag CONFIG Mutations (D30 §2: tag_update, tag_delete, tag_move, tag_rename). It is computed over exactly what tag_get_config publishes for the target path, so the value a caller passes back as items[].expectedFingerprint is the value of the read it reasoned about. Ignition does not enforce it: a handler reads the target's configuration and compares the fingerprint itself.",
+  "readShape": {
+    "call": "system.tag.getConfiguration(path, false, false)",
+    "note": "tag_get_config emits the fingerprint of the configuration its own call returned, whatever `recursive` and `overridesOnly` it was given. The value a Mutation compares is the one from the default read of one exact target path (recursive=false, overridesOnly=false): a fingerprint taken from a recursive or overrides-only read covers a different subtree and fails that comparison with conflict."
+  },
+  "canonicalJson": {
+    "keys": "object keys sort by Unicode code point",
+    "whitespace": "none; `,` between items and `:` between a key and its value",
+    "strings": "only `\"`, `\\` and the control characters below U+0020 are escaped, and a control character is always the six-character \\u00xx form; every other character is raw UTF-8",
+    "integers": "exact decimal form, no exponent and no leading zeroes",
+    "floats": "the interpreter's shortest round-trip form (Jython 2.7 `repr` and Python 3 `repr` agree on every finite value a Tag configuration carries; subnormal doubles are the one known divergence and no vector uses one)",
+    "null": "the literal `null`; the D28 encoding converts a null to {\"$ignition\":\"null\"} before the fingerprint is taken, so a null key never appears in a captured configuration",
+    "booleans": "`true` / `false`"
+  },
+  "over": "the D28-encoded configuration, which is byte-for-byte the `configuration` value the read returns",
+  "coverage": "The token covers the node(s) that read returned. It does not cover a Tag's children beyond that read (tag_update refuses a nested `tags` change for exactly this reason: a child is its own target with its own token), and a property Ignition does not report in the read is outside it.",
+  "raceWindow": "D30 §2: the compare and the change are two steps, so a race window remains between the handler's read and system.tag.configure, in the same way D16 documents the final import race. No atomicity is claimed: a competing writer inside the window is not detected by the token, and the tag_update handler is the only thing that narrows it (Preflight reads every item before any item is dispatched, and MergeOverwrite cannot create a target that Preflight found missing).",
+  "notASecret": "A fingerprint is derived from configuration data the same read publishes; it is a Precondition token, never a credential.",
+  "goldenVectors": [
+    {
+      "name": "atomic-tag-as-recorded",
+      "source": "the key set ticket #6 recorded from a live `getConfiguration` of a real AtomicTag (dataType, defaultValue, enabled, name, path, tagType, value, valueSource), with the ticket #10 fixture Tag's values",
+      "documentation": "A memory Int4 AtomicTag the way a live read reports it. A captured configuration has no null and no reserved key, so the D28 encoding is the identity here.",
+      "nativeConfiguration": [
+        {
+          "dataType": "Int4",
+          "defaultValue": 0,
+          "enabled": true,
+          "name": "WriteTarget",
+          "path": "[default]IgnitionMCP_CI/WriteTarget",
+          "tagType": "AtomicTag",
+          "value": 0,
+          "valueSource": "memory"
+        }
+      ],
+      "configuration": [
+        {
+          "dataType": "Int4",
+          "defaultValue": 0,
+          "enabled": true,
+          "name": "WriteTarget",
+          "path": "[default]IgnitionMCP_CI/WriteTarget",
+          "tagType": "AtomicTag",
+          "value": 0,
+          "valueSource": "memory"
+        }
+      ],
+      "canonicalJson": "[{\"dataType\":\"Int4\",\"defaultValue\":0,\"enabled\":true,\"name\":\"WriteTarget\",\"path\":\"[default]IgnitionMCP_CI/WriteTarget\",\"tagType\":\"AtomicTag\",\"value\":0,\"valueSource\":\"memory\"}]",
+      "fingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e"
+    },
+    {
+      "name": "explicit-null-property",
+      "source": "D28 rule vector; no non-recursive read of the ticket #6 Tag provider root carried an explicit null",
+      "documentation": "An explicit null property: the native read carries a real null, and D28 encodes it as the reserved-key object before the fingerprint is taken, so the encoding rule is part of the token.",
+      "nativeConfiguration": [
+        {
+          "enabled": true,
+          "name": "IgnitionMCP_CI",
+          "path": "[default]IgnitionMCP_CI",
+          "tagType": "Folder",
+          "tags": null
+        }
+      ],
+      "configuration": [
+        {
+          "enabled": true,
+          "name": "IgnitionMCP_CI",
+          "path": "[default]IgnitionMCP_CI",
+          "tagType": "Folder",
+          "tags": {
+            "$ignition": "null"
+          }
+        }
+      ],
+      "canonicalJson": "[{\"enabled\":true,\"name\":\"IgnitionMCP_CI\",\"path\":\"[default]IgnitionMCP_CI\",\"tagType\":\"Folder\",\"tags\":{\"$ignition\":\"null\"}}]",
+      "fingerprint": "tcf1:c2637a3ab3c032079b5821c7ef182b5eafefef516d242589409116cdd500b52f"
+    },
+    {
+      "name": "escaped-reserved-key-object",
+      "source": "D28 rule vector; the escape exists so a configuration value can carry the reserved key",
+      "documentation": "A configuration value carrying a literal $ignition key: D28 escapes the whole object and sorts its entries, and the canonical form sorts object keys as well, so both rules have to survive together.",
+      "nativeConfiguration": [
+        {
+          "name": "Instance",
+          "parameters": {
+            "$ignition": "literal",
+            "Depth": 3
+          },
+          "path": "[default]Instance",
+          "tagType": "UdtInstance",
+          "typeId": "ProbeType"
+        }
+      ],
+      "configuration": [
+        {
+          "name": "Instance",
+          "parameters": {
+            "$ignition": "object",
+            "entries": [
+              [
+                "$ignition",
+                "literal"
+              ],
+              [
+                "Depth",
+                3
+              ]
+            ]
+          },
+          "path": "[default]Instance",
+          "tagType": "UdtInstance",
+          "typeId": "ProbeType"
+        }
+      ],
+      "canonicalJson": "[{\"name\":\"Instance\",\"parameters\":{\"$ignition\":\"object\",\"entries\":[[\"$ignition\",\"literal\"],[\"Depth\",3]]},\"path\":\"[default]Instance\",\"tagType\":\"UdtInstance\",\"typeId\":\"ProbeType\"}]",
+      "fingerprint": "tcf1:766630aad6652f968b47806400f6bfc275bf1d24923d99845500cc9fa0def98e"
+    },
+    {
+      "name": "non-ascii-and-control-characters",
+      "source": "escape rule vector; non-ASCII text and a control character are the two cases where two implementations can silently disagree",
+      "documentation": "Non-ASCII text stays raw UTF-8 and a control character is always the six-character \\u00xx form, which is what makes the Jython and the Python copy of this rule agree byte for byte.",
+      "nativeConfiguration": [
+        {
+          "documentation": "Kälte – 12 °C\tready",
+          "name": "TextTarget",
+          "path": "[default]TextTarget",
+          "tagType": "AtomicTag",
+          "value": "phase4-initial"
+        }
+      ],
+      "configuration": [
+        {
+          "documentation": "Kälte – 12 °C\tready",
+          "name": "TextTarget",
+          "path": "[default]TextTarget",
+          "tagType": "AtomicTag",
+          "value": "phase4-initial"
+        }
+      ],
+      "canonicalJson": "[{\"documentation\":\"Kälte – 12 °C\\u0009ready\",\"name\":\"TextTarget\",\"path\":\"[default]TextTarget\",\"tagType\":\"AtomicTag\",\"value\":\"phase4-initial\"}]",
+      "fingerprint": "tcf1:18af5baec547835145db41baadb3d0b2622ea1b631f77a9df43a0d35d65f23ce"
+    }
+  ],
+  "encoding": "The fingerprint is taken over the D28 `ignition-null-v1` encoding of the read, which is exactly the `configuration` value tag_get_config publishes: a null becomes {\"$ignition\":\"null\"} and an object carrying a literal $ignition key is escaped as {\"$ignition\":\"object\",\"entries\":[[key, value], ...]} with its entries sorted."
+}

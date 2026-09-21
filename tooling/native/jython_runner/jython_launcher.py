@@ -129,6 +129,23 @@ class _QualityCodes(ArrayList):
             self.add(None if item is None else _QualityCode(item))
 
 
+class _Configurations(ArrayList):
+    """A recorded `system.tag.getConfiguration` result: a Java list of maps.
+
+    Each node is a `LinkedHashMap` so the handler's `Map`/`List` normalization
+    branches are exercised, exactly as the Gateway's own return value exercises
+    them.
+    """
+
+    def __init__(self, recorded):
+        ArrayList.__init__(self)
+        for item in recorded["items"]:
+            native = LinkedHashMap()
+            for key, value in item.items():
+                native.put(key, value)
+            self.add(native)
+
+
 class _RecordedResource(object):
     def __init__(self, recorded):
         self.name = recorded.get("name")
@@ -216,6 +233,8 @@ class _Recorder(object):
             return _QualifiedValues(result)
         if kind == "quality-codes":
             return _QualityCodes(result)
+        if kind == "configurations":
+            return _Configurations(result)
         if kind == "results":
             return _RecordedResults(result)
         if kind == "resource":
@@ -244,6 +263,12 @@ class _Tag(object):
 
     def query(self, *args, **kwargs):
         return self.recorder.take("system.tag.query", args, kwargs)
+
+    def getConfiguration(self, *args, **kwargs):
+        return self.recorder.take("system.tag.getConfiguration", args, kwargs)
+
+    def configure(self, *args, **kwargs):
+        return self.recorder.take("system.tag.configure", args, kwargs)
 
 
 class _Config(object):

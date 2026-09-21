@@ -1,0 +1,75 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_update",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "items": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "default": 20,
+      "itemRequired": ["path", "expectedFingerprint", "config"],
+      "itemProperties": {
+        "path": {"type": "string", "providerQualified": true, "configPath": true, "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry"},
+        "expectedFingerprint": {"type": "string", "pattern": "^tcf1:[0-9a-f]{64}$", "source": "tag_get_config.fingerprint"},
+        "config": {"type": "object", "nonEmpty": true}
+      }
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-update.output.schema.json",
+  "nativeRequirements": ["system.tag.readBlocking", "system.tag.getConfiguration", "system.tag.configure", "system.util.audit"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "one system.tag.configure call per item; its single QualityCode is that item's outcome, and Observed state never decides success",
+  "preconditionToken": {
+    "kind": "tag_config_fingerprint",
+    "definition": "contracts/shared/tag-config-fingerprint.json",
+    "definitionVersion": "tcf1",
+    "parameter": "items[].expectedFingerprint",
+    "source": "tag_get_config.fingerprint",
+    "enforcedBy": "handler_read_compare",
+    "comparedRead": "system.tag.getConfiguration(path, false, false) for every item, before any item executes",
+    "mismatchCode": "conflict",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 2: the compare and the change are two steps, so a competing writer can change or delete a target between the Preflight read and system.tag.configure. The handler narrows what it can (every fingerprint is read before any dispatch, and a target the Preflight read found missing is refused with not_found) and claims no atomicity. A target that disappears inside the window is re-created by MergeOverwrite, which is the same race the D16 final-import window documents; a caller that needs a narrower window re-reads with tag_get_config and retries the whole batch."
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_update",
+    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight, whatever the allowlist says, including an explicit *",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "targetPath": {
+    "form": "<provider>Tag, <provider>Folder or <provider>Folder/Tag, and <provider>_types_/... for a UDT definition",
+    "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
+    "leaf": "the target's last segment is the definition name sent to system.tag.configure"
+  },
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "neverCreatesTarget": "not_found",
+  "creatingMissingTargets": "Preflight reads every target's configuration and refuses the whole batch with not_found when a target is not there, so the handler never creates one",
+  "collisionPolicy": "MergeOverwrite",
+  "fixedKnobs": {
+    "collisionPolicy": "MergeOverwrite"
+  },
+  "refusedConfigKeys": {
+    "value": "invalid_argument (configValueIsAControlWrite): a Tag value write is tag_write's, and this Tool belongs to the CONFIG class",
+    "tags": "invalid_argument (configNestedTagsNotAllowed): a child is its own target with its own fingerprint, so it is updated as its own item",
+    "name": "invalid_argument (configNameChangeNotAllowed): a name change is tag_rename's, which checks the new path against the Target allowlist"
+  },
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "ambiguousOutcomeScope": "an item whose own dispatch raised is outcome_unknown and ends the batch (later items are not_executed); an item whose dispatch answered an unattributable QualityCode is outcome_unknown and the batch continues. Nothing is replayed",
+  "nullEncoding": "ignition-null-v1"
+}

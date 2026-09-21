@@ -18,8 +18,18 @@ Stages:
                        every candidate read primitive.
     alarm              Runtime MCP: call the `alarm_probe` handler and record
                        queryStatus matching, cardinality and cost.
-    summarize          Merge the stage records, compare against
-                       `characterization.json`, and write `evidence.json`.
+    tag-write-setup    Runtime MCP: create the disposable Tag fixtures, the audit
+    tag-write            profile and the tag_write policy, then verify tag_write.
+    alarm-no-policy    Runtime MCP: the Alarm Mutations fail closed with no policy.
+    alarm-shelve       Runtime MCP: verify alarm_shelve and alarm_unshelve.
+    tag-update-no-policy
+                       Runtime MCP: `tag_update` fails closed with no policy.
+    tag-update-setup   Runtime MCP: the Tag fixtures, the audit profile and the
+                       tag_update policy the ticket #10 cases run against.
+    tag-update         Runtime MCP: verify the Tag config fingerprint and
+                       `tag_update` on the configurator profile.
+    summarize          Merge the stage records of one milestone, compare against
+                       that milestone's expectations, and write `evidence.json`.
 
 Every stage verifies the L5 CI marker, the trusted repository and the live
 Gateway identity before it touches the Gateway, and fails closed otherwise.
@@ -45,6 +55,12 @@ import gateway_rest  # noqa: E402
 import mcp_client  # noqa: E402
 import policy_document  # noqa: E402
 
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tooling.contracts import lint  # noqa: E402
+
 EXPECTED_MARKER = "ignition-mcp-phase4-live"
 TRUSTED_REPO = "sheon-sek/ignition-mcp"
 PHASE4_ENVIRONMENT = "phase4-live"
@@ -58,7 +74,11 @@ EXPECTED_ORIGIN_PORT = 8093
 #: whose inventory and Tag Mutations the ticket #7 cases exercise.
 PROBE_MCP_PATH = "/data/mcp/phase4-policy-probe"
 OPERATOR_MCP_PATH = "/data/mcp/phase4-operator"
-EXPECTED_MCP_PATHS = (PROBE_MCP_PATH, OPERATOR_MCP_PATH)
+#: The `configurator` deployment: milestone 4b's first mutation belongs to the
+#: CONFIG class, so its inventory is the one that has to equal
+#: contracts/profiles/configurator.yaml exactly.
+CONFIGURATOR_MCP_PATH = "/data/mcp/phase4-configurator"
+EXPECTED_MCP_PATHS = (PROBE_MCP_PATH, OPERATOR_MCP_PATH, CONFIGURATOR_MCP_PATH)
 EXPECTED_MCP_PATH = PROBE_MCP_PATH
 #: Shipped-bundle Server Config and Designer project name on the disposable Gateway.
 RUNTIME_PROJECT = "ignition_runtime"
@@ -75,6 +95,29 @@ RAW_LIMIT = 24_000
 EXIT_OK = 0
 EXIT_STAGE_FAILED = 2
 EXIT_DRIFTED = 3
+#: One summarize per milestone: the stage records it merges, the expectations it
+#: checks and the verdict shape it writes. Milestone 4a is the ticket #6
+#: characterization plus the ticket #7/#8 Mutations; 4b is the Tag CONFIG
+#: Mutation (ticket #10).
+MILESTONE_4A = "4a"
+MILESTONE_4B = "4b"
+EXPECTATIONS = {
+    MILESTONE_4A: "characterization.json",
+    MILESTONE_4B: "characterization-config.json",
+}
+STAGE_SETS = {
+    MILESTONE_4A: (
+        "policy-provision", "policy-read-before-restart", "policy-read-after-restart",
+        "alarm", "tag-write-no-policy", "tag-write-setup", "tag-write",
+        "alarm-no-policy", "alarm-shelve",
+    ),
+    MILESTONE_4B: (
+        "tag-update-no-policy", "tag-update-setup", "tag-update",
+    ),
+}
+#: An optional stage record: the milestone's verdict does not need it, but it is
+#: merged into the facts when it is there.
+OPTIONAL_STAGES = frozenset({"policy-read-after-restart"})
 
 
 class GuardError(RuntimeError):
@@ -92,6 +135,9 @@ class Config:
     api_token: str = ""
     mcp_url: str = ""
     operator_mcp_url: str = ""
+    configurator_mcp_url: str = ""
+    marker_label: str = "g4a"
+    stages: str = MILESTONE_4A
     evidence_dir: Path = Path("artifacts/g4a")
     ci_marker: Path = Path("artifacts/ci-marker.json")
     run_id: str = ""
@@ -136,6 +182,10 @@ class Config:
     @property
     def operator_url(self) -> str:
         return self.operator_mcp_url or self.base_url.rstrip("/") + OPERATOR_MCP_PATH
+
+    @property
+    def configurator_url(self) -> str:
+        return self.configurator_mcp_url or self.base_url.rstrip("/") + CONFIGURATOR_MCP_PATH
 
 
 def bounded(value: Any, limit: int = RAW_LIMIT) -> Any:
@@ -212,6 +262,7 @@ def require_disposable_origin(config: Config) -> dict[str, str]:
 def verify_guard(config: Config) -> None:
     checks = require_disposable_origin(config)
     checks.update(require_origin(config.base_url, config.operator_url))
+    checks.update(require_origin(config.base_url, config.configurator_url))
     if not config.run_id or not config.provider or not config.root_name:
         raise GuardError("run id, policy provider and alarm root must be configured")
     if str(config.run_id) not in config.root_name:
@@ -228,7 +279,7 @@ def verify_guard(config: Config) -> None:
         "trustedRepo": marker.get("trustedRepo") == TRUSTED_REPO,
         "runId": str(marker.get("runId")) == str(config.run_id),
         "gatewayVersion": str(marker.get("gatewayVersion")) == config.gateway_version,
-        "gatewayId": marker.get("gatewayId") == f"phase4-g4a-{config.gateway_version}-{config.run_id}",
+        "gatewayId": marker.get("gatewayId") == f"phase4-{config.marker_label}-{config.gateway_version}-{config.run_id}",
         "policyProvider": marker.get("policyProvider") == config.provider,
         "alarmRoot": marker.get("alarmRoot") == config.root_name,
         "runtimeProject": marker.get("runtimeProject") == config.runtime_project,
@@ -1164,6 +1215,448 @@ def stage_tag_write(config: Config) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Stages: ticket #10 (`tag_update` and the Tag config fingerprint)
+# --------------------------------------------------------------------------- #
+
+def tag_update_paths() -> dict[str, str]:
+    root = policy_document.TAG_FIXTURE_ROOT
+    return {
+        "target": policy_document.TAG_UPDATE_TARGET,
+        "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "nestedTarget": f"[{policy_document.TAG_FIXTURE_PROVIDER}]{root}/Nested/Inner",
+        "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
+        "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
+    }
+
+
+def install_tag_update_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    audit_mode: str = "best_effort", deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    """Install the ticket #10 policy over the same reserved provider."""
+    return install_policy(
+        config, client,
+        document=policy_document.tag_update_tag_document_bytes(allowlist=allowlist, audit_mode=audit_mode),
+        expected_sha256=policy_document.tag_update_policy_sha256(allowlist=allowlist, audit_mode=audit_mode),
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def tag_config(client: mcp_client.McpClient, path: str) -> dict[str, Any]:
+    """One `tag_get_config` read: the configuration and the fingerprint a caller
+    hands back to tag_update."""
+    structured = expect_structured(client, "tag_get_config", {
+        "path": path, "recursive": False, "overridesOnly": False, "maxResults": 50,
+    })
+    fingerprint = structured.get("fingerprint")
+    configuration = structured.get("configuration")
+    if not isinstance(fingerprint, str) or not fingerprint.startswith("tcf1:"):
+        raise StageFailure(f"tag_get_config returned no tcf1 fingerprint for {path}: {json.dumps(structured)[:400]}")
+    if not isinstance(configuration, list):
+        raise StageFailure(f"tag_get_config returned no configuration for {path}: {json.dumps(structured)[:400]}")
+    return {"fingerprint": fingerprint, "configuration": configuration}
+
+
+def derived_fingerprint(configuration: Any) -> str:
+    """The documented rule, applied outside the handler.
+
+    D30 2 defines the Tag config fingerprint over the D28-encoded configuration
+    the same read publishes, so a live read lets the driver recompute it with the
+    contracts linter's own copy of the rule: the handler's Jython implementation
+    and the repository's Python one then have to agree on real Gateway data.
+    """
+    return lint.tag_config_fingerprint(lint.encode_nulls(configuration))
+
+
+def stage_tag_update_no_policy(config: Config) -> dict[str, Any]:
+    """A Gateway with no Runtime Target Policy must refuse the CONFIG Mutation."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    paths = tag_update_paths()
+    error = expect_tool_error(client, "tag_update", {
+        "items": [{"path": paths["target"], "expectedFingerprint": "tcf1:" + "0" * 64,
+                   "config": {"documentation": "phase4-updated"}}],
+    })
+    raw["noPolicy"] = bounded(error)
+    details = error.get("details") or {}
+    facts["tagUpdateNoPolicyErrorCode"] = str(error.get("code", ""))
+    facts["tagUpdateNoPolicyReason"] = str(details.get("reason", ""))
+    facts["tagUpdateNoPolicyFailsClosed"] = facts["tagUpdateNoPolicyErrorCode"] == "operation_disabled"
+    if not facts["tagUpdateNoPolicyFailsClosed"]:
+        raise StageFailure(f"a missing Runtime Target Policy must fail closed: {json.dumps(error)[:600]}")
+    return {
+        "stage": "tag-update-no-policy",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_update_setup(config: Config) -> dict[str, Any]:
+    """Test-only provisioning for the ticket #10 cases."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    probe = mcp_client.McpClient(config.mcp_url, config.api_token)
+    raw["probeInitialize"] = bounded(probe.initialize())
+    tools = probe.tools_list()
+    if "tag_fixture_probe" not in tools:
+        raise StageFailure(f"tag_fixture_probe is not discoverable; tools/list = {sorted(tools)}")
+    report = expect_structured(probe, "tag_fixture_probe", tag_fixture_arguments(config))
+    raw["tagFixtureProbe"] = bounded(report, 40_000)
+    facts["tagUpdateFixtureConfigured"] = bool(report.get("configured"))
+    facts["tagUpdateFixtureReadable"] = bool(report.get("fixtureReadable"))
+    if not facts["tagUpdateFixtureConfigured"] or not facts["tagUpdateFixtureReadable"]:
+        raise StageFailure(f"the Tag fixtures were not created: {json.dumps(report)[:600]}")
+
+    status, payload = gateway_rest.create_resource(
+        config.base_url, config.api_token, "ignition/audit-profile",
+        policy_document.audit_profile_resource(),
+    )
+    raw["createAuditProfile"] = {"status": status, "body": bounded(payload)}
+    find_status, found = gateway_rest.find_resource(
+        config.base_url, config.api_token, "ignition/audit-profile", config.audit_profile,
+    )
+    raw["auditProfileResource"] = {"status": find_status, "body": bounded(found)}
+    facts["tagUpdateAuditProfileAvailable"] = find_status == 200 and isinstance(found, dict)
+    if not facts["tagUpdateAuditProfileAvailable"]:
+        raise StageFailure(
+            f"the {config.audit_profile} audit profile is not readable after provisioning: HTTP {find_status}"
+        )
+
+    configurator = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["configuratorInitialize"] = bounded(configurator.initialize())
+    installed = install_tag_update_policy(config, configurator, allowlist=policy_document.TAG_UPDATE_ALLOWLIST)
+    raw["installPolicy"] = bounded(installed, 20_000)
+    facts["tagUpdatePolicyInstallAttempts"] = installed["attemptCount"]
+    facts["tagUpdatePolicyInstalled"] = installed["ok"]
+    facts["tagUpdatePolicyServedSha256"] = installed["servedSha256"]
+    if not installed["ok"]:
+        raise StageFailure(
+            "the running provider never served the tag_update policy: "
+            f"{json.dumps(installed['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    return {
+        "stage": "tag-update-setup",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_update(config: Config) -> dict[str, Any]:
+    """The ticket #10 live cases: the fingerprint, the merge-update, the refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_update_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+
+    # The CONFIG class is deployed on the configurator profile, and the CONTROL
+    # profile must not carry it: each profile's tools/list equals its contract list
+    # exactly (D09 and the G4 acceptance item).
+    inventory = sorted(client.tools_list())
+    expected_inventory = sorted(profile_tools("configurator"))
+    facts["tagUpdateConfiguratorInventory"] = inventory
+    facts["tagUpdateConfiguratorProfile"] = expected_inventory
+    facts["tagUpdateConfiguratorInventoryMatchesProfile"] = inventory == expected_inventory
+    if not facts["tagUpdateConfiguratorInventoryMatchesProfile"]:
+        raise StageFailure(
+            "the deployed configurator inventory does not equal contracts/profiles/configurator.yaml: "
+            f"{inventory} != {expected_inventory}"
+        )
+    operator = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["operatorInitialize"] = bounded(operator.initialize())
+    operator_inventory = sorted(operator.tools_list())
+    facts["tagUpdateOperatorInventory"] = operator_inventory
+    facts["tagUpdateOperatorInventoryExcludesConfigMutation"] = (
+        "tag_update" not in operator_inventory and operator_inventory == sorted(profile_tools("operator"))
+    )
+    if not facts["tagUpdateOperatorInventoryExcludesConfigMutation"]:
+        raise StageFailure(
+            f"the CONTROL profile must not serve a CONFIG Mutation: {operator_inventory}"
+        )
+
+    # Case 1: the fingerprint a caller reads is the token the handler compares, and
+    # the repository's own copy of the D30 rule derives it from the published
+    # configuration.
+    before = tag_config(client, paths["target"])
+    facts["tagUpdateFingerprintForm"] = before["fingerprint"].startswith("tcf1:") and len(before["fingerprint"]) == 69
+    facts["tagUpdateFingerprintRecomputesFromPublishedConfiguration"] = (
+        derived_fingerprint(before["configuration"]) == before["fingerprint"]
+    )
+    second = tag_config(client, paths["target"])
+    facts["tagUpdateFingerprintStableAcrossReads"] = second["fingerprint"] == before["fingerprint"]
+    facts["tagUpdateConfigurationShape"] = sorted(
+        str(key) for key in (before["configuration"][0] if before["configuration"] else {}).keys()
+    )
+    raw["tagGetConfigBefore"] = bounded(before, 20_000)
+    if not facts["tagUpdateFingerprintRecomputesFromPublishedConfiguration"]:
+        raise StageFailure(
+            "the published fingerprint is not the documented rule over the published configuration: "
+            f"{before['fingerprint']} != {derived_fingerprint(before['configuration'])}"
+        )
+
+    # Case 2: an allowlisted merge-update, confirmed by an independent re-read.
+    structured = expect_structured(client, "tag_update", {
+        "items": [{
+            "path": paths["target"],
+            "expectedFingerprint": before["fingerprint"],
+            "config": dict(policy_document.TAG_UPDATE_CONFIG),
+        }],
+    })
+    raw["allowlistedUpdate"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    summary = structured.get("summary") or {}
+    observed = structured.get("observed") or [{}]
+    facts["tagUpdateUpdateStatus"] = str(items[0].get("status", ""))
+    facts["tagUpdateUpdateNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagUpdateUpdateSucceeded"] = summary.get("succeeded")
+    facts["tagUpdateUpdateAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagUpdateUpdateAuditRecorded"] = summary.get("auditRecorded")
+    facts["tagUpdateObservedFingerprintChanged"] = bool(
+        observed and observed[0].get("fingerprint") not in (None, before["fingerprint"])
+    )
+    after = tag_config(client, paths["target"])
+    raw["tagGetConfigAfter"] = bounded(after, 20_000)
+    merged = (after["configuration"][0] if after["configuration"] else {})
+    facts["tagUpdateIndependentReadShowsTheChange"] = (
+        merged.get("documentation") == policy_document.TAG_UPDATE_CONFIG["documentation"]
+        and merged.get("engUnits") == policy_document.TAG_UPDATE_CONFIG["engUnits"]
+    )
+    facts["tagUpdateIndependentReadMatchesObserved"] = (
+        bool(observed) and observed[0].get("fingerprint") == after["fingerprint"]
+    )
+    facts["tagUpdateFingerprintAfterDerivable"] = derived_fingerprint(after["configuration"]) == after["fingerprint"]
+    if not (
+        facts["tagUpdateUpdateStatus"] == "executed"
+        and facts["tagUpdateUpdateNativeOutcome"].startswith("Good")
+        and facts["tagUpdateIndependentReadShowsTheChange"]
+    ):
+        raise StageFailure(f"the allowlisted update did not apply: {json.dumps(structured)[:800]}")
+
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = gateway_rest.audit_rows(
+        config.base_url, config.api_token, config.audit_profile, action="ignition-mcp.tag_update",
+    )
+    matching = [row for row in rows if correlation and correlation in str(row.get("actionValue", ""))]
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(matching, 20_000)}
+    facts["tagUpdateAuditCorrelationIdPresent"] = bool(correlation)
+    facts["tagUpdateAuditRowsForCorrelation"] = len(matching)
+    facts["tagUpdateAuditAttemptAndResultRecorded"] = len(matching) >= 2
+    facts["tagUpdateAuditActorIsServiceIdentity"] = bool(matching) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in matching
+    )
+
+    # Case 3: the token from before the change is stale now, so the same call is
+    # refused and the target keeps the values the first call wrote.
+    stale = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["target"],
+            "expectedFingerprint": before["fingerprint"],
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["staleFingerprint"] = bounded(stale)
+    stale_items = (stale.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateStaleFingerprintCode"] = str(stale.get("code", ""))
+    facts["tagUpdateStaleFingerprintReason"] = str(stale_items[0].get("reason", ""))
+    facts["tagUpdateStaleFingerprintIsConflict"] = (
+        facts["tagUpdateStaleFingerprintCode"] == "conflict"
+        and facts["tagUpdateStaleFingerprintReason"] == "fingerprintMismatch"
+    )
+    unchanged = tag_config(client, paths["target"])
+    facts["tagUpdateStaleFingerprintChangedNothing"] = (
+        unchanged["fingerprint"] == after["fingerprint"]
+        and unchanged["configuration"] == after["configuration"]
+    )
+    if not facts["tagUpdateStaleFingerprintIsConflict"]:
+        raise StageFailure(f"a stale Tag config fingerprint must be conflict: {json.dumps(stale)[:600]}")
+    if not facts["tagUpdateStaleFingerprintChangedNothing"]:
+        raise StageFailure("a refused stale fingerprint changed the target")
+
+    # Case 4: a target that is not there is not_found, and nothing is created.
+    absent = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["missingTarget"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["missingTarget"] = bounded(absent)
+    absent_items = (absent.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateMissingTargetCode"] = str(absent.get("code", ""))
+    facts["tagUpdateMissingTargetReason"] = str(absent_items[0].get("reason", ""))
+    facts["tagUpdateNeverCreatesTarget"] = (
+        facts["tagUpdateMissingTargetCode"] == "not_found"
+        and facts["tagUpdateMissingTargetReason"] == "targetMissing"
+    )
+    if not facts["tagUpdateNeverCreatesTarget"]:
+        raise StageFailure(f"a missing target must be not_found: {json.dumps(absent)[:600]}")
+    missing_read = expect_tool_error(client, "tag_get_config", {"path": paths["missingTarget"]})
+    raw["missingTargetRead"] = bounded(missing_read)
+    facts["tagUpdateMissingTargetStillAbsent"] = True
+
+    # Case 5: the segment-boundary sibling is refused and untouched.
+    sibling = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["siblingTarget"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["siblingDenial"] = bounded(sibling)
+    sibling_items = (sibling.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateSiblingDenialCode"] = str(sibling.get("code", ""))
+    facts["tagUpdateSiblingDenialReason"] = str(sibling_items[0].get("reason", ""))
+    facts["tagUpdateSiblingDenialIsSegmentBoundary"] = (
+        facts["tagUpdateSiblingDenialCode"] == "permission_denied"
+        and facts["tagUpdateSiblingDenialReason"] == "targetNotAllowlisted"
+    )
+    if not facts["tagUpdateSiblingDenialIsSegmentBoundary"]:
+        raise StageFailure(f"the segment-boundary sibling was not refused: {json.dumps(sibling)[:600]}")
+    sibling_value = read_tag_value(client, paths["siblingTarget"])
+    facts["tagUpdateSiblingValueUnchanged"] = sibling_value.get("value") == 0
+
+    # Case 6: a UDT definition is refused while the allowlist is a plain prefix,
+    # even though the target starts with the same characters.
+    plain_udt = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["udtTarget"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["udtUnderPlainPrefix"] = bounded(plain_udt)
+    plain_items = (plain_udt.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateUdtUnderPlainPrefixCode"] = str(plain_udt.get("code", ""))
+    facts["tagUpdateUdtUnderPlainPrefixReason"] = str(plain_items[0].get("reason", ""))
+    facts["tagUpdateUdtNeedsExplicitTypesEntry"] = (
+        facts["tagUpdateUdtUnderPlainPrefixCode"] == "permission_denied"
+        and facts["tagUpdateUdtUnderPlainPrefixReason"] == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagUpdateUdtNeedsExplicitTypesEntry"]:
+        raise StageFailure(f"a UDT definition needs an explicit _types_ entry: {json.dumps(plain_udt)[:600]}")
+
+    # Case 7: an explicit _types_ entry lets the target through to the existence
+    # check, which is what proves the entry is honoured rather than ignored.
+    installed = install_tag_update_policy(
+        config, client, allowlist=policy_document.TAG_UPDATE_TYPES_ALLOWLIST,
+    )
+    raw["installTypesPolicy"] = bounded(installed, 20_000)
+    facts["tagUpdateTypesPolicyInstalled"] = installed["ok"]
+    if not installed["ok"]:
+        raise StageFailure(
+            "the running provider never served the _types_ policy: "
+            f"{json.dumps(installed['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    honoured = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["udtTarget"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["udtUnderTypesEntry"] = bounded(honoured)
+    honoured_items = (honoured.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateUdtUnderTypesEntryCode"] = str(honoured.get("code", ""))
+    facts["tagUpdateUdtUnderTypesEntryReason"] = str(honoured_items[0].get("reason", ""))
+    facts["tagUpdateTypesEntryIsHonoured"] = (
+        facts["tagUpdateUdtUnderTypesEntryCode"] == "not_found"
+        and facts["tagUpdateUdtUnderTypesEntryReason"] == "targetMissing"
+    )
+    if not facts["tagUpdateTypesEntryIsHonoured"]:
+        raise StageFailure(
+            f"the explicit _types_ entry was not honoured: {json.dumps(honoured)[:600]}"
+        )
+
+    # Case 8: with an explicit * the reserved provider is still refused, for a Tag
+    # and for an Alarm path, and neither the probe Tag nor the policy document moves.
+    wildcard = install_tag_update_policy(config, client, allowlist=policy_document.WILDCARD_ALLOWLIST)
+    raw["installWildcardPolicy"] = bounded(wildcard, 20_000)
+    facts["tagUpdateWildcardPolicyInstalled"] = wildcard["ok"]
+    if not wildcard["ok"]:
+        raise StageFailure(
+            "the running provider never served the wildcard policy: "
+            f"{json.dumps(wildcard['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    reserved_tag = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": config.write_probe_path,
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-clobber-attempt"},
+        }],
+    })
+    raw["reservedProviderRefusal"] = bounded(reserved_tag)
+    reserved_items = (reserved_tag.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateReservedProviderCode"] = str(reserved_tag.get("code", ""))
+    facts["tagUpdateReservedProviderReason"] = str(reserved_items[0].get("reason", ""))
+    facts["tagUpdateReservedProviderRefusedUnderWildcard"] = (
+        facts["tagUpdateReservedProviderCode"] == "permission_denied"
+        and facts["tagUpdateReservedProviderReason"] == "reservedProvider"
+    )
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagUpdateReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagUpdatePolicyDocumentUnclobbered"] = policy_before == policy_after
+    if not facts["tagUpdateReservedProviderRefusedUnderWildcard"]:
+        raise StageFailure(f"the reserved provider was not refused: {json.dumps(reserved_tag)[:600]}")
+
+    # Case 9: a UDT definition is still refused under a bare *, per D30 6.
+    wildcard_udt = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["udtTarget"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }],
+    })
+    raw["udtUnderWildcard"] = bounded(wildcard_udt)
+    wildcard_items = (wildcard_udt.get("details") or {}).get("items") or [{}]
+    facts["tagUpdateUdtUnderWildcardCode"] = str(wildcard_udt.get("code", ""))
+    facts["tagUpdateUdtUnderWildcardReason"] = str(wildcard_items[0].get("reason", ""))
+    facts["tagUpdateBareWildcardDoesNotCoverUdt"] = (
+        facts["tagUpdateUdtUnderWildcardCode"] == "permission_denied"
+        and facts["tagUpdateUdtUnderWildcardReason"] == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagUpdateBareWildcardDoesNotCoverUdt"]:
+        raise StageFailure(f"a bare * must not cover a UDT definition: {json.dumps(wildcard_udt)[:600]}")
+
+    # Case 10: a batch whose second item is refused is refused whole, so the
+    # first item's target still carries the values the allowlisted call wrote.
+    batch = expect_tool_error(client, "tag_update", {
+        "items": [
+            {"path": paths["target"], "expectedFingerprint": after["fingerprint"],
+             "config": {"documentation": "phase4-batch-should-not-apply"}},
+            {"path": paths["siblingTarget"], "expectedFingerprint": "tcf1:" + "0" * 64,
+             "config": {"documentation": "phase4-batch-should-not-apply"}},
+        ],
+    })
+    raw["preflightRefusal"] = bounded(batch)
+    facts["tagUpdatePreflightRefusalCode"] = str(batch.get("code", ""))
+    facts["tagUpdatePreflightRefusalItems"] = len((batch.get("details") or {}).get("items") or [])
+    batch_after = tag_config(client, paths["target"])
+    facts["tagUpdatePreflightExecutedNothing"] = batch_after["fingerprint"] == after["fingerprint"]
+    if not facts["tagUpdatePreflightExecutedNothing"]:
+        raise StageFailure("a refused Preflight executed part of its batch")
+    return {
+        "stage": "tag-update",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Stages: ticket #8 (`alarm_shelve` and `alarm_unshelve`)
 # --------------------------------------------------------------------------- #
 
@@ -1395,41 +1888,88 @@ def load_stage(config: Config, name: str) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
-    provision = load_stage(config, "policy-provision")
-    before = load_stage(config, "policy-read-before-restart")
-    stages = [provision, before]
-    after_path = config.evidence_dir / "policy-read-after-restart.json"
-    after = json.loads(after_path.read_text(encoding="utf-8")) if after_path.is_file() else None
-    if after is not None:
-        stages.append(after)
-    alarm = load_stage(config, "alarm")
-    stages.append(alarm)
-    stages.extend([
-        load_stage(config, "tag-write-no-policy"),
-        load_stage(config, "tag-write-setup"),
-        load_stage(config, "tag-write"),
-        load_stage(config, "alarm-no-policy"),
-        load_stage(config, "alarm-shelve"),
-    ])
+def load_milestone_stages(config: Config) -> list[dict[str, Any]]:
+    """The stage records of the selected milestone, in the order they were recorded.
 
-    facts: dict[str, Any] = {}
-    for stage in stages:
-        facts.update(stage.get("facts", {}))
+    An optional record is merged when it exists and skipped when it does not, so a
+    milestone's verdict never depends on a stage the workflow chose not to run.
+    """
+    stages = []
+    for name in STAGE_SETS[config.stages]:
+        try:
+            stages.append(load_stage(config, name))
+        except StageFailure:
+            if name not in OPTIONAL_STAGES:
+                raise
+    return stages
 
-    expectations_path = config.characterization or (Path(__file__).resolve().parent / "characterization.json")
-    expectations = json.loads(expectations_path.read_text(encoding="utf-8"))
-    expected = expectations.get(config.gateway_version)
-    if expected is None:
-        raise StageFailure(f"characterization.json has no entry for {config.gateway_version}")
-    drift = {
-        key: {"expected": value, "observed": facts.get(key)}
-        for key, value in expected.items() if facts.get(key) != value
-    }
 
+def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
+    """The milestone's own verdict shape over the merged facts."""
+    if config.stages == MILESTONE_4B:
+        return {
+            "runtimeTagConfigMutation": {
+                "configuratorInventoryMatchesProfile": facts.get("tagUpdateConfiguratorInventoryMatchesProfile"),
+                "operatorProfileExcludesConfigMutation": facts.get(
+                    "tagUpdateOperatorInventoryExcludesConfigMutation"
+                ),
+                "fingerprint": {
+                    "form": facts.get("tagUpdateFingerprintForm"),
+                    "recomputesFromPublishedConfiguration": facts.get(
+                        "tagUpdateFingerprintRecomputesFromPublishedConfiguration"
+                    ),
+                    "stableAcrossReads": facts.get("tagUpdateFingerprintStableAcrossReads"),
+                },
+                "update": {
+                    "status": facts.get("tagUpdateUpdateStatus"),
+                    "nativeOutcome": facts.get("tagUpdateUpdateNativeOutcome"),
+                    "observedFingerprintChanged": facts.get("tagUpdateObservedFingerprintChanged"),
+                    "independentReadShowsTheChange": facts.get("tagUpdateIndependentReadShowsTheChange"),
+                    "independentReadMatchesObserved": facts.get("tagUpdateIndependentReadMatchesObserved"),
+                },
+                "staleFingerprint": {
+                    "code": facts.get("tagUpdateStaleFingerprintCode"),
+                    "reason": facts.get("tagUpdateStaleFingerprintReason"),
+                    "changedNothing": facts.get("tagUpdateStaleFingerprintChangedNothing"),
+                },
+                "missingTarget": {
+                    "code": facts.get("tagUpdateMissingTargetCode"),
+                    "reason": facts.get("tagUpdateMissingTargetReason"),
+                    "stillAbsent": facts.get("tagUpdateMissingTargetStillAbsent"),
+                },
+                "targetAllowlist": {
+                    "siblingRefusedAtSegmentBoundary": facts.get("tagUpdateSiblingDenialIsSegmentBoundary"),
+                    "siblingValueUnchanged": facts.get("tagUpdateSiblingValueUnchanged"),
+                    "preflightRefusalCode": facts.get("tagUpdatePreflightRefusalCode"),
+                    "preflightExecutedNothing": facts.get("tagUpdatePreflightExecutedNothing"),
+                },
+                "udtDefinitions": {
+                    "refusedUnderPlainPrefix": facts.get("tagUpdateUdtNeedsExplicitTypesEntry"),
+                    "refusedUnderBareWildcard": facts.get("tagUpdateBareWildcardDoesNotCoverUdt"),
+                    "explicitTypesEntryHonoured": facts.get("tagUpdateTypesEntryIsHonoured"),
+                },
+                "reservedProvider": {
+                    "refusedUnderExplicitWildcard": facts.get("tagUpdateReservedProviderRefusedUnderWildcard"),
+                    "targetValueUnchanged": facts.get("tagUpdateReservedProviderValueUnchanged"),
+                    "policyDocumentUnclobbered": facts.get("tagUpdatePolicyDocumentUnclobbered"),
+                },
+                "audit": {
+                    "mode": facts.get("tagUpdateUpdateAuditMode"),
+                    "recorded": facts.get("tagUpdateUpdateAuditRecorded"),
+                    "rowsForCorrelation": facts.get("tagUpdateAuditRowsForCorrelation"),
+                    "actorIsServiceIdentity": facts.get("tagUpdateAuditActorIsServiceIdentity"),
+                },
+                "noPolicy": {
+                    "code": facts.get("tagUpdateNoPolicyErrorCode"),
+                    "reason": facts.get("tagUpdateNoPolicyReason"),
+                },
+            },
+        }
+    # The exact-path Alarm query bound is the conjunction ticket #6 measured: literal
+    # matching only, and a count that does not grow per unacknowledged cycle.
     literal = bool(facts.get("exactPathCountIsOnePerAlarm")) and not bool(facts.get("folderPathExpandsDescendants"))
     stable = bool(facts.get("perPathCountStableAcrossCycles"))
-    verdict = {
+    return {
         "runtimeTargetPolicyStorage": {
             "chosenLocation": config.policy_path,
             "readPrimitive": "system.tag.readBlocking([path], timeoutMs)",
@@ -1522,19 +2062,48 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
             "operatorInventoryMatchesProfile": facts.get("alarmShelveOperatorInventoryMatchesProfile"),
         },
     }
+
+
+EVIDENCE_TICKETS = {MILESTONE_4A: ["#6", "#7", "#8"], MILESTONE_4B: ["#10"]}
+EVIDENCE_TITLES = {
+    MILESTONE_4A: (
+        "Characterize the Runtime Target Policy and the exact-path alarm query bound, "
+        "and verify tag_write, alarm_shelve and alarm_unshelve live"
+    ),
+    MILESTONE_4B: "Verify the Tag config fingerprint and tag_update (milestone 4b) live",
+}
+
+
+def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
+    stages = load_milestone_stages(config)
+
+    facts: dict[str, Any] = {}
+    for stage in stages:
+        facts.update(stage.get("facts", {}))
+
+    expectations_path = config.characterization
+    if expectations_path is None:
+        expectations_path = Path(__file__).resolve().parent / EXPECTATIONS[config.stages]
+    expectations = json.loads(expectations_path.read_text(encoding="utf-8"))
+    expected = expectations.get(config.gateway_version)
+    if expected is None:
+        raise StageFailure(f"{expectations_path.name} has no entry for {config.gateway_version}")
+    drift = {
+        key: {"expected": value, "observed": facts.get(key)}
+        for key, value in expected.items() if facts.get(key) != value
+    }
+
     evidence = {
         "schemaVersion": 1,
-        "tickets": ["#6", "#7", "#8"],
-        "title": (
-            "Characterize the Runtime Target Policy and the exact-path alarm query bound, "
-            "and verify tag_write, alarm_shelve and alarm_unshelve live"
-        ),
+        "milestone": config.stages,
+        "tickets": EVIDENCE_TICKETS[config.stages],
+        "title": EVIDENCE_TITLES[config.stages],
         "identity": identity(config),
         "stages": stages,
         "facts": facts,
         "expectations": expected,
         "drift": drift,
-        "verdict": verdict,
+        "verdict": summarize_verdict(config, facts),
     }
     config.evidence_dir.mkdir(parents=True, exist_ok=True)
     (config.evidence_dir / "evidence.json").write_text(
@@ -1548,18 +2117,22 @@ def stage_summarize(config: Config) -> tuple[dict[str, Any], int]:
 # --------------------------------------------------------------------------- #
 
 def build_config(argv: list[str]) -> Config:
-    parser = argparse.ArgumentParser(description="Phase 4 ticket #6 characterization driver")
+    parser = argparse.ArgumentParser(description="Phase 4 Runtime mutation harness driver")
     parser.add_argument(
         "stage",
         choices=[
             "tag-write-no-policy", "policy-provision", "policy-read", "alarm",
-            "tag-write-setup", "tag-write", "alarm-no-policy", "alarm-shelve", "summarize",
+            "tag-write-setup", "tag-write", "alarm-no-policy", "alarm-shelve",
+            "tag-update-no-policy", "tag-update-setup", "tag-update", "summarize",
         ],
     )
     parser.add_argument("--base-url", default=os.environ.get("P4_BASE_URL", "http://127.0.0.1:8093"))
     parser.add_argument("--api-token", default=os.environ.get("CI_API_TOKEN", ""))
     parser.add_argument("--mcp-url", default=os.environ.get("P4_MCP_URL", ""))
     parser.add_argument("--operator-mcp-url", default=os.environ.get("P4_OPERATOR_MCP_URL", ""))
+    parser.add_argument("--configurator-mcp-url", default=os.environ.get("P4_CONFIGURATOR_MCP_URL", ""))
+    parser.add_argument("--marker-label", default=os.environ.get("P4_MARKER_LABEL", "g4a"))
+    parser.add_argument("--stages", default=os.environ.get("P4_MILESTONE", MILESTONE_4A), choices=sorted(STAGE_SETS))
     parser.add_argument("--runtime-project", default=os.environ.get("P4_RUNTIME_PROJECT", RUNTIME_PROJECT))
     parser.add_argument("--audit-profile", default=os.environ.get("P4_AUDIT_PROFILE", policy_document.AUDIT_PROFILE_NAME))
     parser.add_argument("--evidence-dir", default=os.environ.get("EVIDENCE_DIR", "artifacts/g4a"))
@@ -1577,7 +2150,11 @@ def build_config(argv: list[str]) -> Config:
     parser.add_argument("--provider", default=os.environ.get("P4_POLICY_PROVIDER", policy_document.POLICY_PROVIDER))
     parser.add_argument("--label", default="before-restart", choices=["before-restart", "after-restart"])
     parser.add_argument("--root-name", default=os.environ.get("P4_ALARM_ROOT", ""))
-    parser.add_argument("--characterization", default=str(Path(__file__).resolve().parent / "characterization.json"))
+    parser.add_argument(
+        "--characterization",
+        default=os.environ.get("P4_CHARACTERIZATION", ""),
+        help="expectations file; defaults to the selected milestone's own file",
+    )
     parser.add_argument("--noise-count", type=int, default=int(os.environ.get("P4_NOISE_COUNT", "60")))
     parser.add_argument("--cycles", type=int, default=int(os.environ.get("P4_CYCLES", "3")))
     parser.add_argument("--repeats", type=int, default=int(os.environ.get("P4_REPEATS", "3")))
@@ -1591,6 +2168,9 @@ def build_config(argv: list[str]) -> Config:
         api_token=args.api_token,
         mcp_url=args.mcp_url or args.base_url.rstrip("/") + PROBE_MCP_PATH,
         operator_mcp_url=args.operator_mcp_url or args.base_url.rstrip("/") + OPERATOR_MCP_PATH,
+        configurator_mcp_url=args.configurator_mcp_url or args.base_url.rstrip("/") + CONFIGURATOR_MCP_PATH,
+        marker_label=args.marker_label,
+        stages=args.stages,
         evidence_dir=Path(args.evidence_dir),
         ci_marker=Path(args.ci_marker),
         run_id=str(args.run_id),
@@ -1606,7 +2186,7 @@ def build_config(argv: list[str]) -> Config:
         provider=args.provider,
         label=args.label,
         root_name=args.root_name or f"MCP_P4_{args.run_id}",
-        characterization=Path(args.characterization),
+        characterization=Path(args.characterization) if args.characterization else None,
         noise_count=args.noise_count,
         cycles=args.cycles,
         repeats=args.repeats,
@@ -1656,6 +2236,18 @@ def main(argv: list[str] | None = None) -> int:
         elif stage == "alarm-shelve":
             record = stage_alarm_shelve(config)
             write_stage(config, "alarm-shelve", record)
+            code = EXIT_OK
+        elif stage == "tag-update-no-policy":
+            record = stage_tag_update_no_policy(config)
+            write_stage(config, "tag-update-no-policy", record)
+            code = EXIT_OK
+        elif stage == "tag-update-setup":
+            record = stage_tag_update_setup(config)
+            write_stage(config, "tag-update-setup", record)
+            code = EXIT_OK
+        elif stage == "tag-update":
+            record = stage_tag_update(config)
+            write_stage(config, "tag-update", record)
             code = EXIT_OK
         else:
             record, code = stage_summarize(config)

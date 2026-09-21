@@ -389,8 +389,117 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   success. One G3 row needed a rerun for a Gateway-side reason recorded in Open
   questions.
 
+### Ticket #10 — Runtime `tag_get_config` fingerprint and `tag_update` (milestone 4b)
+
+- **The Tag config fingerprint is a committed shared contract.** D30 §2 makes it
+  repo-defined, so `contracts/shared/tag-config-fingerprint.json` holds the token
+  form (`tcf1:<64 hex>`), the canonical-JSON rule, the D28 encoding step, the
+  coverage and race-window statements, and four golden vectors. The rule is
+  implemented twice — Jython 2.7 in the handlers (D29 self-containment) and Python
+  3 in `tooling/contracts/lint.py` — and the vectors are what keep the two
+  honest: the lint recomputes every vector from its recorded native read
+  (native read → D28 encoding → canonical JSON → SHA-256), and the D29 suite runs
+  the shipped `tag_get_config` handler under Jython 2.7.4 over the same reads and
+  requires the same fingerprints, including the non-ASCII, control-character,
+  D28-null and escaped-reserved-key cases.
+- **Fixture-first coverage.** 8 recorded-Jython tests
+  (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over four golden
+  vectors, and 38 tests for `tag_update`
+  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 32 fixtures that
+  cover: the policy gate (missing, oversize, length mismatch, malformed,
+  explicit-null `auditProfile`, a broken own-key entry, a policy that names the
+  Tool no allowlist at all), the item array bounds and every item-shape refusal
+  (keys, path grammar, fingerprint form, empty config, and the three refused keys),
+  the Target allowlist at a segment boundary, the reserved provider under an
+  explicit `*`, the D30 §6 `_types_` rule in all three shapes (bare `*`, plain
+  prefix, explicit `_types_` entry), whole-batch Preflight refusal for a stale
+  fingerprint and for a refused target, the fingerprint read-compare itself
+  (`conflict` with nothing dispatched), a missing target (`not_found`, never
+  created), a Preflight read that raises, the `required`/`best_effort`/`off` audit
+  paths, an item-scoped indeterminate native outcome, a dispatch that raises (the
+  item is `outcome_unknown` and later items are `not_executed`), and a failed or
+  empty observed read. The D29 runner gained the `system.tag.getConfiguration` and
+  `system.tag.configure` recordings, so a fixture proves the *absence* of a call
+  as well as its result.
+- Contracts: `contracts/tools/runtime/tag_update.contract.json` (CONFIG, not
+  destructive, FAST, 1..100 targets, the D30 §2 Precondition token, the fixed
+  `MergeOverwrite` collision policy, the `not_found` never-create rule, the refused
+  configuration keys, the `_types_` rule and the race window),
+  `contracts/schemas/tag-update.output.schema.json`, the additive
+  `tag_get_config.fingerprint` field (schema, contract and resource.json), and
+  `tag_update` in the `configurator` and `full` profiles (`readonly` and `operator`
+  unchanged). `BUNDLE_VERSION` goes 0.4.0 → 0.5.0 (D21 MINOR);
+  `tooling/contracts/lint.py` carries the CONFIG inventory, the fingerprint
+  contract and the additive-field check.
+- The Runtime Tag CONFIG Mutation belongs to the CONFIG class, so the harness now
+  deploys a second Phase 4 Server Config (`phase4-configurator`) whose explicit
+  Tool list equals `contracts/profiles/configurator.yaml`, and the live stage
+  asserts both that the configurator endpoint serves exactly that list and that the
+  operator endpoint does not serve `tag_update` (CONTROL ≠ CONFIG).
+- Local rehearsal: `tests/harness/phase4-live/rehearse_local.py --stages 4b` — the
+  milestone selector picks the stage set, the expectations file and the verdict
+  shape, so the 4a evidence is untouched; all four 4b stages against the recorded
+  Gateway, `drift: {}`.
+- The live stage also recomputes the published fingerprint from the published
+  configuration with the repository's own Python copy of the rule, so the Jython
+  handler and the contract definition have to agree on a real Gateway's data.
+
 ## Open questions
 
+- **Ticket #10 — milestone 4b gets its own live workflow, reusing the `phase4-live` environment.**
+  `.github/workflows/phase4-live-g4b.yml` verifies `tag_get_config`/`tag_update` on both Gateway rows
+  and reuses the `phase4-live` GitHub environment unchanged, so it inherits the already-recorded
+  owner-accepted deviation (no protection rules) with the same compensating controls (trusted-repo
+  guard, no repository or environment secrets, compose-localhost endpoints only, run-unique Tag
+  paths, and the driver's CI-marker plus Gateway-identity guard). The marker label and the
+  `gatewayId` are milestone-scoped (`g4b`), so a rehearsal or a G4a run can never satisfy the G4b
+  guard. **For the owner:** confirm the per-milestone workflow split, or fold 4b into the G4a
+  workflow if one evidence bundle per milestone is not wanted.
+- **Ticket #10 — the recorded `phase4` bodies for this ticket are modelled until the live run
+  re-records them.** `tests/fixtures/recorded/gateway-8.3/phase4/tag-config.json` (the fixture Tags'
+  configurations the fake serves) and the six `tag-update-*.json` refusal bodies are modelled from
+  the shipped handler's shape plus the ticket #6 recorded read (the AtomicTag key set: `dataType`,
+  `defaultValue`, `enabled`, `name`, `path`, `tagType`, `value`, `valueSource`), because no live
+  Gateway is reachable from the workstation. The live run's own results are the evidence; a
+  follow-up commit replaces the modelled bodies with the recorded ones once the run exists, the way
+  tickets #7 and #8 recorded theirs.
+- **Ticket #10 — `tag_update` refuses three configuration keys beyond D30's text.** D30 §6
+  says nothing about which properties a Tag CONFIG Mutation may merge, so the shipped handler
+  refuses, with `invalid_argument`, the three keys that would leave its class or its target:
+  `value` (a Tag value write is `tag_write`'s, and `tag_update` is CONFIG — a CONFIG allowlist
+  must not be able to do what a CONTROL Tool does), `tags` (a child is its own target with its
+  own fingerprint, and the Preflight read is non-recursive, so a nested child change would sit
+  outside the token that authorized it), and a `name` that differs from the target's own leaf
+  (renaming is `tag_rename`'s, which checks the new path against the Target allowlist; without
+  this rule, `tag_update` would move a Tag to a path nothing checked). **For the owner:**
+  confirm, or name the keys a CONFIG merge should allow.
+- **Ticket #10 — the D30 §6 `_types_` rule reads as "an entry that itself names `_types_`".**
+  The decision says a UDT definition (`[provider]_types_/…`) is reachable "only when the Runtime
+  Target Policy lists an explicit `_types_` prefix, and a bare `*` does not cover it". The shipped
+  rule is therefore: for a target with a `_types_` segment, at least one matching allowlist entry
+  must also carry a `_types_` segment. That makes `[default]_types_/IgnitionMCP_CI` reach
+  `[default]_types_/IgnitionMCP_CI/ProbeType`, and refuses both `*` and a plain
+  `[default]IgnitionMCP_CI` entry. **For the owner:** confirm, or say whether the entry must
+  repeat the target's own `_types_` prefix literally.
+- **Ticket #10 — the `tag_update` output ceiling is enforced but not fixture-provable.** D10
+  says an oversize structured output must fail explicitly rather than truncate, and the handler
+  keeps that ceiling (256 KiB). It cannot be covered by a D29 fixture: the runner refuses a
+  recorded fixture over the same 256 KiB, so a fixture large enough to overflow the output is
+  itself rejected before Jython starts. The live cases stay far under it. The oversize case the
+  L5 matrix asks for is the *input* one (`items` over the hard maximum, fixture-covered), and
+  #23 should either accept that scope or find a bound that is provable.
+- **Ticket #10 — a UDT definition update and a Folder target are fixture-proven only.** The live
+  cases prove the two D30 §6 refusals (under `*` and under a plain prefix) and that an explicit
+  `_types_` entry is honoured (the target then reaches the existence check and answers
+  `not_found`), but they do not create a UDT definition and merge into it, and no live case
+  targets a Folder. Both paths are covered by fixtures, and creating a UDT definition on the
+  disposable Gateway would need a new probe. **For the owner:** decide whether G4 needs a live
+  UDT-definition update; #11/#12 will exercise the same handler path for `tag_create`/`tag_copy`.
+- **Ticket #10 — the `_types_` and reserved-provider rules are stated per Tool.** `alarm_shelve`,
+  `alarm_unshelve`, `tag_write` and `tag_update` each carry their own copy of the reserved-provider
+  refusal (a bundle has no shared modules), and the shared contract text is
+  `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
+  a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
 - **Ticket #15 — the frozen G3 `head-get-parity` check can fail for a Gateway reason.**
   On the #15 head the 8.3.8 G3 row failed once at `head-get-parity` and passed on an
   immediate rerun ([run 35653162977](https://github.com/sheon-sek/ignition-mcp/actions/runs/35653162977),
