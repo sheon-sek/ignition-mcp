@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"invalid_argument\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"items\": [{\"index\": 0, \"path\": \"__LEAF_MISMATCH_DESTINATION__\", \"reason\": \"destinationLeafDiffersFromSource\"}], \"reason\": \"preflightInputFailed\"}, \"message\": \"Every item must carry an absolute provider-qualified source path, its fingerprint from tag_get_config, and a destination path with the same leaf name; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

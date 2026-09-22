@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_delete",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": true,
+  "budgetClass": "FAST",
+  "parameters": {
+    "items": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "default": 20,
+      "itemRequired": [
+        "path",
+        "expectedFingerprint"
+      ],
+      "itemProperties": {
+        "path": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "cascade": "a Folder target takes everything beneath it in one system.tag.deleteTags call, so the token the caller reasons about is the Folder's own configuration"
+        },
+        "expectedFingerprint": {
+          "type": "string",
+          "pattern": "^tcf1:[0-9a-f]{64}$",
+          "source": "tag_get_config.fingerprint"
+        }
+      }
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-delete.output.schema.json",
+  "nativeRequirements": [
+    "system.tag.readBlocking",
+    "system.tag.exists",
+    "system.tag.getConfiguration",
+    "system.tag.deleteTags",
+    "system.util.audit"
+  ],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "one system.tag.deleteTags call per item, with the target as a one-element path list; its single QualityCode is that item's outcome, and Observed state never decides success",
+  "preconditionToken": {
+    "kind": "tag_config_fingerprint",
+    "definition": "contracts/shared/tag-config-fingerprint.json",
+    "definitionVersion": "tcf1",
+    "parameter": "items[].expectedFingerprint",
+    "source": "tag_get_config.fingerprint",
+    "enforcedBy": "handler_read_compare",
+    "comparedRead": "system.tag.exists(path) and then system.tag.getConfiguration(path, false, false) for every item, before any item executes",
+    "mismatchCode": "conflict",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 2: the compare and the change are two steps, so a competing writer can change or remove a target between the Preflight read and system.tag.deleteTags. The handler narrows what it can (every fingerprint is read before any dispatch, and a target the Preflight read found missing is refused with not_found) and claims no atomicity. A target rewritten inside the window is deleted with content the caller never saw, which is the deletion the token was there to guard, so a caller that needs a narrower window re-reads with tag_get_config and retries the whole batch."
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_delete",
+    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight, whatever the allowlist says, including an explicit *: a delete inside the policy provider would remove the document every Runtime Mutation reads (owner ruling 1)",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "targetPath": {
+    "form": "<provider>Tag, <provider>Folder or <provider>Folder/Tag, and <provider>_types_/... for a UDT definition",
+    "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
+    "leaf": "the target's last segment names the node the call removes, and one path-list entry is one target: the handler never expands a Folder into its children"
+  },
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "neverCreatesTarget": "not_found",
+  "missingTargetFails": "not_found (details.items[].reason = targetMissing): a target the Preflight existence check does not find refuses the whole batch before anything is dispatched, so a delete never creates a node it was asked to remove",
+  "collisionPolicy": "not_applicable",
+  "collisionPolicyWhy": "system.tag.deleteTags takes no collision policy: it removes exactly the provider-qualified paths it is given and writes nothing at another path, so there is no destination that could collide and no D30 4 knob for the handler to fix",
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "ambiguousOutcomeScope": "an item whose own dispatch raised is outcome_unknown and ends the batch (later items are not_executed); an item whose dispatch answered an unattributable QualityCode is outcome_unknown and the batch continues. Nothing is replayed",
+  "nullEncoding": "ignition-null-v1",
+  "existenceCheck": {
+    "call": "system.tag.exists(path) for every item, before that item's fingerprint is read and before any item executes",
+    "why": "a Gateway answers system.tag.getConfiguration for a path that is not there with a synthesized default node, so the configuration read alone cannot tell the caller whether the target exists; the ticket #10 live run recorded the same synthesized node on 8.3.8 and 8.3.9",
+    "missing": "not_found (details.items[].reason = targetMissing), and nothing is dispatched",
+    "unanswered": "upstream_error (reasons existenceCheckFailed / existenceCheckIndeterminate): a Gateway that raises or answers something that is not a boolean is never read as present",
+    "observedReadBacks": "the provider export is the independent absence check the harness uses"
+  },
+  "inputBounds": {
+    "itemsParameter": "items",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagDeleteMaxItems",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxBytes": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "observedConfigurationMaxBytes": 16384,
+    "observedStateMaxBytes": 65536,
+    "outputMaxBytes": 262144
+  },
+  "observedState": "the deleted target's own absence, read back per item with `system.tag.exists(path)` and reported as `absent: true`; a target the Gateway still answers as present is an explicit `upstream_error` observed error, never a silent omission. It is Observed state and never decides success, and a delete leaves no fingerprint behind: the caller's next tag_get_config of that path is a not_found",
+  "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused Precondition each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state read and the serializer do; an Observed state that cannot be returned turns into an explicit observed error on every reported path, and the result is re-rendered without the Observed state rather than replacing the outcomes"
+}

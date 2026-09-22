@@ -327,8 +327,25 @@ def _tag_path_candidates(arguments: dict[str, Any]) -> list[str]:
     return found
 
 
+def _requested_fingerprints(server: Any, arguments: dict[str, Any]) -> tuple[str, str]:
+    """The token a call carried and the fingerprint of the state it was compared against.
+
+    A fingerprint refusal names both, and neither is a run constant: the expected half
+    is the caller's own token and the observed half is the fingerprint the served state
+    holds for that item's target, which is what the shipped handler compared.
+    """
+    for item in arguments.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        expected = str(item.get("expectedFingerprint", ""))
+        path = str(item.get("path") or item.get("sourcePath") or "")
+        if expected.startswith("tcf1:") and path:
+            return expected, _tag_config_fingerprint(server.tag_config.get(path, []))
+    return "", ""
+
+
 def _render_tag_error_body(
-    body: dict[str, Any], templates: tuple[tuple[str, str], ...], values: dict[str, str],
+    server: Any, body: dict[str, Any], templates: tuple[tuple[str, str], ...], values: dict[str, str],
     arguments: dict[str, Any], *, limit: int,
 ) -> dict[str, Any]:
     """Fill one recorded ticket #11 refusal with the values of this run's call.
@@ -354,6 +371,11 @@ def _render_tag_error_body(
     # A replay has no run of its own, so it answers with the same fixed correlation
     # ID the other replayed Tools do.
     text = text.replace("__CORRELATION__", "recorded-replay")
+    # A fingerprint refusal quotes the token the call carried and the fingerprint the
+    # served state holds for that target.
+    expected_fingerprint, observed_fingerprint = _requested_fingerprints(server, arguments)
+    text = text.replace("__EXPECTED_FINGERPRINT__", expected_fingerprint)
+    text = text.replace("__OBSERVED_FINGERPRINT__", observed_fingerprint)
     # A leaf refusal quotes the destination the caller actually named, which is the
     # one path in that case which is not a run constant.
     text = text.replace(
@@ -382,7 +404,7 @@ def _tag_create_body(
 ) -> dict[str, Any]:
     """Substitute the run-scoped values a recorded `tag_create` refusal carries."""
     return _render_tag_error_body(
-        body, _TAG_CREATE_TEMPLATES, server.tag_create_paths, arguments,
+        server, body, _TAG_CREATE_TEMPLATES, server.tag_create_paths, arguments,
         limit=_served_item_limit(server, "tagCreateMaxItems"),
     )
 
@@ -392,8 +414,98 @@ def _tag_copy_body(
 ) -> dict[str, Any]:
     """Substitute the run-scoped values a recorded `tag_copy` refusal carries."""
     return _render_tag_error_body(
-        body, _TAG_COPY_TEMPLATES, server.tag_copy_paths, arguments,
+        server, body, _TAG_COPY_TEMPLATES, server.tag_copy_paths, arguments,
         limit=_served_item_limit(server, "tagCopyMaxItems"),
+    )
+
+
+#: The run-scoped values a ticket #12 refusal body carries, one map per Tool.
+_TAG_DELETE_TEMPLATES = (
+    ("__FOLDER_CHILD__", "folderChild"),
+    ("__FOLDER__", "folder"),
+    ("__MISSING__", "missingTarget"),
+    ("__RESERVED__", "reservedTarget"),
+    ("__SIBLING__", "siblingTarget"),
+    ("__STALE__", "staleTarget"),
+    ("__TARGET__", "target"),
+    ("__UDT__", "udtTarget"),
+)
+_TAG_MOVE_TEMPLATES = (
+    ("__OCCUPIED_DESTINATION__", "occupiedDestination"),
+    ("__OCCUPIED_SOURCE__", "writeTarget"),
+    ("__STALE_SOURCE__", "writeTarget"),
+    ("__LEAF_MISMATCH_DESTINATION__", "leafMismatchDestination"),
+    ("__MISSING_DESTINATION__", "missingDestination"),
+    ("__MISSING_SOURCE__", "missingSource"),
+    ("__RESERVED_DESTINATION__", "reservedDestination"),
+    ("__RESERVED_SOURCE_DESTINATION__", "reservedSourceDestination"),
+    ("__RESERVED_SOURCE__", "reservedSource"),
+    ("__SIBLING_DESTINATION__", "siblingDestination"),
+    ("__SIBLING_SOURCE__", "siblingSource"),
+    ("__SOURCE__", "source"),
+    ("__DESTINATION__", "destination"),
+    ("__UDT_DESTINATION__", "udtDestination"),
+    ("__UDT_SOURCE__", "udtSource"),
+)
+_TAG_RENAME_TEMPLATES = (
+    ("__MULTI_SEGMENT_NAME__", "multiSegmentName"),
+    ("__OCCUPIED_SOURCE__", "occupiedSource"),
+    ("__OCCUPIED_NEW_PATH__", "targetNewPath"),
+    ("__STALE_SOURCE__", "staleSource"),
+    ("__STALE_NEW_NAME__", "staleNewName"),
+    ("__MISSING_TARGET__", "missingTarget"),
+    ("__MISSING_NEW_NAME__", "missingNewName"),
+    ("__SIBLING_TARGET__", "siblingTarget"),
+    ("__SIBLING_NEW_NAME__", "siblingNewName"),
+    ("__SIBLING_NEW_PATH__", "siblingNewPath"),
+    ("__RESERVED_TARGET__", "reservedTarget"),
+    ("__RESERVED_NEW_NAME__", "reservedNewName"),
+    ("__RESERVED_NEW_PATH__", "reservedNewPath"),
+    ("__UDT_TARGET__", "udtTarget"),
+    ("__UDT_NEW_NAME__", "udtNewName"),
+    ("__UDT_NEW_PATH__", "udtNewPath"),
+    ("__TARGET_NEW_PATH__", "targetNewPath"),
+    ("__TARGET_NEW_NAME__", "targetNewName"),
+    ("__TARGET__", "target"),
+)
+
+#: The Bad QualityCode a `system.tag.deleteTags` answers for a path that is gone.
+#: The shape is the recorded one from the ticket #7 `tag_write` evidence (code 260,
+#: `Bad_NotFound`, level `Error`); a live Gateway's own answer is what the live
+#: stage records, and this models it for the rehearsal.
+BAD_NOT_FOUND_OUTCOME = {
+    "code": 260, "name": "Bad_NotFound", "level": "Error", "good": False,
+    "diagnosticMessage": "The path does not exist.",
+}
+
+
+def _tag_delete_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_delete` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_DELETE_TEMPLATES, server.tag_delete_paths, arguments,
+        limit=_served_item_limit(server, "tagDeleteMaxItems"),
+    )
+
+
+def _tag_move_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_move` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_MOVE_TEMPLATES, server.tag_move_paths, arguments,
+        limit=_served_item_limit(server, "tagMoveMaxItems"),
+    )
+
+
+def _tag_rename_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_rename` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_RENAME_TEMPLATES, server.tag_rename_paths, arguments,
+        limit=_served_item_limit(server, "tagRenameMaxItems"),
     )
 
 
@@ -819,13 +931,332 @@ def _apply_tag_copy(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+def _tag_delete_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(item.get("path", "")) for item in (arguments.get("items") or []) if isinstance(item, dict)]
+
+
+def _tag_move_pairs(arguments: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(item.get("sourcePath", "")),
+            str(item.get("destinationPath", "")),
+            str(item.get("expectedFingerprint", "")),
+        )
+        for item in (arguments.get("items") or []) if isinstance(item, dict)
+    ]
+
+
+def _tag_rename_items(arguments: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(item.get("path", "")),
+            str(item.get("newName", "")),
+            str(item.get("expectedFingerprint", "")),
+        )
+        for item in (arguments.get("items") or []) if isinstance(item, dict)
+    ]
+
+
+def _renamed_path(path: str, new_name: str) -> str:
+    """The new path a rename makes: the target's own parent plus the new name.
+
+    `system.tag.rename` takes a name, never a path, so the parent survives — which is
+    what D30 §6 measures against the allowlist. A target at the provider root has the
+    bracket as its base, so the name joins it directly.
+    """
+    index = path.rfind("/")
+    base = path[0:index] if index > path.find("]") else path[0:path.find("]") + 1]
+    return base + new_name if base.endswith("]") else base + "/" + new_name
+
+
+def _tag_delete_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_delete` refusal, or the modelled delete, these arguments ask for.
+
+    The selection mirrors the shipped handler's order: the input pass, the two D10
+    ceilings a request crosses with no native call at all, the policy gate, the
+    deployment's item ceiling, the reserved provider, the allowlist with D30 §6's
+    `_types_` rule, then `system.tag.exists` and the Precondition token.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    paths = _tag_delete_paths(arguments)
+    if any(set(item) != {"path", "expectedFingerprint"} for item in items) or len(items) != len(raw_items):
+        return "item-keys", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(len(path.encode("utf-8")) > PATH_MAX_BYTES for path in paths):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagDeleteMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_delete")
+    refused: list[tuple[int, str]] = []
+    for index, path in enumerate(paths):
+        if _provider_component(path) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-provider-refusal"))
+        elif _names_udt_namespace(path) and not _udt_allowlisted(path, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(path, entries):
+            refused.append((index, "sibling-denial"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for path in paths:
+        if path not in server.tag_config:
+            return "missing-target", paths
+    for item, path in zip(items, paths, strict=True):
+        if item.get("expectedFingerprint") != _tag_config_fingerprint(server.tag_config.get(path, [])):
+            return "stale-fingerprint", paths
+    return "deleted", paths
+
+
+def _apply_tag_delete(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.deleteTags([path])` per item.
+
+    A Folder takes everything beneath it, so the modelled delete drops the node and
+    every path under it — which is what makes a batch that names a folder and a Tag
+    inside it a real partial failure: the second item's own call answers Bad, nothing
+    is retried, and no rollback undoes the first item.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    server.tag_delete_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    succeeded = 0
+    failed = 0
+    for item in items:
+        path = str(item.get("path", ""))
+        if path in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == path or key.startswith(path + "/")]:
+                del server.tag_config[key]
+            results.append({"path": path, "status": "executed", "nativeOutcome": dict(GOOD_OUTCOME)})
+            succeeded += 1
+        else:
+            # The item passed Preflight and the path is gone at dispatch: the Batch
+            # reports that item's own Bad outcome and nothing is rolled back.
+            outcome = dict(BAD_NOT_FOUND_OUTCOME)
+            outcome["diagnosticMessage"] = "Path '" + path + "' not found."
+            results.append({"path": path, "status": "executed", "nativeOutcome": outcome})
+            failed += 1
+        observed.append({"path": path, "status": "ok", "absent": True})
+    server.tag_delete_targets = ",".join(item.get("path", "") for item in items)
+    return _tag_mutation_result(
+        server, items=len(items), results=results, observed=observed,
+        succeeded=succeeded, failed=failed,
+    )
+
+
+def _tag_move_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_move` refusal, or the modelled move, these arguments ask for.
+
+    Same order as the shipped handler: the input pass (the destination's leaf is an
+    input rule, because one `system.tag.move` call lands each source under its own
+    name), the D10 ceilings, the policy gate, the deployment's item ceiling, both
+    ends' reserved-provider and allowlist rules, then the source's existence and
+    Precondition token and the destination's absence.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    pairs = _tag_move_pairs(arguments)
+    paths = [destination for _source, destination, _fingerprint in pairs]
+    if any(set(item) != {"sourcePath", "destinationPath", "expectedFingerprint"} for item in items) \
+            or len(items) != len(raw_items):
+        return "item-keys", paths
+    if any(_target_leaf(source) != _target_leaf(destination) for source, destination, _f in pairs):
+        return "destination-leaf-mismatch", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(
+        len(value.encode("utf-8")) > PATH_MAX_BYTES
+        for source, destination, _fingerprint in pairs for value in (source, destination)
+    ):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagMoveMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_move")
+    refused: list[tuple[int, str]] = []
+    for index, (source, destination, _fingerprint) in enumerate(pairs):
+        if _provider_component(source) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-source-refusal"))
+        elif _provider_component(destination) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-destination-refusal"))
+        elif _names_udt_namespace(source) and not _udt_allowlisted(source, entries):
+            refused.append((index, "udt-source-not-allowlisted"))
+        elif not _allowlisted(source, entries):
+            refused.append((index, "source-not-allowlisted"))
+        elif _names_udt_namespace(destination) and not _udt_allowlisted(destination, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(destination, entries):
+            refused.append((index, "destination-not-allowlisted"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for source, destination, fingerprint in pairs:
+        if source not in server.tag_config:
+            return "source-missing", paths
+        if fingerprint != _tag_config_fingerprint(server.tag_config.get(source, [])):
+            return "stale-fingerprint", paths
+        if destination in server.tag_config:
+            return "destination-exists", paths
+    return "moved", paths
+
+
+def _apply_tag_move(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.move([source], destinationParent, "Abort")` per item.
+
+    The moved node keeps its configuration and gains the destination path, the source
+    is gone, and the Observed state reports both ends in that order.
+    """
+    pairs = _tag_move_pairs(arguments)
+    server.tag_move_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for source, destination, _fingerprint in pairs:
+        if source in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == source or key.startswith(source + "/")]:
+                node = json.loads(json.dumps(server.tag_config.pop(key)))
+                moved = key.replace(source, destination, 1)
+                if isinstance(node[0].get("path"), dict):
+                    node[0]["path"] = dict(node[0]["path"], text=moved)
+                else:
+                    node[0]["path"] = moved
+                server.tag_config[moved] = node
+        results.append({
+            "sourcePath": source,
+            "destinationPath": destination,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": destination,
+            "status": "ok",
+            "absent": False,
+            "fingerprint": _tag_config_fingerprint(server.tag_config.get(destination, [])),
+            "configuration": _published_configuration(server.tag_config.get(destination, [])),
+        })
+        observed.append({"path": source, "status": "ok", "absent": True})
+    server.tag_move_targets = ",".join(
+        path for pair in pairs for path in (pair[1], pair[0])
+    )
+    return _tag_mutation_result(
+        server, items=len(pairs), results=results, observed=observed,
+    )
+
+
+def _tag_rename_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_rename` refusal, or the modelled rename, these arguments ask for.
+
+    Same order as the shipped handler: the input pass (a new name is one path segment,
+    and the new path is the target's own parent plus that name), the D10 ceilings, the
+    policy gate, the deployment's item ceiling, the reserved provider and the new
+    path's allowlist, then the target's existence and token and the new path's
+    absence.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    pairs = _tag_rename_items(arguments)
+    paths = [_renamed_path(path, new_name) for path, new_name, _fingerprint in pairs]
+    if any(set(item) != {"path", "newName", "expectedFingerprint"} for item in items) \
+            or len(items) != len(raw_items):
+        return "item-keys", paths
+    if any(not _one_segment(new_name) for _path, new_name, _fingerprint in pairs):
+        return "new-name-not-a-segment", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(
+        len(value.encode("utf-8")) > PATH_MAX_BYTES
+        for path, _new_name, _fingerprint in pairs for value in (path, _renamed_path(path, _new_name))
+    ):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagRenameMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_rename")
+    refused: list[tuple[int, str]] = []
+    for index, (path, new_name, _fingerprint) in enumerate(pairs):
+        new_path = _renamed_path(path, new_name)
+        if _provider_component(path) == "IgnitionMCPPolicy" \
+                or _provider_component(new_path) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-provider-refusal"))
+        elif _names_udt_namespace(new_path) and not _udt_allowlisted(new_path, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(new_path, entries):
+            refused.append((index, "target-not-allowlisted"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for (path, _new_name, fingerprint), new_path in zip(pairs, paths, strict=True):
+        if path not in server.tag_config:
+            return "missing-target", paths
+        if fingerprint != _tag_config_fingerprint(server.tag_config.get(path, [])):
+            return "stale-fingerprint", paths
+        if new_path in server.tag_config:
+            return "new-path-exists", paths
+    return "renamed", paths
+
+
+def _apply_tag_rename(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.rename(target, newName, "Abort")` per item.
+
+    The node stays in its own parent and takes the new name, the old path is gone, and
+    the Observed state reports the new path first and the old path second.
+    """
+    entries = _tag_rename_items(arguments)
+    server.tag_rename_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for path, new_name, _fingerprint in entries:
+        new_path = _renamed_path(path, new_name)
+        if path in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == path or key.startswith(path + "/")]:
+                node = json.loads(json.dumps(server.tag_config.pop(key)))
+                renamed = new_path + key[len(path):]
+                if isinstance(node[0].get("path"), dict):
+                    node[0]["path"] = dict(node[0]["path"], text=renamed)
+                else:
+                    node[0]["path"] = renamed
+                node[0]["name"] = new_name if key == path else node[0].get("name")
+                server.tag_config[renamed] = node
+        results.append({
+            "path": path,
+            "newPath": new_path,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": new_path,
+            "status": "ok",
+            "absent": False,
+            "fingerprint": _tag_config_fingerprint(server.tag_config.get(new_path, [])),
+            "configuration": _published_configuration(server.tag_config.get(new_path, [])),
+        })
+        observed.append({"path": path, "status": "ok", "absent": True})
+    server.tag_rename_targets = ",".join(
+        path for pair in entries for path in (_renamed_path(pair[0], pair[1]), pair[0])
+    )
+    return _tag_mutation_result(
+        server, items=len(entries), results=results, observed=observed,
+    )
+
+
+def _one_segment(value: str) -> bool:
+    """Whether a new name is one path segment, as the shipped rename rule decides."""
+    if not value or value != value.strip():
+        return False
+    return not any(character in value for character in ("/", ".", "[", "]", "*", "?", ":"))
+
+
 def _tag_mutation_result(
     server: Any, *, items: int, results: list[dict[str, Any]], observed: list[dict[str, Any]],
+    succeeded: int | None = None, failed: int = 0,
 ) -> dict[str, Any]:
     """The structuredContent a dispatched batch publishes.
 
-    Every item the fake let through to dispatch succeeded, so the counts are the
-    driver's own arithmetic on `items`; the audit mode is the served document's.
+    The default counts are the driver's own arithmetic on `items`, because every item
+    a batch case models dispatches and succeeds; a Tool whose dispatch can answer a
+    per-item Bad outcome passes the counts its own applier observed on the served
+    state. The audit mode is the served document's.
     """
     return {
         "content": [{"type": "text", "text": "recorded replay"}],
@@ -834,7 +1265,10 @@ def _tag_mutation_result(
             "items": results,
             "observed": observed,
             "summary": {
-                "requested": items, "succeeded": len(results), "failed": 0, "outcomeUnknown": 0,
+                "requested": items,
+                "succeeded": len(results) if succeeded is None else succeeded,
+                "failed": failed,
+                "outcomeUnknown": 0,
                 "notExecuted": 0, "auditMode": _served_audit_mode(server), "auditRecorded": True,
             },
             "meta": {"correlationId": "recorded-replay"},
@@ -1174,14 +1608,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     )
                 self._json(200, document)
                 return
-            if action_filter in ("ignition-mcp.tag_create", "ignition-mcp.tag_copy"):
-                # Ticket #11: each CONFIG Mutation audits under its own action, so the
-                # driver's read-back can only match the rows of the Tool it called.
+            if action_filter in (
+                "ignition-mcp.tag_create", "ignition-mcp.tag_copy",
+                "ignition-mcp.tag_delete", "ignition-mcp.tag_move", "ignition-mcp.tag_rename",
+            ):
+                # Ticket #11 and #12: each CONFIG Mutation audits under its own action,
+                # so the driver's read-back can only match the rows of the Tool it
+                # called.
                 tool = action_filter.rsplit(".", 1)[-1]
-                correlation = (
-                    server.tag_create_correlation_id if tool == "tag_create"
-                    else server.tag_copy_correlation_id
-                )
+                correlation = getattr(server, tool + "_correlation_id", "")
                 if not correlation:
                     self._json(200, {
                         "items": [],
@@ -1189,8 +1624,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     })
                     return
                 document = json.loads(json.dumps(_fixture("phase4/audit-log-tag-config.json")))
-                paths = server.tag_create_paths if tool == "tag_create" else server.tag_copy_paths
-                target = paths.get("createTarget" if tool == "tag_create" else "destination", "")
+                if tool in ("tag_delete", "tag_move", "tag_rename"):
+                    # Ticket #12: the action target is the paths the call's Observed
+                    # state reports, which the applier recorded for this batch.
+                    target = getattr(server, tool + "_targets", "")
+                else:
+                    paths = server.tag_create_paths if tool == "tag_create" else server.tag_copy_paths
+                    target = paths.get("createTarget" if tool == "tag_create" else "destination", "")
                 for row in document["items"]:
                     row["action"] = str(row["action"]).replace("__ACTION__", action_filter)
                     row["actionTarget"] = str(row["actionTarget"]).replace("__TARGET__", target)
@@ -1441,6 +1881,27 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     else:
                         body = json.loads(json.dumps(_fixture(f"phase4/tag-copy-{case}.json")))
                         result = _tag_copy_body(server, tool_arguments, body)
+                elif tool == "tag_delete":
+                    case, _paths = _tag_delete_case(server, tool_arguments)
+                    if case == "deleted":
+                        result = _apply_tag_delete(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-delete-{case}.json")))
+                        result = _tag_delete_body(server, tool_arguments, body)
+                elif tool == "tag_move":
+                    case, _paths = _tag_move_case(server, tool_arguments)
+                    if case == "moved":
+                        result = _apply_tag_move(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-move-{case}.json")))
+                        result = _tag_move_body(server, tool_arguments, body)
+                elif tool == "tag_rename":
+                    case, _paths = _tag_rename_case(server, tool_arguments)
+                    if case == "renamed":
+                        result = _apply_tag_rename(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-rename-{case}.json")))
+                        result = _tag_rename_body(server, tool_arguments, body)
                 elif tool == "tag_write":
                     case, _paths = _tag_write_case(server, tool_arguments)
                     body = json.loads(json.dumps(_fixture(f"phase4/tag-write-{case}.json")))
@@ -1653,6 +2114,9 @@ class _Server(http.server.ThreadingHTTPServer):
         tag_update_paths: dict[str, str] | None = None,
         tag_create_paths: dict[str, str] | None = None,
         tag_copy_paths: dict[str, str] | None = None,
+        tag_delete_paths: dict[str, str] | None = None,
+        tag_move_paths: dict[str, str] | None = None,
+        tag_rename_paths: dict[str, str] | None = None,
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -1714,11 +2178,26 @@ class _Server(http.server.ThreadingHTTPServer):
         self.tag_update_paths: dict[str, str] = dict(tag_update_paths or {})
         self.tag_create_paths: dict[str, str] = dict(tag_create_paths or {})
         self.tag_copy_paths: dict[str, str] = dict(tag_copy_paths or {})
+        #: Ticket #12's three Tools carry their own path sets for the same reason:
+        #: a `tag_move` or `tag_rename` refusal names an endpoint pair, and a
+        #: `tag_delete` refusal names the target, none of which is a path any earlier
+        #: ticket's run had a name for.
+        self.tag_delete_paths: dict[str, str] = dict(tag_delete_paths or {})
+        self.tag_move_paths: dict[str, str] = dict(tag_move_paths or {})
+        self.tag_rename_paths: dict[str, str] = dict(tag_rename_paths or {})
         #: The correlation ID the modelled Mutation result carried, so the audit log can
         #: answer for it the way the recorded `tag_write` rows do.
         self.tag_update_correlation_id = ""
         self.tag_create_correlation_id = ""
         self.tag_copy_correlation_id = ""
+        self.tag_delete_correlation_id = ""
+        self.tag_move_correlation_id = ""
+        self.tag_rename_correlation_id = ""
+        #: The action target the audit rows of the last modelled batch carry: the
+        #: paths that batch's Observed state reports, in the handler's own order.
+        self.tag_delete_targets = ""
+        self.tag_move_targets = ""
+        self.tag_rename_targets = ""
         #: The provider the ticket #10 Tag fixture lives in; its export is modelled
         #: from the configuration the fake serves.
         self.tag_state_provider = "default"
@@ -2555,6 +3034,9 @@ class RecordedGateway:
         tag_update_paths: dict[str, str] | None = None,
         tag_create_paths: dict[str, str] | None = None,
         tag_copy_paths: dict[str, str] | None = None,
+        tag_delete_paths: dict[str, str] | None = None,
+        tag_move_paths: dict[str, str] | None = None,
+        tag_rename_paths: dict[str, str] | None = None,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -2571,6 +3053,9 @@ class RecordedGateway:
             tag_update_paths,
             tag_create_paths,
             tag_copy_paths,
+            tag_delete_paths,
+            tag_move_paths,
+            tag_rename_paths,
         )
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         if audit_profile:

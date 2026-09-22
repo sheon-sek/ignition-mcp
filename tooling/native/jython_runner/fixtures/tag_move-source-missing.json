@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_move",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Nested/WriteTarget",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 170
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_move\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_move",
+        "actionTarget": "[default]IgnitionMCP_CI/WriteTarget",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    }
+  ]
+}

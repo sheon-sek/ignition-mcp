@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"not_found\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_rename\", \"auditRecorded\": true, \"items\": [{\"code\": \"not_found\", \"index\": 0, \"newPath\": \"__MISSING_NEW_PATH__\", \"path\": \"__MISSING_TARGET__\", \"reason\": \"targetMissing\", \"refusedPath\": \"__MISSING_TARGET__\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target must exist with the fingerprint of its own tag_get_config read, and the new path must be free: an occupied new path is conflict and a target that is not there is not_found; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

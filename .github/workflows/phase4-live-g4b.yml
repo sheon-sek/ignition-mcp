@@ -19,7 +19,16 @@ name: Phase 4 Live Gateway G4b
 # the audit pair) and `tag_copy` (the copied destination with its source left in place,
 # an occupied destination, the destination-leaf input rule, a missing source, the
 # destination-only allowlist measurement, both ends of the reserved provider and the
-# `_types_` rule). Ticket #12 extends it further.
+# `_types_` rule). Ticket #12 extends it further with the three Mutations that
+# relocate or remove a node: `tag_move` (the moved destination present and its source
+# gone, an occupied destination refused, the destination-leaf input rule, the source
+# and destination allowlist halves, the reserved provider at both ends, the D10
+# ceilings), `tag_rename` (the new path its own parent plus the new name makes, an
+# occupied new path refused, the new-name input rule, the `_types_` rule on the new
+# path and the reserved provider) and `tag_delete` (a Folder delete with everything
+# beneath it — including the partial-failure batch where the second item's own call
+# answers Bad and nothing is rolled back — the Precondition token on a real target,
+# the segment boundary, the `_types_` rule and the reserved provider).
 #
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment, the same environment
@@ -300,6 +309,27 @@ jobs:
           set -euo pipefail
           uv run --no-sync python tests/harness/phase4-live/driver.py tag-copy \
             | tee "$EVIDENCE_DIR/driver-tag-copy.log"
+
+      - name: Verify tag_move live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-move \
+            | tee "$EVIDENCE_DIR/driver-tag-move.log"
+
+      - name: Verify tag_rename live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-rename \
+            | tee "$EVIDENCE_DIR/driver-tag-rename.log"
+
+      - name: Verify tag_delete live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-delete \
+            | tee "$EVIDENCE_DIR/driver-tag-delete.log"
 
       - name: Summarize the milestone
         id: summarize

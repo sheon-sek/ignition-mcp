@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_rename",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "newName": "RenamedA",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/TextTarget",
+        "newName": "RenamedB",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "newName": "RenamedC",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 194
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_rename\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\",\"tagRenameMaxItems\":2}"
+          }
+        ]
+      }
+    }
+  ]
+}

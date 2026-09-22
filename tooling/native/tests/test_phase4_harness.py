@@ -853,6 +853,9 @@ def test_summarize_verdict_carries_the_tag_update_result(tmp_path: Path) -> None
         tag_update_paths=_tag_update_paths(),
         tag_create_paths=driver.tag_create_paths(),
         tag_copy_paths=driver.tag_copy_paths(),
+        tag_delete_paths=driver.tag_delete_paths(),
+        tag_move_paths=driver.tag_move_paths(),
+        tag_rename_paths=driver.tag_rename_paths(),
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN, stages=driver.MILESTONE_4B)
         stages = [
@@ -862,13 +865,16 @@ def test_summarize_verdict_carries_the_tag_update_result(tmp_path: Path) -> None
             ("tag-update", driver.stage_tag_update),
             ("tag-create", driver.stage_tag_create),
             ("tag-copy", driver.stage_tag_copy),
+            ("tag-move", driver.stage_tag_move),
+            ("tag-rename", driver.stage_tag_rename),
+            ("tag-delete", driver.stage_tag_delete),
         ]
         for name, stage in stages:
             _record_stage(tmp_path, name, stage(config))
     evidence, code = driver.stage_summarize(config)
     assert code == driver.EXIT_OK
     assert evidence["milestone"] == driver.MILESTONE_4B
-    assert evidence["tickets"] == ["#10", "#11"]
+    assert evidence["tickets"] == ["#10", "#11", "#12"]
     assert evidence["drift"] == {}
     assert evidence["verdict"]["runtimeTagConfigMutation"]["update"]["status"] == "executed"
     assert evidence["verdict"]["runtimeTagConfigMutation"]["staleFingerprint"]["changedNothing"] is True
@@ -1221,6 +1227,371 @@ def test_tag_create_stage_fails_closed_on_a_policy_that_never_became_served(
             driver.stage_tag_create(config)
 
 
+def _ticket_12_records(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """The three ticket #12 stage records, over the chain all of 4b provisions.
+
+    A move borrows `tag_create`'s node, a rename uses the seeded `TextTarget` and
+    creates the occupied name a later case reads, and a delete takes a Folder with
+    everything beneath it — so these three run after the ticket #10/#11 stages on one
+    Gateway, which is what the live workflow does.
+    """
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+        tag_delete_paths=driver.tag_delete_paths(),
+        tag_move_paths=driver.tag_move_paths(),
+        tag_rename_paths=driver.tag_rename_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        driver.stage_tag_update_no_policy(config)
+        driver.stage_policy_provision(config)
+        driver.stage_tag_update_setup(config)
+        driver.stage_tag_update(config)
+        driver.stage_tag_create(config)
+        driver.stage_tag_copy(config)
+        move = driver.stage_tag_move(config)
+        rename = driver.stage_tag_rename(config)
+        delete = driver.stage_tag_delete(config)
+        return move, rename, delete
+
+
+def _ticket_12_facts(
+    tmp_path: Path,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    move, rename, delete = _ticket_12_records(tmp_path)
+    return move["facts"], rename["facts"], delete["facts"]
+
+
+def test_tag_move_stage_records_the_live_facts(tmp_path: Path) -> None:
+    """`tag_move` relocates a node, checks both ends, and never overwrites a name."""
+    move, _rename, _delete = _ticket_12_facts(tmp_path)
+    assert move["tagMoveConfiguratorCarriesAllThree"] is True
+    assert move["tagMoveStatus"] == "executed"
+    assert move["tagMoveNativeOutcome"] == "Good"
+    # Both ends are read independently: the destination is what the call created and
+    # the source is what it removed, each through the provider's own export.
+    assert move["tagMoveObservedDestinationPresent"] is True
+    assert move["tagMoveObservedDestinationMatchesIndependentRead"] is True
+    assert move["tagMoveSourceObservedAbsent"] is True
+    assert move["tagMoveExportShowsDestination"] is True
+    assert move["tagMoveExportSourceGone"] is True
+    assert move["tagMoveAuditRowsForCorrelation"] == 2
+    assert move["tagMoveAuditActorIsServiceIdentity"] is True
+    # One native call lands each source under its own name, so a differing destination
+    # leaf is an input refusal and a move that renames is `tag_rename`'s.
+    assert move["tagMoveLeafMismatchReason"] == "destinationLeafDiffersFromSource"
+    # An occupied destination is conflict, and it changes neither end.
+    assert move["tagMoveOccupiedDestinationCode"] == "conflict"
+    assert move["tagMoveOccupiedDestinationReason"] == "destinationExists"
+    assert move["tagMoveOccupiedDestinationChangedNothing"] is True
+    assert move["tagMoveOccupiedDestinationLeftTheSource"] is True
+    # The Precondition token, on the source.
+    assert move["tagMoveStaleFingerprintReason"] == "fingerprintMismatch"
+    assert move["tagMoveMissingSourceCode"] == "not_found"
+    assert move["tagMoveMissingSourceReason"] == "sourceMissing"
+    # D30 6 measures both ends, and the reserved provider still bounds both of them.
+    assert move["tagMoveSiblingDenialReason"] == "targetNotAllowlisted"
+    assert move["tagMoveUdtNeedsExplicitTypesEntry"] is True
+    assert move["tagMoveBareWildcardDoesNotCoverUdt"] is True
+    assert move["tagMoveTypesEntryIsHonoured"] is True
+    assert move["tagMovePreflightExecutedNothing"] is True
+    assert move["tagMoveReservedSourceReason"] == "reservedProvider"
+    assert move["tagMoveReservedDestinationReason"] == "reservedProvider"
+    assert move["tagMoveReservedProviderValueUnchanged"] is True
+    assert move["tagMovePolicyDocumentUnclobbered"] is True
+    # Every D10 ceiling, including the deployment's own number.
+    assert move["tagMoveHardItemCeilingReason"] == "itemsOverHardLimit"
+    assert move["tagMovePathOverCeilingReason"] == "pathOverLength"
+    assert move["tagMoveOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+    assert move["tagMovePolicyCeilingIsHonoured"] is True
+
+
+def test_tag_rename_stage_records_the_live_facts(tmp_path: Path) -> None:
+    """`tag_rename` moves a node inside its own parent and never takes an occupied name."""
+    _move, rename, _delete = _ticket_12_facts(tmp_path)
+    assert rename["tagRenameStatus"] == "executed"
+    assert rename["tagRenameNativeOutcome"] == "Good"
+    assert rename["tagRenameItemCarriesBothPaths"] is True
+    assert rename["tagRenameObservedNewPathPresent"] is True
+    assert rename["tagRenameObservedNewPathMatchesIndependentRead"] is True
+    assert rename["tagRenameOldPathObservedAbsent"] is True
+    assert rename["tagRenameExportShowsNewPath"] is True
+    assert rename["tagRenameExportOldPathGone"] is True
+    assert rename["tagRenameAuditRowsForCorrelation"] == 2
+    assert rename["tagRenameAuditActorIsServiceIdentity"] is True
+    # A new name is one path segment, and the new path is the old parent plus it.
+    assert rename["tagRenameMultiSegmentNameCode"] == "invalid_argument"
+    assert rename["tagRenameMultiSegmentNameReason"] == "newNameNotASingleSegment"
+    assert rename["tagRenameOccupiedNewPathCode"] == "conflict"
+    assert rename["tagRenameOccupiedNewPathReason"] == "newPathExists"
+    assert rename["tagRenameOccupiedNewPathChangedNothing"] is True
+    assert rename["tagRenameOccupiedNewPathLeftTheTarget"] is True
+    assert rename["tagRenameStaleFingerprintReason"] == "fingerprintMismatch"
+    assert rename["tagRenameMissingTargetCode"] == "not_found"
+    assert rename["tagRenameMissingTargetReason"] == "targetMissing"
+    # D30 6 measures the new path, and the reserved provider covers both ends.
+    assert rename["tagRenameSiblingDenialReason"] == "targetNotAllowlisted"
+    assert rename["tagRenameUdtNeedsExplicitTypesEntry"] is True
+    assert rename["tagRenameBareWildcardDoesNotCoverUdt"] is True
+    assert rename["tagRenameTypesEntryIsHonoured"] is True
+    assert rename["tagRenamePreflightExecutedNothing"] is True
+    assert rename["tagRenameReservedProviderReason"] == "reservedProvider"
+    assert rename["tagRenameReservedProviderValueUnchanged"] is True
+    assert rename["tagRenamePolicyDocumentUnclobbered"] is True
+    assert rename["tagRenameHardItemCeilingReason"] == "itemsOverHardLimit"
+    assert rename["tagRenamePathOverCeilingReason"] == "pathOverLength"
+    assert rename["tagRenameOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+    assert rename["tagRenamePolicyCeilingIsHonoured"] is True
+
+
+def test_tag_delete_stage_records_the_live_facts(tmp_path: Path) -> None:
+    """`tag_delete` removes a target, takes a Folder with it, and changes nothing else."""
+    _move, _rename, delete = _ticket_12_facts(tmp_path)
+    assert delete["tagDeleteStatus"] == "executed"
+    assert delete["tagDeleteNativeOutcome"] == "Good"
+    assert delete["tagDeleteObservedAbsent"] is True
+    assert delete["tagDeleteExportGone"] is True
+    assert delete["tagDeleteAuditRowsForCorrelation"] == 2
+    assert delete["tagDeleteAuditActorIsServiceIdentity"] is True
+    # D30 3's partial failure after Preflight: the folder's own call takes the Tag the
+    # second item names, that item answers its own Bad outcome, and nothing is retried
+    # or rolled back.
+    assert delete["tagDeletePartialBatchStatuses"] == ["executed", "executed"]
+    assert delete["tagDeletePartialBatchFirstOutcome"] == "Good"
+    assert delete["tagDeletePartialBatchSucceeded"] == 1
+    assert delete["tagDeletePartialBatchFailed"] == 1
+    assert delete["tagDeletePartialBatchRetriedNothing"] is True
+    assert delete["tagDeletePartialBatchObservedAbsent"] is True
+    assert delete["tagDeleteFolderExportGone"] is True
+    # The Precondition token, the input rule, both allowlist halves and every ceiling.
+    assert delete["tagDeleteStaleFingerprintCode"] == "conflict"
+    assert delete["tagDeleteStaleFingerprintReason"] == "fingerprintMismatch"
+    assert delete["tagDeleteStaleFingerprintChangedNothing"] is True
+    assert delete["tagDeleteMissingTargetCode"] == "not_found"
+    assert delete["tagDeleteMissingTargetReason"] == "targetMissing"
+    assert delete["tagDeleteItemKeysReason"] == "itemKeysMustBePathAndFingerprint"
+    assert delete["tagDeleteSiblingDenialReason"] == "targetNotAllowlisted"
+    assert delete["tagDeleteUdtNeedsExplicitTypesEntry"] is True
+    assert delete["tagDeleteBareWildcardDoesNotCoverUdt"] is True
+    assert delete["tagDeleteTypesEntryIsHonoured"] is True
+    assert delete["tagDeletePreflightExecutedNothing"] is True
+    assert delete["tagDeleteReservedProviderReason"] == "reservedProvider"
+    assert delete["tagDeleteReservedProviderValueUnchanged"] is True
+    assert delete["tagDeletePolicyDocumentUnclobbered"] is True
+    assert delete["tagDeleteHardItemCeilingReason"] == "itemsOverHardLimit"
+    assert delete["tagDeletePathOverCeilingReason"] == "pathOverLength"
+    assert delete["tagDeleteOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+    assert delete["tagDeletePolicyCeilingIsHonoured"] is True
+
+
+def test_ticket_12_case_selectors_replay_the_recorded_refusals() -> None:
+    """The rehearsal's case selection keeps each Tool's own rule order.
+
+    The selection is what makes the negative cases reachable in a rehearsal, so a
+    changed order — an allowlist read before the reserved provider, an input rule after
+    the ceilings — has to fail here rather than quietly replay a different body.
+    """
+
+    class _Base:
+        policy_provider_created = True
+        policy_value = ""
+        tag_config = {
+            policy_document.TAG_FIXTURE_PATH: [{"name": "WriteTarget", "value": 0}],
+            policy_document.TAG_FIXTURE_SIBLING_PATH: [{"name": "WriteTarget", "value": 0}],
+            policy_document.TAG_MOVE_SOURCE: [{"name": "CreateTarget", "value": 0}],
+            policy_document.TAG_RENAME_TARGET: [{"name": "TextTarget", "value": 0}],
+            policy_document.TAG_DELETE_FOLDER: [{"name": "Nested", "tagType": "Folder"}],
+            policy_document.TAG_DELETE_FOLDER_CHILD: [{"name": "Inner", "value": 0}],
+        }
+
+    def serve(tool: str, policy: dict[str, Any], **config: Any) -> Any:
+        return type("Server", (_Base,), {
+            "policy_value": json.dumps(policy, sort_keys=True, separators=(",", ":")),
+            "tag_config": dict(_Base.tag_config, **config),
+        })()
+
+    def fingerprint(path: str, **config: Any) -> str:
+        """The fingerprint the fake serves for one path, which a Precondition case
+        has to name to reach the stage after the token compare."""
+        return recorded_gateway._tag_config_fingerprint(
+            dict(_Base.tag_config, **config)[path],
+        )
+
+    zero = "tcf1:" + "0" * 64
+    plain_move = serve("tag_move", policy_document.tag_move_policy())
+    occupied_move = serve("tag_move", policy_document.tag_move_policy(), **{
+        policy_document.TAG_MOVE_OCCUPIED_DESTINATION: [{"name": "WriteTarget", "value": 0}],
+    })
+    wildcard_move = serve("tag_move", policy_document.tag_move_policy(
+        allowlist=policy_document.WILDCARD_ALLOWLIST,
+    ))
+    ceiling_move = serve("tag_move", policy_document.tag_move_policy(max_items=1))
+    move_cases = [
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_DESTINATION,
+                       "expectedFingerprint": fingerprint(policy_document.TAG_MOVE_SOURCE)}],
+         "moved"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_LEAF_MISMATCH_DESTINATION,
+                       "expectedFingerprint": zero}], "destination-leaf-mismatch"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_MISSING_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_MISSING_DESTINATION,
+                       "expectedFingerprint": zero}], "source-missing"),
+        (plain_move, [{"sourcePath": policy_document.TAG_FIXTURE_PATH,
+                       "destinationPath": policy_document.TAG_MOVE_OCCUPIED_DESTINATION,
+                       "expectedFingerprint": zero}], "stale-fingerprint"),
+        # A matching token reaches the destination check, where the occupied path is
+        # the collision the Tool refuses instead of overwriting it.
+        (occupied_move, [{"sourcePath": policy_document.TAG_FIXTURE_PATH,
+                          "destinationPath": policy_document.TAG_MOVE_OCCUPIED_DESTINATION,
+                          "expectedFingerprint": fingerprint(policy_document.TAG_FIXTURE_PATH)}],
+         "destination-exists"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SIBLING_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_SIBLING_DESTINATION,
+                       "expectedFingerprint": zero}], "source-not-allowlisted"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_UDT_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_UDT_DESTINATION,
+                       "expectedFingerprint": zero}], "udt-source-not-allowlisted"),
+        (wildcard_move, [{"sourcePath": policy_document.TAG_MOVE_RESERVED_SOURCE,
+                          "destinationPath": policy_document.TAG_MOVE_RESERVED_SOURCE_DESTINATION,
+                          "expectedFingerprint": zero}], "reserved-source-refusal"),
+        (wildcard_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                          "destinationPath": policy_document.TAG_MOVE_RESERVED_DESTINATION,
+                          "expectedFingerprint": zero}], "reserved-destination-refusal"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_DESTINATION,
+                       "expectedFingerprint": zero}] * 21, "over-policy-limit"),
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                       "destinationPath": policy_document.TAG_MOVE_DESTINATION,
+                       "expectedFingerprint": zero}] * 101, "items-over-hard-limit"),
+        (ceiling_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                         "destinationPath": policy_document.TAG_MOVE_DESTINATION,
+                         "expectedFingerprint": zero}] * 2, "over-policy-limit"),
+        # The leaf rule is an input rule, so an over-long destination whose leaf still
+        # matches is measured against the ceiling instead.
+        (plain_move, [{"sourcePath": policy_document.TAG_MOVE_SOURCE,
+                       "destinationPath": f"[{policy_document.TAG_FIXTURE_PROVIDER}]"
+                                          f"{policy_document.TAG_FIXTURE_ROOT}/"
+                                          f"{policy_document.OVERLONG_PATH_LEAF}",
+                       "expectedFingerprint": zero}], "destination-leaf-mismatch"),
+    ]
+    for server, items, expected in move_cases:
+        case, _paths = recorded_gateway._tag_move_case(server, {"items": items})
+        assert case == expected, (expected, case)
+        if case != "moved":
+            assert (FIXTURES / f"tag-move-{case}.json").is_file(), case
+
+    plain_rename = serve("tag_rename", policy_document.tag_rename_policy())
+    ceiling_rename = serve("tag_rename", policy_document.tag_rename_policy(max_items=1))
+    occupied_rename = serve("tag_rename", policy_document.tag_rename_policy(), **{
+        policy_document.TAG_RENAME_TARGET_NEW_PATH: [{"name": "RenamedText", "value": 0}],
+    })
+
+    def rename_item(path: str, name: str, fingerprint: str = zero) -> dict[str, str]:
+        return {"path": path, "newName": name, "expectedFingerprint": fingerprint}
+
+    rename_cases = [
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                    policy_document.TAG_RENAME_TARGET_NEW_NAME,
+                                    fingerprint(policy_document.TAG_RENAME_TARGET))], "renamed"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                    policy_document.TAG_RENAME_MULTI_SEGMENT_NAME)],
+         "new-name-not-a-segment"),
+        (occupied_rename, [rename_item(policy_document.TAG_RENAME_OCCUPIED_SOURCE,
+                                       policy_document.TAG_RENAME_TARGET_NEW_NAME,
+                                       fingerprint(policy_document.TAG_RENAME_OCCUPIED_SOURCE))],
+         "new-path-exists"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_MISSING_TARGET,
+                                    policy_document.TAG_RENAME_MISSING_NEW_NAME)], "missing-target"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_SIBLING_TARGET,
+                                    policy_document.TAG_RENAME_SIBLING_NEW_NAME)],
+         "target-not-allowlisted"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_UDT_TARGET,
+                                    policy_document.TAG_RENAME_UDT_NEW_NAME)],
+         "udt-not-allowlisted"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_RESERVED_TARGET,
+                                    policy_document.TAG_RENAME_RESERVED_NEW_NAME)],
+         "reserved-provider-refusal"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                    policy_document.TAG_RENAME_STALE_NEW_NAME)],
+         "stale-fingerprint"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                    policy_document.TAG_RENAME_TARGET_NEW_NAME)] * 21,
+         "over-policy-limit"),
+        (ceiling_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                     policy_document.TAG_RENAME_TARGET_NEW_NAME)] * 2,
+         "over-policy-limit"),
+        (plain_rename, [rename_item(policy_document.TAG_RENAME_TARGET,
+                                    policy_document.TAG_RENAME_TARGET_NEW_NAME)] * 101,
+         "items-over-hard-limit"),
+    ]
+    for server, items, expected in rename_cases:
+        case, _paths = recorded_gateway._tag_rename_case(server, {"items": items})
+        assert case == expected, (expected, case)
+        if case != "renamed":
+            assert (FIXTURES / f"tag-rename-{case}.json").is_file(), case
+
+    plain_delete = serve("tag_delete", policy_document.tag_delete_policy())
+    wildcard_delete = serve("tag_delete", policy_document.tag_delete_policy(
+        allowlist=policy_document.WILDCARD_ALLOWLIST,
+    ))
+    ceiling_delete = serve("tag_delete", policy_document.tag_delete_policy(max_items=1))
+
+    def delete_item(path: str, fingerprint: str = zero) -> dict[str, str]:
+        return {"path": path, "expectedFingerprint": fingerprint}
+
+    delete_cases = [
+        (plain_delete, [delete_item(policy_document.TAG_FIXTURE_PATH,
+                                    fingerprint(policy_document.TAG_FIXTURE_PATH))], "deleted"),
+        (plain_delete, [{"expectedFingerprint": zero}], "item-keys"),
+        (plain_delete, [delete_item(policy_document.TAG_DELETE_FOLDER,
+                                    fingerprint(policy_document.TAG_DELETE_FOLDER)),
+                        delete_item(policy_document.TAG_DELETE_FOLDER_CHILD,
+                                    fingerprint(policy_document.TAG_DELETE_FOLDER_CHILD))],
+         "deleted"),
+        (plain_delete, [delete_item(policy_document.TAG_DELETE_MISSING_TARGET)], "missing-target"),
+        (plain_delete, [delete_item(policy_document.TAG_DELETE_SIBLING_TARGET)], "sibling-denial"),
+        (plain_delete, [delete_item(policy_document.TAG_DELETE_UDT_TARGET)], "udt-not-allowlisted"),
+        (wildcard_delete, [delete_item(policy_document.TAG_DELETE_RESERVED_TARGET)],
+         "reserved-provider-refusal"),
+        (plain_delete, [delete_item(policy_document.TAG_FIXTURE_PATH)], "stale-fingerprint"),
+        (plain_delete, [delete_item(policy_document.TAG_FIXTURE_PATH)] * 21, "over-policy-limit"),
+        (ceiling_delete, [delete_item(policy_document.TAG_FIXTURE_PATH)] * 2, "over-policy-limit"),
+        (plain_delete, [delete_item(policy_document.TAG_FIXTURE_PATH)] * 101, "items-over-hard-limit"),
+    ]
+    for server, items, expected in delete_cases:
+        case, _paths = recorded_gateway._tag_delete_case(server, {"items": items})
+        assert case == expected, (expected, case)
+        if case != "deleted":
+            assert (FIXTURES / f"tag-delete-{case}.json").is_file(), case
+
+    class _NoPolicy(_Base):
+        policy_provider_created = False
+        policy_value = ""
+
+    # A refusal that needs no Policy is still measured against the input pass first:
+    # the item-key rule and the ceilings precede the gate.
+    assert recorded_gateway._tag_delete_case(_NoPolicy(), {"items": [{"expectedFingerprint": zero}]})[0] == "item-keys"
+    assert recorded_gateway._tag_delete_case(_NoPolicy(), {"items": [delete_item("x")] * 101})[0] == "items-over-hard-limit"
+    assert recorded_gateway._tag_delete_case(_NoPolicy(), {"items": [delete_item(policy_document.TAG_FIXTURE_PATH)]})[0] == "no-policy"
+    assert recorded_gateway._tag_move_case(_NoPolicy(), {"items": [{
+        "sourcePath": policy_document.TAG_MOVE_SOURCE,
+        "destinationPath": policy_document.TAG_MOVE_DESTINATION,
+        "expectedFingerprint": zero,
+    }]})[0] == "no-policy"
+    assert recorded_gateway._tag_rename_case(_NoPolicy(), {"items": [rename_item(
+        policy_document.TAG_RENAME_TARGET, policy_document.TAG_RENAME_TARGET_NEW_NAME,
+    )]})[0] == "no-policy"
+
+
 def test_summarize_verdict_carries_the_tag_config_mutations(tmp_path: Path) -> None:
     """The 4b verdict reports ticket #10 and ticket #11 side by side."""
     with RecordedGateway(
@@ -1231,6 +1602,9 @@ def test_summarize_verdict_carries_the_tag_config_mutations(tmp_path: Path) -> N
         tag_update_paths=_tag_update_paths(),
         tag_create_paths=driver.tag_create_paths(),
         tag_copy_paths=driver.tag_copy_paths(),
+        tag_delete_paths=driver.tag_delete_paths(),
+        tag_move_paths=driver.tag_move_paths(),
+        tag_rename_paths=driver.tag_rename_paths(),
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
                          stages=driver.MILESTONE_4B)
@@ -1241,11 +1615,14 @@ def test_summarize_verdict_carries_the_tag_config_mutations(tmp_path: Path) -> N
             ("tag-update", driver.stage_tag_update),
             ("tag-create", driver.stage_tag_create),
             ("tag-copy", driver.stage_tag_copy),
+            ("tag-move", driver.stage_tag_move),
+            ("tag-rename", driver.stage_tag_rename),
+            ("tag-delete", driver.stage_tag_delete),
         ]:
             _record_stage(tmp_path, name, stage(config))
     evidence, code = driver.stage_summarize(config)
     assert code == driver.EXIT_OK
-    assert evidence["tickets"] == ["#10", "#11"]
+    assert evidence["tickets"] == ["#10", "#11", "#12"]
     assert evidence["drift"] == {}
     mutations = evidence["verdict"]["runtimeTagConfigMutations"]
     assert mutations["tagCreate"]["allowlisted"]["status"] == "executed"
@@ -1262,6 +1639,19 @@ def test_summarize_verdict_carries_the_tag_config_mutations(tmp_path: Path) -> N
     assert mutations["tagCopy"]["source"]["exemptFromAllowlist"] is True
     assert mutations["tagCopy"]["reservedProvider"]["destinationRefusedUnderExplicitWildcard"] is True
     assert mutations["tagCopy"]["inputBounds"]["deploymentCeilingHonoured"] is True
+    assert mutations["tagMove"]["allowlisted"]["sourceObservedAbsent"] is True
+    assert mutations["tagMove"]["occupiedDestination"]["reason"] == "destinationExists"
+    assert mutations["tagMove"]["reservedProvider"]["destinationReason"] == "reservedProvider"
+    assert mutations["tagRename"]["allowlisted"]["exportOldPathGone"] is True
+    assert mutations["tagRename"]["occupiedNewPath"]["reason"] == "newPathExists"
+    assert mutations["tagRename"]["newNameRule"]["reason"] == "newNameNotASingleSegment"
+    assert mutations["tagDelete"]["partialFailureBatch"] == {
+        "statuses": ["executed", "executed"], "firstOutcome": "Good", "secondOutcome": "Bad_NotFound",
+        "succeeded": 1, "failed": 1, "retriedNothing": True, "observedAbsent": True,
+        "folderExportGone": True,
+    }
+    assert mutations["tagDelete"]["preconditionToken"]["staleChangedNothing"] is True
+    assert mutations["tagDelete"]["reservedProvider"]["policyDocumentUnclobbered"] is True
     assert evidence["verdict"]["runtimeTagConfigMutation"]["update"]["status"] == "executed"
 
 
@@ -1275,6 +1665,9 @@ def test_summarize_reports_a_broken_tag_config_mutation_fact_as_drift(tmp_path: 
         tag_update_paths=_tag_update_paths(),
         tag_create_paths=driver.tag_create_paths(),
         tag_copy_paths=driver.tag_copy_paths(),
+        tag_delete_paths=driver.tag_delete_paths(),
+        tag_move_paths=driver.tag_move_paths(),
+        tag_rename_paths=driver.tag_rename_paths(),
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
                          stages=driver.MILESTONE_4B)
@@ -1285,6 +1678,9 @@ def test_summarize_reports_a_broken_tag_config_mutation_fact_as_drift(tmp_path: 
             ("tag-update", driver.stage_tag_update),
             ("tag-create", driver.stage_tag_create),
             ("tag-copy", driver.stage_tag_copy),
+            ("tag-move", driver.stage_tag_move),
+            ("tag-rename", driver.stage_tag_rename),
+            ("tag-delete", driver.stage_tag_delete),
         ]:
             _record_stage(tmp_path, name, stage(config))
     record = json.loads((tmp_path / "tag-create.json").read_text(encoding="utf-8"))
@@ -1402,14 +1798,23 @@ def test_recorded_tag_config_mutation_bodies_are_canonical_and_schemata_valid(
     object in its single text part, with only the detail keys the contract documents.
     """
     create, copy = _ticket_11_records(tmp_path)
+    move, rename, delete = _ticket_12_records(tmp_path)
     for tool, record, key in (
         ("tag_create", create, "allowlistedCreate"),
         ("tag_copy", copy, "allowlistedCopy"),
+        ("tag_move", move, "allowlistedMove"),
+        ("tag_rename", rename, "allowlistedRename"),
+        ("tag_delete", delete, "allowlistedDelete"),
     ):
         contract = json.loads((ROOT / f"contracts/tools/runtime/{tool}.contract.json").read_text())
         schema = json.loads((ROOT / contract["outputSchema"]).read_text(encoding="utf-8"))
         Draft202012Validator(schema).validate(record["raw"][key])
-    for path in sorted(FIXTURES.glob("tag-create-*.json")) + sorted(FIXTURES.glob("tag-copy-*.json")):
+    bodies = (
+        sorted(FIXTURES.glob("tag-create-*.json")) + sorted(FIXTURES.glob("tag-copy-*.json"))
+        + sorted(FIXTURES.glob("tag-delete-*.json")) + sorted(FIXTURES.glob("tag-move-*.json"))
+        + sorted(FIXTURES.glob("tag-rename-*.json"))
+    )
+    for path in bodies:
         body = json.loads(path.read_text(encoding="utf-8"))
         assert body["isError"] is True, path.name
         error = json.loads(body["content"][0]["text"])
@@ -1831,7 +2236,7 @@ def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:
     assert "environment: phase4-live" in text
     assert "github.event.pull_request.head.repo.full_name == github.repository" in text
     for stage in ("tag-update-no-policy", "policy-provision", "tag-update-setup", "tag-update",
-                  "tag-create", "tag-copy", "summarize"):
+                  "tag-create", "tag-copy", "tag-move", "tag-rename", "tag-delete", "summarize"):
         assert stage in text, stage
     assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
     assert "rehearse_local.py --stages 4b" in text
@@ -1839,8 +2244,11 @@ def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:
     # stage's own log is evidence.
     assert text.index("driver.py tag-update ") < text.index("driver.py tag-create") < (
         text.index("driver.py tag-copy")
+    ) < text.index("driver.py tag-move") < text.index("driver.py tag-rename") < (
+        text.index("driver.py tag-delete")
     ) < text.index("driver.py summarize")
-    for log in ("driver-tag-create.log", "driver-tag-copy.log"):
+    for log in ("driver-tag-create.log", "driver-tag-copy.log", "driver-tag-move.log",
+                "driver-tag-rename.log", "driver-tag-delete.log"):
         assert f'$EVIDENCE_DIR/{log}"' in text, log
     assert 'P4_MILESTONE: "4b"' in text
     assert "P4_MARKER_LABEL: g4b" in text

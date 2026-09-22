@@ -118,7 +118,7 @@ STAGE_SETS = {
     ),
     MILESTONE_4B: (
         "tag-update-no-policy", "tag-update-setup", "tag-update",
-        "tag-create", "tag-copy",
+        "tag-create", "tag-copy", "tag-move", "tag-rename", "tag-delete",
     ),
 }
 #: An optional stage record: the milestone's verdict does not need it, but it is
@@ -1844,7 +1844,12 @@ def install_and_require(
     """Install one policy state or fail closed: a refusal measured against a Policy
     that never became served proves nothing about the rule it refuses for.
     """
-    installers = {"create": install_tag_create_policy, "copy": install_tag_copy_policy}
+    installers = {
+        "create": install_tag_create_policy, "copy": install_tag_copy_policy,
+        "delete": lambda config, client, **kw: install_ticket12_policy(config, client, "tag_delete", **kw),
+        "move": lambda config, client, **kw: install_ticket12_policy(config, client, "tag_move", **kw),
+        "rename": lambda config, client, **kw: install_ticket12_policy(config, client, "tag_rename", **kw),
+    }
     installed = installers[tool](config, client, allowlist=allowlist, max_items=max_items)
     raw[f"install{key}Policy"] = bounded(installed, 20_000)
     facts[f"tag{key}PolicyInstalled"] = installed["ok"]
@@ -2594,6 +2599,968 @@ def stage_tag_copy(config: Config) -> dict[str, Any]:
 
 
 # --------------------------------------------------------------------------- #
+# Stages: ticket #12 (`tag_delete`, `tag_move` and `tag_rename`)
+#
+# No setup stage: `tag-update-setup` already seeds the fixture Tags, the audit
+# profile and the policy provider, and each of these three Tools installs its own
+# policy document over the same reserved provider. The stages run in the
+# workflow's order — create, copy, move, rename, delete — because a move borrows
+# `tag_create`'s node as its source, a rename creates the occupied name a delete
+# then reasons about, and a Folder delete takes everything beneath it.
+# --------------------------------------------------------------------------- #
+
+
+def tag_move_paths() -> dict[str, str]:
+    """The `tag_move` endpoint pairs of this run, keyed as the recorded bodies do."""
+    return {
+        "source": policy_document.TAG_MOVE_SOURCE,
+        "writeTarget": policy_document.TAG_FIXTURE_PATH,
+        "destination": policy_document.TAG_MOVE_DESTINATION,
+        "occupiedDestination": policy_document.TAG_MOVE_OCCUPIED_DESTINATION,
+        "missingSource": policy_document.TAG_MOVE_MISSING_SOURCE,
+        "missingDestination": policy_document.TAG_MOVE_MISSING_DESTINATION,
+        "leafMismatchDestination": policy_document.TAG_MOVE_LEAF_MISMATCH_DESTINATION,
+        "siblingSource": policy_document.TAG_MOVE_SIBLING_SOURCE,
+        "siblingDestination": policy_document.TAG_MOVE_SIBLING_DESTINATION,
+        "reservedSource": policy_document.TAG_MOVE_RESERVED_SOURCE,
+        "reservedSourceDestination": policy_document.TAG_MOVE_RESERVED_SOURCE_DESTINATION,
+        "reservedDestination": policy_document.TAG_MOVE_RESERVED_DESTINATION,
+        "udtSource": policy_document.TAG_MOVE_UDT_SOURCE,
+        "udtDestination": policy_document.TAG_MOVE_UDT_DESTINATION,
+    }
+
+
+def tag_rename_paths() -> dict[str, str]:
+    """The `tag_rename` targets of this run, keyed as the recorded bodies do."""
+    return {
+        "target": policy_document.TAG_RENAME_TARGET,
+        "targetNewName": policy_document.TAG_RENAME_TARGET_NEW_NAME,
+        "targetNewPath": policy_document.TAG_RENAME_TARGET_NEW_PATH,
+        "occupiedSource": policy_document.TAG_RENAME_OCCUPIED_SOURCE,
+        "occupiedNewName": policy_document.TAG_RENAME_TARGET_NEW_NAME,
+        "staleSource": policy_document.TAG_RENAME_OCCUPIED_SOURCE,
+        "staleNewName": policy_document.TAG_RENAME_STALE_NEW_NAME,
+        "missingTarget": policy_document.TAG_RENAME_MISSING_TARGET,
+        "missingNewName": policy_document.TAG_RENAME_MISSING_NEW_NAME,
+        "siblingTarget": policy_document.TAG_RENAME_SIBLING_TARGET,
+        "siblingNewName": policy_document.TAG_RENAME_SIBLING_NEW_NAME,
+        "reservedTarget": policy_document.TAG_RENAME_RESERVED_TARGET,
+        "reservedNewName": policy_document.TAG_RENAME_RESERVED_NEW_NAME,
+        "multiSegmentName": policy_document.TAG_RENAME_MULTI_SEGMENT_NAME,
+        "udtTarget": policy_document.TAG_RENAME_UDT_TARGET,
+        "udtNewName": policy_document.TAG_RENAME_UDT_NEW_NAME,
+        "udtNewPath": (
+            f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.UDT_NAMESPACE}/"
+            f"{policy_document.TAG_FIXTURE_ROOT}/{policy_document.TAG_RENAME_UDT_NEW_NAME}"
+        ),
+        "siblingNewPath": (
+            f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_SIBLING_ROOT}/"
+            f"{policy_document.TAG_RENAME_SIBLING_NEW_NAME}"
+        ),
+        "staleNewPath": (
+            f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+            f"{policy_document.TAG_RENAME_STALE_NEW_NAME}"
+        ),
+        "missingNewPath": (
+            f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+            f"{policy_document.TAG_RENAME_MISSING_NEW_NAME}"
+        ),
+        "reservedNewPath": (
+            f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+            f"{policy_document.TAG_RENAME_RESERVED_NEW_NAME}"
+        ),
+    }
+
+
+def tag_delete_paths() -> dict[str, str]:
+    """The `tag_delete` targets of this run, keyed as the recorded bodies do."""
+    return {
+        "target": policy_document.TAG_DELETE_TARGET,
+        "folder": policy_document.TAG_DELETE_FOLDER,
+        "folderChild": policy_document.TAG_DELETE_FOLDER_CHILD,
+        "staleTarget": policy_document.TAG_DELETE_STALE_TARGET,
+        "siblingTarget": policy_document.TAG_DELETE_SIBLING_TARGET,
+        "missingTarget": policy_document.TAG_DELETE_MISSING_TARGET,
+        "reservedTarget": policy_document.TAG_DELETE_RESERVED_TARGET,
+        "udtTarget": policy_document.TAG_DELETE_UDT_TARGET,
+    }
+
+
+def install_ticket12_policy(
+    config: Config, client: mcp_client.McpClient, tool: str, *, allowlist: tuple[str, ...],
+    audit_mode: str = "best_effort", max_items: int | None = None,
+    deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    """Install one ticket #12 Tool's policy over the same reserved provider."""
+    raw_builder = getattr(policy_document, f"{tool}_tag_document_bytes")
+    sha = getattr(policy_document, f"{tool}_policy_sha256")
+    overrides: dict[str, Any] = {"allowlist": allowlist, "audit_mode": audit_mode}
+    if max_items is not None:
+        overrides["max_items"] = max_items
+    return install_policy(
+        config, client,
+        document=raw_builder(**overrides),
+        expected_sha256=sha(**overrides),
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def expect_refusal(
+    client: mcp_client.McpClient, tool: str, arguments: dict[str, Any], *, code: str,
+    details_reason: str, reasons: list[tuple[int, str, str]], raw: dict[str, Any], key: str,
+    path_key: str = "path",
+) -> dict[str, Any]:
+    """Record one Preflight refusal and assert its code, reason and every item.
+
+    A refusal is the Tool's whole answer, so the case is only meaningful if the
+    code, the Preflight reason and the per-item reasons are the ones the D30 rule
+    names. `reasons` is `(index, reason, path)` in the handler's own item order.
+    """
+    error = expect_tool_error(client, tool, arguments)
+    raw[key] = bounded(error, 4_000)
+    details = error.get("details") or {}
+    items = details.get("items") or []
+    seen = [
+        (int(item.get("index", -1)), str(item.get("reason", "")), str(item.get(path_key, "")))
+        for item in items
+    ]
+    if str(error.get("code", "")) != code or str(details.get("reason", "")) != details_reason:
+        raise StageFailure(
+            f"{tool} {key}: expected {code}/{details_reason}: {json.dumps(error)[:600]}"
+        )
+    if seen != reasons:
+        raise StageFailure(
+            f"{tool} {key}: expected items {reasons}, observed {seen}: {json.dumps(error)[:600]}"
+        )
+    return error
+
+
+def exported_at(config: Config, path: str) -> dict[str, Any] | None:
+    """One node of the provider export at an exact path, or None.
+
+    A Configuration read cannot answer "is this path there" — a Gateway answers a
+    path that is not there with a synthesized node (ticket #10 evidence) — so the
+    provider's own export is the independent presence check. Two shapes are walked:
+    the nested Designer document a Gateway serves, whose nodes carry only their own
+    name, and the flat list the recorded fake serves in its place, whose nodes carry
+    their full path.
+    """
+    return _export_walk(provider_export(config), _relative_tag_path(path), "")
+
+
+def _relative_tag_path(path: str) -> str:
+    return path.split("]", 1)[-1].strip("/")
+
+
+def _export_walk(node: Any, wanted: str, prefix: str) -> dict[str, Any] | None:
+    children = node.get("tags") if isinstance(node, dict) else None
+    for child in children if isinstance(children, list) else []:
+        if not isinstance(child, dict):
+            continue
+        name = str(child.get("name", ""))
+        candidate = str(child.get("path") or (prefix + "/" + name if prefix else name))
+        if _relative_tag_path(candidate) == wanted:
+            return child
+        found = _export_walk(child, wanted, _relative_tag_path(candidate))
+        if found is not None:
+            return found
+    return None
+
+
+
+
+def stage_tag_move(config: Config) -> dict[str, Any]:
+    """The ticket #12 `tag_move` live cases: the move, its collision, its refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_move_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    zero = "tcf1:" + "0" * 64
+    inventory = sorted(client.tools_list())
+    facts["tagMoveConfiguratorInventory"] = inventory
+    facts["tagMoveConfiguratorCarriesAllThree"] = all(
+        tool in inventory for tool in ("tag_delete", "tag_move", "tag_rename")
+    )
+    if not facts["tagMoveConfiguratorCarriesAllThree"]:
+        raise StageFailure(f"the configurator deployment does not serve all three Tools: {inventory}")
+
+    def item(source: str = "", destination: str = "", fingerprint: str = "") -> dict[str, str]:
+        return {
+            "sourcePath": source or paths["source"],
+            "destinationPath": destination or paths["destination"],
+            "expectedFingerprint": fingerprint or zero,
+        }
+
+    # Case 0: one `system.tag.move` call lands each source under its own name, so a
+    # destination whose leaf differs is an input refusal, and a move that renames is
+    # `tag_rename`'s.
+    expect_refusal(
+        client, "tag_move", {"items": [item(destination=paths["leafMismatchDestination"])]},
+        code="invalid_argument", details_reason="preflightInputFailed",
+        reasons=[(0, "destinationLeafDiffersFromSource", paths["leafMismatchDestination"])],
+        raw=raw, key="leafMismatch",
+    )
+    facts["tagMoveLeafMismatchCode"] = "invalid_argument"
+    facts["tagMoveLeafMismatchReason"] = "destinationLeafDiffersFromSource"
+    expect_refusal(
+        client, "tag_move", {"items": [item()] * (HARD_ITEM_CEILING + 1)},
+        code="limit_exceeded", details_reason="itemsOverHardLimit", reasons=[],
+        raw=raw, key="itemsOverHardCeiling",
+    )
+    facts["tagMoveHardItemCeilingReason"] = "itemsOverHardLimit"
+    overlong = policy_document.OVERLONG_PATH_LEAF
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/{overlong}",
+            destination=f"{policy_document.TAG_UPDATE_FOLDER}/{overlong}",
+        )]},
+        code="limit_exceeded", details_reason="pathOverLength", reasons=[],
+        raw=raw, key="pathOverCeiling",
+    )
+    facts["tagMovePathOverCeilingReason"] = "pathOverLength"
+
+    install_and_require(
+        config, client, facts, "move", "Move",
+        allowlist=policy_document.TAG_MOVE_ALLOWLIST, raw=raw,
+    )
+
+    # Case 1: the positive move. Both ends are read independently afterwards through
+    # the provider's own export at the two exact paths, because the destination is
+    # what the call promised to create and the source is what it promised to remove.
+    source_before = tag_config(client, paths["source"])
+    structured = expect_structured(client, "tag_move", {"items": [item(
+        fingerprint=source_before["fingerprint"],
+    )]})
+    raw["allowlistedMove"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    observed = structured.get("observed") or [{}]
+    summary = structured.get("summary") or {}
+    facts["tagMoveStatus"] = str(items[0].get("status", ""))
+    facts["tagMoveNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagMoveAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagMoveAuditRecorded"] = summary.get("auditRecorded")
+    destination_read = tag_config(client, paths["destination"])
+    raw["tagGetConfigDestination"] = bounded(destination_read, 20_000)
+    facts["tagMoveObservedDestinationPresent"] = (
+        len(observed) == 2
+        and str(observed[0].get("path", "")) == paths["destination"]
+        and observed[0].get("status") == "ok"
+        and observed[0].get("absent") is False
+    )
+    facts["tagMoveObservedDestinationMatchesIndependentRead"] = (
+        observed[0].get("fingerprint") == destination_read["fingerprint"]
+        and derived_fingerprint(observed[0].get("configuration")) == observed[0].get("fingerprint")
+    )
+    facts["tagMoveSourceObservedAbsent"] = (
+        len(observed) == 2
+        and str(observed[1].get("path", "")) == paths["source"]
+        and observed[1].get("status") == "ok"
+        and observed[1].get("absent") is True
+    )
+    facts["tagMoveExportShowsDestination"] = (
+        exported_at(config, paths["destination"]) is not None
+    )
+    facts["tagMoveExportSourceGone"] = (
+        exported_at(config, paths["source"]) is None
+    )
+    if not (
+        facts["tagMoveStatus"] == "executed"
+        and facts["tagMoveNativeOutcome"].startswith("Good")
+        and facts["tagMoveObservedDestinationPresent"]
+        and facts["tagMoveSourceObservedAbsent"]
+        and facts["tagMoveExportShowsDestination"]
+        and facts["tagMoveExportSourceGone"]
+    ):
+        raise StageFailure(f"the allowlisted move did not land: {json.dumps(structured)[:800]}")
+
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = audited_rows(config, correlation, "ignition-mcp.tag_move")
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(rows, 20_000)}
+    facts["tagMoveAuditRowsForCorrelation"] = len(rows)
+    facts["tagMoveAuditActorIsServiceIdentity"] = bool(rows) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in rows
+    )
+    if len(rows) < 2:
+        raise StageFailure(f"the move wrote no audit pair for {correlation}: {audit_status}")
+
+    # Case 2: the destination `tag_copy` built inside `Nested` is occupied, so the
+    # same move is conflict and leaves both ends exactly as they were.
+    occupied_before = tag_config(client, paths["occupiedDestination"])
+    source_unchanged = tag_config(client, policy_document.TAG_FIXTURE_PATH)
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=policy_document.TAG_FIXTURE_PATH,
+            destination=paths["occupiedDestination"],
+            fingerprint=tag_config(client, policy_document.TAG_FIXTURE_PATH)["fingerprint"],
+        )]},
+        code="conflict", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "destinationExists", paths["occupiedDestination"])],
+        raw=raw, key="occupiedDestination",
+    )
+    facts["tagMoveOccupiedDestinationCode"] = "conflict"
+    facts["tagMoveOccupiedDestinationReason"] = "destinationExists"
+    occupied_after = tag_config(client, paths["occupiedDestination"])
+    facts["tagMoveOccupiedDestinationChangedNothing"] = (
+        occupied_after["fingerprint"] == occupied_before["fingerprint"]
+        and occupied_after["configuration"] == occupied_before["configuration"]
+    )
+    facts["tagMoveOccupiedDestinationLeftTheSource"] = (
+        tag_config(client, policy_document.TAG_FIXTURE_PATH)["fingerprint"] == source_unchanged["fingerprint"]
+    )
+    if not facts["tagMoveOccupiedDestinationChangedNothing"]:
+        raise StageFailure("a refused move overwrote the destination it was refused for")
+
+    # Case 3: the Precondition token. A stale fingerprint is conflict, and a source
+    # that is not there is not_found; neither dispatches anything.
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=policy_document.TAG_FIXTURE_PATH, destination=paths["occupiedDestination"],
+        )]},
+        code="conflict", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "fingerprintMismatch", policy_document.TAG_FIXTURE_PATH)],
+        raw=raw, key="staleFingerprint",
+    )
+    facts["tagMoveStaleFingerprintCode"] = "conflict"
+    facts["tagMoveStaleFingerprintReason"] = "fingerprintMismatch"
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=paths["missingSource"], destination=paths["missingDestination"],
+        )]},
+        code="not_found", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "sourceMissing", paths["missingSource"])],
+        raw=raw, key="missingSource",
+    )
+    facts["tagMoveMissingSourceCode"] = "not_found"
+    facts["tagMoveMissingSourceReason"] = "sourceMissing"
+
+    # Case 4: D30 6 measures the source and the destination. The segment-boundary
+    # sibling is refused at the source end, which is the half a copy never checks.
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=paths["siblingSource"], destination=paths["siblingDestination"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "targetNotAllowlisted", paths["siblingSource"])],
+        raw=raw, key="siblingDenial",
+    )
+    facts["tagMoveSiblingDenialReason"] = "targetNotAllowlisted"
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=paths["udtSource"], destination=paths["udtDestination"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted", paths["udtSource"])],
+        raw=raw, key="udtUnderPlainPrefix",
+    )
+    facts["tagMoveUdtNeedsExplicitTypesEntry"] = True
+
+    # Case 5: D10's deployment ceiling, and the whole-batch refusal that keeps the
+    # allowed item of a batch from moving.
+    expect_refusal(
+        client, "tag_move", {"items": [item()] * 21},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyLimit",
+    )
+    facts["tagMoveOverPolicyLimitReason"] = "itemsOverPolicyLimit"
+    install_and_require(
+        config, client, facts, "move", "MoveCeiling",
+        allowlist=policy_document.TAG_MOVE_ALLOWLIST, raw=raw, max_items=1,
+    )
+    expect_refusal(
+        client, "tag_move", {"items": [item(), item(source=policy_document.TAG_FIXTURE_PATH,
+                                                     destination=paths["occupiedDestination"])]},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyCeiling",
+    )
+    facts["tagMovePolicyCeilingIsHonoured"] = True
+
+    # Case 6: the reserved provider bounds both ends under an explicit `*`, before
+    # any read — so a source that is not there still answers with the provider
+    # reason, which is what makes it a provider rule and not an access rule.
+    install_and_require(
+        config, client, facts, "move", "MoveWildcard",
+        allowlist=policy_document.WILDCARD_ALLOWLIST, raw=raw,
+    )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=paths["reservedSource"], destination=paths["reservedSourceDestination"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "reservedProvider", paths["reservedSource"])],
+        raw=raw, key="reservedSourceRefusal",
+    )
+    facts["tagMoveReservedSourceReason"] = "reservedProvider"
+    expect_refusal(
+        client, "tag_move", {"items": [item(destination=paths["reservedDestination"])]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "reservedProvider", paths["reservedDestination"])],
+        raw=raw, key="reservedDestinationRefusal",
+    )
+    facts["tagMoveReservedDestinationReason"] = "reservedProvider"
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagMoveReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagMovePolicyDocumentUnclobbered"] = policy_before == policy_after
+    expect_refusal(
+        client, "tag_move", {"items": [item(
+            source=paths["udtSource"], destination=paths["udtDestination"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted", paths["udtSource"])],
+        raw=raw, key="udtUnderWildcard",
+    )
+    facts["tagMoveBareWildcardDoesNotCoverUdt"] = True
+
+    # Case 7: the explicit `_types_` entry is honoured. A batch whose first item is
+    # the definition pair and whose second is the segment-boundary sibling refuses
+    # wholly and lists only the sibling, where the same pair alone was refused as a
+    # definition under a plain prefix (Case 4). What changed is the entry.
+    install_and_require(
+        config, client, facts, "move", "MoveTypes",
+        allowlist=policy_document.TAG_TYPES_ALLOWLIST, raw=raw,
+    )
+    expect_refusal(
+        client, "tag_move", {"items": [
+            item(source=paths["udtSource"], destination=paths["udtDestination"]),
+            item(source=paths["siblingSource"], destination=paths["siblingDestination"]),
+        ]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(1, "targetNotAllowlisted", paths["siblingSource"])],
+        raw=raw, key="udtUnderTypesEntry",
+    )
+    facts["tagMoveTypesEntryIsHonoured"] = True
+    facts["tagMovePreflightExecutedNothing"] = (
+        exported_at(config, paths["udtDestination"]) is None
+        and exported_at(config, paths["siblingDestination"]) is None
+    )
+    if not facts["tagMovePreflightExecutedNothing"]:
+        raise StageFailure("a refused move Preflight executed part of its batch")
+    return {
+        "stage": "tag-move",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_rename(config: Config) -> dict[str, Any]:
+    """The ticket #12 `tag_rename` live cases: the rename, its collision, its refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_rename_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    zero = "tcf1:" + "0" * 64
+
+    def item(path: str = "", new_name: str = "", fingerprint: str = "") -> dict[str, str]:
+        return {
+            "path": path or paths["target"],
+            "newName": new_name or paths["targetNewName"],
+            "expectedFingerprint": fingerprint or zero,
+        }
+
+    # Case 0: a rename names one leaf, never a path, because `system.tag.rename`
+    # keeps the target's own parent; the D10 ceilings are measured over the request.
+    expect_refusal(
+        client, "tag_rename", {"items": [item(new_name=paths["multiSegmentName"])]},
+        code="invalid_argument", details_reason="preflightInputFailed",
+        reasons=[(0, "newNameNotASingleSegment", paths["target"])],
+        raw=raw, key="multiSegmentName",
+    )
+    facts["tagRenameMultiSegmentNameCode"] = "invalid_argument"
+    facts["tagRenameMultiSegmentNameReason"] = "newNameNotASingleSegment"
+    expect_refusal(
+        client, "tag_rename", {"items": [item()] * (HARD_ITEM_CEILING + 1)},
+        code="limit_exceeded", details_reason="itemsOverHardLimit", reasons=[],
+        raw=raw, key="itemsOverHardCeiling",
+    )
+    facts["tagRenameHardItemCeilingReason"] = "itemsOverHardLimit"
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+                 + policy_document.OVERLONG_PATH_LEAF,
+            new_name="Overlong",
+        )]},
+        code="limit_exceeded", details_reason="pathOverLength", reasons=[],
+        raw=raw, key="pathOverCeiling",
+    )
+    facts["tagRenamePathOverCeilingReason"] = "pathOverLength"
+
+    install_and_require(
+        config, client, facts, "rename", "Rename",
+        allowlist=policy_document.TAG_RENAME_ALLOWLIST, raw=raw,
+    )
+
+    # Case 1: the positive rename. The new path is what the call promised to create
+    # and the old path is what it promised to remove, so both are read independently
+    # afterwards, through the provider's own export at each exact path.
+    target_before = tag_config(client, paths["target"])
+    structured = expect_structured(client, "tag_rename", {"items": [item(
+        fingerprint=target_before["fingerprint"],
+    )]})
+    raw["allowlistedRename"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    observed = structured.get("observed") or [{}]
+    summary = structured.get("summary") or {}
+    facts["tagRenameStatus"] = str(items[0].get("status", ""))
+    facts["tagRenameNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagRenameItemCarriesBothPaths"] = (
+        str(items[0].get("path", "")) == paths["target"]
+        and str(items[0].get("newPath", "")) == paths["targetNewPath"]
+    )
+    facts["tagRenameAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagRenameAuditRecorded"] = summary.get("auditRecorded")
+    new_path_read = tag_config(client, paths["targetNewPath"])
+    raw["tagGetConfigNewPath"] = bounded(new_path_read, 20_000)
+    facts["tagRenameObservedNewPathPresent"] = (
+        len(observed) == 2
+        and str(observed[0].get("path", "")) == paths["targetNewPath"]
+        and observed[0].get("status") == "ok"
+        and observed[0].get("absent") is False
+    )
+    facts["tagRenameObservedNewPathMatchesIndependentRead"] = (
+        observed[0].get("fingerprint") == new_path_read["fingerprint"]
+        and derived_fingerprint(observed[0].get("configuration")) == observed[0].get("fingerprint")
+    )
+    facts["tagRenameOldPathObservedAbsent"] = (
+        len(observed) == 2
+        and str(observed[1].get("path", "")) == paths["target"]
+        and observed[1].get("status") == "ok"
+        and observed[1].get("absent") is True
+    )
+    facts["tagRenameExportShowsNewPath"] = (
+        exported_at(config, paths["targetNewPath"]) is not None
+    )
+    facts["tagRenameExportOldPathGone"] = (
+        exported_at(config, paths["target"]) is None
+    )
+    if not (
+        facts["tagRenameStatus"] == "executed"
+        and facts["tagRenameNativeOutcome"].startswith("Good")
+        and facts["tagRenameObservedNewPathPresent"]
+        and facts["tagRenameOldPathObservedAbsent"]
+        and facts["tagRenameExportShowsNewPath"]
+        and facts["tagRenameExportOldPathGone"]
+    ):
+        raise StageFailure(f"the allowlisted rename did not land: {json.dumps(structured)[:800]}")
+
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = audited_rows(config, correlation, "ignition-mcp.tag_rename")
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(rows, 20_000)}
+    facts["tagRenameAuditRowsForCorrelation"] = len(rows)
+    facts["tagRenameAuditActorIsServiceIdentity"] = bool(rows) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in rows
+    )
+    if len(rows) < 2:
+        raise StageFailure(f"the rename wrote no audit pair for {correlation}: {audit_status}")
+
+    # Case 2: the name the positive case just created is occupied, so the same new
+    # name on another target is conflict and leaves both it and the new path alone.
+    occupied_before = tag_config(client, paths["targetNewPath"])
+    source_before = tag_config(client, paths["occupiedSource"])
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["occupiedSource"], new_name=paths["occupiedNewName"],
+            fingerprint=source_before["fingerprint"],
+        )]},
+        code="conflict", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "newPathExists", paths["targetNewPath"])],
+        raw=raw, key="occupiedNewPath", path_key="refusedPath",
+    )
+    facts["tagRenameOccupiedNewPathCode"] = "conflict"
+    facts["tagRenameOccupiedNewPathReason"] = "newPathExists"
+    occupied_after = tag_config(client, paths["targetNewPath"])
+    facts["tagRenameOccupiedNewPathChangedNothing"] = (
+        occupied_after["fingerprint"] == occupied_before["fingerprint"]
+    )
+    facts["tagRenameOccupiedNewPathLeftTheTarget"] = (
+        tag_config(client, paths["occupiedSource"])["fingerprint"] == source_before["fingerprint"]
+    )
+    if not facts["tagRenameOccupiedNewPathChangedNothing"]:
+        raise StageFailure("a refused rename overwrote the new path it was refused for")
+
+    # Case 3: the Precondition token. A stale fingerprint is conflict and a target
+    # that is not there is not_found; neither dispatches anything.
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["staleSource"], new_name=paths["staleNewName"],
+        )]},
+        code="conflict", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "fingerprintMismatch", paths["staleSource"])],
+        raw=raw, key="staleFingerprint",
+    )
+    facts["tagRenameStaleFingerprintCode"] = "conflict"
+    facts["tagRenameStaleFingerprintReason"] = "fingerprintMismatch"
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["missingTarget"], new_name=paths["missingNewName"],
+        )]},
+        code="not_found", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "targetMissing", paths["missingTarget"])],
+        raw=raw, key="missingTarget",
+    )
+    facts["tagRenameMissingTargetCode"] = "not_found"
+    facts["tagRenameMissingTargetReason"] = "targetMissing"
+
+    # Case 4: D30 6 measures the new path, and the segment-boundary sibling's new
+    # path is outside the allowlist even though its target's parent was too.
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["siblingTarget"], new_name=paths["siblingNewName"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "targetNotAllowlisted", paths["siblingNewPath"])],
+        raw=raw, key="siblingDenial", path_key="refusedPath",
+    )
+    facts["tagRenameSiblingDenialReason"] = "targetNotAllowlisted"
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["udtTarget"], new_name=paths["udtNewName"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted",
+                  f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.UDT_NAMESPACE}/"
+                  f"{policy_document.TAG_FIXTURE_ROOT}/{paths['udtNewName']}")],
+        raw=raw, key="udtUnderPlainPrefix", path_key="refusedPath",
+    )
+    facts["tagRenameUdtNeedsExplicitTypesEntry"] = True
+
+    # Case 5: D10's deployment ceiling, and the whole-batch refusal.
+    expect_refusal(
+        client, "tag_rename", {"items": [item()] * 21},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyLimit",
+    )
+    facts["tagRenameOverPolicyLimitReason"] = "itemsOverPolicyLimit"
+    install_and_require(
+        config, client, facts, "rename", "RenameCeiling",
+        allowlist=policy_document.TAG_RENAME_ALLOWLIST, raw=raw, max_items=1,
+    )
+    expect_refusal(
+        client, "tag_rename", {"items": [item(), item(path=paths["staleSource"], new_name=paths["staleNewName"])]},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyCeiling",
+    )
+    facts["tagRenamePolicyCeilingIsHonoured"] = True
+
+    # Case 6: the reserved provider is refused at the target end under an explicit
+    # `*`, and the probe Tag and policy document do not move.
+    install_and_require(
+        config, client, facts, "rename", "RenameWildcard",
+        allowlist=policy_document.WILDCARD_ALLOWLIST, raw=raw,
+    )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["reservedTarget"], new_name=paths["reservedNewName"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "reservedProvider", paths["reservedTarget"])],
+        raw=raw, key="reservedProviderRefusal",
+    )
+    facts["tagRenameReservedProviderReason"] = "reservedProvider"
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagRenameReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagRenamePolicyDocumentUnclobbered"] = policy_before == policy_after
+    expect_refusal(
+        client, "tag_rename", {"items": [item(
+            path=paths["udtTarget"], new_name=paths["udtNewName"],
+        )]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted",
+                  f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.UDT_NAMESPACE}/"
+                  f"{policy_document.TAG_FIXTURE_ROOT}/{paths['udtNewName']}")],
+        raw=raw, key="udtUnderWildcard", path_key="refusedPath",
+    )
+    facts["tagRenameBareWildcardDoesNotCoverUdt"] = True
+
+    # Case 7: the explicit `_types_` entry is honoured, measured the same way a
+    # create and a copy measure theirs: the definition item passes the allowlist and
+    # the batch is refused for its sibling alone.
+    install_and_require(
+        config, client, facts, "rename", "RenameTypes",
+        allowlist=policy_document.TAG_TYPES_ALLOWLIST, raw=raw,
+    )
+    expect_refusal(
+        client, "tag_rename", {"items": [
+            item(path=paths["udtTarget"], new_name=paths["udtNewName"]),
+            item(path=paths["siblingTarget"], new_name=paths["siblingNewName"]),
+        ]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(1, "targetNotAllowlisted", paths["siblingNewPath"])],
+        raw=raw, key="udtUnderTypesEntry", path_key="refusedPath",
+    )
+    facts["tagRenameTypesEntryIsHonoured"] = True
+    facts["tagRenamePreflightExecutedNothing"] = (
+        exported_at(config, paths["udtNewPath"]) is None
+        and exported_at(config, paths["siblingNewPath"]) is None
+    )
+    if not facts["tagRenamePreflightExecutedNothing"]:
+        raise StageFailure("a refused rename Preflight executed part of its batch")
+    return {
+        "stage": "tag-rename",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_delete(config: Config) -> dict[str, Any]:
+    """The ticket #12 `tag_delete` live cases: the delete, the partial batch, the refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_delete_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+    zero = "tcf1:" + "0" * 64
+
+    def item(path: str = "", fingerprint: str = "") -> dict[str, str]:
+        return {"path": path or paths["target"], "expectedFingerprint": fingerprint or zero}
+
+    def delete_fingerprint(path: str) -> str:
+        return tag_config(client, path)["fingerprint"]
+
+    # Case 0: the D10 ceilings a request crosses with no native call.
+    expect_refusal(
+        client, "tag_delete", {"items": [item()] * (HARD_ITEM_CEILING + 1)},
+        code="limit_exceeded", details_reason="itemsOverHardLimit", reasons=[],
+        raw=raw, key="itemsOverHardCeiling",
+    )
+    facts["tagDeleteHardItemCeilingReason"] = "itemsOverHardLimit"
+    expect_refusal(
+        client, "tag_delete", {"items": [item(
+            path=f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+                 + policy_document.OVERLONG_PATH_LEAF,
+        )]},
+        code="limit_exceeded", details_reason="pathOverLength", reasons=[],
+        raw=raw, key="pathOverCeiling",
+    )
+    facts["tagDeletePathOverCeilingReason"] = "pathOverLength"
+    expect_refusal(
+        client, "tag_delete", {"items": [{"expectedFingerprint": zero}]},
+        code="invalid_argument", details_reason="preflightInputFailed",
+        reasons=[(0, "itemKeysMustBePathAndFingerprint", "")],
+        raw=raw, key="itemKeys",
+    )
+    facts["tagDeleteItemKeysReason"] = "itemKeysMustBePathAndFingerprint"
+
+    install_and_require(
+        config, client, facts, "delete", "Delete",
+        allowlist=policy_document.TAG_DELETE_ALLOWLIST, raw=raw,
+    )
+
+    # Case 1: a partial-failure batch after Preflight. Both items pass every
+    # Preflight rule — the folder and a Tag inside it both exist and both
+    # fingerprints match — and then the first item's `system.tag.deleteTags` takes
+    # the folder with everything beneath it, so the second item's own call answers a
+    # Bad QualityCode. D30 3: no rollback, per-item outcomes, and the batch is not
+    # retried.
+    folder_before = tag_config(client, paths["folder"])
+    structured = expect_structured(client, "tag_delete", {"items": [
+        item(path=paths["folder"], fingerprint=folder_before["fingerprint"]),
+        item(path=paths["folderChild"], fingerprint=delete_fingerprint(paths["folderChild"])),
+    ]})
+    raw["partialBatch"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}, {}]
+    summary = structured.get("summary") or {}
+    observed = structured.get("observed") or [{}]
+    facts["tagDeletePartialBatchStatuses"] = [str(entry.get("status", "")) for entry in items]
+    facts["tagDeletePartialBatchFirstOutcome"] = str(
+        (items[0].get("nativeOutcome") or {}).get("name", "")
+    )
+    facts["tagDeletePartialBatchSecondOutcome"] = str(
+        (items[1].get("nativeOutcome") or {}).get("name", "")
+    )
+    facts["tagDeletePartialBatchSucceeded"] = summary.get("succeeded")
+    facts["tagDeletePartialBatchFailed"] = summary.get("failed")
+    facts["tagDeletePartialBatchRetriedNothing"] = summary.get("outcomeUnknown") == 0
+    facts["tagDeletePartialBatchObservedAbsent"] = len(observed) == 2 and all(
+        entry.get("status") == "ok" and entry.get("absent") is True for entry in observed
+    )
+    facts["tagDeleteFolderExportGone"] = (
+        exported_at(config, paths["folder"]) is None
+    )
+    if not (
+        facts["tagDeletePartialBatchStatuses"] == ["executed", "executed"]
+        and facts["tagDeletePartialBatchFirstOutcome"].startswith("Good")
+        and facts["tagDeletePartialBatchSucceeded"] == 1
+        and facts["tagDeletePartialBatchFailed"] == 1
+        and facts["tagDeletePartialBatchObservedAbsent"]
+        and facts["tagDeleteFolderExportGone"]
+    ):
+        raise StageFailure(
+            f"the partial-failure delete batch is not a partial batch: {json.dumps(structured)[:800]}"
+        )
+
+    # Case 2: the positive delete, confirmed by the provider's own export at that
+    # exact path — a Configuration read cannot answer absence (ticket #10 evidence).
+    target_before = tag_config(client, paths["target"])
+    structured = expect_structured(client, "tag_delete", {"items": [item(
+        fingerprint=target_before["fingerprint"],
+    )]})
+    raw["allowlistedDelete"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    observed = structured.get("observed") or [{}]
+    summary = structured.get("summary") or {}
+    facts["tagDeleteStatus"] = str(items[0].get("status", ""))
+    facts["tagDeleteNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagDeleteAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagDeleteAuditRecorded"] = summary.get("auditRecorded")
+    facts["tagDeleteObservedAbsent"] = (
+        len(observed) == 1
+        and str(observed[0].get("path", "")) == paths["target"]
+        and observed[0].get("status") == "ok"
+        and observed[0].get("absent") is True
+    )
+    facts["tagDeleteExportGone"] = exported_at(config, paths["target"]) is None
+    if not (
+        facts["tagDeleteStatus"] == "executed"
+        and facts["tagDeleteNativeOutcome"].startswith("Good")
+        and facts["tagDeleteObservedAbsent"]
+        and facts["tagDeleteExportGone"]
+    ):
+        raise StageFailure(f"the allowlisted delete did not land: {json.dumps(structured)[:800]}")
+
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = audited_rows(config, correlation, "ignition-mcp.tag_delete")
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(rows, 20_000)}
+    facts["tagDeleteAuditRowsForCorrelation"] = len(rows)
+    facts["tagDeleteAuditActorIsServiceIdentity"] = bool(rows) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in rows
+    )
+    if len(rows) < 2:
+        raise StageFailure(f"the delete wrote no audit pair for {correlation}: {audit_status}")
+
+    # Case 3: the Precondition token. A stale fingerprint is conflict and a target
+    # that is not there is not_found; neither dispatches anything, and the target the
+    # stale token named is still there.
+    stale_before = tag_config(client, paths["staleTarget"])
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["staleTarget"])]},
+        code="conflict", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "fingerprintMismatch", paths["staleTarget"])],
+        raw=raw, key="staleFingerprint",
+    )
+    facts["tagDeleteStaleFingerprintCode"] = "conflict"
+    facts["tagDeleteStaleFingerprintReason"] = "fingerprintMismatch"
+    stale_after = tag_config(client, paths["staleTarget"])
+    facts["tagDeleteStaleFingerprintChangedNothing"] = (
+        stale_after["fingerprint"] == stale_before["fingerprint"]
+    )
+    if not facts["tagDeleteStaleFingerprintChangedNothing"]:
+        raise StageFailure("a refused delete removed the target it was refused for")
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["missingTarget"])]},
+        code="not_found", details_reason="preflightPreconditionFailed",
+        reasons=[(0, "targetMissing", paths["missingTarget"])],
+        raw=raw, key="missingTarget",
+    )
+    facts["tagDeleteMissingTargetCode"] = "not_found"
+    facts["tagDeleteMissingTargetReason"] = "targetMissing"
+
+    # Case 4: the segment-boundary sibling and a UDT definition without an explicit
+    # `_types_` entry, each refused before anything is read.
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["siblingTarget"])]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "targetNotAllowlisted", paths["siblingTarget"])],
+        raw=raw, key="siblingDenial",
+    )
+    facts["tagDeleteSiblingDenialReason"] = "targetNotAllowlisted"
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["udtTarget"])]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted", paths["udtTarget"])],
+        raw=raw, key="udtUnderPlainPrefix",
+    )
+    facts["tagDeleteUdtNeedsExplicitTypesEntry"] = True
+
+    # Case 5: D10's deployment ceiling, and the whole-batch refusal that keeps the
+    # allowed item of a batch from being deleted.
+    expect_refusal(
+        client, "tag_delete", {"items": [item()] * 21},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyLimit",
+    )
+    facts["tagDeleteOverPolicyLimitReason"] = "itemsOverPolicyLimit"
+    install_and_require(
+        config, client, facts, "delete", "DeleteCeiling",
+        allowlist=policy_document.TAG_DELETE_ALLOWLIST, raw=raw, max_items=1,
+    )
+    expect_refusal(
+        client, "tag_delete", {"items": [item(), item(path=paths["staleTarget"])]},
+        code="limit_exceeded", details_reason="itemsOverPolicyLimit", reasons=[],
+        raw=raw, key="overPolicyCeiling",
+    )
+    facts["tagDeletePolicyCeilingIsHonoured"] = True
+
+    # Case 6: the reserved provider is refused under an explicit `*`, before any
+    # read, and neither the probe Tag nor the policy document moves.
+    install_and_require(
+        config, client, facts, "delete", "DeleteWildcard",
+        allowlist=policy_document.WILDCARD_ALLOWLIST, raw=raw,
+    )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["reservedTarget"])]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "reservedProvider", paths["reservedTarget"])],
+        raw=raw, key="reservedProviderRefusal",
+    )
+    facts["tagDeleteReservedProviderReason"] = "reservedProvider"
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagDeleteReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagDeletePolicyDocumentUnclobbered"] = policy_before == policy_after
+    expect_refusal(
+        client, "tag_delete", {"items": [item(path=paths["udtTarget"])]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(0, "udtDefinitionNotAllowlisted", paths["udtTarget"])],
+        raw=raw, key="udtUnderWildcard",
+    )
+    facts["tagDeleteBareWildcardDoesNotCoverUdt"] = True
+
+    # Case 7: the explicit `_types_` entry is honoured: the definition item passes
+    # the allowlist and the batch is refused for its sibling alone.
+    install_and_require(
+        config, client, facts, "delete", "DeleteTypes",
+        allowlist=policy_document.TAG_TYPES_ALLOWLIST, raw=raw,
+    )
+    expect_refusal(
+        client, "tag_delete", {"items": [
+            item(path=paths["udtTarget"]), item(path=paths["siblingTarget"]),
+        ]},
+        code="permission_denied", details_reason="preflightTargetRefused",
+        reasons=[(1, "targetNotAllowlisted", paths["siblingTarget"])],
+        raw=raw, key="udtUnderTypesEntry",
+    )
+    facts["tagDeleteTypesEntryIsHonoured"] = True
+    facts["tagDeletePreflightExecutedNothing"] = (
+        exported_at(config, paths["staleTarget"]) is not None
+    )
+    if not facts["tagDeletePreflightExecutedNothing"]:
+        raise StageFailure("a refused delete Preflight executed part of its batch")
+    return {
+        "stage": "tag-delete",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Stages: ticket #8 (`alarm_shelve` and `alarm_unshelve`)
 # --------------------------------------------------------------------------- #
 
@@ -3041,6 +4008,210 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
                         "actorIsServiceIdentity": facts.get("tagCopyAuditActorIsServiceIdentity"),
                     },
                 },
+                # Ticket #12: the two Mutations that relocate a node and the one that
+                # removes it. Each reports its own dispatch, collision, allowlist,
+                # ceiling and reserved-provider answers, because the rules differ: a
+                # move checks both ends, a rename checks the new path its own parent
+                # plus the new name makes, and a delete has no collision policy at all.
+                "tagMove": {
+                    "configuratorCarriesAllThree": facts.get(
+                        "tagMoveConfiguratorCarriesAllThree"
+                    ),
+                    "allowlisted": {
+                        "status": facts.get("tagMoveStatus"),
+                        "nativeOutcome": facts.get("tagMoveNativeOutcome"),
+                        "observedDestinationPresent": facts.get(
+                            "tagMoveObservedDestinationPresent"
+                        ),
+                        "observedDestinationMatchesIndependentRead": facts.get(
+                            "tagMoveObservedDestinationMatchesIndependentRead"
+                        ),
+                        "sourceObservedAbsent": facts.get("tagMoveSourceObservedAbsent"),
+                        "exportShowsDestination": facts.get("tagMoveExportShowsDestination"),
+                        "exportSourceGone": facts.get("tagMoveExportSourceGone"),
+                    },
+                    "destinationLeafRule": {
+                        "code": facts.get("tagMoveLeafMismatchCode"),
+                        "reason": facts.get("tagMoveLeafMismatchReason"),
+                    },
+                    "occupiedDestination": {
+                        "code": facts.get("tagMoveOccupiedDestinationCode"),
+                        "reason": facts.get("tagMoveOccupiedDestinationReason"),
+                        "changedNothing": facts.get("tagMoveOccupiedDestinationChangedNothing"),
+                        "leftTheSource": facts.get("tagMoveOccupiedDestinationLeftTheSource"),
+                    },
+                    "preconditionToken": {
+                        "staleCode": facts.get("tagMoveStaleFingerprintCode"),
+                        "staleReason": facts.get("tagMoveStaleFingerprintReason"),
+                        "missingSourceCode": facts.get("tagMoveMissingSourceCode"),
+                        "missingSourceReason": facts.get("tagMoveMissingSourceReason"),
+                    },
+                    "targetAllowlist": {
+                        "siblingDenialReason": facts.get("tagMoveSiblingDenialReason"),
+                        "preflightExecutedNothing": facts.get("tagMovePreflightExecutedNothing"),
+                    },
+                    "udtDefinitions": {
+                        "refusedUnderPlainPrefix": facts.get("tagMoveUdtNeedsExplicitTypesEntry"),
+                        "refusedUnderBareWildcard": facts.get("tagMoveBareWildcardDoesNotCoverUdt"),
+                        "explicitTypesEntryHonoured": facts.get("tagMoveTypesEntryIsHonoured"),
+                    },
+                    "reservedProvider": {
+                        "sourceReason": facts.get("tagMoveReservedSourceReason"),
+                        "destinationReason": facts.get("tagMoveReservedDestinationReason"),
+                        "targetValueUnchanged": facts.get("tagMoveReservedProviderValueUnchanged"),
+                        "policyDocumentUnclobbered": facts.get(
+                            "tagMovePolicyDocumentUnclobbered"
+                        ),
+                    },
+                    "inputBounds": {
+                        "hardItemCeiling": facts.get("tagMoveHardItemCeilingReason"),
+                        "pathOverCeiling": facts.get("tagMovePathOverCeilingReason"),
+                        "overPolicyLimit": facts.get("tagMoveOverPolicyLimitReason"),
+                        "deploymentCeilingHonoured": facts.get("tagMovePolicyCeilingIsHonoured"),
+                    },
+                    "audit": {
+                        "mode": facts.get("tagMoveAuditMode"),
+                        "recorded": facts.get("tagMoveAuditRecorded"),
+                        "rowsForCorrelation": facts.get("tagMoveAuditRowsForCorrelation"),
+                        "actorIsServiceIdentity": facts.get("tagMoveAuditActorIsServiceIdentity"),
+                    },
+                },
+                "tagRename": {
+                    "allowlisted": {
+                        "status": facts.get("tagRenameStatus"),
+                        "nativeOutcome": facts.get("tagRenameNativeOutcome"),
+                        "itemCarriesBothPaths": facts.get("tagRenameItemCarriesBothPaths"),
+                        "observedNewPathPresent": facts.get("tagRenameObservedNewPathPresent"),
+                        "observedNewPathMatchesIndependentRead": facts.get(
+                            "tagRenameObservedNewPathMatchesIndependentRead"
+                        ),
+                        "oldPathObservedAbsent": facts.get("tagRenameOldPathObservedAbsent"),
+                        "exportShowsNewPath": facts.get("tagRenameExportShowsNewPath"),
+                        "exportOldPathGone": facts.get("tagRenameExportOldPathGone"),
+                    },
+                    "newNameRule": {
+                        "code": facts.get("tagRenameMultiSegmentNameCode"),
+                        "reason": facts.get("tagRenameMultiSegmentNameReason"),
+                    },
+                    "occupiedNewPath": {
+                        "code": facts.get("tagRenameOccupiedNewPathCode"),
+                        "reason": facts.get("tagRenameOccupiedNewPathReason"),
+                        "changedNothing": facts.get("tagRenameOccupiedNewPathChangedNothing"),
+                        "leftTheTarget": facts.get("tagRenameOccupiedNewPathLeftTheTarget"),
+                    },
+                    "preconditionToken": {
+                        "staleCode": facts.get("tagRenameStaleFingerprintCode"),
+                        "staleReason": facts.get("tagRenameStaleFingerprintReason"),
+                        "missingTargetCode": facts.get("tagRenameMissingTargetCode"),
+                        "missingTargetReason": facts.get("tagRenameMissingTargetReason"),
+                    },
+                    "targetAllowlist": {
+                        "siblingDenialReason": facts.get("tagRenameSiblingDenialReason"),
+                        "preflightExecutedNothing": facts.get(
+                            "tagRenamePreflightExecutedNothing"
+                        ),
+                    },
+                    "udtDefinitions": {
+                        "refusedUnderPlainPrefix": facts.get(
+                            "tagRenameUdtNeedsExplicitTypesEntry"
+                        ),
+                        "refusedUnderBareWildcard": facts.get(
+                            "tagRenameBareWildcardDoesNotCoverUdt"
+                        ),
+                        "explicitTypesEntryHonoured": facts.get("tagRenameTypesEntryIsHonoured"),
+                    },
+                    "reservedProvider": {
+                        "reason": facts.get("tagRenameReservedProviderReason"),
+                        "targetValueUnchanged": facts.get(
+                            "tagRenameReservedProviderValueUnchanged"
+                        ),
+                        "policyDocumentUnclobbered": facts.get(
+                            "tagRenamePolicyDocumentUnclobbered"
+                        ),
+                    },
+                    "inputBounds": {
+                        "hardItemCeiling": facts.get("tagRenameHardItemCeilingReason"),
+                        "pathOverCeiling": facts.get("tagRenamePathOverCeilingReason"),
+                        "overPolicyLimit": facts.get("tagRenameOverPolicyLimitReason"),
+                        "deploymentCeilingHonoured": facts.get("tagRenamePolicyCeilingIsHonoured"),
+                    },
+                    "audit": {
+                        "mode": facts.get("tagRenameAuditMode"),
+                        "recorded": facts.get("tagRenameAuditRecorded"),
+                        "rowsForCorrelation": facts.get("tagRenameAuditRowsForCorrelation"),
+                        "actorIsServiceIdentity": facts.get(
+                            "tagRenameAuditActorIsServiceIdentity"
+                        ),
+                    },
+                },
+                "tagDelete": {
+                    "allowlisted": {
+                        "status": facts.get("tagDeleteStatus"),
+                        "nativeOutcome": facts.get("tagDeleteNativeOutcome"),
+                        "observedAbsent": facts.get("tagDeleteObservedAbsent"),
+                        "exportGone": facts.get("tagDeleteExportGone"),
+                    },
+                    "partialFailureBatch": {
+                        "statuses": facts.get("tagDeletePartialBatchStatuses"),
+                        "firstOutcome": facts.get("tagDeletePartialBatchFirstOutcome"),
+                        "secondOutcome": facts.get("tagDeletePartialBatchSecondOutcome"),
+                        "succeeded": facts.get("tagDeletePartialBatchSucceeded"),
+                        "failed": facts.get("tagDeletePartialBatchFailed"),
+                        "retriedNothing": facts.get("tagDeletePartialBatchRetriedNothing"),
+                        "observedAbsent": facts.get("tagDeletePartialBatchObservedAbsent"),
+                        "folderExportGone": facts.get("tagDeleteFolderExportGone"),
+                    },
+                    "preconditionToken": {
+                        "staleCode": facts.get("tagDeleteStaleFingerprintCode"),
+                        "staleReason": facts.get("tagDeleteStaleFingerprintReason"),
+                        "staleChangedNothing": facts.get(
+                            "tagDeleteStaleFingerprintChangedNothing"
+                        ),
+                        "missingTargetCode": facts.get("tagDeleteMissingTargetCode"),
+                        "missingTargetReason": facts.get("tagDeleteMissingTargetReason"),
+                    },
+                    "inputRules": {
+                        "itemKeysReason": facts.get("tagDeleteItemKeysReason"),
+                    },
+                    "targetAllowlist": {
+                        "siblingDenialReason": facts.get("tagDeleteSiblingDenialReason"),
+                        "preflightExecutedNothing": facts.get(
+                            "tagDeletePreflightExecutedNothing"
+                        ),
+                    },
+                    "udtDefinitions": {
+                        "refusedUnderPlainPrefix": facts.get(
+                            "tagDeleteUdtNeedsExplicitTypesEntry"
+                        ),
+                        "refusedUnderBareWildcard": facts.get(
+                            "tagDeleteBareWildcardDoesNotCoverUdt"
+                        ),
+                        "explicitTypesEntryHonoured": facts.get("tagDeleteTypesEntryIsHonoured"),
+                    },
+                    "reservedProvider": {
+                        "reason": facts.get("tagDeleteReservedProviderReason"),
+                        "targetValueUnchanged": facts.get(
+                            "tagDeleteReservedProviderValueUnchanged"
+                        ),
+                        "policyDocumentUnclobbered": facts.get(
+                            "tagDeletePolicyDocumentUnclobbered"
+                        ),
+                    },
+                    "inputBounds": {
+                        "hardItemCeiling": facts.get("tagDeleteHardItemCeilingReason"),
+                        "pathOverCeiling": facts.get("tagDeletePathOverCeilingReason"),
+                        "overPolicyLimit": facts.get("tagDeleteOverPolicyLimitReason"),
+                        "deploymentCeilingHonoured": facts.get("tagDeletePolicyCeilingIsHonoured"),
+                    },
+                    "audit": {
+                        "mode": facts.get("tagDeleteAuditMode"),
+                        "recorded": facts.get("tagDeleteAuditRecorded"),
+                        "rowsForCorrelation": facts.get("tagDeleteAuditRowsForCorrelation"),
+                        "actorIsServiceIdentity": facts.get(
+                            "tagDeleteAuditActorIsServiceIdentity"
+                        ),
+                    },
+                },
             },
         }
     # The exact-path Alarm query bound is the conjunction ticket #6 measured: literal
@@ -3142,15 +4313,15 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-EVIDENCE_TICKETS = {MILESTONE_4A: ["#6", "#7", "#8"], MILESTONE_4B: ["#10", "#11"]}
+EVIDENCE_TICKETS = {MILESTONE_4A: ["#6", "#7", "#8"], MILESTONE_4B: ["#10", "#11", "#12"]}
 EVIDENCE_TITLES = {
     MILESTONE_4A: (
         "Characterize the Runtime Target Policy and the exact-path alarm query bound, "
         "and verify tag_write, alarm_shelve and alarm_unshelve live"
     ),
     MILESTONE_4B: (
-        "Verify the Tag config fingerprint, tag_update, tag_create and tag_copy "
-        "(milestone 4b) live"
+        "Verify the Tag config fingerprint, tag_update, tag_create, tag_copy, tag_move, "
+        "tag_rename and tag_delete (milestone 4b) live"
     ),
 }
 
@@ -3205,7 +4376,7 @@ def build_config(argv: list[str]) -> Config:
             "tag-write-no-policy", "policy-provision", "policy-read", "alarm",
             "tag-write-setup", "tag-write", "alarm-no-policy", "alarm-shelve",
             "tag-update-no-policy", "tag-update-setup", "tag-update",
-            "tag-create", "tag-copy", "summarize",
+            "tag-create", "tag-copy", "tag-move", "tag-rename", "tag-delete", "summarize",
         ],
     )
     parser.add_argument("--base-url", default=os.environ.get("P4_BASE_URL", "http://127.0.0.1:8093"))
@@ -3338,6 +4509,18 @@ def main(argv: list[str] | None = None) -> int:
         elif stage == "tag-copy":
             record = stage_tag_copy(config)
             write_stage(config, "tag-copy", record)
+            code = EXIT_OK
+        elif stage == "tag-move":
+            record = stage_tag_move(config)
+            write_stage(config, "tag-move", record)
+            code = EXIT_OK
+        elif stage == "tag-rename":
+            record = stage_tag_rename(config)
+            write_stage(config, "tag-rename", record)
+            code = EXIT_OK
+        elif stage == "tag-delete":
+            record = stage_tag_delete(config)
+            write_stage(config, "tag-delete", record)
             code = EXIT_OK
         else:
             record, code = stage_summarize(config)

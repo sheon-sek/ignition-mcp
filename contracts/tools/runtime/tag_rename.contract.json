@@ -1,0 +1,127 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_rename",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "items": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "default": 20,
+      "itemRequired": [
+        "path",
+        "newName",
+        "expectedFingerprint"
+      ],
+      "itemProperties": {
+        "path": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "readable": "the target must exist and its configuration must be readable, and its fingerprint is the item's Precondition token"
+        },
+        "newName": {
+          "type": "string",
+          "singleSegment": true,
+          "note": "one path segment and nothing else: a /, ., [, ], *, ? or : anywhere in it is invalid_argument (details.items[].reason = newNameNotASingleSegment), because system.tag.rename takes a name and the target's own parent decides where the node lands"
+        },
+        "expectedFingerprint": {
+          "type": "string",
+          "pattern": "^tcf1:[0-9a-f]{64}$",
+          "source": "tag_get_config.fingerprint"
+        }
+      }
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-rename.output.schema.json",
+  "nativeRequirements": [
+    "system.tag.readBlocking",
+    "system.tag.exists",
+    "system.tag.getConfiguration",
+    "system.tag.rename",
+    "system.util.audit"
+  ],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "one system.tag.rename call per item, with the target's path, the new name and Abort as the collision policy; its single QualityCode is that item's outcome, and Observed state never decides success",
+  "preconditionToken": {
+    "kind": "tag_config_fingerprint",
+    "definition": "contracts/shared/tag-config-fingerprint.json",
+    "definitionVersion": "tcf1",
+    "parameter": "items[].expectedFingerprint",
+    "source": "tag_get_config.fingerprint",
+    "enforcedBy": "handler_read_compare",
+    "comparedRead": "system.tag.exists(path), then system.tag.getConfiguration(path, false, false), then system.tag.exists(newPath) for every item, before any item executes",
+    "mismatchCode": "conflict",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 2: the compare and the change are two steps, so a competing writer can rewrite the target, remove it, or take its new path between the Preflight read and system.tag.rename. The handler narrows what it can (every target fingerprint and every free new path is read before any dispatch, a target the Preflight read found missing is refused with not_found, and an occupied new path is refused with conflict) and claims no atomicity. A new path that appears inside the window is refused by the Gateway's own Abort and reported as that item's conflict, so the race never costs a node; a target rewritten inside the window is renamed with content the caller never saw, and a caller that needs a narrower window re-reads with tag_get_config and retries the whole batch."
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_rename",
+    "allowlistMatch": "the new path - the target's own parent plus items[].newName - as a provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight for the target and for its new path, whatever the allowlist says, including an explicit *: a rename into the provider would place a node beside the policy document, and a rename of one of its nodes would move it (owner ruling 1)",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "targetPath": {
+    "form": "<provider>Tag, <provider>Folder or <provider>Folder/Tag, and <provider>_types_/... for a UDT definition",
+    "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
+    "newPath": "the path the Tool lands on is the target's own parent plus items[].newName, and it is that new path D30 6 measures, that must be free, and whose last segment is the new name"
+  },
+  "sourcePath": {
+    "readable": "system.tag.exists(path) must answer true (not_found, details.items[].reason = targetMissing) and system.tag.getConfiguration(path, false, false) must answer a node (upstream_error, reasons configurationReadFailed / configurationUnavailable) before any item executes",
+    "notAllowlistChecked": "D30 6 checks the new path of a rename, not the old one: the target is bounded by the reserved-provider rule, its own readability and its fingerprint, and by the new path the caller names",
+    "reservedProvider": "a target inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
+  },
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a new path inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "collisionPolicy": "Abort",
+  "existingTargetFails": "conflict (details.items[].reason = newPathExists): the new path already holds something, and D11 forbids replacing it",
+  "neverOverwrites": "the handler sends collisionPolicy=Abort, so a new path that appears between the Preflight existence check and the dispatch aborts that item's rename instead of overwriting it, and the aborted call is reported as that item's conflict (details.items[].reason = newPathAppeared) once the Gateway answers the new path as present; the target keeps its own name and parent either way",
+  "fixedKnobs": {
+    "collisionPolicy": "Abort"
+  },
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "ambiguousOutcomeScope": "an item whose own dispatch raised and whose new path the Gateway does not answer as present is outcome_unknown and ends the batch (later items are not_executed); a raised dispatch whose new path has appeared is that item's conflict, and an item whose dispatch answered an unattributable QualityCode is outcome_unknown, so the batch continues in both cases. Nothing is replayed",
+  "nullEncoding": "ignition-null-v1",
+  "existenceCheck": {
+    "call": "system.tag.exists(path) and system.tag.exists(newPath) for every item, before any item executes",
+    "why": "a Gateway answers system.tag.getConfiguration for a path that is not there with a synthesized default node, so neither the target's presence nor the new path's absence can be read from a configuration read; the ticket #10 live run recorded the same synthesized node on 8.3.8 and 8.3.9",
+    "targetMissing": "not_found (details.items[].reason = targetMissing), and nothing is dispatched",
+    "newPathPresent": "conflict (details.items[].reason = newPathExists), and nothing is dispatched",
+    "unanswered": "upstream_error (reasons existenceCheckFailed / existenceCheckIndeterminate): a Gateway that raises or answers something that is not a boolean is never read as present or as absent",
+    "observedReadBacks": "the provider export is the independent presence check the harness uses for both paths"
+  },
+  "inputBounds": {
+    "itemsParameter": "items",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagRenameMaxItems",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxBytes": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "observedConfigurationMaxBytes": 16384,
+    "observedStateMaxBytes": 65536,
+    "outputMaxBytes": 262144
+  },
+  "observedState": "two paths per item: the new path's own tag_get_config read, `system.tag.getConfiguration(newPath, false, false)`, published with the D30 2 fingerprint of that read, and the old path's absence, read back with `system.tag.exists(path)`. Both are Observed state and never decide success, and the new path's fingerprint is the token the caller's next tag_update/tag_delete would use",
+  "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused Precondition each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes"
+}

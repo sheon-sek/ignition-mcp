@@ -21,6 +21,12 @@ Mutation):
   Tag state the fake models. They need no setup stage of their own because
   ``tag-update-setup`` already seeds the fixture Tags, the audit profile and the policy
   provider they run against, and each installs its own policy document.
+* ``tag-move`` / ``tag-rename`` / ``tag-delete`` (milestone 4b, ticket #12) exercise the
+  three Mutations that relocate or remove a node: the move and the rename with both of
+  their ends re-read from the provider export the fake serves, the delete with its
+  partial-failure batch (a Folder takes the Tag a later item names), each Tool's
+  collision, its Precondition token, its allowlist and reserved-provider refusals, and
+  the D10 ceilings.
 * ``summarize`` exercises the drift check and verdict.
 
 The rehearsal runs against ``tests/fixtures/recorded/gateway-8.3/phase4``. Those
@@ -78,6 +84,9 @@ MILESTONES = {
         (["tag-update"], "tag-update"),
         (["tag-create"], "tag-create"),
         (["tag-copy"], "tag-copy"),
+        (["tag-move"], "tag-move"),
+        (["tag-rename"], "tag-rename"),
+        (["tag-delete"], "tag-delete"),
     ],
 }
 FIXTURE_DIR = ROOT / "tests/fixtures/recorded/gateway-8.3/phase4"
@@ -187,6 +196,9 @@ def main(argv: list[str] | None = None) -> int:
             tag_update_paths=tag_update_paths(),
             tag_create_paths=driver.tag_create_paths(),
             tag_copy_paths=driver.tag_copy_paths(),
+            tag_delete_paths=driver.tag_delete_paths(),
+            tag_move_paths=driver.tag_move_paths(),
+            tag_rename_paths=driver.tag_rename_paths(),
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH
