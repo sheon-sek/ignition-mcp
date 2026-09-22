@@ -1706,46 +1706,6 @@ async def fault_update_cases(
     observations: dict[str, Any] = {}
     description = "Disposable Phase 4 CI audit profile (fault cases)"
 
-    # --------------------------- the core collection on the wire (ticket #35)
-    # A real Gateway answers a read that omits the collection exactly as it answers one
-    # that names `core`, so Gateway state alone cannot show which request the server
-    # sent. The proxy owns the hop the server's own client wrote through, and it records
-    # every request target: that record is what proves the pin live (D30 owner ruling 5).
-    signature = await agent.signature(resource_type, allowlisted)
-    hop = await faults.mark()
-    pinned = await agent.call(UPDATE_TOOL, {
-        "resourceType": resource_type,
-        "expectedSignature": signature,
-        "name": allowlisted,
-        "description": description,
-    })
-    pinned_body = structured(pinned) if not pinned.get("isError") else {}
-    _check(cases, "core-collection-update-applies", True, not pinned.get("isError"))
-    _check(
-        cases, "core-collection-update-moves-the-signature", True,
-        isinstance(pinned_body.get("signature"), str) and pinned_body.get("signature") != signature,
-    )
-    hop_state = await faults.state()
-    pinned_requests = [
-        entry for entry in hop_state.get("requests", [])
-        if int(entry.get("seq", 0)) > hop
-        and RESOURCE_COLLECTION_PATH in str(entry.get("target", ""))
-    ]
-    observations["coreCollectionHop"] = pinned_requests
-    reads = [entry for entry in pinned_requests if entry.get("method") == "GET"]
-    writes = [entry for entry in pinned_requests if entry.get("method") == "PUT"]
-    _check(cases, "core-collection-read-count", 2, len(reads))
-    _check(
-        cases, "core-collection-is-on-every-read", True,
-        reads and all(f"collection={CORE_COLLECTION}" in str(entry["target"]) for entry in reads),
-    )
-    _check(cases, "core-collection-write-count", 1, len(writes))
-    _check(
-        cases, "core-collection-write-names-the-collection-route",
-        f"{RESOURCE_COLLECTION_PATH}{resource_type}?allowInvalidReferences=false",
-        writes[0]["target"] if writes else None,
-    )
-
     # ------------------------------------------- the hop is gone before the call (D23)
     # The first failure D23 lists is "Gateway unreachable": the proxy takes its data
     # listener away before the call starts, so the Tool's own read-compare of the
@@ -1995,6 +1955,66 @@ async def fault_update_cases(
     landed = await _await_retention(agent, resource_type, allowlisted, 46)
     observations["cancelledRetentionSettled"] = landed
     _check(cases, "fault-cancellation-leaves-the-change-in-place", 46, landed)
+    return cases, observations
+
+
+async def core_collection_wire_cases(
+    *, agent: "Session", resource_type: str, allowlisted: str, faults: ProxyFaults,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """What the server actually sent, for D30's owner ruling 5 (ticket #35).
+
+    A real Gateway answers a read that omits the collection exactly as it answers one that
+    names ``core``, so Gateway state alone cannot show which request the server sent. The
+    proxy owns the hop the server's own HTTP client wrote through, and it records every
+    request target: its record is what proves the pin live. The *item* field is not visible
+    there (the proxy records targets, not bodies), so this case pins what it can and the
+    unit cases pin the rest.
+
+    It runs after the ``#20`` fault cases on purpose: those are timing-sensitive — the
+    fault instance runs a deliberately small tool budget — and adding requests in front of
+    them would perturb evidence this ticket does not own.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    # The hop has to be clean for this case: `none` clears whatever the fault cases left
+    # armed and (re)opens the proxy's data listener if one of them closed it.
+    armed = await faults.arm("none")
+    _check(cases, "core-collection-hop-is-listening", True, bool(armed.get("listening")))
+    signature = await agent.signature(resource_type, allowlisted)
+    hop = await faults.mark()
+    pinned = await agent.call(UPDATE_TOOL, {
+        "resourceType": resource_type,
+        "expectedSignature": signature,
+        "name": allowlisted,
+        "description": "Disposable Phase 4 CI audit profile (core collection on the wire)",
+    })
+    pinned_body = structured(pinned) if not pinned.get("isError") else {}
+    _check(cases, "core-collection-update-applies", True, not pinned.get("isError"))
+    _check(
+        cases, "core-collection-update-moves-the-signature", True,
+        isinstance(pinned_body.get("signature"), str) and pinned_body.get("signature") != signature,
+    )
+    hop_state = await faults.state()
+    pinned_requests = [
+        entry for entry in hop_state.get("requests", [])
+        if int(entry.get("seq", 0)) > hop
+        and RESOURCE_COLLECTION_PATH in str(entry.get("target", ""))
+    ]
+    observations["coreCollectionHop"] = pinned_requests
+    reads = [entry for entry in pinned_requests if entry.get("method") == "GET"]
+    writes = [entry for entry in pinned_requests if entry.get("method") == "PUT"]
+    _check(cases, "core-collection-read-count", 2, len(reads))
+    _check(
+        cases, "core-collection-is-on-every-read", True,
+        reads and all(f"collection={CORE_COLLECTION}" in str(entry["target"]) for entry in reads),
+    )
+    _check(cases, "core-collection-write-count", 1, len(writes))
+    _check(
+        cases, "core-collection-write-names-the-collection-route",
+        f"{RESOURCE_COLLECTION_PATH}{resource_type}?allowInvalidReferences=false",
+        writes[0]["target"] if writes else None,
+    )
     return cases, observations
 
 
@@ -2290,6 +2310,11 @@ async def run_fault_mode(
         )
         cases.extend(import_cases)
         observations.update(import_observations)
+        collection_cases, collection_observations = await core_collection_wire_cases(
+            agent=agent, resource_type=resource_type, allowlisted=allowlisted, faults=faults,
+        )
+        cases.extend(collection_cases)
+        observations.update(collection_observations)
     finally:
         await faults.arm("none")
         await agent.aclose()

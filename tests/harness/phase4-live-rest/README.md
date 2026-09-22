@@ -230,7 +230,10 @@ own HTTP client wrote through, and the driver reads its record of the request ta
 `collection` field of a *change item* is not observable there (the proxy records targets,
 not bodies): the unit tests pin it against the recorded Gateway, which keys its resource
 state by `(name, collection)` and therefore answers a request that omitted or misnamed the
-collection with the wrong resource or none at all.
+collection with the wrong resource or none at all. The case runs **after** the fault cases
+above, because the fault instance runs a deliberately small tool budget and the `#20` cases
+are timing-sensitive: a few extra requests in front of them would perturb evidence this
+ticket does not own.
 
 "Never a replay" is asserted twice, and independently: the audit log holds exactly one
 `attempt` row for the call, and the proxy's per-method counter shows exactly one write

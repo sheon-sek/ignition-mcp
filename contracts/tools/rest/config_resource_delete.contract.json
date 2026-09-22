@@ -76,7 +76,7 @@
     "confirm": "never sent",
     "collection": "core"
   },
-  "fixedKnobsNote": "The documented DELETE route takes an optional `confirm` flag for a delete the Gateway says would affect other resources. The caller cannot choose it: it is never sent, so such a delete is refused like any other rejection and no call can authorize a cascade outside its Targets.",
+  "fixedKnobsNote": "The documented DELETE route takes an optional `confirm` flag for a delete the Gateway says would affect other resources. The caller cannot choose it: it is never sent, so such a delete is refused like any other rejection and no call can authorize a cascade outside its Targets. The route's `collection` query parameter is the other fixed knob: it is always `core` (D30 owner ruling 5).",
   "boundedInputBytes": 262144,
   "requestSchemaValidation": {
     "source": "gateway-openapi-capability-snapshot",
