@@ -306,14 +306,17 @@ remains an operator obligation** (surfaced by `gateway_diagnose` and `setup-nati
 
 ## Operator CLI (`setup-native`)
 
-`ignition-mcp setup-native` detects, plans, applies and verifies an `ignition-runtime-bundle`
-deployment across its documented REST and MCP endpoints. It is code-separated from the server (D25)
-and ships as the `ignition-mcp` console script. Phase 4 added `apply`, which writes the planned
-bundle Project, the MCP Server Config, the Runtime Target Policy and — only when the matching flags
-are passed — a dedicated Runtime Security Level and a Runtime API token. Nothing else in this group
-mutates a Gateway: `install-module` (Phase 6) is deliberately **not implemented**. `apply` stops on
-any `BLOCKED` plan line, it never rolls back, and it ends by running the `verify` sequence; `plan`
-prints intentions and always ends with the line `No changes have been applied.`
+`ignition-mcp setup-native` detects, plans, applies, verifies and installs the Module behind an
+`ignition-runtime-bundle` deployment across its documented REST and MCP endpoints. It is
+code-separated from the server (D25) and ships as the `ignition-mcp` console script. `apply` writes
+the planned bundle Project, the MCP Server Config, the Runtime Target Policy and, only when the
+matching flags are passed, a dedicated Runtime Security Level and a Runtime API token.
+`install-module` writes the Gateway's Module plane from one trusted local `.modl`: it hash-checks
+the file, uploads it, accepts its certificate and EULA only under their own flags, installs it, and
+restarts the Gateway only when `--restart` says so. Neither command writes anything the operator has
+not authorised, and neither downloads anything. `apply` stops on any `BLOCKED` plan line, it never
+rolls back, and it ends by running the `verify` sequence; `plan` prints intentions and always ends
+with the line `No changes have been applied.`
 
 ```bash
 ignition-mcp setup-native doctor --bundle-manifest release/ignition-runtime-bundle-0.2.0.manifest.json \
@@ -323,6 +326,12 @@ ignition-mcp setup-native apply  --bundle-manifest ... --bundle-zip ... --policy
   --server-config-permissions-file permissions.json --server-config-name production \
   --provision-security-levels --create-runtime-token --runtime-token-file ~/secrets/runtime.token
 ignition-mcp setup-native verify --bundle-manifest ... --mcp-url http://127.0.0.1:8000/mcp
+ignition-mcp setup-native install-module --file release/MCP-module-1.3.5.2026021307-SNAPSHOT.modl \
+  --sha256 "$(sha256sum release/MCP-module-1.3.5.2026021307-SNAPSHOT.modl | cut -d' ' -f1)" \
+  --gateway-url https://gw:8088 --gateway-token-file ~/secrets/gateway.token
+# The same command, once you have read what it shows you, and when this Gateway may come down:
+#   ... --accept-certificate --accept-eula --restart
+# Then run `verify` to prove the bundle deployment on top of it.
 ```
 
 Inputs (every value comes from the manifest file or the command line; the CLI never reads
@@ -330,7 +339,7 @@ repo-relative paths such as `contracts/` or `packages/ignition-runtime-bundle/`)
 
 | Flag | Environment fallback | Meaning |
 | --- | --- | --- |
-| `--bundle-manifest PATH` | none (required) | Release manifest JSON: the whole desired state, including the profile inventories and `testedTuples` |
+| `--bundle-manifest PATH` | none (required, except `install-module`) | Release manifest JSON: the whole desired state, including the profile inventories and `testedTuples` |
 | `--bundle-zip PATH` | none | Bundle ZIP; its SHA-256 must equal `artifact.sha256` or the run fails as a usage error |
 | `--profile NAME` | none | `readonly` (default), `operator`, `configurator` or `full` inventory to check against |
 | `--gateway-url URL` | `IGNITION_MCP_SETUP_GATEWAY_URL` | Gateway base URL |
@@ -352,6 +361,22 @@ repo-relative paths such as `contracts/` or `packages/ignition-runtime-bundle/`)
 | `--runtime-token-insecure-channel` | none | Create the token with `secureChannelRequired=false` (plain-HTTP lab Gateways only) |
 | `--allow-insecure-authorize` | none | Permit sending the API token over plain HTTP to a non-loopback Gateway |
 | `--json` | none | Machine-readable report on stdout (`plan` still ends with the promise line) |
+
+`install-module` replaces the manifest family with its own two inputs and four switches:
+
+| Flag | Meaning |
+| --- | --- |
+| `--file PATH` | The trusted local `.modl` to install. Its SHA-256 is compared before anything is sent, and its own `module.xml` supplies the module id and build |
+| `--sha256 HEX` | The hash this file must have. A mismatch is a usage error (exit `2`) and no request leaves the machine |
+| `--accept-certificate` | Accept the module's signing certificate. Without it the run prints subject, issuer and validity dates and stops before installing |
+| `--accept-eula` | Accept the module's EULA. Without it the run prints where the EULA is read and stops before installing |
+| `--acknowledge-upgrade` | Accept a module build higher than the installed one. A build *lower* than the Gateway's is always refused, and this flag does not override that |
+| `--restart` | Restart the Gateway after the install, wait for it to answer again, and confirm the module id and build are served. Without it the run reports the pending restart and exits `0` |
+
+The Gateway half is shared: `--gateway-url`, `--gateway-token-file`, `--timeout-seconds`,
+`--allow-insecure-authorize` and `--json` behave as above. `install-module` reads no manifest, checks
+no compatibility matrix (that is `doctor`'s report), and its restart wait is bounded at 600 s polled
+every 5 s.
 
 Tokens are never echoed: they stay out of reports, and any Gateway or MCP error body is truncated
 and scrubbed. The credential `apply` creates follows the same rule — the Gateway's raw API key is
@@ -403,4 +428,6 @@ configuration backup remains the operator's safety net.
 
 Exit codes: `0` success with no `FAIL` (and no `BLOCKED` for `plan`), `1` a failed check or
 transport error, `2` usage error (bad flags, rejected manifest, unreadable artifact, credential
-file with a loose mode), `3` `plan` reports at least one `BLOCKED` action.
+file with a loose mode), `3` nothing written because an explicit operator acknowledgement is
+missing: a `BLOCKED` plan line, an unacknowledged bundle change, or a module upgrade, certificate
+or EULA this run was not told to accept.

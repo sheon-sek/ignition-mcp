@@ -1,9 +1,11 @@
-"""Validated command inputs for ``ignition-mcp setup-native`` (D20, D21).
+"""Validated command inputs for ``ignition-mcp setup-native`` (D20, D21, D26 Phase 6).
 
-Everything the CLI wants to see is derived from two operator-provided artifacts:
-the bundle manifest JSON (the whole desired state, validated structurally here)
-and optionally the bundle ZIP it describes (SHA-256 verified).  Credentials come
-from ``0600`` files or environment variables and are never echoed.
+``doctor``, ``plan``, ``verify`` and ``apply`` derive everything from two
+operator-provided artifacts: the bundle manifest JSON (the whole desired state,
+validated structurally here) and the bundle ZIP it describes (SHA-256 verified).
+``install-module`` takes a different pair of artifacts: the trusted local ``.modl``
+and the SHA-256 the operator names for it, validated here and read by that command.
+Credentials come from ``0600`` files or environment variables and are never echoed.
 """
 
 from __future__ import annotations
@@ -19,7 +21,9 @@ from pathlib import Path
 from typing import Any, NoReturn, Sequence
 from urllib.parse import urlsplit
 
-COMMANDS = ("doctor", "plan", "verify", "apply")
+INSTALL_MODULE = "install-module"
+#: The manifest commands, then the one command that names a ``.modl`` instead.
+COMMANDS = ("doctor", "plan", "verify", "apply", INSTALL_MODULE)
 PROFILE_NAMES = ("readonly", "operator", "configurator", "full")
 
 #: The Resource type and collection ``apply`` writes the MCP Server Config through
@@ -48,6 +52,12 @@ DEFAULT_BUNDLE_PROJECT = "ignition_runtime"
 DEFAULT_TIMEOUT_SECONDS = 10.0
 MAX_TIMEOUT_SECONDS = 120.0
 MCP_TIMEOUT_SECONDS = 30.0
+#: D10: the largest ``.modl`` this CLI will read and upload. The pinned MCP Module
+#: fixture is 250 KiB; the bound leaves room for a far bigger one and still refuses
+#: an arbitrary file.
+MAX_MODULE_BYTES = 64 * 1024 * 1024
+#: The ``fileName`` the Gateway stores the upload under: one path-free name.
+MODULE_NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 MANIFEST_KEYS = frozenset(
     {
@@ -102,9 +112,13 @@ NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 EXIT_CODE_DOC = """\
 exit codes:
   0  command completed with no FAIL (doctor/verify) and no BLOCKED (plan)
-  1  a check failed or a transport error occurred
+  1  a check failed or a transport error occurred; install-module also answers this
+     when the Gateway runs a newer module build than the file offered, which is never
+     accepted, or when the installed build cannot be read
   2  usage error: bad flags, unreadable/invalid manifest, credential file rejected
-  3  plan reports at least one BLOCKED action (apply writes nothing and exits 3)
+  3  wrote nothing because an explicit operator acknowledgement is missing: a BLOCKED
+     plan line, an unacknowledged bundle change, or a module upgrade, certificate or
+     EULA this run was not told to accept
 """
 
 ENV_DOC = f"""\
@@ -121,8 +135,10 @@ Native REST routes and stops before it writes while any plan line is BLOCKED;
 ``--provision-security-levels`` and ``--create-runtime-token`` add D20's two
 opt-in writes (a dedicated Runtime Security Level and a Runtime API token per
 profile), which never modify an existing one, and the token secret goes only to
-the operator-named ``--runtime-token-file``; ``install-module`` (Phase 6) does
-not exist yet.
+the operator-named ``--runtime-token-file``.  ``install-module`` takes
+``--file``/``--sha256`` instead of a manifest, uploads nothing until the local
+hash matches, and accepts a certificate, an EULA or a higher build only when its
+flag says so.
 """
 
 
@@ -244,6 +260,49 @@ class Inputs:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ModuleInputs:
+    """What ``install-module`` is allowed to know: one local file, its named hash, one Gateway.
+
+    The file itself is read, hashed and opened by the command, never here, so a run
+    that only prints ``--help`` costs nothing. The module id and build this command
+    reasons about come from the file's own ``module.xml``, not from a manifest, and
+    the compatibility matrix is ``doctor``'s to report (D20).
+    """
+
+    command: str
+    module_file: Path
+    #: The validated basename the Gateway stores the upload under.
+    upload_name: str
+    #: The SHA-256 the operator named for this file, lowercase hex.
+    sha256: str
+    gateway_url: Endpoint
+    gateway_token: str
+    timeout_seconds: float
+    allow_insecure_authorize: bool
+    as_json: bool
+    accept_certificate: bool
+    accept_eula: bool
+    acknowledge_upgrade: bool
+    restart: bool
+
+
+#: Either input shape: both carry the Gateway connection and the reporting switch.
+SetupInputs = Inputs | ModuleInputs
+
+
+def _module_upload_name(raw: str) -> str:
+    """One path-free file name this CLI will send as the upload's ``fileName``."""
+
+    name = Path(raw).name
+    if MODULE_NAME_TOKEN.fullmatch(name) is None:
+        raise UsageError(
+            f"--file: {name!r} is not a name this CLI will upload as fileName "
+            "(must match [A-Za-z0-9][A-Za-z0-9._-]{0,127})"
+        )
+    return name
+
+
 def manifest_inventory(manifest: dict[str, Any], profile: str, key: str) -> list[str]:
     """One inventory of one profile; raises :class:`UsageError` on a manifest the
     structural check should already have rejected."""
@@ -264,34 +323,42 @@ def tested_tuples(manifest: dict[str, Any]) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def build_base_parser() -> UsageParser:
-    """Flags shared by every ``setup-native`` subcommand (no ``--help``)."""
+def build_base_parser(*, module_mode: bool = False) -> UsageParser:
+    """Flags shared by every ``setup-native`` subcommand (no ``--help``).
+
+    ``module_mode`` swaps the manifest artifact family for the ``install-module``
+    one; the Gateway connection flags stay a single definition for both.
+    """
 
     base = UsageParser(add_help=False)
-    flags = base.add_argument_group("setup-native inputs")
+    flags = base.add_argument_group("install-module inputs" if module_mode else "setup-native inputs")
+    if module_mode:
+        _add_module_flags(flags)
+    else:
+        _add_manifest_flags(flags)
+    _add_gateway_flags(flags)
+    return base
+
+
+def _add_manifest_flags(flags: argparse._ArgumentGroup) -> None:
+    """The bundle-manifest family: the desired state the four manifest commands read."""
+
     flags.add_argument("--bundle-manifest", required=True, metavar="PATH", help="release manifest JSON (required)")
     flags.add_argument("--bundle-zip", metavar="PATH", help="bundle ZIP; its SHA-256 must match the manifest")
     flags.add_argument("--profile", default="readonly", choices=PROFILE_NAMES, help="profile inventory (readonly)")
-    flags.add_argument("--gateway-url", metavar="URL", help=f"Gateway base URL (or ${ENV_GATEWAY_URL})")
     flags.add_argument("--mcp-url", metavar="URL",
                        help=f"Runtime MCP endpoint URL (or ${ENV_MCP_URL}; doctor/verify derive it "
                             "from --server-config-name when this is absent)")
-    flags.add_argument("--gateway-token-file", metavar="PATH",
-                       help=f"0600 file with the Ignition API token (or ${ENV_GATEWAY_TOKEN})")
     flags.add_argument("--mcp-token-file", metavar="PATH",
                        help=f"0600 file with the MCP bearer token (or ${ENV_MCP_TOKEN})")
     flags.add_argument("--bundle-project", default=DEFAULT_BUNDLE_PROJECT, metavar="NAME",
                        help=f"project the bundle deploys into ({DEFAULT_BUNDLE_PROJECT})")
     flags.add_argument("--server-config-name", metavar="NAME",
                        help="expected MCP server-config resource name (presence check only)")
-    flags.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS",
-                       help=f"per-request HTTP budget ({DEFAULT_TIMEOUT_SECONDS:g}s; MCP initialize {MCP_TIMEOUT_SECONDS:g}s)")
     flags.add_argument("--policy-file", metavar="PATH",
                        help="Runtime Target Policy JSON document apply writes to the reserved Tag provider")
     flags.add_argument("--server-config-permissions-file", metavar="PATH",
                        help="permissions tree for a Server Config this run creates (never invented by the CLI)")
-    flags.add_argument("--acknowledge-upgrade", action="store_true",
-                       help="accept a MAJOR or downgrade bundle change (plan marks those lines)")
     flags.add_argument("--backup-dir", metavar="PATH",
                        help="before overwriting a managed bundle project, export the deployed one into this directory")
     flags.add_argument("--provision-security-levels", action="store_true",
@@ -310,20 +377,50 @@ def build_base_parser() -> UsageParser:
                        help="the token resource's name (default: --server-config-name)")
     flags.add_argument("--runtime-token-insecure-channel", action="store_true",
                        help="create the token with secureChannelRequired=false (plain-HTTP lab Gateways only)")
+
+
+def _add_module_flags(flags: argparse._ArgumentGroup) -> None:
+    """The ``install-module`` family: one trusted local ``.modl`` plus its named hash."""
+
+    flags.add_argument("--file", required=True, metavar="PATH",
+                       help="local .modl to install (required); nothing is uploaded until its hash matches")
+    flags.add_argument("--sha256", required=True, metavar="HEX",
+                       help="the SHA-256 this file must have (required); a mismatch is a usage error")
+    flags.add_argument("--accept-certificate", action="store_true",
+                       help="accept the module's certificate; without it the run prints the certificate "
+                            "and installs nothing")
+    flags.add_argument("--accept-eula", action="store_true",
+                       help="accept the module's EULA; without it the run says where to read the EULA "
+                            "and installs nothing")
+    flags.add_argument("--restart", action="store_true",
+                       help="restart the Gateway after the install and wait for the module to come back; "
+                            "without it the run reports the pending restart instead")
+
+
+def _add_gateway_flags(flags: argparse._ArgumentGroup) -> None:
+    """The Gateway connection flags every command shares."""
+
+    flags.add_argument("--gateway-url", metavar="URL", help=f"Gateway base URL (or ${ENV_GATEWAY_URL})")
+    flags.add_argument("--gateway-token-file", metavar="PATH",
+                       help=f"0600 file with the Ignition API token (or ${ENV_GATEWAY_TOKEN})")
+    flags.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS",
+                       help=f"per-request HTTP budget ({DEFAULT_TIMEOUT_SECONDS:g}s; MCP initialize {MCP_TIMEOUT_SECONDS:g}s)")
+    flags.add_argument("--acknowledge-upgrade", action="store_true",
+                       help="accept a MAJOR or downgrade bundle change, or a module build higher than the "
+                            "installed one (plan marks those lines; install-module refuses without it)")
     flags.add_argument("--allow-insecure-authorize", action="store_true",
                        help="send the API token over plain HTTP to a non-loopback Gateway")
     flags.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report on stdout")
-    return base
 
 
 def command_parser(command: str) -> UsageParser:
-    """Standalone parser for one subcommand (used by :func:`load_inputs`)."""
+    """Standalone parser for one subcommand (used by the two ``load_*`` functions)."""
 
     if command not in COMMANDS:
         raise UsageError(f"unknown command {command!r}; expected one of {', '.join(COMMANDS)}")
     parser = UsageParser(
         prog=f"ignition-mcp setup-native {command}",
-        parents=[build_base_parser()],
+        parents=[build_base_parser(module_mode=command == INSTALL_MODULE)],
         description=_COMMAND_HELP[command],
         epilog=EXIT_CODE_DOC + ENV_DOC,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -336,6 +433,10 @@ _COMMAND_HELP = {
     "plan": "Report the CREATE / UPDATE / NO CHANGE / BLOCKED intentions for a deployment.",
     "verify": "Verify a provisioned deployment: exact inventories, resource/prompt smokes, bundle_info.",
     "apply": "Apply the planned bundle project, Server Config and Runtime Target Policy, then verify.",
+    INSTALL_MODULE: (
+        "Install a trusted local MCP Module .modl through the Gateway's own module routes: "
+        "hash check, upload, certificate and EULA acceptance, install, optional restart."
+    ),
 }
 
 
@@ -350,7 +451,14 @@ def parse_command(argv: Sequence[str]) -> tuple[str, list[str]]:
 
 
 def load_inputs(argv: Sequence[str], command: str) -> Inputs:
-    """Parse ``argv`` for ``command`` and validate every artifact and credential."""
+    """Parse ``argv`` for one manifest command and validate every artifact and credential.
+
+    ``install-module`` names a ``.modl`` instead of a manifest; it loads through
+    :func:`load_module_inputs`.
+    """
+
+    if command == INSTALL_MODULE:
+        raise UsageError("install-module reads --file and --sha256, not a bundle manifest")
 
     parser = command_parser(command)
     try:
@@ -371,10 +479,7 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if bundle_zip is not None:
         _verify_artifact_hash(bundle_zip, manifest)
 
-    gateway_raw = _text_or_none(namespace.gateway_url) or os.environ.get(ENV_GATEWAY_URL)
-    if not gateway_raw:
-        raise UsageError(f"--gateway-url (or ${ENV_GATEWAY_URL}) is required")
-    gateway_url = _endpoint(gateway_raw, "--gateway-url")
+    gateway_url = _gateway_url(namespace)
     server_config_name = (
         None
         if namespace.server_config_name is None
@@ -391,14 +496,7 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
             "or --server-config-name to derive it"
         )
 
-    gateway_token = _resolve_token(
-        _text_or_none(namespace.gateway_token_file),
-        os.environ.get(ENV_GATEWAY_TOKEN),
-        "--gateway-token-file",
-        ENV_GATEWAY_TOKEN,
-    )
-    if gateway_token is None:
-        raise UsageError(f"a Gateway API token is required: --gateway-token-file or ${ENV_GATEWAY_TOKEN}")
+    gateway_token = _gateway_token(namespace)
     mcp_token = _resolve_token(
         _text_or_none(namespace.mcp_token_file),
         os.environ.get(ENV_MCP_TOKEN),
@@ -406,9 +504,7 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
         ENV_MCP_TOKEN,
     )
 
-    timeout = float(namespace.timeout_seconds)
-    if not 0.0 < timeout <= MAX_TIMEOUT_SECONDS:
-        raise UsageError(f"--timeout-seconds must be in (0, {MAX_TIMEOUT_SECONDS:g}]")
+    timeout = _timeout(namespace)
 
     policy_file = _optional_path(_text_or_none(namespace.policy_file), "--policy-file")
     permissions_file = _optional_path(
@@ -494,6 +590,78 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
         runtime_token_name=runtime_token_name,
         runtime_token_insecure_channel=bool(namespace.runtime_token_insecure_channel),
     )
+
+
+def load_module_inputs(argv: Sequence[str]) -> ModuleInputs:
+    """Parse ``argv`` for ``install-module`` and validate the file it names and its hash.
+
+    The file's bytes are read by the command, after this returns: a bad hash must be
+    refused before anything reaches the Gateway, and reading a 64 MiB archive to
+    report a usage problem is not what a flag check is for.
+    """
+
+    parser = command_parser(INSTALL_MODULE)
+    try:
+        namespace = parser.parse_args([str(item) for item in argv])
+    except SystemExit as exit_signal:  # --help exits 0; argparse errors become UsageError instead
+        if exit_signal.code in (0, None):
+            raise
+        raise UsageError(str(exit_signal.code)) from exit_signal
+
+    module_file = _require_path(_text(namespace.file, "--file"), "--file")
+    expected = _text(namespace.sha256, "--sha256").lower()
+    if _SHA256.fullmatch(expected) is None:
+        raise UsageError("--sha256: a lowercase hex SHA-256 (64 characters) is required")
+    gateway_url = _gateway_url(namespace)
+    gateway_token = _gateway_token(namespace)
+    timeout = _timeout(namespace)
+
+    return ModuleInputs(
+        command=INSTALL_MODULE,
+        module_file=module_file,
+        upload_name=_module_upload_name(str(module_file)),
+        sha256=expected,
+        gateway_url=gateway_url,
+        gateway_token=gateway_token,
+        timeout_seconds=timeout,
+        allow_insecure_authorize=bool(namespace.allow_insecure_authorize),
+        as_json=bool(namespace.as_json),
+        accept_certificate=bool(namespace.accept_certificate),
+        accept_eula=bool(namespace.accept_eula),
+        acknowledge_upgrade=bool(namespace.acknowledge_upgrade),
+        restart=bool(namespace.restart),
+    )
+
+
+def _gateway_url(namespace: argparse.Namespace) -> Endpoint:
+    """The Gateway base URL from the flag or its environment fallback."""
+
+    raw = _text_or_none(namespace.gateway_url) or os.environ.get(ENV_GATEWAY_URL)
+    if not raw:
+        raise UsageError(f"--gateway-url (or ${ENV_GATEWAY_URL}) is required")
+    return _endpoint(raw, "--gateway-url")
+
+
+def _gateway_token(namespace: argparse.Namespace) -> str:
+    """The Gateway API token, resolved from a 0600 file or the environment."""
+
+    token = _resolve_token(
+        _text_or_none(namespace.gateway_token_file),
+        os.environ.get(ENV_GATEWAY_TOKEN),
+        "--gateway-token-file",
+        ENV_GATEWAY_TOKEN,
+    )
+    if token is None:
+        raise UsageError(f"a Gateway API token is required: --gateway-token-file or ${ENV_GATEWAY_TOKEN}")
+    return token
+
+
+def _timeout(namespace: argparse.Namespace) -> float:
+    timeout = float(namespace.timeout_seconds)
+    if not 0.0 < timeout <= MAX_TIMEOUT_SECONDS:
+        raise UsageError(f"--timeout-seconds must be in (0, {MAX_TIMEOUT_SECONDS:g}]")
+    return timeout
+
 
 
 def _optional_path(value: str | None, flag: str) -> Path | None:

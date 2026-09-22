@@ -209,15 +209,15 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
-def test_cli_write_routes_are_the_curated_set_of_ticket_21() -> None:
-    """Ticket #21: ``apply`` writes through one guarded module with named routes.
+def test_cli_write_routes_are_the_curated_set_of_the_two_writing_commands() -> None:
+    """Tickets #21 and #54: the CLI writes through one guarded module with named routes.
 
     The CLI is excluded from the write-transport scan above (D25 code separation),
     so its write half is pinned here instead: the route constants are exactly the
-    documented operations ``apply`` needs, every write dispatch goes through the
-    single ``_write`` chokepoint, and no other module in the package issues a
-    non-GET transport call. The only GET-shaped transport call in ``writer.py`` is
-    the bounded Project export.
+    documented operations ``apply`` and ``install-module`` need, every write dispatch
+    goes through the single ``_write`` chokepoint, and no other module in the package
+    issues a non-GET transport call. The only GET-shaped transport call in
+    ``writer.py`` is the bounded Project export.
     """
 
     cli_dir = SRC_ROOT / "cli" / "setup_native"
@@ -237,6 +237,12 @@ def test_cli_write_routes_are_the_curated_set_of_ticket_21() -> None:
         "TAG_IMPORT_PATH": "/data/api/v1/tags/import",
         # Ticket #22's opt-in credential: the Gateway's own key/hash generator.
         "API_TOKEN_GENERATE_PATH": "/data/api/v1/api-token/generate",
+        # Ticket #54's Module flow: upload, the two acceptances, install, restart.
+        "MODULE_UPLOAD_PATH": "/data/api/v1/modules/upload",
+        "MODULE_CERTIFICATE_ACCEPT_PATH": "/data/api/v1/modules/certificate",
+        "MODULE_EULA_ACCEPT_PATH": "/data/api/v1/modules/eula",
+        "MODULE_INSTALL_PATH": "/data/api/v1/modules/install",
+        "GATEWAY_RESTART_PATH": "/data/api/v1/restart-tasks/restart",
     }, sorted(routes)
 
     chokepoints = {"_write": {"POST", "PUT"}, "_archive": {"GET"}}
