@@ -357,6 +357,23 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `good` are always exact, and the free-text diagnostic keeps its bounded prefix
     plus its marker. Fixtures: `tag_write-native-outcome-oversize-name` and
     `tag_write-native-outcome-oversize-level`.
+  - **Live evidence (head `0570760`, draft PR #32):** `Phase 4 Live Gateway G4a`
+    run
+    [35679155559](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155559)
+    is **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate)
+    with `drift: {}` on both, and every ticket #7/#8 live case holds with the
+    round-3 handler (allowlisted batch 3 succeeded + 1 Bad, two audit rows, the
+    Alarm shelve and its exact-path state). CI
+    [35679155556](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155556),
+    Phase 0 G0
+    [35679155612](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155612),
+    Phase 3 G3
+    [35679155551](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155551),
+    the REST mutation workflow
+    [35679155548](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155548)
+    and `Phase 4 Live Gateway G4b`
+    [35679155554](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155554)
+    are green on the same head.
 - **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
     Gateway G4a` run
     [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)
