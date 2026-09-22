@@ -292,7 +292,36 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     verification reads the value quality rather than the probe's label, and the
     workflow gives the stage one bounded Gateway restart — the recorded heal —
     before failing the job.
-  - **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
+- **Review round 2 fixes** (the ticket report holds the detail):
+  - **A Dataset Observed value is measured by walking its cells.** The estimate
+    charged a fixed cost per cell, so a one-cell Dataset holding an arbitrarily
+    large string passed the check and was materialized by the read-back. The walk
+    now sums the cells' structural sizes under the same byte budget with an early
+    exit and never reads a cell to measure it; an over-budget Dataset becomes an
+    explicit `limit_exceeded` observed error naming its size and the ceiling, and a
+    Dataset inside the budget is still reported as Observed state.
+  - **The provider's QualityCode text is bounded.** `diagnosticMessage` was copied
+    unbounded, so a verbose provider could make `items` alone exceed the 256 KiB
+    ceiling and hide every established outcome behind a counts-only Tool Error. The
+    identifiers (`code`, `name`, `level`, `good`) stay exact, the diagnostic keeps a
+    bounded 512-byte prefix, and `diagnosticMessageOverLimitBytes` states the size
+    it had — present exactly when the text was bounded, and declared in the output
+    schema. The `#8` Alarm Tools need no equivalent change: their per-item outcomes
+    carry no provider text, and their Observed entries' `user`/`expiration` already
+    bound to an explicit `limit_exceeded` observed error.
+  - **The pinned actionlint download is resilient.** Run 35669308034's 8.3.8 row
+    failed before Gateway startup because the release CDN answered `HTTP 500` to
+    the pinned fetch. The fetch now retries a transport failure, and a body whose
+    digest is not the pinned one, with exponential backoff (five attempts, 1 s to
+    8 s); the sha256 still decides what is accepted, so a retry cannot substitute a
+    different artifact, and a body over the pinned size is refused without a retry.
+    **LIVE EVIDENCE PENDING (Actions outage):** GitHub Actions created no workflow
+    run for this repository after 2026-09-21T23:49:41Z, so the round-2 head has no
+    G4a run of its own and the red 8.3.8 row's rerun is outstanding. The fix is
+    covered locally (the workflow check passes, and the retry path is tested against
+    a transient HTTP 500); the confirmation that both G4a rows are green on the
+    round-2 head is part of the coordinator's post-outage sweep.
+- **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
     Gateway G4a` run
     [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)
     **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with

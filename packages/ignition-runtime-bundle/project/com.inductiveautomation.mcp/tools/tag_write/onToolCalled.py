@@ -39,6 +39,13 @@ def onToolCalled(builder, writes, timeout):
 	OBSERVED_VALUE_MAX_BYTES = 8192
 	OBSERVED_STATE_MAX_BYTES = 65536
 	OBSERVED_DATASET_MAX_CELLS = 2000
+	# D10 output: a Native outcome's text is provider data with no size of its own.
+	# The identifiers an outcome is matched on stay exact; the free-text diagnostic
+	# is bounded and marked, so a verbose provider cannot make the per-item outcomes
+	# impossible to return.
+	QUALITY_NAME_MAX_BYTES = 128
+	QUALITY_LEVEL_MAX_BYTES = 128
+	QUALITY_DIAGNOSTIC_MAX_BYTES = 512
 	OUTPUT_MAX_BYTES = 262144
 
 	def toolError(code, message, details):
@@ -85,7 +92,18 @@ def onToolCalled(builder, writes, timeout):
 		name = value.getName() if hasattr(value, "getName") else unicode(value)
 		level = value.getLevel() if hasattr(value, "getLevel") else unicode(value)
 		diagnostic = value.getDiagnosticMessage() if hasattr(value, "getDiagnosticMessage") else None
-		return {"code": int(value.getCode()), "name": unicode(name), "level": unicode(level), "good": qualityIsGood(value), "diagnosticMessage": optionalText(diagnostic)}
+		diagnosticText = optionalText(diagnostic)
+		diagnosticBytes = None if diagnosticText is None else utf8Bytes(diagnosticText)
+		# D10: the provider's QualityCode text has no size of its own, and the
+		# per-item outcomes are what a caller acts on, so the free text is bounded
+		# before the item is built. The identifiers stay exact, the diagnostic keeps
+		# a bounded prefix, and an over-limit diagnostic states the size it had - the
+		# marker is present exactly when the text was bounded, so nothing about the
+		# outcome is silent.
+		rendered = {"code": int(value.getCode()), "name": boundedQualityText(name, QUALITY_NAME_MAX_BYTES), "level": boundedQualityText(level, QUALITY_LEVEL_MAX_BYTES), "good": qualityIsGood(value), "diagnosticMessage": None if diagnosticText is None else boundedQualityText(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES)}
+		if diagnosticBytes is not None and diagnosticBytes > QUALITY_DIAGNOSTIC_MAX_BYTES:
+			rendered["diagnosticMessageOverLimitBytes"] = diagnosticBytes
+		return rendered
 
 	def jsonValue(value):
 		if value is None or isinstance(value, (bool, int, long, basestring)):
@@ -175,6 +193,31 @@ def onToolCalled(builder, writes, timeout):
 	def utf8Bytes(value):
 		return len(text(value).encode("utf-8"))
 
+	def boundedQualityText(value, limit):
+		# A bounded prefix cut on a character boundary, so a UTF-8 character is never
+		# split and the bytes the marker reports match the text that is returned.
+		rendered = text(value)
+		if utf8Bytes(rendered) <= limit:
+			return rendered
+		rendered = rendered[:limit]
+		while rendered and utf8Bytes(rendered) > limit:
+			rendered = rendered[:-1]
+		return rendered
+
+	def datasetCellBytes(value, limit):
+		# Walk the Dataset's cells with an early exit: a cell can hold an arbitrarily
+		# large string, so measuring by reading the value would defeat the budget the
+		# measurement exists to enforce. Nothing here materializes a cell, and each
+		# cell carries a small fixed allowance for the JSON punctuation and separators
+		# a Dataset representation adds around it.
+		total = 0
+		for row in range(int(value.getRowCount())):
+			for column in range(int(value.getColumnCount())):
+				total += 4 + valueBytesBounded(value.getValueAt(row, column), limit)
+				if total > limit:
+					return total
+		return total
+
 	def scalarInputBytes(value):
 		if isinstance(value, basestring):
 			return utf8Bytes(value)
@@ -221,7 +264,7 @@ def onToolCalled(builder, writes, timeout):
 		if isinstance(value, (int, long, float, Number)):
 			return 24
 		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
-			return int(value.getRowCount()) * int(value.getColumnCount()) * 24
+			return datasetCellBytes(value, limit)
 		if isinstance(value, (list, tuple, List)):
 			total = 2
 			for child in value:
@@ -257,6 +300,9 @@ def onToolCalled(builder, writes, timeout):
 			cells = int(value.getRowCount()) * int(value.getColumnCount())
 			if cells > OBSERVED_DATASET_MAX_CELLS:
 				return "The observed Dataset is " + unicode(cells) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned."
+			size = datasetCellBytes(value, OBSERVED_VALUE_MAX_BYTES)
+			if size > OBSERVED_VALUE_MAX_BYTES:
+				return "The observed Dataset is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
 			return None
 		if not isinstance(value, (bool, Boolean, int, long, float, Number)):
 			size = valueBytesBounded(value, OBSERVED_VALUE_MAX_BYTES)

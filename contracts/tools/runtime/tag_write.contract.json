@@ -38,6 +38,10 @@
     "observedStateMaxBytes": 65536,
     "observedValueMaxBytes": 8192,
     "observedDatasetMaxCells": 2000,
+    "qualityNameMaxBytes": 128,
+    "qualityLevelMaxBytes": 128,
+    "qualityDiagnosticMaxBytes": 512,
+    "qualityDiagnosticOverLimitField": "diagnosticMessageOverLimitBytes",
     "outputMaxBytes": 262144
   },
   "outputSchema": "contracts/schemas/tag-write.output.schema.json",
@@ -59,7 +63,7 @@
   },
   "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
   "deniedMutationAudit": "after a usable Policy is read, a refused target produces one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
-  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed value that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; a Dataset Observed value is measured by walking its cells under the byte budget before any cell is materialized, an Observed value or entry that cannot be returned is an explicit `limit_exceeded` observed error, the provider's QualityCode text is bounded (name and level 128 bytes, diagnostic 512 bytes) with `diagnosticMessageOverLimitBytes` stating the size an over-limit diagnostic had, and the result is re-rendered without the Observed state rather than replacing the outcomes",
   "automaticRetryAfterAmbiguousOutcome": false,
   "itemOutcomeUnknownScope": "only items whose native outcome is itself indeterminate",
   "nullEncoding": "ignition-null-v1"

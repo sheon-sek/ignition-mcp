@@ -379,6 +379,79 @@ def test_the_contract_declares_the_d10_input_bounds() -> None:
     assert contract["inputBounds"]["overBudgetCode"] == "limit_exceeded"
 
 
+def test_a_dataset_observed_value_is_measured_before_it_is_materialized() -> None:
+    """A one-cell Dataset can hold an arbitrarily large string, so the observed
+    budget has to walk the cells instead of trusting the cell count: measuring a
+    cell by reading it would defeat the budget it is there to enforce."""
+    recorded = json.loads(_fixture("observed-dataset-over-budget").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"]["nativeType"] == "Dataset"
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    # The walk measures the cell (20000 bytes, plus the per-cell allowance the
+    # estimate charges) instead of counting one cell at a fixed cost, and the
+    # message names that size and the ceiling it passed.
+    assert "20004 bytes, over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+
+
+def test_a_dataset_inside_the_budget_is_still_reported_as_observed_state() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-small")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["observed"][0]["status"] == "ok"
+    assert structured["observed"][0]["value"] == {
+        "columns": ["Number", "Text"], "rows": [[1, "ok"], [2, "fine"]],
+    }
+
+
+def test_an_oversize_native_diagnostic_keeps_the_outcome_and_marks_the_limit() -> None:
+    """The provider's free text has no bound of its own, so its representation is
+    bounded before the item is built: code, name, level and good stay exact, the
+    text is a bounded prefix, and the marker carries the size it had."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-diagnostic")
+    )["structuredContent"]
+
+    quality = structured["items"][0]["quality"]
+    assert (quality["code"], quality["name"], quality["level"], quality["good"]) == (
+        260, "Bad_NotFound", "Error", False,
+    )
+    assert quality["diagnosticMessageOverLimitBytes"] == 4000
+    assert quality["diagnosticMessage"] == "d" * 512
+    assert structured["summary"]["failed"] == 1
+
+
+def test_long_diagnostics_cannot_hide_a_full_batch_of_outcomes() -> None:
+    """100 Native outcomes each carrying a 1500-byte diagnostic: the bounded
+    representation has to keep every QualityCode inside the 256 KiB ceiling, so
+    the items alone can never become the reason a Tool Error is returned."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("items-with-long-diagnostics")
+    )["structuredContent"]
+
+    assert len(structured["items"]) == 100
+    assert structured["summary"] == {
+        "requested": 100,
+        "succeeded": 0,
+        "failed": 100,
+        "outcomeUnknown": 0,
+        "auditMode": "best_effort",
+        "auditRecorded": True,
+    }
+    assert all(item["quality"]["name"] == "Bad_NotFound" for item in structured["items"])
+    assert {item["quality"]["diagnosticMessageOverLimitBytes"] for item in structured["items"]} == {1500}
+    assert all(item["quality"]["diagnosticMessage"] == "e" * 512 for item in structured["items"])
+
+
 VALID_POLICY_FIXTURES = (
     "tag_write-allowlisted-batch",
     "tag_write-native-outcome-indeterminate",
@@ -409,6 +482,11 @@ VALID_POLICY_FIXTURES = (
     "tag_write-observed-value-over-budget",
     "tag_write-observed-state-budget-exhausted",
     "tag_write-serialization-fails",
+    # Round 2: Dataset Observed values and an unbounded QualityCode diagnostic.
+    "tag_write-observed-dataset-over-budget",
+    "tag_write-observed-dataset-small",
+    "tag_write-native-outcome-oversize-diagnostic",
+    "tag_write-items-with-long-diagnostics",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (

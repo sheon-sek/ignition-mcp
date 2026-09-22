@@ -17,6 +17,12 @@ Only recorded state crosses the boundary (``system.tag.*``, ``system.config.*``,
 (``system.util.jsonDecode``, ``jsonEncode``, ``getLogger``) are real
 implementations in this process.
 
+A recorded value may also carry a ``nativeType`` marker for a shape JSON cannot
+express, so a fixture can replay what a handler distinguishes by duck typing:
+``{"nativeType": "Dataset", "columns": [...], "rows": [[...]]}`` becomes the
+Dataset-like object whose ``getColumnCount``/``getColumnName``/``getRowCount``/
+``getValueAt`` a handler reads.
+
 A fixture may also inject a failure of one of those real helpers so a handler's
 failure path is reachable from a recording:
 
@@ -84,7 +90,7 @@ class _QualifiedValue(object):
     """A recorded QualifiedValue: the handler reads .value/.quality/.timestamp."""
 
     def __init__(self, recorded):
-        self.value = recorded.get("value")
+        self.value = _recorded_value(recorded.get("value"))
         self.quality = _QualityCode(recorded.get("quality") or {})
         self.timestamp = recorded.get("timestamp")
 
@@ -96,6 +102,37 @@ class _QualifiedValue(object):
 
     def getTimestamp(self):
         return self.timestamp
+
+
+def _recorded_value(recorded):
+    """A recorded Tag value: JSON scalars and arrays as they are, plus the native
+    shapes a handler distinguishes by duck typing. A ``nativeType`` marker turns a
+    recorded mapping into the Java-like object the handler sees, so a fixture can
+    replay a value shape a JSON scalar cannot express (a Dataset)."""
+
+    if isinstance(recorded, dict) and recorded.get("nativeType") == "Dataset":
+        return _RecordedDataset(recorded)
+    return recorded
+
+
+class _RecordedDataset(object):
+    """A recorded Dataset: the handler reads columns and cells through the API."""
+
+    def __init__(self, recorded):
+        self.columns = list(recorded.get("columns") or [])
+        self.rows = [list(row) for row in (recorded.get("rows") or [])]
+
+    def getColumnCount(self):
+        return len(self.columns)
+
+    def getColumnName(self, index):
+        return self.columns[index]
+
+    def getRowCount(self):
+        return len(self.rows)
+
+    def getValueAt(self, row, column):
+        return self.rows[row][column]
 
 
 class _RecordedTagPath(object):
