@@ -650,14 +650,15 @@ The G5 live stage must run these cases against Perspective resources:
 - no-op;
 - unrelated-resource preservation;
 - refusal of a Mutation that would override an Inherited resource;
-- concurrent external change abort.
+- concurrent external change abort, meaning a change to the Project between the caller's read and the write, which the write refuses with `conflict`.
 
 The remaining D26 G5 cases test the generic transaction, not the Perspective adapter. G5 cites the existing G3/G4 evidence for them, as long as the Perspective writes call the unchanged transaction service:
 
 - backup failure abort-before-import;
 - ambiguous import outcome reconciliation;
 - invalid ZIP, path traversal, duplicate, symlink and bomb rejection;
-- post-import verification failure and the recovery-required path.
+- post-import verification failure and the recovery-required path;
+- a change that lands inside the transaction, between baseline A and the fresh export A-prime.
 
 If a Phase 5 change modifies `ProjectTransactionService` or ZIP safety, the affected cases return to the live stage.
 
