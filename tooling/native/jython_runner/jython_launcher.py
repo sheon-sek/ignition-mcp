@@ -16,6 +16,15 @@ Only recorded state crosses the boundary (``system.tag.*``, ``system.config.*``,
 ``system.alarm.*``, ``system.util.audit``). Deterministic helpers
 (``system.util.jsonDecode``, ``jsonEncode``, ``getLogger``) are real
 implementations in this process.
+
+A fixture may also inject a failure of one of those real helpers so a handler's
+failure path is reachable from a recording:
+
+    "utilFailures": {"jsonEncode": {"onCall": 1, "message": "recorded failure"}}
+
+``onCall`` counts that helper's calls in the handler, 1-based. It exists because a
+handler's own serialization step can only be exercised if it can be made to fail,
+and the handler's outcome reporting must not depend on it.
 """
 
 from __future__ import print_function
@@ -32,11 +41,13 @@ class _RecordedError(Exception):
 
 
 class _Logger(object):
+    """Handler diagnostics go to stderr, so a failing fixture shows the reason."""
+
     def warn(self, message):
-        pass
+        print("WARN " + str(message), file=sys.stderr)
 
     def error(self, message):
-        pass
+        print("ERROR " + str(message), file=sys.stderr)
 
 
 class _QualityCode(object):
@@ -303,13 +314,19 @@ class _Alarm(object):
 
 
 class _Util(object):
-    def __init__(self, recorder):
+    def __init__(self, recorder, failures=None):
         self.recorder = recorder
+        self.failures = failures or {}
+        self.encodeCalls = 0
 
     def getLogger(self, name):
         return _Logger()
 
     def jsonEncode(self, value):
+        self.encodeCalls += 1
+        failure = self.failures.get("jsonEncode")
+        if failure and failure.get("onCall") == self.encodeCalls:
+            raise RuntimeException(str(failure.get("message", "recorded jsonEncode failure")))
         return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
     def jsonDecode(self, value):
@@ -323,11 +340,11 @@ class _Util(object):
 
 
 class _System(object):
-    def __init__(self, recorder):
+    def __init__(self, recorder, failures=None):
         self.tag = _Tag(recorder)
         self.config = _Config(recorder)
         self.alarm = _Alarm(recorder)
-        self.util = _Util(recorder)
+        self.util = _Util(recorder, failures)
 
 
 class _Builder(object):
@@ -346,7 +363,7 @@ def _main():
         raise ValueError("Unsupported recorded fixture schemaVersion")
 
     recorder = _Recorder(fixture["calls"])
-    namespace = {"system": _System(recorder)}
+    namespace = {"system": _System(recorder, fixture.get("utilFailures"))}
     execfile(handler_path, namespace)  # noqa: F821 - Jython 2.7 built-in
     arguments = fixture["arguments"]
     ordered = [arguments[name] for name in fixture["parameterOrder"]]

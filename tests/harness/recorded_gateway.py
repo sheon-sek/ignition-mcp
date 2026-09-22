@@ -353,10 +353,22 @@ def _tag_read_replay(server: Any, arguments: dict[str, Any]) -> dict[str, Any] |
     }
 
 
-def _tag_config_fingerprint(configuration: list[Any]) -> str:
-    from tooling.contracts.lint import encode_nulls, tag_config_fingerprint
+def _published_configuration(configuration: list[Any]) -> list[Any]:
+    """The D28-encoded form a Tool publishes, which is also what it fingerprints.
 
-    return tag_config_fingerprint(encode_nulls(configuration))
+    The fake stores the native configuration it serves; a handler publishes the
+    encoded form and fingerprints exactly that, so the fake does the same and the
+    live driver's check (which hashes the published value as it stands) holds.
+    """
+    from tooling.contracts.lint import encode_nulls
+
+    return encode_nulls(configuration)
+
+
+def _tag_config_fingerprint(configuration: list[Any]) -> str:
+    from tooling.contracts.lint import tag_config_fingerprint
+
+    return tag_config_fingerprint(_published_configuration(configuration))
 
 
 #: The node a Gateway answers for a configuration read of a path that is not
@@ -386,7 +398,7 @@ def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any]
     if not isinstance(path, str):
         return None
     if path not in server.tag_config:
-        configuration = [_synthesized_node(path)]
+        configuration = _published_configuration([_synthesized_node(path)])
         return {
             "path": path,
             "recursive": bool(arguments.get("recursive", False)),
@@ -396,7 +408,7 @@ def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any]
             "summary": {"returned": 1, "limit": 50},
             "meta": {"correlationId": "recorded-replay"},
         }
-    configuration = server.tag_config[path]
+    configuration = _published_configuration(server.tag_config[path])
     recursive = bool(arguments.get("recursive", False))
     overrides_only = bool(arguments.get("overridesOnly", False))
     limit = arguments.get("maxResults")
@@ -413,12 +425,36 @@ def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _provider_component(path: str) -> str:
+    """The bracketed provider of a Tag path, which is what the reserved rule names.
+
+    A prefix or substring test would also refuse a provider whose name merely
+    starts with the reserved one, so the comparison is on the component itself.
+    """
+    if not path.startswith("["):
+        return ""
+    closing = path.find("]")
+    if closing <= 1:
+        return ""
+    return path[1:closing]
+
+
 def _tag_update_paths(arguments: dict[str, Any]) -> list[str]:
     return [
         str(item.get("path", ""))
         for item in (arguments.get("items") or [])
         if isinstance(item, dict)
     ]
+
+
+def _served_item_limit(server: Any) -> int:
+    """The `tag_update` item ceiling the policy Tag serves, defaulting to D10's 20."""
+    try:
+        document = json.loads(server.policy_value)
+        limit = document.get("tagUpdateMaxItems")
+    except (AttributeError, TypeError, ValueError):
+        return 20
+    return int(limit) if isinstance(limit, int) and not isinstance(limit, bool) else 20
 
 
 def _served_allowlist(server: Any, tool: str) -> list[str]:
@@ -443,7 +479,11 @@ def _tag_update_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[
     paths = [str(item.get("path", "")) for item in items]
     if not items or not server.policy_provider_created or not server.policy_value:
         return "no-policy", paths
-    if any(path.startswith("[IgnitionMCPPolicy]") for path in paths):
+    # D10: the deployment's item ceiling is checked right after the Policy read,
+    # before any Target or Precondition check.
+    if len(items) > _served_item_limit(server):
+        return "over-policy-limit", paths
+    if any(_provider_component(path) == "IgnitionMCPPolicy" for path in paths):
         return "reserved-provider-refusal", paths
     entries = _served_allowlist(server, "tag_update")
     for path in paths:
@@ -492,7 +532,7 @@ def _apply_tag_update(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
             "path": path,
             "status": "ok",
             "fingerprint": _tag_config_fingerprint(server.tag_config[path]),
-            "configuration": server.tag_config[path],
+            "configuration": _published_configuration(server.tag_config[path]),
         })
         succeeded += 1
     return {

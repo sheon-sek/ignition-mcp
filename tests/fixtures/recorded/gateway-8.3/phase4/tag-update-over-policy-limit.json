@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"limit_exceeded\", \"correlationId\": \"recorded-replay\", \"details\": {\"limit\": 20, \"reason\": \"itemsOverPolicyLimit\", \"requested\": 21}, \"message\": \"items exceeds the deployment's limit of 20 targets; split the batch or raise tagUpdateMaxItems in the Runtime Target Policy.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

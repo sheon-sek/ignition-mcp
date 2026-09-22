@@ -3,12 +3,19 @@
   "version": 1,
   "restricted": false,
   "overridable": false,
-  "files": ["onToolCalled.py"],
+  "files": [
+    "onToolCalled.py"
+  ],
   "attributes": {
     "title": "tag_update",
-    "description": "Merge a configuration change into existing Tags via system.tag.configure with the handler-fixed MergeOverwrite collision policy. Each item carries the target path, the tcf1 Tag config fingerprint of that target's own tag_get_config read, and the configuration to merge. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable; a target outside the tag_update Target allowlist, inside the reserved IgnitionMCPPolicy provider (whatever the allowlist says, including an explicit *), or a UDT definition without an explicit _types_ allowlist entry fails with permission_denied before anything executes. Preflight validates every item's input and Target and compares every fingerprint before any item executes: a stale fingerprint is conflict and a missing target is not_found, so this Tool never creates one. An item never writes a Tag value (that is tag_write), never changes a name (that is tag_rename) and never carries nested children (each child is its own target with its own fingerprint). Runtime audit follows the policy's auditMode; a failed post-Mutation audit write gives auditRecorded=false, never a failure. The re-read configuration is Observed state and never decides success.",
+    "description": "Merge a configuration change into existing Tags via system.tag.configure with the handler-fixed MergeOverwrite collision policy. Each item carries the target path, the tcf1 Tag config fingerprint of that target's own tag_get_config read, and the configuration to merge. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable; a target outside the tag_update Target allowlist, inside the reserved IgnitionMCPPolicy provider (whatever the allowlist says, including an explicit *), or a UDT definition without an explicit _types_ allowlist entry fails with permission_denied before anything executes. Preflight validates every item's input and Target and compares every fingerprint before any item executes: a stale fingerprint is conflict and a missing target is not_found, so this Tool never creates one. An item never writes a Tag value (that is tag_write), never changes a name (that is tag_rename) and never carries nested children (each child is its own target with its own fingerprint). Runtime audit follows the policy's auditMode; a failed post-Mutation audit write gives auditRecorded=false, never a failure. The re-read configuration is Observed state and never decides success. Every request is bounded (D10): 20 targets by default up to the 100-target hard maximum, and the deployment may raise the default through tagUpdateMaxItems in the Runtime Target Policy; the path, each configuration, its nesting and the batch as a whole have finite ceilings, and an over-budget request is a limit_exceeded refusal before any native call. A refused Target or Precondition writes one Runtime audit decision row (none in off mode, fail-closed in required mode), and the Observed state carries its own budget so a per-item Native outcome is never replaced by an output-limit error.",
     "parameters": [
-      {"name": "items", "description": "1..100 update items: {\"path\": provider-qualified Tag, Folder or UDT definition config path, \"expectedFingerprint\": the tcf1 fingerprint from tag_get_config for that exact path, \"config\": the configuration properties to merge}. Default 20 (D10), hard maximum 100.", "type": "array", "required": true}
+      {
+        "name": "items",
+        "description": "1..100 update items: {\"path\": provider-qualified Tag, Folder or UDT definition config path, \"expectedFingerprint\": the tcf1 fingerprint from tag_get_config for that exact path, \"config\": the configuration properties to merge}. Default 20 (D10), hard maximum 100.",
+        "type": "array",
+        "required": true
+      }
     ]
   }
 }

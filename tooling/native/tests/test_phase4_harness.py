@@ -828,11 +828,15 @@ def test_tag_update_stages_record_the_live_facts(stub_mcp: dict[str, Any], tmp_p
     assert facts["tagUpdateMissingTargetAbsentFromExport"] is True
     assert facts["tagUpdateSiblingDenialIsSegmentBoundary"] is True
     assert facts["tagUpdateUdtNeedsExplicitTypesEntry"] is True
+    assert facts["tagUpdateUdtDefinitionReadIsAllowed"] is True
     assert facts["tagUpdateTypesEntryIsHonoured"] is True
     assert facts["tagUpdateBareWildcardDoesNotCoverUdt"] is True
     assert facts["tagUpdateReservedProviderRefusedUnderWildcard"] is True
     assert facts["tagUpdatePolicyDocumentUnclobbered"] is True
     assert facts["tagUpdatePreflightExecutedNothing"] is True
+    assert facts["tagUpdateOverPolicyLimitIsRefused"] is True
+    assert facts["tagUpdateSiblingDenialAuditRecorded"] is True
+    assert facts["tagUpdateStaleFingerprintAuditRecorded"] is True
     assert no_policy["tagUpdateNoPolicyFailsClosed"] is True
     assert no_policy["tagUpdateNoPolicyReason"] == "declaredLengthUnavailable"
     assert setup["tagUpdatePolicyInstalled"] is True
@@ -1298,6 +1302,22 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
     # Frozen expectations: drift must fail the job now.
     assert 'if [[ "$rc" == "3" ]]; then' in text
     assert 'echo "characterization drifted' in text
+
+
+def test_the_live_fingerprint_verifier_reproduces_the_golden_vectors() -> None:
+    """The driver recomputes the published fingerprint with the contracts linter's
+    own copy of the D30 rule. The published configuration is already D28 encoded,
+    so the verifier hashes it as it stands: a null marker or a literal `$ignition`
+    object must not be escaped a second time."""
+    document = json.loads(
+        (ROOT / "contracts/shared/tag-config-fingerprint.json").read_text(encoding="utf-8")
+    )
+    for vector in document["goldenVectors"]:
+        assert driver.derived_fingerprint(vector["configuration"]) == vector["fingerprint"], vector["name"]
+    # The two vectors that reach the encoding rule are the ones the double encoding
+    # would break, so the check is not vacuous.
+    names = {vector["name"] for vector in document["goldenVectors"]}
+    assert {"explicit-null-property", "escaped-reserved-key-object"} <= names
 
 
 def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:

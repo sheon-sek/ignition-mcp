@@ -486,10 +486,50 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   - Runtime audit ran in `best_effort`, `auditRecorded=true`, and the `MCP_CI_AUDIT` log held
     both rows (attempt + result) for the call's correlation ID with `actor` equal to the
     policy's Service identity;
+  - an over-budget batch (21 targets against the 20-target default) was refused with
+    `limit_exceeded` / `itemsOverPolicyLimit` before any native call;
+  - a refused Target and a refused Precondition both reported `auditRecorded=true`, so the D18
+    decision row is live-proven as well as fixture-proven;
+  - the exact UDT definition read was allowed and published a `tcf1` token, and that token is
+    what the `_types_` update case handed back;
   - the run's own bodies are recorded: the `tag_get_config` read of the fixture Tag and the node
     a Gateway synthesizes for a missing path are the two live golden vectors in
     `contracts/shared/tag-config-fingerprint.json`, and the refusal bodies the fake replays are
     in `tests/fixtures/recorded/gateway-8.3/phase4/` with their provenance.
+- **Review round 1 fixes.** Five blockers, all addressed, with the same patterns the #7 fix
+  (`ac8ed4c` onward, `origin/p4/runtime-fix`) introduced so the two lanes merge:
+  - *D10 input bounds.* `tag_update` now enforces the 20-target project default inside the
+    100-target hard ceiling, raisable only through the Runtime Target Policy
+    (`tagUpdateMaxItems`, 1..100; a value outside that range fails closed with
+    `policyTagUpdateMaxItems`), plus a 2048-byte path ceiling, a 16384-byte configuration-string
+    ceiling, a 1000-element array ceiling, a nesting ceiling of 8, a 32768-byte per-configuration
+    budget and one finite 65536-byte aggregate input budget. Every one of them is pure validation
+    over the request, refused with `limit_exceeded` (`requested` and `limit`) before the policy
+    read; the contract declares them as `inputBounds` and the linter checks them, including that
+    the named Policy field is part of the document schema.
+  - *Denied Mutations are audited (D08/D18).* A refused Target and a refused Precondition each
+    write one bounded `decision` row and dispatch nothing; `off` records nothing, and `required`
+    refuses the call (`auditAttemptFailed`, `phase=decision`) when the row cannot be written. The
+    ordered D29 fixtures prove the denial produces exactly one audit call and no `configure`.
+  - *Outcome preservation.* The Observed state carries its own budget (16384 bytes per
+    configuration, 65536 bytes in total) measured on the raw native read before conversion, so an
+    over-budget configuration is an explicit `limit_exceeded` observed error; the serializer is
+    caught locally and the result is re-rendered without the Observed state instead of replacing
+    the per-item Native outcomes, with a last-resort `limit_exceeded` that states the requested
+    bytes, the limit and the outcome counts. The Native `diagnosticMessage` is bounded too.
+  - *An allowed UDT definition can obtain its token.* `tag_get_config` accepts one exact
+    definition path (`recursive=false`), which is the read that publishes the `tcf1` token a
+    `tag_update` on that definition compares; a recursive read of the definition namespace stays
+    `invalid_argument` because `udt_type_get` owns the subtree view. A test runs the read and the
+    update it authorizes and asserts the two tokens are the same value.
+  - *The live verifier no longer double-encodes D28.* The driver hashes the published
+    `configuration` as it stands (it is already the encoded value), and the recorded fake
+    publishes the encoded form and fingerprints exactly what it publishes. The verifier is tested
+    against all five committed golden vectors, including the null and reserved-key ones. The
+    recorded fake also reads the reserved provider from the provider component instead of a
+    prefix test.
+  - The D29 launcher gained the #7 fix's `utilFailures` injection (so a handler's serialization
+    failure is reachable from a recording) and sends handler diagnostics to stderr.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
@@ -574,6 +614,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   `[default]_types_/IgnitionMCP_CI/ProbeType`, and refuses both `*` and a plain
   `[default]IgnitionMCP_CI` entry. **For the owner:** confirm, or say whether the entry must
   repeat the target's own `_types_` prefix literally.
+- **Ticket #10 — review round 1 adopted the #7 fix's D10 shape, including one shared linter helper.**
+  `_check_input_bounds` is byte-identical to the helper the #7 fix introduces, but this lane calls it
+  from the CONFIG path while that fix calls it from the shared `_check_runtime_mutation`, and this
+  lane's Policy-field loop skips a contract that does not declare `inputBounds` yet (`tag_write` and
+  the Alarm Tools on this lane). The merged tree checks every Mutation once the two lanes are
+  together. **For the owner:** no decision; recorded so a merge resolver keeps both call sites.
+- **Ticket #10 — the UDT definition *positive* case is still fixture-proven.** The live `_types_`
+  cases now read the definition's token with `tag_get_config` and hand that exact token back, which
+  proves the read is allowed and the token flows, but the disposable Gateway has no UDT definition,
+  so the flow still ends at the existence check (`not_found`). A live definition update needs a probe
+  that creates one; #11/#12 exercise the same handler path.
 - **Ticket #10 — the `tag_update` output ceiling is enforced but not fixture-provable.** D10
   says an oversize structured output must fail explicitly rather than truncate, and the handler
   keeps that ceiling (256 KiB). It cannot be covered by a D29 fixture: the runner refuses a

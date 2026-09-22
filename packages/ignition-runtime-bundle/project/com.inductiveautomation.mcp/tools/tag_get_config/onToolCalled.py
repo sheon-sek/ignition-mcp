@@ -62,6 +62,8 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 				count += countNodes(children)
 		return count
 
+	UDT_NAMESPACE = "_types_"
+
 	def validPath(value):
 		if not isinstance(value, basestring) or not value.strip():
 			return False
@@ -71,8 +73,13 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		closing = value.find("]")
 		if closing <= 1 or value.startswith("[.]") or value.startswith("[~]") or value.startswith("[]"):
 			return False
-		body = value[closing + 1:]
-		return "_types_" not in [segment for segment in body.split("/") if segment]
+		return True
+
+	def isUdtDefinitionPath(value):
+		closing = value.find("]")
+		if closing <= 0:
+			return False
+		return UDT_NAMESPACE in [segment for segment in value[closing + 1:].split("/") if segment]
 
 	# D30 2: the Tag config fingerprint. Repo-defined, versioned `tcf1` and
 	# deterministic: SHA-256 over the canonical JSON text of the D28-encoded
@@ -127,7 +134,7 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 	stage = "validation"
 	try:
 		if not validPath(path):
-			return toolError("invalid_argument", "path must be an absolute provider-qualified Tag path outside the internal UDT definition namespace.")
+			return toolError("invalid_argument", "path must be an absolute provider-qualified Tag path.")
 		path = path.strip()
 		if recursive is None:
 			recursive = False
@@ -135,6 +142,11 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			overridesOnly = False
 		if not isinstance(recursive, bool) or not isinstance(overridesOnly, bool):
 			return toolError("invalid_argument", "recursive and overridesOnly must be boolean.")
+		if isUdtDefinitionPath(path) and recursive:
+			# D30 6: an exact definition read is what publishes the Tag config
+			# fingerprint a Tag CONFIG Mutation compares, so it is allowed; the
+			# subtree view of the definition namespace stays udt_type_get's.
+			return toolError("invalid_argument", "a UDT definition is read one exact definition at a time: set recursive=false, or use udt_type_get for the subtree view.")
 		if maxResults is None:
 			maxResults = 50
 		if isinstance(maxResults, bool) or not isinstance(maxResults, (int, long)) or maxResults < 1 or maxResults > 200:

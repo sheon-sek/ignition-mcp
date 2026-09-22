@@ -13,7 +13,7 @@
       "type": "string",
       "required": true,
       "providerQualified": true,
-      "udtDefinitionNamespace": false
+      "udtDefinitionNamespace": "one exact definition path (recursive=false) is allowed, because it is the read that publishes the Tag config fingerprint a Tag CONFIG Mutation compares (D30 2 and 6); a recursive read of the definition namespace is invalid_argument, and udt_type_get owns that subtree view"
     },
     "recursive": {
       "type": "boolean",
