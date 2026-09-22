@@ -16,6 +16,7 @@ from typing import Any
 import urllib.parse
 import re
 import zipfile
+from xml.etree import ElementTree
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = ROOT / "tests/fixtures/recorded/gateway-8.3"
@@ -1571,6 +1572,42 @@ def _apply_tag_write_case(server: Any, case: str, body: dict[str, Any]) -> None:
             server.tag_state[str(item["path"])] = item.get("value")
 
 
+def _uploaded_module_identity(archive: bytes) -> dict[str, Any] | None:
+    """The identity the uploaded ``.modl`` declares, parsed from its own module.xml.
+
+    The install flow serves the module back under the id and the display version the
+    archive carries, so the rehearsal drives the real bytes of the pinned fixture and
+    the fake comes back with exactly the build that file declares.
+    """
+
+    if not archive.startswith(b"PK"):
+        return None
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as zp:
+            document = zp.read("module.xml")
+    except (KeyError, zipfile.BadZipFile, OSError):
+        return None
+    try:
+        root = ElementTree.fromstring(document.decode("utf-8"))
+    except (ElementTree.ParseError, UnicodeDecodeError):
+        return None
+    node = root if root.tag == "module" else root.find("module")
+    if node is None:
+        return None
+    module_id = (node.findtext("id") or "").strip()
+    raw_version = (node.findtext("version") or "").strip()
+    if not module_id or not raw_version:
+        return None
+    logical, build = raw_version, ""
+    parts = raw_version.split(".")
+    if len(parts) > 3:
+        candidate = parts[3].split("-")[0]
+        if len(candidate) == 10 and candidate.isdigit():
+            build = candidate
+            logical = ".".join(parts[:3]) + parts[3][len(candidate):]
+    return {"id": module_id, "version": logical, "build": build}
+
+
 class _Handler(http.server.BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -1651,6 +1688,21 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             self._json(200, payload)
             return
         if path == "/data/api/v1/modules/healthy":
+            if server.module_install_flow:
+                # Ticket #56: the stateful install flow. No module until the operator
+                # installed one and the Gateway came back from its restart.
+                items = []
+                uploaded = server.uploaded_module
+                if uploaded and server.module_installed and server.module_restarted:
+                    items = [{
+                        "id": uploaded["id"],
+                        "name": uploaded["id"],
+                        "version": f"{uploaded['version']} (b{uploaded['build']})",
+                        "installed": True,
+                        "healthy": True,
+                    }]
+                self._json(200, {"items": items})
+                return
             fixture = (
                 "phase2/modules-healthy-after-restart.json"
                 if server.modules_active
@@ -1830,6 +1882,31 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "items": [],
                 "metadata": {"total": 0.0, "matching": 0.0, "limit": 100, "offset": 0},
             })
+            return
+        if path == "/data/api/v1/modules/certificate":
+            module_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("moduleId", [""])[0]
+            uploaded = server.uploaded_module
+            if not server.module_install_flow or uploaded is None or module_id != uploaded["id"]:
+                self._json(404, {"message": "Module not uploaded", "status": "404"})
+                return
+            # Modelled, not recorded: the operator-facing fields the 8.3.8 OpenAPI
+            # documents for the certificate view. The rehearsal only needs the CLI to
+            # see a certificate it must accept; the live run records the real fields.
+            self._json(200, {
+                "subjectName": f"CN={uploaded['id']}",
+                "issuerName": f"CN={uploaded['id']}",
+                "notValidBefore": "2026-01-01T00:00:00Z",
+                "notValidAfter": "2036-01-01T00:00:00Z",
+                "selfSigned": True,
+            })
+            return
+        if path == "/data/api/v1/modules/eula":
+            module_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("moduleId", [""])[0]
+            uploaded = server.uploaded_module
+            if not server.module_install_flow or uploaded is None or module_id != uploaded["id"]:
+                self._json(404, {"message": "No EULA found for module", "status": "404"})
+                return
+            self._send(200, b"<html><body>modelled module EULA</body></html>", "text/html")
             return
         self._json(404, {"message": "No recorded response", "status": "404"})
 
@@ -2199,6 +2276,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         if path == "/data/api/v1/modules/certificate":
             module_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("moduleId", [""])[0]
+            if server.module_install_flow:
+                uploaded = server.uploaded_module
+                if uploaded is None or module_id != uploaded["id"]:
+                    self._json(404, {"message": "Module not uploaded", "status": "404"})
+                    return
+                if server.module_certificate_accepted:
+                    self._json(409, _fixture("phase2/certificate-already-accepted.json"))
+                    return
+                server.module_certificate_accepted = True
+                self._json(200, {"success": True, "message": "Module certificate accepted."})
+                return
             if module_id not in server.quarantined_modules:
                 self._json(404, {"message": "Module not quarantined", "status": "404"})
                 return
@@ -2207,6 +2295,63 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return
             server.certificate_accepted = True
             self._json(200, {})
+            return
+        if path == "/data/api/v1/modules/eula":
+            module_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("moduleId", [""])[0]
+            uploaded = server.uploaded_module
+            if not server.module_install_flow or uploaded is None or module_id != uploaded["id"]:
+                self._json(404, {"message": "Module not uploaded", "status": "404"})
+                return
+            if server.module_eula_accepted:
+                self._json(409, {"message": "Module EULA already accepted.", "url": self.path, "status": "409"})
+                return
+            server.module_eula_accepted = True
+            self._json(200, {"success": True, "message": "EULA accepted successfully"})
+            return
+        if path == "/data/api/v1/modules/upload":
+            if not server.module_install_flow:
+                self._json(404, {"message": "No recorded response", "status": "404"})
+                return
+            file_name = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("fileName", [""])[0]
+            uploaded = _uploaded_module_identity(body)
+            if uploaded is None or not uploaded["build"]:
+                # Not a .modl, or one without a comparable build: a Gateway would
+                # store it and quarantine it; the install flow has no use for it.
+                self._json(400, {"message": "Not a usable module archive", "status": "400"})
+                return
+            server.uploaded_module = uploaded
+            server.upload_name = file_name
+            self._json(200, {"moduleId": uploaded["id"], "licenseAccepted": False})
+            return
+        if path == "/data/api/v1/modules/install":
+            module_id = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("moduleId", [""])[0]
+            uploaded = server.uploaded_module
+            if not server.module_install_flow or uploaded is None or module_id != uploaded["id"]:
+                self._json(404, {"message": "Module not uploaded", "status": "404"})
+                return
+            if not (server.module_certificate_accepted and server.module_eula_accepted):
+                self._json(400, {"message": "Accept the module's certificate and EULA first", "status": "400"})
+                return
+            server.module_installed = True
+            self._json(200, {
+                "filename": server.upload_name,
+                "onStartup": "true",
+                "upgradeVersion": uploaded["version"],
+            })
+            return
+        if path == "/data/api/v1/restart-tasks/restart":
+            confirm = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("confirm", [""])[0]
+            if not server.module_install_flow:
+                self._json(404, {"message": "No recorded response", "status": "404"})
+                return
+            if confirm != "true":
+                self._json(400, {"message": "Please confirm restart through a 'confirm' query parameter.", "status": "400"})
+                return
+            # A Gateway can drop the connection on the way down; a 200 with no body is
+            # the acknowledgement, and the module comes back only after the restart.
+            if server.module_installed:
+                server.module_restarted = True
+            self._send(200)
             return
         self._json(404, {"message": "No recorded response", "status": "404"})
 
@@ -2281,6 +2426,7 @@ class _Server(http.server.ThreadingHTTPServer):
         tag_move_paths: dict[str, str] | None = None,
         tag_rename_paths: dict[str, str] | None = None,
         primitive_pickup_delay: float = 0.0,
+        module_install_flow: bool = False,
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -2386,6 +2532,19 @@ class _Server(http.server.ThreadingHTTPServer):
         #: Ticket #21: the Tags the reserved provider currently serves (the last
         #: imported document), so an apply read-back sees what it wrote.
         self.served_policy_tags: list[dict[str, Any]] = []
+        # Ticket #56: the module-install flow. A server started with
+        # ``module_install_flow`` has NO MCP Module: ``modules/healthy`` serves an
+        # empty list until the operator uploads, accepts and installs one through the
+        # documented module routes and restarts the Gateway, exactly the state
+        # ``setup-native install-module`` drives. The build the module comes back
+        # with is parsed from the uploaded archive's own module.xml.
+        self.module_install_flow = module_install_flow
+        self.uploaded_module: dict[str, Any] | None = None
+        self.upload_name = ""
+        self.module_certificate_accepted = False
+        self.module_eula_accepted = False
+        self.module_installed = False
+        self.module_restarted = False
         self.write_probe_value = "phase4-write-probe-value"
         #: Ticket #10: the Tag configuration the fake serves, keyed by exact path.
         #: `tag_get_config` answers from it and `tag_update` merges into it, so a
@@ -3353,6 +3512,8 @@ class RecordedGateway:
         tag_move_paths: dict[str, str] | None = None,
         tag_rename_paths: dict[str, str] | None = None,
         primitive_pickup_delay: float = 0.0,
+        module_install_flow: bool = False,
+        module_installed: bool = False,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -3373,7 +3534,22 @@ class RecordedGateway:
             tag_move_paths,
             tag_rename_paths,
             primitive_pickup_delay,
+            module_install_flow,
         )
+        if module_installed:
+            # Ticket #56: a fake that models the Gateway AFTER the install-only phase:
+            # the pinned Module is installed, the restart happened, and the CLI's
+            # second install-module run must answer NO CHANGE against it.
+            fixture = next((ROOT / "tests/fixtures/modules").glob("MCP-module-*.modl"))
+            installed = _uploaded_module_identity(fixture.read_bytes())
+            if installed is None:  # pragma: no cover - the pinned fixture is a module
+                raise ValueError(f"{fixture}: not a module archive")
+            self._server.uploaded_module = installed
+            self._server.upload_name = "MCP-module.modl"
+            self._server.module_certificate_accepted = True
+            self._server.module_eula_accepted = True
+            self._server.module_installed = True
+            self._server.module_restarted = True
         self._server.policy_provider_unready_reads = policy_provider_unready_reads
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
         if audit_profile:

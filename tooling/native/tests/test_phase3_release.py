@@ -25,6 +25,28 @@ HANDLER_MEMBER = "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
 BUNDLE_VERSION = (PROJECT.parent / "BUNDLE_VERSION").read_text(encoding="utf-8").strip()
 SHA_A = "a" * 40
 SHA_B = "b" * 40
+#: The G6 rows (ticket #56) are composed from the live run's artifacts after it goes
+#: green, so this pin accepts the gate the moment its rows land: the release then
+#: carries one exact G6 tuple per Gateway row alongside the G4/G5 ones (D21).
+G6_DIRS = ("g6-8.3.8-mcp-2026021307", "g6-8.3.9-mcp-2026021307")
+
+
+def _expected_tuples() -> list[tuple[str, str, str, str]]:
+    from tooling.compat.evidence import load_evidence
+
+    tuples = [
+        ("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+        ("G5", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+    ]
+    if all((EVIDENCE / directory / "evidence.json").is_file() for directory in G6_DIRS):
+        rows = [row for row in load_evidence(EVIDENCE) if row.gate == "G6"]
+        tuples.extend(
+            ("G6", row.gateway_version, row.compatibility_status, row.native_response_binding)
+            for row in rows
+        )
+    return sorted(tuples, key=lambda item: (item[0], item[1]))
 
 
 def _copy_project(target_parent: Path) -> Path:
@@ -63,16 +85,14 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        # The G4 and G5 close-out rows certify this bundle, so the release carries
-        # one exact tuple per Gateway row for each gate, per D21. The status stays
-        # UNTESTED because an evidence row never promotes a deployment.
+        # The G4 and G5 close-out rows certify this bundle, and the G6 rows join them
+        # the moment their evidence directories land (ticket #56). One exact tuple per
+        # Gateway row per gate, per D21. The status stays UNTESTED because an evidence
+        # row never promotes a deployment.
         self.assertEqual(
             [(item["gate"], item["gatewayVersion"], item["compatibilityStatus"],
               item["nativeResponseBinding"]) for item in manifest["testedTuples"]],
-            [("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
-             ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
-             ("G5", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
-             ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION")],
+            _expected_tuples(),
         )
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)

@@ -92,6 +92,18 @@ G5_CITED_CASES = (
 #: How the amendment's cited cases are proven: a committed G3/G4 row that already holds
 #: them, or a live G5 run that took them back. Anything else is not admissible.
 G5_CITED_CLASSES = ("CITED", "LIVE")
+#: The cases D26's G6 stage proves live (ticket #56): the Module install through the
+#: CLI on a Gateway that started without it, the NO CHANGE second run, the exact
+#: inventory verification of the fresh deployment, its D20 idempotency check, and the
+#: Bundle upgrade (a lowered release, then the real one under acknowledgement, then a
+#: green verify). Each case names the stage document fields that are its evidence.
+G6_LIVE_CASES: dict[str, str] = {
+    "module install": "install-module",
+    "module install is idempotent": "install-module-again",
+    "fresh apply and exact inventory verification": "apply",
+    "apply idempotency (second plan and apply write nothing)": "secondApply",
+    "bundle upgrade with acknowledgement": "upgradeApply",
+}
 G4_GATE_RESULTS = ("VERIFIED", "VERIFIED_WITH_LIMITATION", "UNVERIFIED_LIMITATION", "UNTESTED")
 G4_PLANES = ("rest", "runtime")
 G4_PROFILES = ("readonly", "operator", "configurator", "full")
@@ -99,7 +111,7 @@ BINDING_STATUSES = (
     "NATIVE_BINDING_PENDING", "VERIFIED", "VERIFIED_WITH_LIMITATION", "FAILED",
     "FAILED_NATIVE_BINDING", "UNVERIFIED_LIMITATION", "UNVERIFIED",
 )
-GATES = ("G0", "G1", "G2", "G3", "G4", "G5")
+GATES = ("G0", "G1", "G2", "G3", "G4", "G5", "G6")
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _BUILD = re.compile(r"^[0-9]{10}$")
@@ -207,6 +219,12 @@ def parse_row(directory: Path, doc: dict[str, Any]) -> EvidenceRow:
     if not isinstance(flag, bool):
         raise EvidenceError(f"{where}: d27 exception flag must be an explicit boolean")
 
+    if compatibility == "SUPPORTED":
+        # D21: no evidence row may claim SUPPORTED, whatever its gate. parse_row holds
+        # the rule so a row composed out of band is refused by the same code the
+        # tree's loader runs.
+        raise EvidenceError(f"{where}: SUPPORTED compatibility may not be claimed (evidence must be certified)")
+
     row = EvidenceRow(
         gate=gate,
         directory=directory.name,
@@ -229,6 +247,8 @@ def parse_row(directory: Path, doc: dict[str, Any]) -> EvidenceRow:
         _apply_g4_rules(row, doc, where)
     if gate == "G5":
         _apply_g5_rules(row, doc, where, directory.parent)
+    if gate == "G6":
+        _apply_g6_rules(row, doc, where)
     return row
 
 
@@ -517,6 +537,52 @@ def _apply_g5_rules(row: EvidenceRow, doc: dict[str, Any], where: str, root: Pat
         limitations = doc.get("limitations")
         if not isinstance(limitations, list) or not limitations:
             raise EvidenceError(f"{where}: a G5 row that is not fully verified must record its limitations")
+    unsatisfied = doc.get("unsatisfiedAcceptance")
+    if not isinstance(unsatisfied, list) or not all(isinstance(item, str) for item in unsatisfied):
+        raise EvidenceError(f"{where}: unsatisfiedAcceptance must be a list of strings")
+
+
+def _apply_g6_rules(row: EvidenceRow, doc: dict[str, Any], where: str) -> None:
+    """G6 rules (D26's final v1 release gate, ticket #56).
+
+    The stage is the module-install pass of the phase4-live-apply workflow: a Gateway
+    that started with NO Module, the pinned ``.modl`` installed through
+    ``setup-native install-module`` (hash check, certificate and EULA acceptance under
+    their own flags, install, restart, read-back), the fresh apply/verify sequence and
+    the D20 idempotency check run unchanged, then the Bundle upgrade: a lowered real
+    release applied first, then the exact release with ``--acknowledge-upgrade``. A row
+    may not claim ``SUPPORTED``, and a not-fully-verified row must record limitations.
+    """
+
+    deviations = doc.get("ownerAcceptedDeviations")
+    if not isinstance(deviations, list) or "phase4-live-environment-protection" not in deviations:
+        raise EvidenceError(
+            f"{where}: G6 evidence must record the owner-accepted phase4-live environment "
+            "deviation (phase4-live-environment-protection)"
+        )
+    g6 = doc.get("g6")
+    if not isinstance(g6, dict):
+        raise EvidenceError(f"{where}: G6 rows must record the g6 case split")
+    cases = g6.get("cases")
+    if not isinstance(cases, dict) or set(cases) != set(G6_LIVE_CASES):
+        raise EvidenceError(
+            f"{where}: g6.cases must account for exactly {sorted(G6_LIVE_CASES)}"
+        )
+    run_ids = {entry.get("runId") for entry in doc.get("runs", []) if isinstance(entry, dict)}
+    for case in G6_LIVE_CASES:
+        entry = _g5_entry(cases[case], case, where, verdicts=("LIVE",))
+        for run_id in entry["runIds"]:
+            if run_id not in run_ids:
+                raise EvidenceError(
+                    f"{where}: G6 case {case!r} cites run {run_id!r}, which runs[] does not hold"
+                )
+    gate_result = doc.get("gateResult")
+    if gate_result not in G4_GATE_RESULTS:
+        raise EvidenceError(f"{where}: gateResult must be one of {G4_GATE_RESULTS}")
+    if gate_result != "VERIFIED":
+        limitations = doc.get("limitations")
+        if not isinstance(limitations, list) or not limitations:
+            raise EvidenceError(f"{where}: a G6 row that is not fully verified must record its limitations")
     unsatisfied = doc.get("unsatisfiedAcceptance")
     if not isinstance(unsatisfied, list) or not all(isinstance(item, str) for item in unsatisfied):
         raise EvidenceError(f"{where}: unsatisfiedAcceptance must be a list of strings")

@@ -120,7 +120,14 @@ class _Composer:
 class G4RowTest(unittest.TestCase):
     def test_committed_rows_validate_and_match_their_close_documents(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4", "G5"})
+        # The G6 rows (ticket #56) land from the live run's artifacts; the pin accepts
+        # the gate the moment its directories appear (see test_evidence.py).
+        g6_present = all(
+            (REPO_EVIDENCE / name / "evidence.json").is_file()
+            for name in ("g6-8.3.8-mcp-2026021307", "g6-8.3.9-mcp-2026021307")
+        )
+        expected_gates = {"G0", "G1", "G2", "G3", "G4", "G5"} | ({"G6"} if g6_present else set())
+        self.assertEqual({row.gate for row in rows}, expected_gates)
         for version, directory in (("8.3.8", ROW_838), ("8.3.9", ROW_839)):
             row = next(item for item in rows if item.directory == directory)
             document = row.raw
