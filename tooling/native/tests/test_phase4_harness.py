@@ -1016,9 +1016,17 @@ def test_tag_copy_case_selector_replays_the_recorded_refusals() -> None:
         (plain, {"items": [pair()["items"][0]] * 21}, "over-policy-limit"),
         (ceiling, {"items": [pair()["items"][0]] * 2}, "over-policy-limit"),
         (plain, {"items": [pair()["items"][0]] * 101}, "items-over-hard-limit"),
+        # The ceiling is measured after the input pass, so a destination that is both
+        # over-long and leaf-mismatched reports the leaf — the order the handler takes
+        # and the reason the live over-budget case keeps the source's leaf.
         (plain, pair(destination=f"[{policy_document.TAG_FIXTURE_PROVIDER}]"
                                  f"{policy_document.TAG_FIXTURE_ROOT}/"
-                                 f"{policy_document.OVERLONG_PATH_LEAF}"), "path-over-length"),
+                                 f"{policy_document.OVERLONG_PATH_LEAF}"),
+         "destination-leaf-mismatch"),
+        (plain, pair(destination=f"[{policy_document.TAG_FIXTURE_PROVIDER}]"
+                                 f"{policy_document.TAG_FIXTURE_ROOT}/"
+                                 f"{policy_document.OVERLONG_PATH_LEAF}/WriteTarget"),
+         "path-over-length"),
     ]
     for server, arguments, expected in cases:
         case, _paths = recorded_gateway._tag_copy_case(server, arguments)

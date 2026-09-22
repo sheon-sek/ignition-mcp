@@ -2289,13 +2289,16 @@ def stage_tag_copy(config: Config) -> dict[str, Any]:
     if not facts["tagCopyHardItemCeilingIsRefused"]:
         raise StageFailure(f"the copy item hard ceiling must be refused: {json.dumps(hard_batch)[:600]}")
     # ...and the same ceiling on the other end: a copy bounds both its source path and
-    # its destination path, and the refusal quotes the end that crossed it.
+    # its destination path, and the refusal quotes the end that crossed it. The
+    # destination keeps the source's leaf, because a destination with another leaf is
+    # refused as invalid_argument before the ceiling is ever measured.
+    overlong_source = paths["source"]
     overlong = expect_tool_error(client, "tag_copy", {
         "items": [{
-            "sourcePath": paths["source"],
+            "sourcePath": overlong_source,
             "destinationPath": (
                 f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
-                + policy_document.OVERLONG_PATH_LEAF
+                + policy_document.OVERLONG_PATH_LEAF + "/" + overlong_source.rsplit("/", 1)[-1]
             ),
         }],
     })

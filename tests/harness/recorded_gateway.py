@@ -747,13 +747,17 @@ def _tag_copy_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[st
     paths = [destination for _source, destination in pairs]
     if len(items) > HARD_MAX_ITEMS:
         return "items-over-hard-limit", paths
+    # The handler refuses a destination whose leaf differs inside its input pass, and
+    # measures the D10 ceilings only after every item passed it, so a request with both
+    # problems reports the leaf. The fake has to take the same order or a rehearsal
+    # would pick the ceiling body where a Gateway answers the leaf one.
+    if any(_target_leaf(source) != _target_leaf(destination) for source, destination in pairs):
+        return "destination-leaf-mismatch", paths
     if any(
         len(value.encode("utf-8")) > PATH_MAX_BYTES
         for source, destination in pairs for value in (source, destination)
     ):
         return "path-over-length", paths
-    if any(_target_leaf(source) != _target_leaf(destination) for source, destination in pairs):
-        return "destination-leaf-mismatch", paths
     if not items or not server.policy_provider_created or not server.policy_value:
         return "no-policy", paths
     if len(items) > _served_item_limit(server, "tagCopyMaxItems"):
