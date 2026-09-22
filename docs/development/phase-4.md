@@ -530,6 +530,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   decide; recorded because it is a Gateway behavior the plan did not predict and because the
   recorded fake still answers a Tool Error for a missing path, so a rehearsal models this
   difference rather than the Gateway.
+- **Ticket #10 — a Gateway-side provider flake can fail the G4a `policy-read` stage.** On the
+  `0b50a52` head the 8.3.8 row of `Phase 4 Live Gateway G4a`
+  ([run 35668653059](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668653059)) failed
+  after the workflow's Gateway restart: the provider's initial Tag load hit
+  `java.lang.NullPointerException: … "cleanPath" is null` in `TagConfigResource.createResourcePath`
+  once per Tag and then reported `Error_Configuration` for the policy Tag with a `Bad_Unsupported`
+  write probe, so the stage never saw the document it had just verified through Native REST. The
+  8.3.9 row of the same run passed, the same head's provisioning stage found the provider ready and
+  its export correct, and an immediate `gh run rerun --failed` of that job passed — the same class
+  of Gateway-side provider-startup flake the ticket #6 evidence recorded and that
+  `phase4/tag-import-provider-not-ready.json` already documents. **For the owner:** no decision;
+  recorded because a G4a or G4b row can fail this way on an unmodified head and needs a rerun.
 - **Ticket #10 — `tag_update` refuses three configuration keys beyond D30's text.** D30 §6
   says nothing about which properties a Tag CONFIG Mutation may merge, so the shipped handler
   refuses, with `invalid_argument`, the three keys that would leave its class or its target:
