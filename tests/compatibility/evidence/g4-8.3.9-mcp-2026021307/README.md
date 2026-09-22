@@ -15,6 +15,7 @@ The cited live runs were:
 | [35710377211](https://github.com/sheon-sek/ignition-mcp/actions/runs/35710377211) | Phase 4 Live Gateway G4a | `ca27b4b` | milestone 4a on the candidate: the Runtime Target Policy gate, `tag_write`, `alarm_shelve`/`alarm_unshelve`, the operator inventory and the Runtime audit pair |
 | [35710377243](https://github.com/sheon-sek/ignition-mcp/actions/runs/35710377243) | Phase 4 Live Gateway G4b | `ca27b4b` | milestone 4b: the fingerprint, `tag_update`, `tag_create` and `tag_copy` |
 | [35707687810](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687810) | Phase 4 Live Gateway G4b | `dfa4d08` | milestone 4b complete: `tag_delete`, `tag_move`, `tag_rename`, the partial-failure batch, the 19-Tool configurator inventory |
+| [35713927291](https://github.com/sheon-sek/ignition-mcp/actions/runs/35713927291) | Phase 4 Live Gateway G4b | `0801e51` | milestone 4b on the **final integration head** (`4238653` + #22 + the CI-only workflow change): the same cases and inventories, with the head's own bundle |
 | [35687123699](https://github.com/sheon-sek/ignition-mcp/actions/runs/35687123699) | Phase 4 Live Gateway REST mutation | `98f8f74` | the REST inventories and every allowlist, refused-type and precondition refusal, plus the fault proxy's timeout / ambiguous-outcome / cancellation / partial-write cases |
 
 The candidate row is not required, but it is not weaker either: every case the
