@@ -46,6 +46,11 @@ _OPENAPI_OPERATIONS = (
     ("get", "/data/api/v1/resources/find/ignition.gateway/idp-links/{name}"),
     ("get", "/data/api/v1/resources/singleton/ignition/security-levels"),
     ("post", "/data/api/v1/resources/ignition/api-token"),
+    # Ticket #22: D20's opt-in provisioning writes — the Security Levels singleton
+    # (modify, with the Resource signature as the optimistic precondition) and the
+    # Gateway's own API-token key/hash generator.
+    ("put", "/data/api/v1/resources/ignition/security-levels"),
+    ("post", "/data/api/v1/api-token/generate"),
     ("post", "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider"),
     ("post", "/data/api/v1/resources/ignition/audit-profile"),
     ("post", "/data/api/v1/resources/ignition/database-connection"),
@@ -121,6 +126,35 @@ MANAGED_PRODUCT = "ignition-runtime-bundle"
 #: through the type's collection routes; D30 §5 refuses it to the generic config
 #: Mutations, which is exactly why apply has its own curated path.
 SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
+
+#: Ticket #22: the resource types D20's opt-in provisioning writes — the Gateway's
+#: Security Levels singleton and an API token. D30 §5 refuses both to the generic
+#: config Mutations, so ``setup-native apply`` owns them through its curated path.
+SECURITY_LEVELS_TYPE = "ignition/security-levels"
+API_TOKEN_TYPE = "ignition/api-token"
+
+#: The security tree the fake serves. Modelled from the live G0 evidence
+#: (``tests/compatibility/evidence/g0-8.3.8-mcp-2026021307/ci-security.json`` records
+#: the CI level as an "Authenticated child; sibling of Authenticated/Roles"), so a
+#: plan reads the same shape the disposable Gateway serves and has a real sibling to
+#: preserve.
+AUTHENTICATED_DESCRIPTION = "Represents a user who has been authenticated by the system."
+STOCK_SECURITY_LEVELS: list[dict[str, Any]] = [
+    {
+        "name": "Authenticated",
+        "description": AUTHENTICATED_DESCRIPTION,
+        "children": [{"name": "Roles", "children": []}],
+    },
+]
+
+#: The Gateway-generated ``key``/``hash`` pair the token routes answer with. Recorded,
+#: not modelled: the key is the harness's own disposable CI credential (a value that
+#: exists nowhere but an ephemeral CI Gateway, and that the job destroys), and the hash
+#: is the one the live G0 run recorded for it in the evidence file above. The pair
+#: follows the documented derivation — the hash is the unpadded Base64URL SHA-256
+#: digest of the decoded key bytes.
+GENERATED_API_TOKEN_KEY = "zG48znDwfapnZCJA_d7THMrQJpejwONfXMFZ5oBYn0I"
+GENERATED_API_TOKEN_HASH = "QaH9skRX4DQggE1M8oVuwZSNIU9tOzkt9TKzKNPt53M"
 
 
 def _resource_type_segment(path: str) -> str | None:
@@ -1555,6 +1589,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/data/api/v1/resources/ignition/audit-profile":
             self._json(200, {})
             return
+        if path == "/data/api/v1/api-token/generate":
+            # Ticket #22: the Gateway's own key/hash generator. It persists nothing;
+            # the pair is what the token create below stores.
+            self._json(200, server.generated_token_pair)
+            return
+        if path == "/data/api/v1/resources/ignition/api-token":
+            # Ticket #22: the Runtime API token an opt-in apply creates. The type has
+            # no published state until a token is seeded or created, so this branch
+            # publishes it on demand instead of at startup, which would change what the
+            # ticket #15/#36 cases read back from an unseeded Gateway.
+            server.resources.setdefault(API_TOKEN_TYPE, {})
+            status, payload = server.apply_resource_create(API_TOKEN_TYPE, body)
+            self._json(status, payload)
+            return
         if path == "/data/api/v1/resources/ignition/tag-provider":
             resources = json.loads(body)
             names = [item.get("name") for item in resources] if isinstance(resources, list) else []
@@ -1793,6 +1841,14 @@ class _Server(http.server.ThreadingHTTPServer):
         self.pipeline_cancel_status: int | None = None
         self.pipeline_cancel_race: dict[str, str] | None = None
         self.signature_serial = 0
+        #: Ticket #22: the API-token key/hash pair the generate route answers with
+        #: (recorded, see ``GENERATED_API_TOKEN_KEY``), and the security tree the
+        #: Security Levels singleton serves. ``answer_api_token_generation_with``
+        #: replaces the pair for the case where a Gateway answers an inconsistent one.
+        self.generated_token_pair: Any = {
+            "key": GENERATED_API_TOKEN_KEY,
+            "hash": GENERATED_API_TOKEN_HASH,
+        }
         #: Modelled (not recorded) per-operation write behaviour, keyed by the
         #: operation the Tool performs ("update", "create", "delete", "rename"):
         #: a Gateway that refuses a change inside a 200 (`write_problem`), one that
@@ -1807,6 +1863,28 @@ class _Server(http.server.ThreadingHTTPServer):
         self.exports_served = 0
         self.project_change_after: tuple[str, int, dict[str, bytes]] | None = None
         self._seed_server_config(runtime_tools, bundle_version)
+        self._seed_security_levels()
+
+    def _seed_security_levels(self) -> None:
+        """Publish the Security Levels singleton ``setup-native apply`` reconciles.
+
+        Ticket #22: the stock tree (modelled from the live G0 evidence) with the
+        ``Authenticated`` level a dedicated Runtime level hangs under, so a plan has a
+        real tree to preserve and a real signature to precondition a write with.
+        """
+
+        levels = json.loads(json.dumps(STOCK_SECURITY_LEVELS))
+        self.resources[SECURITY_LEVELS_TYPE] = {
+            ("security-levels", DEFAULT_COLLECTION): {
+                "type": "security-levels",
+                "name": "security-levels",
+                "enabled": True,
+                "description": "",
+                "collection": DEFAULT_COLLECTION,
+                "signature": self.next_signature(),
+                "config": {"securityLevels": levels},
+            },
+        }
 
     def deployed_bundle_version(self) -> str:
         """The bundle version the served Project reports, as the Module's handler reads it.
@@ -2937,6 +3015,22 @@ class RecordedGateway:
 
     def signature(self, resource_type: str, name: str, collection: str = DEFAULT_COLLECTION) -> str:
         return str(self.resource(resource_type, name, collection)["signature"])
+
+    def security_levels(self) -> list[dict[str, Any]] | None:
+        """The security tree the fake currently serves (``None`` = no singleton)."""
+
+        document = self._server._singleton(SECURITY_LEVELS_TYPE)
+        tree = document.get("config", {}).get("securityLevels") if isinstance(document, dict) else None
+        return tree if isinstance(tree, list) else None
+
+    def answer_api_token_generation_with(self, payload: Any) -> None:
+        """Answer the API-token generate route with ``payload`` whatever it is.
+
+        Modelled, not recorded: the case is a 2xx body this CLI cannot turn into a
+        credential — a key/hash pair that disagrees, or a body that is not a pair.
+        """
+
+        self._server.generated_token_pair = payload
 
     def refuse_writes_with(self, operation: str, problem: str | None) -> None:
         """Model a Gateway that answers 200 with ``success=false`` for one operation.

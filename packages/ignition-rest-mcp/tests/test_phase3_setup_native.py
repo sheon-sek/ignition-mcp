@@ -1498,7 +1498,7 @@ def test_keyboard_interrupt_exits_two(tmp_path: Path, monkeypatch: pytest.Monkey
 
 ALLOWED_IMPORT_ROOTS = frozenset(
     {
-        "__future__", "argparse", "asyncio", "collections", "dataclasses", "hashlib", "httpx",
+        "__future__", "argparse", "asyncio", "base64", "collections", "dataclasses", "hashlib", "httpx",
         "ipaddress", "json", "os", "pathlib", "re", "stat", "sys", "time", "typing", "urllib",
     }
 )

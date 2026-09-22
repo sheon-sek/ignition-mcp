@@ -20,6 +20,7 @@ sequence (D20), whose report is embedded in this command's own report.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
@@ -28,7 +29,7 @@ import httpx
 
 from ignition_rest_mcp.cli.setup_native import documents as docs
 from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import plan, verify
+from ignition_rest_mcp.cli.setup_native import plan, security, verify
 from ignition_rest_mcp.cli.setup_native.action import (
     BLOCKED,
     CREATE,
@@ -43,7 +44,7 @@ from ignition_rest_mcp.cli.setup_native.doctor import (
     make_gateway,
     probe_gateway,
 )
-from ignition_rest_mcp.cli.setup_native.inputs import Inputs
+from ignition_rest_mcp.cli.setup_native.inputs import API_TOKEN_TYPE, SECURITY_LEVELS_TYPE, Inputs
 from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter, WriteError
 
 
@@ -98,6 +99,16 @@ def apply_report(
         report["error"] = error
     if inputs.policy_file is not None:
         report["policyFile"] = str(inputs.policy_file)
+    if inputs.provisions_security:
+        report["securityLevel"] = inputs.security_level_path
+    if inputs.create_runtime_token:
+        # The credential's *location* and mode, never the credential (D20).
+        report["runtimeToken"] = {
+            "name": inputs.runtime_token,
+            "secretFile": str(inputs.runtime_token_file),
+            "secretFileMode": "0600",
+            "secureChannelRequired": not inputs.runtime_token_insecure_channel,
+        }
     return report
 
 
@@ -175,6 +186,81 @@ def _bundle_archive(inputs: Inputs) -> bytes:
             f"--bundle-zip: {inputs.bundle_zip} is {len(archive)} bytes; the manifest declares {declared}"
         )
     return archive
+
+
+async def _write_security_level(
+    inputs: Inputs, observed: security.Observation, actions: Sequence[Action], writer: GatewayWriter
+) -> Write:
+    """Create the dedicated Runtime Security Level, preserving the tree (D20)."""
+
+    action = _action_of(actions, "security-level")
+    if action.action not in (CREATE, UPDATE):
+        return Write(action.kind, action.name, action.action, "nothing to write")
+    before = observed.levels or []
+    tree, error = security.with_managed_level(before, inputs)
+    if tree is None:  # pragma: no cover - the plan line is BLOCKED before any write
+        raise WriteError(f"the dedicated Runtime level cannot be placed in the served tree: {error}")
+    await writer.update_security_levels(tree, signature=observed.signature, collection=observed.collection)
+    problem = security.verify_readback(
+        await writer.reads.singleton_document(SECURITY_LEVELS_TYPE), before, inputs,
+    )
+    if problem:
+        raise WriteError(f"the security-levels write was accepted but {problem}")
+    return Write(
+        action.kind, action.name, action.action,
+        f"added {inputs.security_level_path}, preserving the other {len(before)} top-level level(s); "
+        "read back and structurally verified",
+    )
+
+
+async def _write_runtime_token(
+    inputs: Inputs,
+    observed: security.Observation,
+    creating_level: bool,
+    actions: Sequence[Action],
+    writer: GatewayWriter,
+) -> Write:
+    """Create the Runtime API token and store its secret in the operator's 0600 file."""
+
+    action = _action_of(actions, "runtime-token")
+    if action.action not in (CREATE, UPDATE):
+        return Write(action.kind, action.name, action.action, "nothing to write")
+    token_file = inputs.runtime_token_file
+    assert token_file is not None  # pragma: no cover - load_inputs requires it with the flag
+    try:
+        key, declared = security.credential(await writer.generate_api_token())
+    except security.CredentialError as error:
+        raise WriteError(str(error)) from error
+    grant = security.token_grant(inputs, observed.levels or [], creating=creating_level)
+    if grant is None:  # pragma: no cover - the plan line is BLOCKED before any write
+        raise WriteError(
+            f"{inputs.security_level_path} is not in the Gateway's security tree, so the Runtime API "
+            "token has no level to be granted; nothing was written"
+        )
+    config = security.token_config(
+        inputs, grant, token_hash=declared, timestamp_ms=int(time.time() * 1000),
+    )
+    await writer.create_api_token(
+        inputs.runtime_token, config, description=security.token_description(inputs),
+    )
+    served = await writer.reads.resource_document(API_TOKEN_TYPE, inputs.runtime_token)
+    if security.stored_token_hash(served) != declared:
+        raise WriteError(
+            f"the API token {inputs.runtime_token} was created but reads back a different token hash, "
+            f"so the secret for {token_file} would not authenticate"
+        )
+    try:
+        security.write_secret_file(token_file, security.token_secret(inputs.runtime_token, key))
+    except security.FileError as error:
+        raise WriteError(
+            f"{error}; the token exists on the Gateway with a secret that was not stored — delete it "
+            "(or pass another --runtime-token-file) before re-running"
+        ) from error
+    return Write(
+        action.kind, action.name, action.action,
+        f"created the API token granted {inputs.security_level_path}; its secret was written to "
+        f"{token_file} with mode 0600 and is never reported",
+    )
 
 
 async def _write_project(inputs: Inputs, actions: Sequence[Action], writer: GatewayWriter) -> Write:
@@ -352,12 +438,19 @@ async def _execute(
     documents: docs.Documents,
     observation: GatewayObservation,
     policy: docs.PolicyObservation | None,
+    observed: security.Observation,
     actions: Sequence[Action],
     writer: GatewayWriter,
 ) -> list[Write]:
     """Run the writes in plan order; a failure stops the sequence (no rollback)."""
 
     writes: list[Write] = []
+
+    async def security_level() -> Write:
+        return await _write_security_level(inputs, observed, actions, writer)
+
+    async def token_step() -> Write:
+        return await _write_runtime_token(inputs, observed, level_creating, actions, writer)
 
     async def project() -> Write:
         return await _write_project(inputs, actions, writer)
@@ -368,11 +461,22 @@ async def _execute(
     async def policy_tags() -> Write:
         return await _write_policy(inputs, documents, policy, actions, writer)
 
-    steps = (
+    # D20's transaction order: the Security Level and the credential are provisioned
+    # before the Project and the Server Config that name them. A run that did not opt
+    # into them does not touch those planes at all, so its report keeps exactly the
+    # three deployment lines it had before the flags existed.
+    steps: list[tuple[str, Any]] = []
+    level_creating = False
+    if inputs.provision_security_levels:
+        level_creating = _action_of(actions, "security-level").action == CREATE
+        steps.append(("security-level", security_level))
+    if inputs.create_runtime_token:
+        steps.append(("runtime-token", token_step))
+    steps.extend((
         ("bundle-project", project),
         ("server-config", server_config),
         ("runtime-policy", policy_tags),
-    )
+    ))
     for kind, step in steps:
         try:
             writes.append(await step())
@@ -393,15 +497,18 @@ async def run(
 
     documents = docs.load(inputs)
     policy: docs.PolicyObservation | None = None
+    observed = security.Observation()
     async with make_gateway(inputs, gateway_transport) as client:
         _, observation = await probe_gateway(client, inputs)
         if observation.reachable:
             policy = await docs.observe_policy(client)
+        if observation.reachable and inputs.provisions_security:
+            observed = await security.observe(client, inputs)
     if not observation.reachable:
         error = observation.error or "Gateway unreachable"
         return _emit(inputs, [], [], [], exit_code=1, error=error, verify_report=None)
 
-    actions = plan.build_actions(inputs, observation, documents, policy)
+    actions = plan.build_actions(inputs, observation, documents, policy, observed)
     blocked = [action for action in actions if action.action == BLOCKED]
     if blocked:
         error = (
@@ -418,7 +525,7 @@ async def run(
         inputs.gateway_url, inputs.gateway_token, timeout_seconds=inputs.timeout_seconds,
         transport=gateway_transport,
     ) as writer:
-        writes = await _execute(inputs, documents, observation, policy, actions, writer)
+        writes = await _execute(inputs, documents, observation, policy, observed, actions, writer)
 
     verify_report, verify_lines, verify_code = await verify.collect(inputs, mcp_transport=mcp_transport)
     failed = any(not write.ok for write in writes) or verify_code != 0

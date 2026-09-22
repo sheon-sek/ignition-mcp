@@ -94,13 +94,19 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
   Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs one milestone's driver stages against the recorded
   Gateway fake (`--stages 4a` by default, `--stages 4b` for ticket #10).
-- `apply_stage.py` (ticket #21, milestone 4d): drives the shipped
+- `apply_stage.py` (tickets #21 and #22, milestone 4d): drives the shipped
   `ignition-mcp setup-native` CLI — `plan` -> `apply` -> `verify`, then a second
   `plan`/`apply` that must be a `NO CHANGE` run that writes nothing — against the
   Gateway row this workflow provisioned. It uses run-unique names for the Project
   and the Server Config (so the first run really creates both), the deterministic
   release the workflow built, the ticket #6 policy document and the harness's own
-  permissions tree. A verify that fails right after the write is re-run, bounded
+  permissions tree. Ticket #22's opt-in flags are always passed, so the same run
+  also creates the dedicated Runtime Security Level for its profile and a Runtime
+  API token granted exactly that level; both are read back over Native REST with the
+  stage's own admin token, the token's stored hash must equal the secret the CLI
+  wrote, the credential file must be `0600`, and the secret is judged absent from
+  every command output and from the evidence (which is redacted rather than uploaded
+  if it ever appears). A verify that fails right after the write is re-run, bounded
   and read-only, because a Gateway whose Module has not yet picked the new Project
   or Server Config up answers the endpoint before it can serve it; a *write* is
   never re-run. `--expected-origin` refuses any Gateway but the compose one.

@@ -11,12 +11,14 @@ applied.``
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Sequence
 
 import httpx
 
 from ignition_rest_mcp.cli.setup_native import documents as docs
 from ignition_rest_mcp.cli.setup_native import gateway as gw
+from ignition_rest_mcp.cli.setup_native import security
 from ignition_rest_mcp.cli.setup_native.action import (
     ACKNOWLEDGEMENT,
     BLOCKED,
@@ -34,7 +36,7 @@ from ignition_rest_mcp.cli.setup_native.doctor import (
     make_gateway,
     probe_gateway,
 )
-from ignition_rest_mcp.cli.setup_native.inputs import Inputs
+from ignition_rest_mcp.cli.setup_native.inputs import SECURITY_LEVEL_PARENT, Inputs
 
 PLAN_SENTINEL = "No changes have been applied."
 
@@ -293,14 +295,17 @@ def policy_actions(
 
 
 def detect_only_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
-    """Security level and runtime token are detected, never provisioned, by this CLI."""
+    """The security planes this run only detects — a flag-enabled one is planned instead."""
 
     lines = [
-        ("security-level", "security-levels", "Gateway security level"),
-        ("runtime-token", "api-token", "Ignition API token for the MCP service user"),
+        (inputs.provision_security_levels, "security-level", "security-levels", "Gateway security level"),
+        (inputs.create_runtime_token, "runtime-token", "api-token", "Ignition API token for the MCP service user"),
     ]
     actions: list[Action] = []
-    for kind, capability, label in lines:
+    for planned, kind, capability, label in lines:
+        if planned:
+            # ``provisioning_actions`` carries this line, in the order apply runs it.
+            continue
         if observation.capability(capability):
             actions.append(
                 Action(NO_CHANGE, kind, label, "detect-only, provisioning is apply-phase")
@@ -312,16 +317,173 @@ def detect_only_actions(inputs: Inputs, observation: GatewayObservation) -> list
     return actions
 
 
+def provisioning_actions(
+    inputs: Inputs, observation: GatewayObservation, observed: security.Observation | None
+) -> list[Action]:
+    """D20's opt-in Security Level and Runtime API token lines; empty without the flags."""
+
+    if not inputs.provisions_security:
+        return []
+    state = observed if observed is not None else security.Observation()
+    actions: list[Action] = []
+    if inputs.provision_security_levels:
+        action, detail, _ = _level_standing(inputs, observation, state)
+        actions.append(Action(action, "security-level", inputs.security_level_path, detail))
+    if inputs.create_runtime_token:
+        actions.append(_runtime_token_action(inputs, observation, state))
+    return actions
+
+
+def _level_standing(
+    inputs: Inputs, observation: GatewayObservation, observed: security.Observation
+) -> tuple[str, str, list[dict[str, Any]] | None]:
+    """One action, its reason and the level's granted tree for the Runtime API token."""
+
+    if not observation.capability("security-levels"):
+        return BLOCKED, (
+            f"Gateway does not document GET {gw.SECURITY_LEVELS_PATH}; the dedicated Runtime Security "
+            "Level cannot be read or written"
+        ), None
+    if observed.levels_error:
+        return BLOCKED, f"the Gateway's security tree could not be read ({observed.levels_error})", None
+    tree = observed.levels or []
+    if not observed.signature:
+        return BLOCKED, (
+            "the security-levels singleton serves no Resource signature, so a write cannot be "
+            "preconditioned on the tree this plan reasoned about"
+        ), None
+    found = security.find_level(tree, inputs.security_level)
+    if found is not None:
+        path, node = found
+        if path != [SECURITY_LEVEL_PARENT, inputs.security_level]:
+            return BLOCKED, (
+                f"a level named {inputs.security_level} already exists at {'.'.join(path)}; refusing to "
+                "add a second one under a different path"
+            ), None
+        problem = security.level_shape_problem(node)
+        if problem:
+            return BLOCKED, (
+                f"{inputs.security_level_path} already exists but {problem}; this CLI never modifies an "
+                "existing Security Level"
+            ), None
+        grant = security.grant_tree(tree, [SECURITY_LEVEL_PARENT, inputs.security_level])
+        return NO_CHANGE, "the dedicated Runtime level is already present; left unchanged", grant
+    merged, error = security.with_managed_level(tree, inputs)
+    if merged is None:
+        return BLOCKED, error, None
+    return CREATE, (
+        f"add the dedicated Runtime level under {SECURITY_LEVEL_PARENT}, preserving the other "
+        f"{len(tree)} top-level level(s)"
+    ), security.token_grant(inputs, tree, creating=True)
+
+
+def _runtime_token_action(
+    inputs: Inputs, observation: GatewayObservation, observed: security.Observation
+) -> Action:
+    """The Runtime API token intention: create it once, never overwrite it (D09, D20)."""
+
+    kind = "runtime-token"
+    name = inputs.runtime_token
+    level_action, level_detail, _ = _level_standing(inputs, observation, observed)
+    if level_action == BLOCKED:
+        return Action(
+            BLOCKED, kind, name,
+            f"the Runtime API token is granted the dedicated Security Level, and {level_detail}",
+        )
+    if level_action == CREATE and not inputs.provision_security_levels:
+        return Action(
+            BLOCKED, kind, name,
+            f"{inputs.security_level_path} does not exist and --provision-security-levels was not passed; "
+            "a Runtime credential must be granted a dedicated Security Level",
+        )
+    if not observation.capability("api-token"):
+        return Action(
+            BLOCKED, kind, name,
+            f"Gateway does not document POST {gw.API_TOKEN_PATH}; the Runtime API token cannot be read "
+            "or created",
+        )
+    if observed.token_error:
+        return Action(
+            BLOCKED, kind, name,
+            f"an API token of this name could not be read ({observed.token_error})",
+        )
+    token_file = inputs.runtime_token_file
+    assert token_file is not None  # load_inputs requires it together with --create-runtime-token
+    if observed.secret.error:
+        return Action(
+            BLOCKED, kind, name,
+            f"--runtime-token-file {token_file} is unusable: {observed.secret.error}",
+        )
+    if observed.token is not None:
+        return _existing_token_action(inputs, name, token_file, observed)
+    if observed.secret.exists:
+        return Action(
+            BLOCKED, kind, name,
+            f"--runtime-token-file already holds a credential ({observed.secret.name!r}); refusing to "
+            "overwrite it — move it aside or pass a different path",
+        )
+    blocked = security.check_secret_file_target(token_file)
+    if blocked:
+        return Action(BLOCKED, kind, name, blocked)
+    channel = "secureChannelRequired=false" if inputs.runtime_token_insecure_channel else "secureChannelRequired=true"
+    level_note = "the level this run creates" if level_action == CREATE else "the existing level"
+    return Action(
+        CREATE, kind, name,
+        f"create API token granted {inputs.security_level_path} ({level_note}), {channel}; the secret is "
+        f"written to {token_file} with mode 0600 and never reported",
+    )
+
+
+def _existing_token_action(
+    inputs: Inputs, name: str, token_file: Path, observed: security.Observation
+) -> Action:
+    """What to do about an API token the Gateway already serves: never overwrite it."""
+
+    kind = "runtime-token"
+    stored = security.stored_token_hash(observed.token)
+    if not stored:
+        return Action(
+            BLOCKED, kind, name,
+            "an API token of this name already exists and the Gateway serves no readable token hash; "
+            "refusing to overwrite it",
+        )
+    if not observed.secret.exists:
+        return Action(
+            BLOCKED, kind, name,
+            f"an API token of this name already exists ({token_file} holds no credential to prove "
+            "ownership); refusing to overwrite it — reuse the existing token, or pass "
+            "--runtime-token-name to provision a new one",
+        )
+    if observed.secret.name != name:
+        return Action(
+            BLOCKED, kind, name,
+            f"{token_file} holds the credential {observed.secret.name!r}, not {name!r}; refusing to "
+            "compare or overwrite it",
+        )
+    if not observed.secret.hashes_to(stored):
+        return Action(
+            BLOCKED, kind, name,
+            f"the API token's stored hash is not the secret in {token_file}; refusing to overwrite it — "
+            "reuse the existing credential, or pass --runtime-token-name to provision a new one",
+        )
+    return Action(
+        NO_CHANGE, kind, name,
+        f"the Runtime API token already exists and matches {token_file}; left unchanged",
+    )
+
+
 def build_actions(
     inputs: Inputs,
     observation: GatewayObservation,
     documents: docs.Documents | None = None,
     policy: docs.PolicyObservation | None = None,
+    observed: security.Observation | None = None,
 ) -> list[Action]:
     """Every intention, in the order ``apply`` executes them."""
 
     wanted = documents if documents is not None else docs.Documents()
     actions = module_actions(inputs, observation)
+    actions.extend(provisioning_actions(inputs, observation, observed))
     actions.extend(project_actions(inputs, observation))
     actions.extend(server_config_actions(inputs, observation, wanted))
     actions.extend(policy_actions(inputs, observation, wanted, policy))
@@ -351,12 +513,15 @@ async def run(
 
     documents = docs.load(inputs)
     policy: docs.PolicyObservation | None = None
+    observed: security.Observation | None = None
     async with make_gateway(inputs, gateway_transport) as client:
         _, observation = await probe_gateway(client, inputs)
         if observation.reachable and documents.policy_text is not None:
             policy = await docs.observe_policy(client)
+        if observation.reachable and inputs.provisions_security:
+            observed = await security.observe(client, inputs)
     error = None if observation.reachable else (observation.error or "Gateway unreachable")
-    actions = [] if error else build_actions(inputs, observation, documents, policy)
+    actions = [] if error else build_actions(inputs, observation, documents, policy, observed)
     return _emit(inputs, actions, error=error)
 
 
