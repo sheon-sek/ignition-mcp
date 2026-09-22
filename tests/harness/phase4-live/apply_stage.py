@@ -55,6 +55,8 @@ import hashlib
 import io
 import json
 import os
+import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -71,9 +73,10 @@ sys.path.insert(0, str(ROOT / "tests/harness/phase4-live"))
 import policy_document  # noqa: E402
 
 from ignition_rest_mcp.cli.setup_native import apply as apply_command  # noqa: E402
+from ignition_rest_mcp.cli.setup_native import install_module as install_command  # noqa: E402
 from ignition_rest_mcp.cli.setup_native import plan as plan_command  # noqa: E402
 from ignition_rest_mcp.cli.setup_native import verify as verify_command  # noqa: E402
-from ignition_rest_mcp.cli.setup_native.inputs import load_inputs  # noqa: E402
+from ignition_rest_mcp.cli.setup_native.inputs import load_inputs, load_module_inputs  # noqa: E402
 
 #: The permissions tree the harness's own Server Configs carry, so the config this
 #: stage creates is the same deployment shape the other stages run against.
@@ -83,6 +86,12 @@ VERIFY_ATTEMPTS = 6
 
 VERIFY_WAIT_SECONDS = 10.0
 SENTINEL = "No changes have been applied."
+
+#: The ticket #56 stage bounds. The module install is judged against the identity the
+#: pinned ``.modl`` declares (read once, hashed by the CLI itself), and the lowered
+#: bundle the upgrade case imports is validated exactly like a release build.
+INSTALL_VERIFY_ATTEMPTS = 12
+INSTALL_VERIFY_WAIT_SECONDS = 10.0
 
 
 def permissions_of_harness_config() -> dict[str, Any]:
@@ -113,6 +122,33 @@ async def run_command(command: str, argv: list[str]) -> tuple[int, str, dict[str
             code = await verify_command.run(inputs)
     text = buffer.getvalue()
     return code, text, parse_report(text, command)
+
+
+async def run_module_install(args: argparse.Namespace) -> tuple[int, str, dict[str, Any]]:
+    """One ``setup-native install-module`` run against the module-less Gateway.
+
+    The CLI is the shipped product: the same ``load_module_inputs`` the entry point
+    uses, the same refusal order, and the restart wait it owns. The stage records the
+    JSON report the run emitted and judges the identity the Gateway serves afterwards.
+    """
+
+    argv = [
+        "--file", str(args.module_file),
+        "--sha256", args.module_sha256,
+        "--gateway-url", args.base_url,
+        "--gateway-token-file", str(args.token_file),
+        "--accept-certificate",
+        "--accept-eula",
+        "--acknowledge-upgrade",
+        "--restart",
+        "--json",
+    ]
+    inputs = load_module_inputs(argv)
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        code = await install_command.run(inputs)
+    text = buffer.getvalue()
+    return code, text, parse_report(text, "install-module")
 
 
 def build_argv(args: argparse.Namespace) -> list[str]:
@@ -158,6 +194,41 @@ async def run_stage(args: argparse.Namespace) -> int:
     # 0700 directory as the operator token: the Gateway returns the key once, and the
     # stage must never let it reach the uploaded evidence.
     args.runtime_token_file = private / "runtime.token"
+    # Ticket #56: when the run names a module file, the Gateway it talks to has NO
+    # MCP Module, and this stage puts it there through the shipped CLI before it
+    # applies anything.
+    if args.install_only:
+        evidence: dict[str, Any] = {
+            "schemaVersion": 1,
+            "ticket": 56,
+            "title": "setup-native install-module (ticket #56)",
+            "baseUrl": args.base_url,
+            "sourceRevision": args.source_revision,
+            "runId": os.environ.get("GITHUB_RUN_ID", ""),
+            "steps": {},
+        }
+        install_code, install_text, install_report = await run_module_install(args)
+        evidence["steps"]["install-module"] = {
+            "exitCode": install_code, "report": install_report, "output": install_text,
+        }
+        again_code, again_text, again_report = await run_module_install(args)
+        evidence["steps"]["install-module-again"] = {
+            "exitCode": again_code, "report": again_report, "output": again_text,
+        }
+        ok = (
+            install_code == 0
+            and install_report.get("outcome") == "INSTALL"
+            and again_code == 0
+            and again_report.get("outcome") == "NO CHANGE"
+        )
+        evidence["ok"] = ok
+        if not ok:
+            evidence["failure"] = (
+                f"install-module {install_report.get('outcome')} / again {again_report.get('outcome')}"
+            )
+        _write(evidence, args, "setup-native-install-module.json")
+        print(json.dumps({"stage": "setup-native-install-module", "ok": ok}, sort_keys=True))
+        return 0 if ok else 1
     policy_file = args.evidence_dir / "runtime-target-policy.json"
     policy_file.write_text(json.dumps(policy_document.POLICY, indent=2, sort_keys=True), encoding="utf-8")
     args.policy_file = policy_file
@@ -167,6 +238,20 @@ async def run_stage(args: argparse.Namespace) -> int:
     args.permissions_file = permissions_file
 
     argv = build_argv(args)
+    released_argv = list(argv)
+    lowered_version = ""
+    if args.bundle_source is not None:
+        # Ticket #56, round 1: the starting deployment is the released bundle one
+        # version BELOW the release the run built, so the upgrade that follows deploys
+        # the real release over an older bundle (D21's upgrade path, under
+        # acknowledgement). The build is a real release build of the same project
+        # source and the same revision stamp.
+        args.lowered_release_keepalive = tempfile.TemporaryDirectory(prefix="setup-native-lowered-")
+        lowered_dir, lowered_version = _build_lowered_release(
+            args, Path(args.lowered_release_keepalive.name),
+        )
+        argv = _argv_with_bundle(argv, lowered_dir)
+    released = json.loads(args.bundle_manifest.read_text(encoding="utf-8"))
     evidence: dict[str, Any] = {
         "schemaVersion": 1,
         "ticket": 22,
@@ -185,8 +270,37 @@ async def run_stage(args: argparse.Namespace) -> int:
         "mcpUrl": f"{args.base_url.rstrip('/')}/data/mcp/{args.server_config}",
         "sourceRevision": args.source_revision,
         "runId": os.environ.get("GITHUB_RUN_ID", ""),
+        "bundle": {
+            "filename": str(released["artifact"]["filename"]),
+            "version": str(released["bundleVersion"]),
+            "sha256": str(released["artifact"]["sha256"]),
+            "nativeResponseBindingStatus": str(released["nativeResponseBindingStatus"]),
+        },
+        "startingBundleVersion": lowered_version,
         "steps": {},
     }
+
+    if args.module_file is not None:
+        # The workflow already ran the install with --install-only; this run embeds
+        # that phase's recorded INSTALL step (it is the only live record of the
+        # install) and adds its own proof: a NO CHANGE read-back that uploads nothing.
+        install_document = args.evidence_dir / "setup-native-install-module.json"
+        if not install_document.is_file():
+            _fail(evidence, args, f"the install-only phase left no {install_document.name} to embed")
+            return 1
+        installed = json.loads(install_document.read_text(encoding="utf-8"))
+        if installed.get("ok") is not True:
+            _fail(evidence, args, "the install-only phase did not record a green install")
+            return 1
+        evidence["steps"]["install-module"] = installed["steps"]["install-module"]
+        # The NO CHANGE read-back: the CLI sees the installed build and uploads nothing.
+        again_code, again_text, again_report = await run_module_install(args)
+        evidence["steps"]["install-module-again"] = {
+            "exitCode": again_code, "report": again_report, "output": again_text,
+        }
+        if again_code != 0 or again_report.get("outcome") != "NO CHANGE":
+            _fail(evidence, args, f"the module the install-only phase installed is not served: {again_report.get('outcome')}")
+            return 1
 
     plan_code, plan_text, plan_report = await run_command("plan", argv)
     evidence["steps"]["plan"] = {"exitCode": plan_code, "report": plan_report, "output": plan_text}
@@ -284,6 +398,60 @@ async def run_stage(args: argparse.Namespace) -> int:
     if secret and secret in json.dumps(evidence):
         _fail(evidence, args, "the credential reached a command output or the evidence")
         return 1
+
+    # ---------------------------------------------------------------- ticket #56 upgrade
+    if args.bundle_source is not None:
+        # The starting deployment is the lowered release; the upgrade deploys the real
+        # released bundle over it, under --acknowledge-upgrade (D21's upgrade path).
+        plan_code, plan_text, plan_report = await run_command("plan", released_argv)
+        plan_line = _bundle_project_action(plan_report)
+        if plan_code != 0 or plan_line is None or plan_line.get("action") != "UPDATE":
+            _fail(evidence, args, f"the released bundle was not planned as an upgrade: {plan_line}")
+            return 1
+        real_version = str(released["bundleVersion"])
+        if lowered_version not in str(plan_line.get("reason", "")) or real_version not in str(plan_line.get("reason", "")):
+            _fail(evidence, args, f"the upgrade plan does not observe {lowered_version} -> {real_version}: {plan_line}")
+            return 1
+        evidence["steps"]["upgradePlan"] = {
+            "exitCode": plan_code, "report": plan_report, "output": plan_text,
+        }
+        upgrade_argv = [*released_argv, "--acknowledge-upgrade"]
+        apply_code, apply_text, apply_report = await run_command("apply", upgrade_argv)
+        attempts = 1
+        retries: list[dict[str, Any]] = []
+        green = _verify_ok(apply_report.get("verify"))
+        while not green and attempts <= VERIFY_ATTEMPTS:
+            await asyncio.sleep(VERIFY_WAIT_SECONDS)
+            verify_code, verify_text, verify_report = await run_command("verify", upgrade_argv)
+            retries.append({
+                "attempt": attempts, "exitCode": verify_code,
+                "report": verify_report, "output": verify_text,
+            })
+            green = verify_code == 0 and _verify_ok(verify_report)
+            attempts += 1
+        written_kinds = sorted({
+            write.get("kind") for write in (apply_report.get("writes") or [])
+            if write.get("action") in ("CREATE", "UPDATE")
+        })
+        evidence["steps"]["upgradeApply"] = {
+            "bundleVersionBefore": lowered_version,
+            "bundleVersionAfter": real_version,
+            "planLine": plan_line,
+            "exitCode": apply_code,
+            "verifyAttempts": attempts,
+            "verifyGreen": green,
+            "verifyRetries": retries,
+            "writtenKinds": written_kinds,
+            "report": apply_report,
+            "output": apply_text,
+        }
+        if not green:
+            _fail(evidence, args, "verify never went green after the bundle upgrade")
+            return 1
+        if written_kinds != ["bundle-project"]:
+            _fail(evidence, args, f"the upgrade wrote more than the bundle project: {written_kinds}")
+            return 1
+
     evidence["ok"] = True
     _write(evidence, args)
     print(json.dumps({
@@ -293,12 +461,131 @@ async def run_stage(args: argparse.Namespace) -> int:
         "verifyAttempts": verify_attempts,
         "provisioning": provisioning,
         "secondApply": [write.get("action") for write in (second_apply_report.get("writes") or [])],
+        "upgrade": None if "upgradeApply" not in evidence["steps"] else {
+            "from": evidence["steps"]["upgradeApply"]["bundleVersionBefore"],
+            "to": evidence["steps"]["upgradeApply"]["bundleVersionAfter"],
+            "verifyGreen": evidence["steps"]["upgradeApply"]["verifyGreen"],
+        },
     }, sort_keys=True))
     return 0
 
 
 def _verify_ok(report: Any) -> bool:
     return isinstance(report, dict) and report.get("verified") is True
+
+
+# ------------------------------------------------------------------ ticket #56 upgrade
+
+
+def _bundle_project_action(report: dict[str, Any]) -> dict[str, Any] | None:
+    """The plan's bundle-project line, if the plan carried one."""
+
+    for action in report.get("actions") or []:
+        if isinstance(action, dict) and action.get("kind") == "bundle-project":
+            return action
+    return None
+
+
+def _build_lowered_release(args: argparse.Namespace, work: Path) -> tuple[Path, str]:
+    """Build the starting deployment: the released bundle one version below.
+
+    The lowered build is a real, validated release of the same project source and the
+    same revision stamp (D21: only BUNDLE_VERSION moves), so the apply that lands it
+    exercises the same import the real upgrade then replaces.
+    """
+
+    released = json.loads(args.bundle_manifest.read_text(encoding="utf-8"))
+    real_version = str(released["bundleVersion"])
+    major, minor, patch = (int(part) for part in real_version.split("."))
+    if patch:
+        lowered = f"{major}.{minor}.{patch - 1}"
+    elif minor:
+        lowered = f"{major}.{minor - 1}.0"
+    else:
+        raise SystemExit(f"cannot lower {real_version}: there is no version below it to deploy first")
+    source = work / "source"
+    source.mkdir()
+    shutil.copytree(args.bundle_source / "project", source / "project")
+    for sibling in ("BUNDLE_VERSION", "RESOURCE_SCHEMA_VERSION"):
+        shutil.copy(args.bundle_source / sibling, source / sibling)
+    (source / "BUNDLE_VERSION").write_text(lowered + "\n", encoding="utf-8")
+    _repoint_bundle_version(source / "project", lowered)
+    release_dir = _rebuild_release(source, work / "release", lowered,
+                                   source_revision=args.source_revision)
+    return release_dir, lowered
+
+
+def _repoint_bundle_version(project: Path, bundle_version: str) -> None:
+    """Keep the D21 identity trio consistent in a re-versioned bundle source copy.
+
+    The validator ties BUNDLE_VERSION, the handler's ``bundleVersion`` literal and the
+    project.json marker line together; a lowered build moves all three, and only the
+    version literals (never a Tool, Resource or Prompt) change.
+    """
+
+    handler = project / "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
+    text = handler.read_text(encoding="utf-8")
+    handler.write_text(
+        re.sub(r'bundleVersion = "[^"]+"', f'bundleVersion = "{bundle_version}"', text, count=1),
+        encoding="utf-8",
+    )
+    manifest_path = project / "project.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    lines = str(manifest["description"]).splitlines()
+    lines[-1] = f"ignition-mcp-managed: product=ignition-runtime-bundle; bundle={bundle_version}"
+    manifest["description"] = "\n".join(lines)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+
+def _rebuild_release(source: Path, out: Path, bundle_version: str, *, source_revision: str) -> Path:
+    """Build one release from a validated bundle source copy.
+
+    ``source_revision`` must be the same stamp the run's release carries: the deployed
+    artifact and the endpoint's ``bundle_info`` answer are judged against it.
+    """
+
+    out.mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        [
+            sys.executable, "-m", "tooling.native.cli", "release",
+            "--project-dir", str(source / "project"),
+            "--out-dir", str(out),
+            "--source-revision", source_revision,
+            "--evidence-dir", "tests/compatibility/evidence",
+        ],
+        cwd=str(ROOT), capture_output=True, text=True, check=False,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(
+            f"the {bundle_version} release build failed: {completed.stdout} {completed.stderr}"
+        )
+    return out
+
+
+def _argv_with_bundle(argv: list[str], release_dir: Path) -> list[str]:
+    """The same apply argv, aimed at one release directory's artifacts."""
+
+    replaced: list[str] = []
+    index = 0
+    while index < len(argv):
+        item = argv[index]
+        if item == "--bundle-manifest":
+            replaced.extend([
+                item,
+                str(next(release_dir.glob("ignition-runtime-bundle-*.manifest.json"))),
+            ])
+            index += 2  # the flag and the value it had
+            continue
+        if item == "--bundle-zip":
+            replaced.extend([
+                item,
+                str(next(release_dir.glob("ignition-runtime-bundle-*.zip"))),
+            ])
+            index += 2
+            continue
+        replaced.append(item)
+        index += 1
+    return replaced
 
 
 # ------------------------------------------------------------------ ticket #22 probes
@@ -442,9 +729,9 @@ def _fail(evidence: dict[str, Any], args: argparse.Namespace, reason: str) -> No
     print(f"setup-native apply stage failed: {reason}", file=sys.stderr)
 
 
-def _write(evidence: dict[str, Any], args: argparse.Namespace) -> None:
+def _write(evidence: dict[str, Any], args: argparse.Namespace, name: str = "setup-native-apply.json") -> None:
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
-    path = args.evidence_dir / "setup-native-apply.json"
+    path = args.evidence_dir / name
     blob = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
     secret = _secret_line(args.runtime_token_file)
     if secret and secret in blob:
@@ -461,12 +748,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--api-token", required=True)
-    parser.add_argument("--bundle-manifest", required=True, type=Path)
-    parser.add_argument("--bundle-zip", required=True, type=Path)
+    parser.add_argument("--bundle-manifest", type=Path, default=None,
+                        help="required for the apply phase; --install-only stops before it")
+    parser.add_argument("--bundle-zip", type=Path, default=None,
+                        help="required for the apply phase; --install-only stops before it")
     parser.add_argument("--evidence-dir", required=True, type=Path)
     parser.add_argument("--source-revision", default="")
-    parser.add_argument("--project", required=True)
-    parser.add_argument("--server-config", required=True)
+    parser.add_argument("--project", default=None,
+                        help="required for the apply phase; --install-only stops before it")
+    parser.add_argument("--server-config", default=None,
+                        help="required for the apply phase; --install-only stops before it")
     parser.add_argument("--profile", default="readonly")
     parser.add_argument(
         "--expected-origin", default="",
@@ -477,11 +768,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="the compose file of the disposable Gateway; when given, a verify that stays red "
              "reloads the Gateway once before the stage judges it",
     )
+    parser.add_argument(
+        "--module-file", type=Path, default=None,
+        help="the pinned .modl this stage installs through the CLI before it applies (ticket #56); "
+             "when absent the stage assumes the workflow deployed the module and skips the install",
+    )
+    parser.add_argument(
+        "--module-sha256", default="",
+        help="the SHA-256 of --module-file, named exactly as an operator names it",
+    )
+    parser.add_argument(
+        "--install-only", action="store_true",
+        help="run only the install-module step of ticket #56 and stop; the workflow calls the "
+             "stage once with this before the apply run, so each phase has its own log",
+    )
+    parser.add_argument(
+        "--bundle-source", type=Path, default=None,
+        help="a directory holding a validated BUNDLE_VERSION + project/ copy of the release the "
+             "run lowers and re-imports for the Bundle upgrade case (ticket #56)",
+    )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
+    if args.install_only and args.module_file is None:
+        print("--install-only runs the ticket #56 module install and needs --module-file", file=sys.stderr)
+        return 2
+    if not args.install_only and not (
+        args.bundle_manifest and args.bundle_zip and args.project and args.server_config
+    ):
+        print(
+            "the apply phase needs --bundle-manifest, --bundle-zip, --project and --server-config "
+            "(or run --install-only for the ticket #56 module install)",
+            file=sys.stderr,
+        )
+        return 2
     if args.expected_origin:
         origin = args.base_url.split("//", 1)[-1].split("/", 1)[0]
         if origin != args.expected_origin:
