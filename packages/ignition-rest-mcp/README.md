@@ -258,11 +258,11 @@ never returns the archive, and leaves every other entry untouched. Reads return 
 resources only: a View the Project inherits from an ancestor is not in the export and answers
 `not_found` rather than being resolved through the inheritance chain.
 
-`perspective_view_validate` (D15) dispatches nothing. It parses the View document the caller
-sends, requires a JSON object with a `root` object whose `type` is a string, and applies the
-D10 budgets: at most 1 MiB of serialized document and at most 64 JSON levels. Unknown
-component types are accepted, and a passing validation does not promise that an Ignition
-import accepts the document.
+`perspective_view_validate` (D15) dispatches nothing. It takes the View document as a JSON
+object, requires a `root` object whose `type` is a string, and applies the D10 budgets: at most
+1 MiB, measured on the document's compact re-serialization, and at most 64 JSON levels.
+Unknown component types are accepted, and a passing validation does not promise that an
+Ignition import accepts the document.
 
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,

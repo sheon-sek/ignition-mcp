@@ -274,14 +274,20 @@ def read_session_props(archive_path: str) -> dict[str, Any] | None:
 def validate_view_document(document: Any, *, budget: ViewBudget | None = None) -> ViewValidation:
     """Validate one View document offline (D15), without a Gateway or an archive.
 
-    ``document`` is JSON text or an already-parsed JSON value, so the write side
-    can validate a document it holds and a caller can validate the text it sent.
+    ``document`` is an already-parsed JSON value, which is what a Tool receives:
+    the MCP layer parses the caller's request, so this function measures and
+    checks instead of parsing text.
 
-    Refused with ``invalid_argument``: text that does not parse as JSON, a value
-    that is not a JSON object, a missing or non-object ``root``, and a
-    ``root.type`` that is not a string. Refused with ``limit_exceeded``: a
-    document over the byte ceiling, one nested deeper than the depth ceiling, and
-    text whose nesting exhausts the JSON parser before it can be measured.
+    Refused with ``invalid_argument``: a value that is not a JSON object, a value
+    JSON cannot represent, a missing or non-object ``root``, and a ``root.type``
+    that is not a string. Refused with ``limit_exceeded``: a document nested
+    deeper than the depth ceiling, and one over the byte ceiling.
+
+    The byte ceiling is measured on the compact re-serialization
+    (``separators=(",", ":")``, ``ensure_ascii=False``), so it does not depend on
+    how the caller's client spaced its request, and the depth ceiling is checked
+    before that measurement, so no document reaches the serializer deep enough to
+    exhaust its recursion.
 
     Unknown component types are accepted. This checks structure and budget, never
     the component inventory of a particular Ignition patch, and it cannot promise
@@ -289,43 +295,27 @@ def validate_view_document(document: Any, *, budget: ViewBudget | None = None) -
     """
 
     limits = budget if budget is not None else DEFAULT_VIEW_BUDGET
-    parsed: Any = document
-    measured: int
-    if isinstance(document, str):
-        measured = len(document.encode("utf-8"))
-        if measured > limits.max_bytes:
-            raise GatewayError("limit_exceeded", _bytes_message(measured, limits.max_bytes))
-        try:
-            parsed = json.loads(document)
-        except RecursionError as error:
-            raise GatewayError("limit_exceeded", _depth_message(limits.max_depth + 1, limits.max_depth)) from error
-        except ValueError as error:
-            raise GatewayError(
-                "invalid_argument", f"view must be JSON text; parsing it failed ({error})",
-            ) from error
-    else:
-        try:
-            measured = len(
-                json.dumps(parsed, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-            )
-        except (TypeError, ValueError) as error:
-            raise GatewayError(
-                "invalid_argument", "view must be JSON text or a JSON value that JSON can represent",
-            ) from error
-        if measured > limits.max_bytes:
-            raise GatewayError("limit_exceeded", _bytes_message(measured, limits.max_bytes))
-
-    if not isinstance(parsed, dict):
+    if not isinstance(document, dict):
         raise GatewayError("invalid_argument", "a View document must be a JSON object")
-    root = parsed.get("root")
+    root = document.get("root")
     if not isinstance(root, dict):
         raise GatewayError("invalid_argument", "a View document must have a 'root' object")
     if not isinstance(root.get("type"), str):
         raise GatewayError("invalid_argument", "a View document must have a string 'root.type'")
-    depth = _container_depth(parsed)
+    depth = _container_depth(document)
     if depth > limits.max_depth:
         raise GatewayError("limit_exceeded", _depth_message(depth, limits.max_depth))
-    return ViewValidation(document=parsed, bytes=measured, depth=depth)
+    try:
+        measured = len(
+            json.dumps(document, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+        )
+    except (TypeError, ValueError) as error:
+        raise GatewayError(
+            "invalid_argument", "view must be a JSON object that JSON can represent",
+        ) from error
+    if measured > limits.max_bytes:
+        raise GatewayError("limit_exceeded", _bytes_message(measured, limits.max_bytes))
+    return ViewValidation(document=document, bytes=measured, depth=depth)
 
 
 def _bytes_message(requested: int, limit: int) -> str:

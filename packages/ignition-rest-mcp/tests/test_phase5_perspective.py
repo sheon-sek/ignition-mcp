@@ -202,19 +202,20 @@ def test_list_view_paths_reports_views_and_never_a_folder(tmp_path: Path) -> Non
 
 
 def test_validate_accepts_an_unknown_component_type_and_reports_measurements() -> None:
-    text = json.dumps(UNKNOWN_COMPONENT_VIEW)
-
-    validation = perspective.validate_view_document(text)
+    validation = perspective.validate_view_document(UNKNOWN_COMPONENT_VIEW)
 
     assert validation.document == UNKNOWN_COMPONENT_VIEW
-    assert validation.bytes == len(text.encode("utf-8"))
+    # The byte ceiling is measured on the compact re-serialization, not on a dump
+    # that spaces its separators out.
+    assert validation.bytes == len(
+        json.dumps(UNKNOWN_COMPONENT_VIEW, separators=(",", ":"), ensure_ascii=False).encode("utf-8"),
+    )
+    assert validation.bytes < len(json.dumps(UNKNOWN_COMPONENT_VIEW).encode("utf-8"))
     assert validation.depth == 4
 
 
 def test_validate_refuses_an_oversize_document() -> None:
-    oversize = json.dumps(
-        {"root": {"type": "x"}, "pad": "a" * perspective.DEFAULT_VIEW_BUDGET.max_bytes},
-    )
+    oversize = {"root": {"type": "x"}, "pad": "a" * perspective.DEFAULT_VIEW_BUDGET.max_bytes}
 
     with pytest.raises(GatewayError) as captured:
         perspective.validate_view_document(oversize)
@@ -228,15 +229,16 @@ def test_validate_refuses_a_document_nested_past_the_depth_ceiling() -> None:
         nested = {"type": "x", "child": nested}
 
     with pytest.raises(GatewayError) as captured:
-        perspective.validate_view_document(json.dumps({"root": nested}))
+        perspective.validate_view_document({"root": nested})
 
     assert captured.value.code == "limit_exceeded"
 
 
 @pytest.mark.parametrize("document", [
-    "{not json", "[]", '{"children": []}', '{"root": []}', '{"root": {"type": 7}}',
+    [], ["root"], 7, None, "", '{"root": {"type": "x"}}', {"children": []}, {"root": []},
+    {"root": {"type": 7}},
 ])
-def test_validate_refuses_a_document_that_is_not_a_view(document: str) -> None:
+def test_validate_refuses_a_document_that_is_not_a_view(document: Any) -> None:
     with pytest.raises(GatewayError) as captured:
         perspective.validate_view_document(document)
 
@@ -337,7 +339,7 @@ def test_view_validate_makes_no_gateway_call() -> None:
     )
     context = OperationContext.start("perspective_view_validate", "none:test", "FAST")
 
-    result = perspective_view_validate(context, view=json.dumps(UNKNOWN_COMPONENT_VIEW))
+    result = perspective_view_validate(context, view=UNKNOWN_COMPONENT_VIEW)
 
     assert result.valid is True
     assert result.depth == 4
@@ -452,7 +454,7 @@ def test_the_registered_tools_reach_their_services_under_the_contract_parameter_
         server = server_module.create_server(_settings(data_dir=str(tmp_path)))
         async with Client(server) as client:
             validated = await client.call_tool(
-                "perspective_view_validate", {"view": json.dumps(UNKNOWN_COMPONENT_VIEW)},
+                "perspective_view_validate", {"view": UNKNOWN_COMPONENT_VIEW},
             )
             assert validated.data.valid is True
             listing = await client.call_tool("perspective_view_list", {"projectName": "Demo"})

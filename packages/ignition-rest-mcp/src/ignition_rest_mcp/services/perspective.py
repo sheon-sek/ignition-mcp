@@ -15,6 +15,7 @@ Gateway nor an archive: it validates the document the caller sent.
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
@@ -94,9 +95,13 @@ async def perspective_view_get(
 
 
 def perspective_view_validate(
-    context: OperationContext, *, view: str,
+    context: OperationContext, *, view: dict[str, Any],
 ) -> PerspectiveViewValidateResult:
-    """Validate a caller-supplied View document offline (D15). No Gateway call."""
+    """Validate a caller-supplied View document offline (D15). No Gateway call.
+
+    ``view`` is the parsed document, as the MCP layer delivers it: the byte
+    ceiling is measured on its compact re-serialization.
+    """
 
     validation = perspective.validate_view_document(view)
     return PerspectiveViewValidateResult(

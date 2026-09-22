@@ -782,7 +782,7 @@ def create_server(settings: Settings) -> FastMCP:
         output_schema=PerspectiveViewValidateResult.model_json_schema(),
         tags={"read", "scope:ignition.read", "capability:project_export"},
     )
-    async def perspective_view_validate(view: str) -> PerspectiveViewValidateResult:
+    async def perspective_view_validate(view: dict[str, Any]) -> PerspectiveViewValidateResult:
         async def flow(context: OperationContext) -> PerspectiveViewValidateResult:
             return perspective_view_validate_service(context, view=view)
 
