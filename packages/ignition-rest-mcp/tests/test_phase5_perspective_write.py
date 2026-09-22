@@ -68,6 +68,8 @@ WRITE_TOOLS = (VIEW_UPSERT_TOOL, VIEW_DELETE_TOOL, PAGE_CONFIG_UPDATE_TOOL, SESS
 VIEWS = perspective.VIEWS_DIRECTORY
 PAGE_CONFIG_ENTRY = perspective.PAGE_CONFIG_ENTRY
 SESSION_PROPS_ENTRY = perspective.SESSION_PROPS_ENTRY
+PAGE_CONFIG_RESOURCE_ENTRY = perspective.PAGE_CONFIG_RESOURCE_ENTRY
+SESSION_PROPS_RESOURCE_ENTRY = perspective.SESSION_PROPS_RESOURCE_ENTRY
 
 
 def _zip(entries: dict[str, bytes]) -> bytes:
@@ -90,6 +92,17 @@ def _compact(document: dict[str, Any]) -> bytes:
 
     return json.dumps(document, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
+
+
+def _metadata(document_name: str) -> bytes:
+    """The `resource.json` an import needs to keep a resource, as P5-3 confirmed it on a
+    live 8.3.8 Gateway. Written out rather than built from the adapter, so a change to
+    the shape the server writes fails these tests."""
+
+    return (
+        '{"scope":"G","version":1,"restricted":false,"overridable":true,"files":["'
+        f'{document_name}"]}}'
+    ).encode("utf-8")
 
 def _view_document(label: str = "overview") -> dict[str, Any]:
     return {"root": {"type": "ia.container.coord", "children": []}, "custom": {"label": label}}
@@ -254,7 +267,12 @@ def test_a_view_replace_creates_the_document_when_the_project_has_no_such_view()
     entries = _entries(patched)
 
     assert entries[f"{VIEWS}/{NEW_PATH}/view.json"] == _compact(replacement)
-    _unchanged(_entries(baseline), entries, f"{VIEWS}/{NEW_PATH}/view.json")
+    # The create also writes the metadata the import needs to keep the View.
+    assert entries[f"{VIEWS}/{NEW_PATH}/resource.json"] == _metadata("view.json")
+    _unchanged(
+        _entries(baseline), entries,
+        f"{VIEWS}/{NEW_PATH}/view.json", f"{VIEWS}/{NEW_PATH}/resource.json",
+    )
 
 
 def test_a_view_delete_removes_the_view_and_keeps_a_folder_that_still_holds_views() -> None:
@@ -307,6 +325,53 @@ def test_the_target_entry_is_what_decides_whether_a_project_defines_the_resource
     assert not perspective.defines_target(str(archive), ResourcePatch(PatchKind.SESSION_PROPS_REPLACE))
 
 
+@pytest.mark.parametrize(("patch", "document_entry", "resource_entry", "document_name"), [
+    (
+        ResourcePatch(kind=PatchKind.VIEW_REPLACE, logical_path=NEW_PATH, document=_view_document("new")),
+        f"{VIEWS}/{NEW_PATH}/view.json", f"{VIEWS}/{NEW_PATH}/resource.json", "view.json",
+    ),
+    (
+        ResourcePatch(kind=PatchKind.PAGE_CONFIG_REPLACE, document={"pages": ["*"]}),
+        PAGE_CONFIG_ENTRY, PAGE_CONFIG_RESOURCE_ENTRY, "config.json",
+    ),
+    (
+        ResourcePatch(kind=PatchKind.SESSION_PROPS_REPLACE, document={"props": {"theme": "dark"}}),
+        SESSION_PROPS_ENTRY, SESSION_PROPS_RESOURCE_ENTRY, "props.json",
+    ),
+])
+def test_a_created_resource_gains_the_designer_metadata_ignition_requires(
+    patch: ResourcePatch, document_entry: str, resource_entry: str, document_name: str,
+) -> None:
+    """A Project import keeps a resource directory only when a sibling `resource.json`
+    declares it, so a resource this server creates must carry one in the same patch
+    (confirmed on a live 8.3.8 Gateway). Without it the import reports success and
+    publishes nothing."""
+
+    baseline = _project_archive(views={SIBLING_PATH: _view_document("sibling")})
+
+    entries = _entries(_patched(baseline, patch))
+
+    assert entries[resource_entry] == _metadata(document_name)
+    assert entries[document_entry] == _compact(patch.document or {})
+
+
+def test_an_existing_resource_keeps_its_own_metadata() -> None:
+    """The metadata rule is a create rule: a resource that already has a
+    `resource.json` keeps it byte-identically, whatever shape it is in."""
+
+    baseline = _project_archive(views={VIEW_PATH: _view_document("before")})
+    before = _entries(baseline)
+
+    patched = _patched(
+        baseline,
+        ResourcePatch(kind=PatchKind.VIEW_REPLACE, logical_path=VIEW_PATH, document=_view_document("after")),
+    )
+    entries = _entries(patched)
+
+    assert entries[f"{VIEWS}/{VIEW_PATH}/resource.json"] == before[f"{VIEWS}/{VIEW_PATH}/resource.json"]
+    _unchanged(before, entries, f"{VIEWS}/{VIEW_PATH}/view.json")
+
+
 # ------------------------------------------------------------------ the write Tools
 
 
@@ -347,10 +412,16 @@ def test_a_view_upsert_creates_a_view_the_project_does_not_have(tmp_path: Path) 
             created = _view_document("created")
             result = _upsert(agent, path=NEW_PATH, view=created, fingerprint=_fingerprint(agent))
             after = _entries(gateway.project(PROJECT))
+            listed = structured(
+                agent.call("perspective_view_list", {"projectName": PROJECT})
+            )
 
     assert structured(result)["state"] == "COMMITTED"
     assert after[f"{VIEWS}/{NEW_PATH}/view.json"] == _compact(created)
-    _unchanged(before, after, f"{VIEWS}/{NEW_PATH}/view.json")
+    # The metadata is what makes the import keep the new View at all.
+    assert after[f"{VIEWS}/{NEW_PATH}/resource.json"] == _metadata("view.json")
+    assert NEW_PATH in listed["items"]
+    _unchanged(before, after, f"{VIEWS}/{NEW_PATH}/view.json", f"{VIEWS}/{NEW_PATH}/resource.json")
 
 
 def test_upserting_the_same_document_is_a_no_change(tmp_path: Path) -> None:
@@ -476,7 +547,8 @@ def test_page_config_update_commits_and_creates_a_document_the_project_lacks(tmp
 
     assert structured(result)["state"] == "COMMITTED"
     assert after[PAGE_CONFIG_ENTRY] == _compact(config)
-    _unchanged(before, after, PAGE_CONFIG_ENTRY)
+    assert after[PAGE_CONFIG_RESOURCE_ENTRY] == _metadata("config.json")
+    _unchanged(before, after, PAGE_CONFIG_ENTRY, PAGE_CONFIG_RESOURCE_ENTRY)
 
 
 def test_session_props_update_commits_and_creates_a_document_the_project_lacks(tmp_path: Path) -> None:
@@ -494,7 +566,8 @@ def test_session_props_update_commits_and_creates_a_document_the_project_lacks(t
 
     assert structured(result)["state"] == "COMMITTED"
     assert after[SESSION_PROPS_ENTRY] == _compact(props)
-    _unchanged(before, after, SESSION_PROPS_ENTRY)
+    assert after[SESSION_PROPS_RESOURCE_ENTRY] == _metadata("props.json")
+    _unchanged(before, after, SESSION_PROPS_ENTRY, SESSION_PROPS_RESOURCE_ENTRY)
 
 
 def test_an_inherited_view_is_refused_before_the_transaction(

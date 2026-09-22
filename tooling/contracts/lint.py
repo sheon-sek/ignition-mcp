@@ -184,6 +184,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "requestSchemaValidation": False,
         "consumesArtifact": False,
         "perspectiveTarget": True,
+        #: D26: this Tool removes one View and creates nothing, so it declares no
+        #: created-resource metadata (the P5-3 live finding governs the other three).
+        "createsMetadata": False,
         "capabilityId": "project_import",
         "recoveredSuccess": (
             "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
@@ -1075,6 +1078,36 @@ def lint_contracts(root: str | Path) -> None:
                     raise ContractError(
                         f"{tool_name}: an ancestor chain the listing cannot account for must fail "
                         "closed with upstream_error (D15)"
+                    )
+                # P5-3's live 8.3.8 finding: the import keeps a Perspective resource only when
+                # a sibling resource.json declares it, so a Tool that creates one must write
+                # that metadata, and a Tool that creates nothing must not claim to.
+                metadata = tool.get("createdResourceMetadata")
+                if spec.get("createsMetadata", True):
+                    if not isinstance(metadata, dict):
+                        raise ContractError(
+                            f"{tool_name}: the created-resource metadata rule must be declared (D15)"
+                        )
+                    if metadata.get("sibling") != "resource.json":
+                        raise ContractError(
+                            f"{tool_name}: a created resource's metadata is its sibling resource.json"
+                        )
+                    if tuple(metadata.get("files", ())) not in (
+                        ("view.json",), ("config.json",), ("props.json",),
+                    ):
+                        raise ContractError(
+                            f"{tool_name}: a created resource's files list must name exactly the "
+                            "document written beside the metadata"
+                        )
+                    if not metadata.get("existingResource"):
+                        raise ContractError(
+                            f"{tool_name}: the rule must say what happens to metadata the baseline "
+                            "already holds"
+                        )
+                elif "createdResourceMetadata" in tool:
+                    raise ContractError(
+                        f"{tool_name}: this Tool creates no Perspective resource, so it declares no "
+                        "created-resource metadata"
                     )
             # D30 §6/D17: the archive this Tool consumes is as much a contract as the
             # Target is, so the declaration is required and checked. A Tool of the Phase 5

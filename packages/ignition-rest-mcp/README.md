@@ -274,12 +274,14 @@ same D16 Project transaction as `project_import`: `perspective_view_upsert` and
 `perspective_view_delete` change one View at a Logical resource path, and
 `perspective_page_config_update` and `perspective_session_props_update` replace the
 Project's Page configuration and Session properties documents. Each write builds its
-candidate by copying the baseline export and patching exactly one entry, so every other
-entry reaches the Gateway byte-identical, and each takes `expectedFingerprint`, the
-`pcf1` Project fingerprint the matching get Tool reported. A stale token is `conflict`;
-a satisfied transaction is `COMMITTED` or `NO_CHANGE`; every other D16 terminal state is
-a Tool error with the D30 §7 code, and a Gateway rejection is final. A delete of a View
-the Project does not define locally is `not_found`.
+candidate by copying the baseline export and patching one resource: the target entry,
+plus, when the Project does not hold that resource yet, the sibling `resource.json` an
+import needs to keep it. Every other entry reaches the Gateway byte-identical, and each
+write takes `expectedFingerprint`, the `pcf1` Project fingerprint the matching get Tool
+reported. A stale token is `conflict`; a satisfied transaction is `COMMITTED` or
+`NO_CHANGE`; every other D16 terminal state is a Tool error with the D30 §7 code, and a
+Gateway rejection is final. A delete of a View the Project does not define locally is
+`not_found`.
 
 Three rules decide what a write may touch. Before the transaction starts, the server
 reads the Project's own export to see whether the target is Local, and only when it is

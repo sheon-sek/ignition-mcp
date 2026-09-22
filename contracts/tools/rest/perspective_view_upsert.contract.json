@@ -60,7 +60,6 @@
   "callerSuppliedRestPath": false,
   "embeddedSecretsRedacted": true,
   "candidateBuilder": "the D15 typed adapter: the baseline archive is copied and exactly one entry, the View document, is replaced; every other entry is copied byte-identically",
-  "createWhenAbsent": "a Logical resource path the Project does not define locally and no ancestor defines is created. The View document entry is written where the archive has none. The Designer resource metadata that belongs beside it is not invented: an existing View keeps its own resource.json, and a created one gets the document entry this Tool was given (open question in the Phase 5 runbook)",
   "redaction": {
     "refusal": "a view that carries the exact value <redacted> anywhere, as a value or as a key, fails with invalid_argument before the inheritance walk and before any transaction",
     "reason": "redacted_value",
@@ -150,5 +149,15 @@
     "recoveryLocks": "the release set and hold set are D16's: a COMMITTED, NO_CHANGE, NOT_APPLIED, CONFLICTED or FAILED_PRE_IMPORT transaction releases the recovery snapshot; OUTCOME_UNKNOWN and RECOVERY_REQUIRED keep it locked and preserve the candidate and the re-export for diagnosis",
     "automaticRetry": "never: no import is replayed, automatically or otherwise (D16, D30)"
   },
-  "verification": "D16 post-import re-export C, compared by logical Project fingerprint: C == B commits, C == A is not_applied, and a claimed success that matches neither is recovery_required. The candidate the transaction stages and fingerprints is the archive it dispatches, so the verified bytes are the sent bytes."
+  "verification": "D16 post-import re-export C, compared by logical Project fingerprint: C == B commits, C == A is not_applied, and a claimed success that matches neither is recovery_required. The candidate the transaction stages and fingerprints is the archive it dispatches, so the verified bytes are the sent bytes.",
+  "absence": "a Project that does not define the target locally and has no ancestor that defines it gains it, together with the sibling resource.json the import needs to keep it (D15, confirmed live)",
+  "createdResourceMetadata": {
+    "rule": "a resource this Tool creates is written with the sibling resource.json Ignition needs to keep it: an import drops a resource directory that holds only its document, so a create would report COMMITTED and publish nothing (confirmed on a live 8.3.8 Gateway)",
+    "sibling": "resource.json",
+    "shape": "compact JSON of {\"scope\":\"G\",\"version\":1,\"restricted\":false,\"overridable\":true,\"files\":[...]}, the shape the Gateway itself writes",
+    "existingResource": "a resource the baseline already holds keeps its own resource.json byte-identically; this Tool never rewrites metadata it did not create",
+    "files": [
+      "view.json"
+    ]
+  }
 }

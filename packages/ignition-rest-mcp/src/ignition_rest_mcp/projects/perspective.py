@@ -18,9 +18,12 @@ mapping.
 The write half is :class:`ResourcePatch` plus :func:`apply_patch`: one typed
 change to exactly one Perspective resource, written over a copy of the baseline
 archive with every other entry copied byte-identically (D15: never rebuild a
-Project from the resource types this server understands). A delete removes the
-View's own entries, and the folder's marker entries only when the View was all
-that folder held, so a folder that still holds other Views keeps them.
+Project from the resource types this server understands). A resource the baseline
+does not hold is created with the sibling ``resource.json`` Ignition needs to keep
+it, since an import drops a resource directory that holds only its document. A
+delete removes the View's own entries, and the folder's marker entries only when
+the View was all that folder held, so a folder that still holds other Views keeps
+them.
 
 Every caller-facing message names the Logical resource, never the archive entry:
 the layout stays server-side, and a message that echoed an entry would hand the
@@ -81,10 +84,20 @@ VIEW_RESOURCE_NAME = "resource.json"
 VIEW_FOLDER_NAME = "folder.json"
 
 #: The Project's single Page configuration document.
-PAGE_CONFIG_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/config.json"
+PAGE_CONFIG_DOCUMENT_NAME = "config.json"
 
 #: The Project's single Session properties document.
-SESSION_PROPS_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/props.json"
+SESSION_PROPS_DOCUMENT_NAME = "props.json"
+
+#: The Project's single Page configuration entry.
+PAGE_CONFIG_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/{PAGE_CONFIG_DOCUMENT_NAME}"
+
+#: The Project's single Session properties entry.
+SESSION_PROPS_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/{SESSION_PROPS_DOCUMENT_NAME}"
+
+#: The Designer resource metadata beside each Project-wide document.
+PAGE_CONFIG_RESOURCE_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/{VIEW_RESOURCE_NAME}"
+SESSION_PROPS_RESOURCE_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/{VIEW_RESOURCE_NAME}"
 
 #: Longest Logical resource path accepted (D10: caller input is bounded).
 MAX_LOGICAL_PATH_BYTES = 512
@@ -504,7 +517,9 @@ def apply_patch(source: "SeekableBytes", patch: ResourcePatch, target: "Seekable
     directory order, keeping its own ``ZipInfo``: the D16 fingerprint hashes the
     uncompressed content of every entry, so nothing unrelated may move. The
     replaced entry keeps its place and its header when the archive already has it,
-    and is appended with a fresh header when the patch creates it.
+    and is appended with a fresh header when the patch creates it, together with the
+    sibling ``resource.json`` Ignition needs to keep that resource (see
+    :func:`designer_resource_metadata`).
 
     ``source`` is an already D15-validated baseline, so entry names are read as
     validated. Both streams are seekable ZIP containers.
@@ -517,6 +532,7 @@ def apply_patch(source: "SeekableBytes", patch: ResourcePatch, target: "Seekable
     with zipfile.ZipFile(cast(Any, source)) as archive:
         infos = archive.infolist()
         names = [info.filename for info in infos]
+        additions = _created_entries(patch, replacement, names)
         dropped = _patch_entries(names, patch) - set(replacement)
         with zipfile.ZipFile(cast(Any, target), "w", zipfile.ZIP_DEFLATED) as out:
             for info in infos:
@@ -524,9 +540,71 @@ def apply_patch(source: "SeekableBytes", patch: ResourcePatch, target: "Seekable
                     continue
                 body = replacement.get(info.filename, archive.read(info))
                 out.writestr(info, body)
-            for name, body in replacement.items():
-                if name not in names:
-                    out.writestr(_new_entry(name), body)
+            for name, body in additions.items():
+                out.writestr(_new_entry(name), body)
+
+
+def designer_resource_metadata(document_name: str) -> dict[str, Any]:
+    """The Designer resource metadata Ignition keeps beside one Perspective resource.
+
+    A Project import keeps a resource directory only when a sibling ``resource.json``
+    declares it: a directory holding only its document is dropped without an error, so
+    a resource this server creates would be reported committed and publish nothing
+    (confirmed on a live 8.3.8 Gateway). ``document_name`` is the declared file beside
+    the metadata, and the rest of the shape is the one the Gateway itself writes.
+    """
+
+    return {
+        "scope": "G",
+        "version": 1,
+        "restricted": False,
+        "overridable": True,
+        "files": [document_name],
+    }
+
+
+def _resource_metadata(patch: ResourcePatch) -> tuple[str, bytes] | None:
+    """The resource.json a created resource needs, with the entry it belongs in.
+
+    ``None`` for a delete, which creates nothing.
+    """
+
+    if patch.kind is PatchKind.VIEW_REPLACE:
+        return (
+            view_resource_entry(patch.logical_path),
+            document_bytes(designer_resource_metadata(VIEW_DOCUMENT_NAME)),
+        )
+    if patch.kind is PatchKind.PAGE_CONFIG_REPLACE:
+        return (
+            PAGE_CONFIG_RESOURCE_ENTRY,
+            document_bytes(designer_resource_metadata(PAGE_CONFIG_DOCUMENT_NAME)),
+        )
+    if patch.kind is PatchKind.SESSION_PROPS_REPLACE:
+        return (
+            SESSION_PROPS_RESOURCE_ENTRY,
+            document_bytes(designer_resource_metadata(SESSION_PROPS_DOCUMENT_NAME)),
+        )
+    return None
+
+
+def _created_entries(
+    patch: ResourcePatch, replacement: dict[str, bytes], names: list[str],
+) -> dict[str, bytes]:
+    """The entries one patch adds to the baseline archive.
+
+    A replacement document the archive does not hold, and the Designer resource
+    metadata beside it when the archive holds none: the import keeps a resource only
+    when that sibling declares it, so a created View, Page configuration or Session
+    properties document needs one written in the same patch. Metadata the archive
+    already holds is left exactly as it is, and the documented entry set of a resource
+    that already exists is never rewritten.
+    """
+
+    additions = {name: body for name, body in replacement.items() if name not in names}
+    metadata = _resource_metadata(patch)
+    if metadata is not None and metadata[0] not in names:
+        additions[metadata[0]] = metadata[1]
+    return additions
 
 
 def _patch_entries(names: list[str], patch: ResourcePatch) -> set[str]:
