@@ -39,6 +39,10 @@ RESOURCE_TYPE = "ignition/audit-profile"
 #: An allowed singleton target (the documented change item carries no name).
 SINGLETON_TYPE = "ignition/cobranding"
 COLLECTION_PATH = f"/data/api/v1/resources/{RESOURCE_TYPE}"
+#: D30 owner ruling 5: the collection every config Mutation addresses, named on every
+#: read and write this harness makes so the provisioned resources sit where the Tools
+#: look for them rather than in whatever the Gateway calls its default.
+COLLECTION = "core"
 FIND_PATH = f"/data/api/v1/resources/find/{RESOURCE_TYPE}/"
 RENAME_PATH = f"/data/api/v1/resources/rename/{RESOURCE_TYPE}/"
 ALLOWLISTED = "MCP_CI_AUDIT"
@@ -178,6 +182,7 @@ def await_required_endpoints(base_url: str, token: str, *, timeout: float = 180.
 def _create_profile(base_url: str, token: str, name: str, description: str) -> int:
     body = json.dumps([{
         "name": name,
+        "collection": COLLECTION,
         "enabled": True,
         "description": description,
         "config": {"profile": {"type": "local"}, "settings": {}},
@@ -192,7 +197,8 @@ def _create_profile(base_url: str, token: str, name: str, description: str) -> i
 
 def _read_profile(base_url: str, token: str, name: str) -> dict[str, Any]:
     status, payload = _request(
-        base_url, token, "GET", FIND_PATH + name, allowed_error_statuses=frozenset({404}),
+        base_url, token, "GET", f"{FIND_PATH}{name}?collection={COLLECTION}",
+        allowed_error_statuses=frozenset({404}),
     )
     if status != 200 or not isinstance(payload, dict):
         raise ProvisionError(f"reading {RESOURCE_TYPE}/{name} returned HTTP {status}")
@@ -495,11 +501,13 @@ def provision(
         )
     }
     token_status, token_payload = _request(
-        base_url, token, "GET", "/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci",
+        base_url, token, "GET",
+        f"/data/api/v1/resources/find/ignition/api-token/ignition-mcp-ci?collection={COLLECTION}",
         allowed_error_statuses=frozenset({404}),
     )
     singleton_status, singleton_payload = _request(
-        base_url, token, "GET", f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}",
+        base_url, token, "GET",
+        f"/data/api/v1/resources/singleton/{SINGLETON_TYPE}?collection={COLLECTION}",
         allowed_error_statuses=frozenset({404}),
     )
     return {

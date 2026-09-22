@@ -183,8 +183,9 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (D30 §7) through a Tool-scoped mapping that leaves the frozen G3 behavior and evidence untouched;
   the change item is validated against the target Gateway's own documented PUT request schema (D03)
   before dispatch, and an update route without a usable schema exposes no update; a
-  collection-qualified change is refused; and a Gateway refusal is never reported as a success when
-  the requested values happened to equal the pre-state.
+  collection-qualified change is refused (superseded by ticket #35, which pins every config Mutation
+  to the `core` collection instead of refusing every collection name); and a Gateway refusal is never
+  reported as a success when the requested values happened to equal the pre-state.
 - The same runs captured each Gateway's `/openapi.json`; the 8.3.9 candidate exposes
   56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
   the MCP Module's own `server-config`), and every one of them is classified. The
@@ -1220,6 +1221,183 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   Phase 4 Live Gateway REST mutation run above.** The first push after the outage (see Open
   questions) produced all three.
 
+### Ticket #35 — pin generic config Mutations to the `core` collection (milestone 4c)
+
+- **Rule (D30 owner ruling 5, `config_collection: core_only`).**
+  `config_resource_create/update/delete/rename` name `core` on every Gateway read and write
+  they make: the pre-dispatch read and the verification read-back send `?collection=core`,
+  a change item always carries `"collection": "core"`, and the documented `DELETE` and
+  rename routes send it as their own query parameter. The update/create routes document no
+  collection query parameter at all, so there the item field is the only mechanism — a type
+  whose documented item schema does not declare that field, or does not accept `core`, has
+  no way to address a Target and is refused with `unsupported_capability` before anything is
+  dispatched (never sent for the Gateway's own default to place). A
+  caller-supplied `collection` is accepted only when it is exactly `core`; any other value
+  is `invalid_argument` before anything is read or dispatched. The Target identity stays
+  `<resourceType>/<name>` — now unambiguously *in core* — so no Target allowlist entry
+  changes. `_default_collection`, which refused every collection name, is replaced by
+  `_core_collection`, and the read helpers no longer take a collection at all: there is one
+  value they may send.
+- **Contract and Docs.** The four REST contracts declare `collection` as a D30 §4 fixed
+  knob beside `allowInvalidReferences`/`confirm`/`references` and say what the parameter
+  now means; `tooling/contracts/lint.py` checks the knob, so the pin cannot drift from the
+  contract silently. The package README and this runbook (including the #14 open question
+  this ticket resolves) replace the "non-default collections are refused" wording.
+  `collection` deliberately stays a bounded string with `invalid_argument` as its refusal
+  code rather than an input enum: an enum would turn a bad value into an MCP-level schema
+  error and lose the D06/D30 §7 taxonomy. D03 is untouched — the item field is validated
+  against the Gateway's own documented item schema, which documents `collection` for every
+  committed type.
+- **Fixture-first coverage.** `tests/harness/recorded_gateway.py` keys its resource state by
+  `(name, collection)`, so its seeded default is now `core`, its `DELETE` and rename routes
+  honour the documented query parameter, and every request entry keeps the request target
+  with the query string the tests assert. New cases in
+  `test_phase4_config_resource_update.py` (30 cases) and
+  `test_phase4_config_resource_create_delete_rename.py` (40 cases): an explicit `core` is
+  accepted, an omitted collection is sent as `core` on the wire (reads, item field and, for
+  the delete/rename, the query), a non-core value is refused with **no** request at all and
+  no audit row, and a same-named look-alike in another collection keeps its signature and
+  its enabled flag across an update, a delete and a rename. The full `AGENTS.md` command
+  block is green (**919 pytest cases**, ruff, mypy strict, lock, workflow linter, native
+  validate/build/release, compat, contract lint, `sync_schemas` no-op).
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **194/194 cases**
+  against the recorded Gateway (182 before this ticket; the 12 new ones are the five gate-on
+  collection cases and the seven fault-mode wire cases).
+- **Live** ([run 35678385105](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385105),
+  head `0bfcb69`, workflow `Phase 4 Live Gateway REST mutation`): **both rows green, 194/194
+  live cases on 8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)**. What
+  the rows recorded for this ticket:
+  - gate-on: `update-reports-the-core-collection` — the result of an update that omitted the
+    collection reports `"core"`; `explicit-core-collection-is-accepted` and
+    `explicit-core-collection-reports-core` — naming `core` explicitly is accepted and reported;
+    `non-core-collection-is-invalid-argument` with `non-core-collection-changes-nothing` — a
+    `custom` collection is refused with the D06 envelope
+    (`collection must be core: a Target is the exact <resourceType>/<name> in the core
+    collection…`, recorded in `observations.json`) and the signature the accepted update
+    reported is still served;
+  - fault mode: the proxy's own record of the hop the server's HTTP client wrote through, on
+    both Gateway versions, is exactly
+    `GET /data/api/v1/resources/find/ignition/audit-profile/MCP_CI_AUDIT?collection=core`,
+    `PUT /data/api/v1/resources/ignition/audit-profile?allowInvalidReferences=false`,
+    `GET …/MCP_CI_AUDIT?collection=core` — two reads that name the core collection and one
+    write on the type's documented collection route, with the update applied
+    (`core-collection-update-applies`, `…-moves-the-signature`);
+  - `provision.json` shows the harness's *own* fixture writes going the same way: four
+    `ignition/audit-profile` resources created with the explicit `"collection": "core"` item
+    field (HTTP 200 each) and read back with `?collection=core`, and the refused API token and
+    the allowed singleton both readable in that collection.
+- **One timing flake, and what changed because of it.** The first live attempt of the previous
+  head (`d6294e1`, [run 35677461853](https://github.com/sheon-sek/ignition-mcp/actions/runs/35677461853))
+  was green on 8.3.8 (193/193) but failed the candidate row's four
+  `fault-import-after-full-body-*` cases — a `#20` case, not this ticket's: the proxy recorded
+  `bodyBytes: 0` with `forwarded: true` and no answer, so the archive body never left the
+  server inside that instance's 8 s tool budget and the D16 transaction ended `NOT_APPLIED`
+  (`conflict`) instead of `COMMITTED`. Rerunning the same head's failed job was green
+  (193/193). This ticket's fault-mode case therefore runs **after** the `#20` cases (commit
+  `0bfcb69`), so it cannot add requests in front of evidence it does not own; the case counts
+  above are from that reordered head.
+- **Frozen gates, green on the same head (`0bfcb69`)**: CI
+  [35678385028](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385028),
+  Phase 3 Live Gateway G3
+  [35678385023](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385023), and
+  Phase 4 Live Gateway G4a
+  [35678385007](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385007).
+- **The live form of the rule.** A real Gateway answers a read that omits the collection
+  exactly as it answers one that names `core`, so Gateway state cannot show which request
+  the server sent. The fault-mode instance therefore reads the proxy hop's own record of the
+  request targets: two reads with `?collection=core` and exactly one `PUT` to
+  `/data/api/v1/resources/<type>?allowInvalidReferences=false`. The `collection` *item*
+  field is not visible there (the proxy records targets, not bodies); it is pinned by the
+  unit cases against the fixture, which answers a request that omitted or misnamed the
+  collection with the wrong resource or none at all.
+- **Out of scope by ruling.** The owner ruling governs the generic config *Mutations*, so
+  `config_resource_get` keeps its own `collection` parameter: it is the caller's read, and
+  reading a look-alike in another collection is how a caller can see that two same-named
+  resources really are two. A signature read there cannot be used by a Mutation — the
+  Mutation read-compares the `core` resource and answers `conflict` — and the mutation
+  surface itself never addresses any collection but `core`.
+- **Not this ticket.** D30 owner ruling 4 (issue #36) refuses the Tag-provider config
+  resource named `IgnitionMCPPolicy` by name inside these Tools; the collection pin is
+  orthogonal to it (that resource is `ignition/tag-provider`, name `IgnitionMCPPolicy`,
+  collection `core`), and #36 is left untouched here.
+- **Review round 1 fixes** (`35-review-1.md`: one blocker, one nit; report `35-fix-1.md`).
+  - **Blocker — the item could silently stop naming the collection.** `_write_item`
+    (`services/config_mutation.py`) added `"collection": "core"` only when the type's
+    documented item schema declared the field. A Gateway documenting an otherwise usable
+    change item without it therefore kept the update/create Tool available and dispatched an
+    item that named no collection, leaving the Gateway's own default to choose the Target —
+    the fail-closed guarantee of ruling 5 did not hold (the committed 8.3.8 document declares
+    the field for all 56 reachable types, which is why the live rows never exercised the
+    fallback). The item now names `core` unconditionally: a create/update whose documented
+    item schema does not declare `collection`, or whose declared `collection` property does
+    not accept `core`, is refused with `unsupported_capability` before any request is built
+    (`_core_collection_refusal`, raised from `_write_item` and from the D03 validation pass —
+    the value `core` can only have come from the server, never from the caller), so no new
+    error code is introduced (D06, D30 §7). The refusal is a capability fact raised before
+    `execute_mutation`, so it leaves no audit row, exactly like the non-core input refusal.
+    Fixture-first: three recorded-Gateway cases (one per Tool that builds an item, plus the
+    `collection`-rejects-`core` variant) patch the committed document's item schema and assert
+    `unsupported_capability`, **no** request on any config-resource route, no audit row, and an
+    unchanged Target. All three fail on the pre-fix head — the no-field update case came back
+    as a *success* with `enabled:false` observed, i.e. the change had really been placed in
+    whichever collection the fixture's default named. Two committed-document invariants were
+    added too: every documented PUT/POST change item declares `collection`, and the minimal
+    item the Tool can send (which now includes `"collection": "core"`) validates against every
+    documented item schema.
+  - **Nit — the contracts described the wrong wire mechanism.** `targetId.collection` in the
+    four REST contracts now says, per Tool, where the collection actually travels: create and
+    update name the pinned reads plus the schema-validated item field (and the
+    `unsupported_capability` refusal when the item cannot carry it), delete names the pinned
+    reads plus the `DELETE` route's query parameter, rename names the pinned reads plus the
+    rename route's query parameter. The `changeItem` / `unavailableDisposition` fields that
+    described the item without the collection were corrected too. `tooling/contracts/lint.py`
+    needed no change — it pins `fixedKnobs`, the Precondition token and the structural
+    disposition, none of which moved — and it stays green; the package README's three
+    collection paragraphs were updated to the same rule.
+  - **Validation.** Full `AGENTS.md` command block green on the fix head `ca08e92`
+    (**924 pytest cases**, +5 on the pre-review 919; ruff, mypy strict, lock, workflow
+    linter, native validate/build/release, compat, contract lint, `sync_schemas` no-op), and
+    the local recorded-Gateway rehearsal `tests/harness/phase4-live-rest/rehearse_local.py`
+    — **194/194 cases**, unchanged.
+  - **Live** (head `ca08e92`, workflow `Phase 4 Live Gateway REST mutation`,
+    [run 35680756386](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756386)):
+    **both rows green — 194/194 cases on 8.3.8 (`2026071409`, required) and 194/194 on 8.3.9
+    (`2026082511`, candidate), no failed case**, including every collection case from the
+    first round (`update-reports-the-core-collection`, `explicit-core-collection-*`,
+    `non-core-collection-*`, `core-collection-is-on-every-read`,
+    `core-collection-write-count` = 1, `core-collection-write-names-the-collection-route`).
+    No flake occurred in this round. The new refusal itself cannot be exercised live — no real
+    Gateway documents a change item without the field — so the live artifacts were used for
+    the opposite check: the `openapi-8.3.8.json` and `openapi-8.3.9.json` each row uploads
+    were run through the same capability derivation the server uses, and **every reachable
+    type on both versions (55 each) declares `collection` in its item schema and accepts
+    `core`**, so the rule disables nothing on either supported Gateway and the unit fixtures
+    remain the proof of the refusal itself. Frozen gates on the same head: CI
+    [35680756384](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756384),
+    Phase 3 Live Gateway G3
+    [35680756395](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756395), and
+    Phase 4 Live Gateway G4a
+    [35680756382](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756382) —
+    all green. The documentation head (`822cd99`) re-ran the same four workflows; CI
+    [35681209151](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209151),
+    Phase 3 G3 [35681209126](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209126)
+    and G4a [35681209123](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209123)
+    are green, and the REST mutation run
+    [35681209098](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209098) needed one
+    recorded retry — see the flake note below.
+  - **The known `#20` flake, seen once and rerun.** The first attempt of the docs head's REST
+    mutation run (`822cd99`, run
+    [35681209098](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209098) attempt 1)
+    failed the required 8.3.8 row on the four `fault-import-after-full-body-*` cases: the
+    `project_import` pre-flight answered `not_found` for the archive it consumes
+    (`afterBodyImportResult: "not_found"`, transaction `FAILED_PRE_IMPORT` with
+    `import_dispatched: 0`), inside that fault instance's 8 s tool budget; the candidate 8.3.9
+    row passed **194/194** in the same attempt, the same code head `ca08e92` had passed both
+    rows 194/194 first try (run 35680756386), and this head changes
+    `docs/development/phase-4.md` alone. Rerunning the failed job was green: **194/194 on both
+    rows** (attempt 2, same run id, artifacts re-read). Recorded rather than hidden; nothing
+    in this ticket touches the Project-import path.
+
 ## Open questions
 
 - **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
@@ -1381,6 +1559,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   refusal (a bundle has no shared modules), and the shared contract text is
   `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
   a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
+- **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
+  evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
+  `2026-09-22T01:27:45Z` with head `200c8b9`, so the push of `2368b58` created **no**
+  workflow runs: a `pull_request` workflow has nothing to run for a branch whose PR is
+  closed. The lane rule ("one draft PR per lane; pushes trigger every `pull_request`
+  workflow") was restored by opening draft PR #37 from the same branch and base, whose
+  creation re-triggered CI, Phase 3 G3, the Phase 4 REST mutation run and G4a on the same
+  head — the live rows quoted in this ticket's Results section are from those runs.
+  **For the coordinator:** this is a handover artifact, not a lane failure; if the lane is
+  merged again, the next ticket needs another draft PR (or the workflows need a
+  `workflow_dispatch` entry point) before any head can carry live evidence.
 - **Ticket #19 — GitHub Actions delivered no runs for the documentation-only head.** The
   code head `51b25b2` has all four workflows green (CI, Phase 3 G3, Phase 4 G4a, Phase 4
   Live Gateway REST mutation with 98/98 cases in both rows), and the two commits after it
@@ -1669,14 +1858,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   the capturing run. Every listed type is classified. Committing the 12.7 MB document itself is a
   repository-size decision for the owner; until then the classification test enforces the inventory
   and the discovery-by-path rule, and anything unclassified stays refused.
-- **Ticket #14 — a collection-qualified Target policy does not exist yet.** The Gateway reads and
-  changes a config resource by collection as well as by name, so a Target allowlist entry for
-  `<resourceType>/<name>` would otherwise authorize the same name in every collection.
-  `config_resource_update` therefore refuses a caller-supplied `collection` with `invalid_argument`
-  and addresses only the default collection, which closes the gap without inventing an encoding the
-  Target policy has no room for. Supporting collections means amending the Target policy (D08/D30)
-  to name the triple unambiguously; until then a two-collection test proves the refusal, and the
-  fixture keys resource state by `(name, collection)` so the distinction is observable.
+- **Ticket #14 — a collection-qualified Target policy does not exist yet; RESOLVED by the D30 owner
+  ruling of 2026-09-22 (item 5, `config_collection: core_only`).** The Gateway reads and changes a
+  config resource by collection as well as by name, so a Target allowlist entry for
+  `<resourceType>/<name>` would otherwise authorize the same name in every collection. Ticket #14
+  closed that gap by refusing every caller-supplied `collection`; ticket #35 replaced the refusal
+  with the ruling: generic config Mutations always target `core`, the server sends `collection=core`
+  on every read and write it makes, a caller-supplied collection is accepted only when it is `core`,
+  and any other value fails with `invalid_argument` before dispatch. The Target identity stays
+  `<resourceType>/<name>`, now unambiguously *in core*. Supporting a second collection would still
+  mean amending the Target policy (D08/D30) to name the triple; no ticket does that, and the
+  two-collection tests prove that a change reaches the core resource only.
 - **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
   live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
   timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open

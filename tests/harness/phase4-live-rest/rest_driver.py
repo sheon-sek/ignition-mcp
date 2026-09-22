@@ -120,6 +120,16 @@ UNALLOWLISTED_RENAMED = "MCP_CI_AUDIT_RENAMED_NOT_ALLOWED"
 #: A name of the allowlisted type that the Target allowlists deliberately omit.
 NOT_ALLOWLISTED_RESOURCE = "MCP_CI_AUDIT_OTHER"
 
+#: D30 owner ruling 5 (ticket #35): every config Mutation is made in the ``core``
+#: collection and names it on the wire; the other collection is what a case offers as
+#: the value that must be refused.
+CORE_COLLECTION = "core"
+OTHER_COLLECTION = "custom"
+#: The documented collection route of the allowlisted type: what a write has to be
+#: dispatched to (the reads and the ``DELETE``/rename routes carry the collection as a
+#: query parameter instead).
+RESOURCE_COLLECTION_PATH = "/data/api/v1/resources/"
+
 #: The two names the Project import cases use: the allowlisted Target and an existing
 #: Project the Target allowlist deliberately does not name.
 DEFAULT_PROJECT = "MCP_CI_IMPORT"
@@ -1027,6 +1037,8 @@ async def run_gate_on(
                 "description": (body.get("observedState") or {}).get("description"),
             },
         )
+        # D30 owner ruling 5: an omitted collection means core, and the result says so.
+        _check(cases, "update-reports-the-core-collection", CORE_COLLECTION, body.get("collection"))
         reread = await agent.get(resource_type, allowlisted)
         _check(cases, "independent-reread-confirms", after, reread.get("signature"))
 
@@ -1082,6 +1094,48 @@ async def run_gate_on(
         _check(
             cases, "singleton-update-moves-the-signature", True,
             isinstance(singleton_signature, str) and singleton_signature != singleton_before,
+        )
+
+        # --------------------------------------------- the core collection (#35)
+        # D30 owner ruling 5: the caller may name the one collection these Mutations
+        # address, and anything else is refused as input.
+        core_signature = await agent.signature(resource_type, allowlisted)
+        explicit = await agent.call(UPDATE_TOOL, {
+            "resourceType": resource_type,
+            "expectedSignature": core_signature,
+            "name": allowlisted,
+            "collection": CORE_COLLECTION,
+            "description": "Disposable Phase 4 CI audit profile (core collection)",
+        })
+        _check(cases, "explicit-core-collection-is-accepted", True, not explicit.get("isError"))
+        explicit_body = structured(explicit) if not explicit.get("isError") else {}
+        observations["explicitCoreSignature"] = explicit_body.get("signature")
+        _check(
+            cases, "explicit-core-collection-reports-core", CORE_COLLECTION,
+            explicit_body.get("collection"),
+        )
+
+        # The token the accepted update reported; if that update failed, the call below
+        # still carries a well-formed token (the collection check precedes the signature
+        # read), so the case fails on its own observation instead of a driver traceback.
+        core_token = explicit_body.get("signature")
+        refused_collection = await agent.call(UPDATE_TOOL, {
+            "resourceType": resource_type,
+            "expectedSignature": (
+                core_token if isinstance(core_token, str) and core_token else core_signature
+            ),
+            "name": allowlisted,
+            "collection": OTHER_COLLECTION,
+            "enabled": False,
+        })
+        observations["nonCoreCollectionRefusal"] = refused_collection
+        _check(
+            cases, "non-core-collection-is-invalid-argument", "invalid_argument",
+            _refusal_code(refused_collection),
+        )
+        _check(
+            cases, "non-core-collection-changes-nothing", explicit_body.get("signature"),
+            await agent.signature(resource_type, allowlisted),
         )
 
         # ------------------------------------------------------------ create (#15)
@@ -1159,6 +1213,10 @@ async def run_gate_on(
         })
         _check(cases, "delete-of-an-absent-target-is-not-found", "not_found", _envelope_code(gone_again))
 
+        # The token belongs to another resource, so the Gateway's own read-compare
+        # refuses it; the signature the Target carries right now is what proves the
+        # refusal changed nothing.
+        current_signature = await agent.signature(resource_type, allowlisted)
         stale_delete = await agent.call(DELETE_TOOL, {
             "resourceType": resource_type,
             "expectedSignature": singleton_signature,
@@ -1166,7 +1224,7 @@ async def run_gate_on(
         })
         _check(cases, "delete-with-a-stale-signature-is-conflict", "conflict",
                _envelope_code(stale_delete))
-        _check(cases, "delete-with-a-stale-signature-changes-nothing", after,
+        _check(cases, "delete-with-a-stale-signature-changes-nothing", current_signature,
                await agent.signature(resource_type, allowlisted))
 
         refused_delete = await agent.call(DELETE_TOOL, {
@@ -1900,6 +1958,66 @@ async def fault_update_cases(
     return cases, observations
 
 
+async def core_collection_wire_cases(
+    *, agent: "Session", resource_type: str, allowlisted: str, faults: ProxyFaults,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """What the server actually sent, for D30's owner ruling 5 (ticket #35).
+
+    A real Gateway answers a read that omits the collection exactly as it answers one that
+    names ``core``, so Gateway state alone cannot show which request the server sent. The
+    proxy owns the hop the server's own HTTP client wrote through, and it records every
+    request target: its record is what proves the pin live. The *item* field is not visible
+    there (the proxy records targets, not bodies), so this case pins what it can and the
+    unit cases pin the rest.
+
+    It runs after the ``#20`` fault cases on purpose: those are timing-sensitive — the
+    fault instance runs a deliberately small tool budget — and adding requests in front of
+    them would perturb evidence this ticket does not own.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    # The hop has to be clean for this case: `none` clears whatever the fault cases left
+    # armed and (re)opens the proxy's data listener if one of them closed it.
+    armed = await faults.arm("none")
+    _check(cases, "core-collection-hop-is-listening", True, bool(armed.get("listening")))
+    signature = await agent.signature(resource_type, allowlisted)
+    hop = await faults.mark()
+    pinned = await agent.call(UPDATE_TOOL, {
+        "resourceType": resource_type,
+        "expectedSignature": signature,
+        "name": allowlisted,
+        "description": "Disposable Phase 4 CI audit profile (core collection on the wire)",
+    })
+    pinned_body = structured(pinned) if not pinned.get("isError") else {}
+    _check(cases, "core-collection-update-applies", True, not pinned.get("isError"))
+    _check(
+        cases, "core-collection-update-moves-the-signature", True,
+        isinstance(pinned_body.get("signature"), str) and pinned_body.get("signature") != signature,
+    )
+    hop_state = await faults.state()
+    pinned_requests = [
+        entry for entry in hop_state.get("requests", [])
+        if int(entry.get("seq", 0)) > hop
+        and RESOURCE_COLLECTION_PATH in str(entry.get("target", ""))
+    ]
+    observations["coreCollectionHop"] = pinned_requests
+    reads = [entry for entry in pinned_requests if entry.get("method") == "GET"]
+    writes = [entry for entry in pinned_requests if entry.get("method") == "PUT"]
+    _check(cases, "core-collection-read-count", 2, len(reads))
+    _check(
+        cases, "core-collection-is-on-every-read", True,
+        reads and all(f"collection={CORE_COLLECTION}" in str(entry["target"]) for entry in reads),
+    )
+    _check(cases, "core-collection-write-count", 1, len(writes))
+    _check(
+        cases, "core-collection-write-names-the-collection-route",
+        f"{RESOURCE_COLLECTION_PATH}{resource_type}?allowInvalidReferences=false",
+        writes[0]["target"] if writes else None,
+    )
+    return cases, observations
+
+
 async def fault_import_cases(
     *, agent: "Session", rest_url: str, agent_token: str, project: str, faults: ProxyFaults,
     evidence: Evidence, raw_dir: Path,
@@ -2192,6 +2310,11 @@ async def run_fault_mode(
         )
         cases.extend(import_cases)
         observations.update(import_observations)
+        collection_cases, collection_observations = await core_collection_wire_cases(
+            agent=agent, resource_type=resource_type, allowlisted=allowlisted, faults=faults,
+        )
+        cases.extend(collection_cases)
+        observations.update(collection_observations)
     finally:
         await faults.arm("none")
         await agent.aclose()

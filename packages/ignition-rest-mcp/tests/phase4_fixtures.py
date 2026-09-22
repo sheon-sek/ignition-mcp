@@ -40,6 +40,12 @@ SINGLETON_NAME = "cobranding"
 TOKEN_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
 
+#: D30 owner ruling 5: the one collection a config Mutation addresses. The cases seed
+#: every Target in it and keep a same-named look-alike in ``OTHER_COLLECTION``, so a
+#: change that reached the wrong resource would be visible in the fixture's state.
+CORE_COLLECTION = "core"
+OTHER_COLLECTION = "custom"
+
 UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
 DELETE_TOOL = "config_resource_delete"
@@ -140,34 +146,36 @@ def mutation_settings(
 def seed_config_resources(gateway: Any) -> None:
     """The config resources every case in these modules needs.
 
-    An allowlisted update/delete/rename Target, a look-alike of the same name in
-    another collection, a second resource of the same type the Target allowlist does
-    *not* name, the refused API token the live CI Gateway really holds, and an allowed
-    singleton.
+    An allowlisted update/delete/rename Target in ``core``, a look-alike of the same
+    name in another collection, a second resource of the same type the Target
+    allowlist does *not* name, the refused API token the live CI Gateway really holds,
+    and an allowed singleton. Every Mutation Target is seeded in ``core``, which is
+    the only collection a config Mutation addresses (D30 owner ruling 5).
     """
 
     gateway.seed_resource(
-        PROFILE, RESOURCE,
+        PROFILE, RESOURCE, collection=CORE_COLLECTION,
         config={"profile": {"type": "local", "retentionDays": 14}, "settings": {}},
         description="CI audit profile",
     )
     gateway.seed_resource(
-        PROFILE, RESOURCE, collection="custom",
+        PROFILE, RESOURCE, collection=OTHER_COLLECTION,
         config={"profile": {"type": "local", "retentionDays": 3}},
         description="same name, other collection",
     )
     gateway.seed_resource(
-        PROFILE, OTHER_RESOURCE,
+        PROFILE, OTHER_RESOURCE, collection=CORE_COLLECTION,
         config={"profile": {"type": "local"}, "settings": {}},
         description="CI audit profile (allowlist control)",
     )
     gateway.seed_resource(
-        TOKEN_TYPE, REFUSED_NAME,
+        TOKEN_TYPE, REFUSED_NAME, collection=CORE_COLLECTION,
         config={"profile": {"type": "basic-token"}, "settings": {"tokenHash": "<redacted>"}},
         description="Disposable CI-only API token",
     )
     gateway.seed_resource(
-        SINGLETON_TYPE, SINGLETON_NAME, config={"enabled": True}, description="CI branding",
+        SINGLETON_TYPE, SINGLETON_NAME, collection=CORE_COLLECTION,
+        config={"enabled": True}, description="CI branding",
     )
 
 
@@ -249,6 +257,21 @@ def write_requests(gateway: Any, method: str) -> list[dict[str, Any]]:
     """Every request the server sent the Gateway with this HTTP method."""
 
     return [request for request in gateway.requests if request["method"] == method]
+
+
+def resource_route_requests(gateway: Any) -> list[dict[str, Any]]:
+    """Every request the server sent the Gateway on a config-resource route.
+
+    A refusal that must happen before anything is read or dispatched is asserted
+    against this rather than against one method: such a refusal may not even fetch the
+    resource it was asked about. Each entry's ``path`` is the request target as the
+    Gateway saw it, query string included.
+    """
+
+    return [
+        request for request in gateway.requests
+        if "/data/api/v1/resources/" in str(request["path"])
+    ]
 
 
 def audit_rows(tmp_path: Path) -> list[dict[str, Any]]:
