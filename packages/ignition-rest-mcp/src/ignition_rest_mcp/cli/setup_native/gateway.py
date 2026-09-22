@@ -20,12 +20,18 @@ import httpx
 from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
 
 JSON_LIMIT_BYTES = 1_048_576
+#: The EULA route answers HTML; only its size is ever read, never its text.
+EULA_LIMIT_BYTES = 1_048_576
 OPENAPI_LIMIT_BYTES = 16 * 1024 * 1024
 ERROR_BODY_SNIPPET = 160
 
 MCP_MODULE_ID = "com.inductiveautomation.mcp"
 GATEWAY_INFO_PATH = "/data/api/v1/gateway-info"
 MODULES_PATH = "/data/api/v1/modules/healthy"
+#: The two reads that tell ``install-module`` what the module carries: a signing
+#: certificate to show the operator and an EULA to point them at.
+MODULE_CERTIFICATE_PATH = "/data/api/v1/modules/certificate"
+MODULE_EULA_PATH = "/data/api/v1/modules/eula"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 SERVER_CONFIG_FIND_PATH = "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"
 #: The find route of any config resource type, for the reads ``apply`` reasons over
@@ -237,13 +243,41 @@ class GatewayRest:
     async def mcp_module(self) -> ModuleIdentity | None:
         """Identity of the installed MCP Module, or ``None`` when it is absent."""
 
+        return await self.module_identity(MCP_MODULE_ID)
+
+    async def module_identity(self, module_id: str) -> ModuleIdentity | None:
+        """Identity of one installed module by id, or ``None`` when it is absent."""
+
         for item in await self.healthy_modules():
-            if item.get("id") == MCP_MODULE_ID:
+            if item.get("id") == module_id:
                 identity = parse_module_identity(item.get("version"))
                 if identity is None:
-                    raise GatewayProbeError("the MCP Module entry carries no usable version")
+                    raise GatewayProbeError(f"the {module_id} entry carries no usable version")
                 return identity
         return None
+
+    async def module_certificate(self, module_id: str) -> dict[str, Any] | None:
+        """The module's signing certificate, or ``None`` when it carries none."""
+
+        document = await self.get_json(
+            MODULE_CERTIFICATE_PATH, params={"moduleId": module_id}, allow_404=True,
+        )
+        return document if isinstance(document, dict) else None
+
+    async def module_eula_size(self, module_id: str) -> int | None:
+        """Bytes of EULA the module serves, or ``None`` when it carries none.
+
+        The document is never rendered into a report: the operator reads it where the
+        Gateway serves it, and this CLI only needs to know that there is one.
+        """
+
+        probe = await self._request(
+            "GET", MODULE_EULA_PATH, params={"moduleId": module_id},
+            limit_bytes=EULA_LIMIT_BYTES, allow_404=True,
+        )
+        if probe.status_code == 404:
+            return None
+        return len(probe.content)
 
     async def find_project(self, name: str) -> ProjectState:
         document = await self.get_json(PROJECT_FIND_PATH.format(name=quote(name, safe="")), allow_404=True)

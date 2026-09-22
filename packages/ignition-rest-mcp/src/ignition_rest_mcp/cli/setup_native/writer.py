@@ -1,16 +1,17 @@
-"""The curated, guarded write path ``apply`` uses (D20, D30).
+"""The curated, guarded write path ``apply`` and ``install-module`` use (D20, D30).
 
-``apply`` is the only part of this repo that writes a Gateway outside the D08
-mutation chain, so its write path is deliberately small and named:
+These two commands are the only parts of this repo that write a Gateway outside the
+D08 mutation chain, so this write path is deliberately small and named:
 
-* **Only these routes.** The three operations of ticket #21 — import a Project
-  archive, create/modify the MCP Server Config resource, create the reserved
-  policy Tag provider and import its Tags — each has one method here, and every
-  path is built from a module constant. No caller can address another route, and
-  no request body is a pass-through of operator input.
+* **Only these routes.** Each operation has one method here, and every path is built
+  from a module constant: import a Project archive, create or modify the MCP Server
+  Config resource, create the reserved policy Tag provider and import its Tags,
+  upload a Module, accept its certificate, accept its EULA, install it, restart the
+  Gateway. No caller can address another route, and no request body is a
+  pass-through of operator input.
 * **Guards before dispatch.** A name must match the CLI's name grammar, a Tool
-  list must be explicit (``*`` is refused, D09/D20), and the reserved provider name
-  is the module constant, not an argument.
+  list must be explicit (``*`` is refused, D09/D20), the reserved provider name
+  is the module constant, and an upload body must already sit inside the size bound.
 * **Bounded and redacted.** Every response is size-bounded and every error message
   is scrubbed of the API token before it can reach a report.
 * **No blind retry.** The one retry loop is the policy Tag import: it re-sends the
@@ -44,6 +45,8 @@ from ignition_rest_mcp.cli.setup_native.gateway import (
 from ignition_rest_mcp.cli.setup_native.inputs import (
     API_TOKEN_TYPE,
     CONFIG_COLLECTION,
+    MAX_MODULE_BYTES,
+    MODULE_NAME_TOKEN,
     SECURITY_LEVELS_TYPE,
     SERVER_CONFIG_TYPE,
     NAME_TOKEN,
@@ -58,6 +61,23 @@ TAG_IMPORT_PATH = "/data/api/v1/tags/import"
 #: The Gateway's own key/hash generator for a new API token (ticket #22). It persists
 #: nothing: the pair it answers with is what the token create below stores.
 API_TOKEN_GENERATE_PATH = "/data/api/v1/api-token/generate"
+#: The Module flow of ``install-module`` (D20), one route per step of the documented
+#: sequence: upload the archive, accept what it carries, install it, restart.
+MODULE_UPLOAD_PATH = "/data/api/v1/modules/upload"
+MODULE_CERTIFICATE_ACCEPT_PATH = "/data/api/v1/modules/certificate"
+MODULE_EULA_ACCEPT_PATH = "/data/api/v1/modules/eula"
+MODULE_INSTALL_PATH = "/data/api/v1/modules/install"
+GATEWAY_RESTART_PATH = "/data/api/v1/restart-tasks/restart"
+#: The 8.3.8 OpenAPI describes the upload body as "a binary stream" and names no media
+#: type. ``application/octet-stream`` is what the repo sends for any other raw body
+#: (the Tag import); T3's live run confirms it against a real Gateway.
+MODULE_UPLOAD_CONTENT_TYPE = "application/octet-stream"
+#: Both accept routes answer 409 when the certificate or EULA is already accepted,
+#: which is the state this command wanted anyway.
+ALREADY_ACCEPTED_STATUS = 409
+#: What one acceptance step reported: this run accepted it, or the Gateway already had.
+ACCEPTED = "ACCEPTED"
+ALREADY_ACCEPTED = "ALREADY_ACCEPTED"
 
 MAX_WRITE_RESPONSE_BYTES = 1_048_576
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -162,6 +182,15 @@ def guard_name(value: str, what: str) -> str:
     if NAME_TOKEN.fullmatch(name) is None:
         raise WriteError(f"{what} {value!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}")
     return name
+
+
+def guard_module_token(value: str, what: str) -> str:
+    """Validate a module id or an upload file name: one path-free token, never a URL fragment."""
+
+    token = str(value).strip()
+    if MODULE_NAME_TOKEN.fullmatch(token) is None:
+        raise WriteError(f"{what} {value!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,127}}")
+    return token
 
 
 def guard_tool_list(tools: Any, what: str) -> list[str]:
@@ -516,6 +545,91 @@ class GatewayWriter:
 
     async def export_policy(self) -> dict[str, Any]:
         return await self._reads.export_tags(documents.PROVIDER)
+
+    # ------------------------------------------------------------------- modules
+
+    async def upload_module(self, file_name: str, archive: bytes) -> dict[str, Any]:
+        """Upload one ``.modl`` for installation; the bytes travel raw.
+
+        D20 accepts a trusted local artifact only, and the caller has already proven
+        its SHA-256. The Gateway stores the file under ``fileName`` in its module root,
+        so the name is checked to be one path-free name and nothing else.
+        """
+
+        target = guard_module_token(file_name, "module file name")
+        if len(archive) > MAX_MODULE_BYTES:
+            raise WriteError(
+                f"the module archive is {len(archive)} bytes; the bound is {MAX_MODULE_BYTES} bytes"
+            )
+        if not archive:
+            raise WriteError("the module archive is empty")
+        action = "upload module"
+        return _as_object(await self._write(
+            "POST",
+            MODULE_UPLOAD_PATH,
+            body=archive,
+            content_type=MODULE_UPLOAD_CONTENT_TYPE,
+            params={"fileName": target},
+            action=action,
+        ), action)
+
+    async def accept_module_certificate(self, module_id: str) -> str:
+        """Accept the module's signing certificate; 409 means it already was."""
+
+        return await self._accept(MODULE_CERTIFICATE_ACCEPT_PATH, module_id, "certificate")
+
+    async def accept_module_eula(self, module_id: str) -> str:
+        """Accept the module's EULA; 409 means it already was."""
+
+        return await self._accept(MODULE_EULA_ACCEPT_PATH, module_id, "EULA")
+
+    async def _accept(self, path: str, module_id: str, what: str) -> str:
+        target = guard_module_token(module_id, "module id")
+        action = f"accept {what}"
+        try:
+            _as_object(await self._write(
+                "POST", path, body=b"", content_type="application/json",
+                params={"moduleId": target}, action=action,
+            ), action)
+        except WriteError as error:
+            # The route documents 409 for an acceptance the Gateway already holds,
+            # which is the state this command asked for.
+            if error.status == ALREADY_ACCEPTED_STATUS:
+                return ALREADY_ACCEPTED
+            raise
+        return ACCEPTED
+
+    async def install_module(self, module_id: str) -> dict[str, Any]:
+        """Complete the installation of a module this Gateway already holds uploaded."""
+
+        target = guard_module_token(module_id, "module id")
+        action = "install module"
+        return _as_object(await self._write(
+            "POST",
+            MODULE_INSTALL_PATH,
+            body=b"",
+            content_type="application/json",
+            params={"moduleId": target},
+            action=action,
+        ), action)
+
+    async def restart_gateway(self) -> dict[str, Any]:
+        """Restart the Gateway, confirming the call the documented way (D20).
+
+        The restart is disruptive by design, and a Gateway can drop the connection on
+        the way down: a transport failure carries ``status == 0``, which the caller
+        reports alongside its own wait rather than retrying here.
+        """
+
+        action = "restart gateway"
+        return _as_object(await self._write(
+            "POST",
+            GATEWAY_RESTART_PATH,
+            body=b"",
+            content_type="application/json",
+            params={"confirm": "true"},
+            action=action,
+        ), action)
 
     # --------------------------------------------------------------- transport
 

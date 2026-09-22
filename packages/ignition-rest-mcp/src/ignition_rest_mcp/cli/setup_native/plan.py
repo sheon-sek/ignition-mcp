@@ -118,7 +118,7 @@ def project_actions(inputs: Inputs, observation: GatewayObservation) -> list[Act
 
 
 def module_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
-    """The MCP Module is a precondition this CLI cannot satisfy (install-module is Phase 6)."""
+    """The MCP Module is a precondition ``install-module`` satisfies, never this command."""
 
     if observation.module_error:
         return [
@@ -136,9 +136,9 @@ def module_actions(inputs: Inputs, observation: GatewayObservation) -> list[Acti
                 BLOCKED,
                 "mcp-module",
                 gw.MCP_MODULE_ID,
-                "MCP Module is not installed and healthy; module installation is Phase 6 "
-                "(install-module is not implemented)",
-            )
+                "MCP Module is not installed and healthy; run setup-native install-module with the "
+                "trusted local .modl, restart the Gateway, then plan again",
+            ),
         ]
     return [
         Action(

@@ -188,21 +188,21 @@ def execute(workspace: Path, arguments: list[str], gateway_url: str) -> subproce
     )
 
 
-def test_installed_help_documents_exit_codes_and_absent_commands(sandbox: Path) -> None:
+def test_installed_help_documents_exit_codes_and_every_command(sandbox: Path) -> None:
     run = execute(sandbox, ["doctor", "--help"], "http://127.0.0.1:1")
     assert run.returncode == 0, run.stderr
     assert "exit codes:" in run.stdout
     assert "0  command completed with no FAIL" in run.stdout
-    assert "3  plan reports at least one BLOCKED action" in run.stdout
+    assert "3  wrote nothing because an explicit operator acknowledgement is missing" in run.stdout
 
-    # `apply` exists (Phase 4); `install-module` is Phase 6 and still refused.
     group = execute(sandbox, ["--help"], "http://127.0.0.1:1")
     assert group.returncode == 0, group.stderr
-    assert "{doctor,plan,verify,apply}" in group.stdout
+    assert "{doctor,plan,verify,apply,install-module}" in group.stdout
 
-    refused = execute(sandbox, ["install-module", "--bundle-manifest", "unused.json"], "http://127.0.0.1:1")
-    assert refused.returncode == 2
-    assert "not implemented" in refused.stderr and "Phase 6" in refused.stderr
+    module = execute(sandbox, ["install-module", "--help"], "http://127.0.0.1:1")
+    assert module.returncode == 0, module.stderr
+    assert "--file" in module.stdout and "--sha256" in module.stdout and "--restart" in module.stdout
+    assert "--bundle-manifest" not in module.stdout
 
 
 def test_installed_doctor_uses_only_the_environment_and_the_manifest(sandbox: Path,
