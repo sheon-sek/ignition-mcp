@@ -54,7 +54,9 @@ FAILED = "FAILED"
 RESTART_READY_SECONDS = 600.0
 RESTART_POLL_SECONDS = 5.0
 
-#: A ``.modl`` is a ZIP, and ``module.xml`` is its identity document.
+#: A ``.modl`` is a ZIP, and ``module.xml`` is its identity document. Reading and hashing
+#: the archive share one pass, so this is the block the file bound is checked on.
+MODULE_READ_BLOCK_BYTES = 1024 * 1024
 MODULE_XML_NAME = "module.xml"
 MODULE_XML_LIMIT_BYTES = 1_048_576
 
@@ -104,27 +106,21 @@ def read_artifact(inputs: ModuleInputs) -> Artifact:
     check a precondition rather than a post-condition (D20).
     """
 
-    module_file = inputs.module_file
-    try:
-        # Bound the buffer before reading it (D10); a file that changed underneath this
-        # check is caught by the hash comparison below, which refuses the run anyway.
-        if module_file.stat().st_size > MAX_MODULE_BYTES:
-            raise UsageError(
-                f"--file: {module_file} is over the {MAX_MODULE_BYTES} byte bound for a .modl"
-            )
-        payload = module_file.read_bytes()
-    except OSError as error:
-        raise UsageError(f"--file: cannot read {module_file}: {type(error).__name__}") from error
-    digest = hashlib.sha256(payload).hexdigest()
+    payload, digest = _read_bounded(inputs.module_file)
     if digest != inputs.sha256:
         raise UsageError(
             f"--file: SHA-256 mismatch (file {digest} != --sha256 {inputs.sha256}); nothing was uploaded"
         )
-    module_id, raw_version = _read_module_xml(payload, module_file)
+    module_id, raw_version = _read_module_xml(payload, inputs.module_file)
+    if module_id != gw.MCP_MODULE_ID:
+        raise UsageError(
+            f"--file: {inputs.module_file} is module {module_id!r}, and this command installs "
+            f"the {gw.MCP_MODULE_ID!r} module and nothing else"
+        )
     identity = gw.parse_module_identity(raw_version)
     if identity is None or identity.build is None or identity.version is None:
         raise UsageError(
-            f"--file: {module_file} declares version {raw_version!r}, which carries no 10-digit build; "
+            f"--file: {inputs.module_file} declares version {raw_version!r}, which carries no 10-digit build; "
             "the installed build cannot be compared without one"
         )
     return Artifact(
@@ -135,6 +131,32 @@ def read_artifact(inputs: ModuleInputs) -> Artifact:
         sha256=digest,
         payload=payload,
     )
+
+
+def _read_bounded(module_file: Path) -> tuple[bytes, str]:
+    """One open, one pass, and no more than the bound: D10 says a big file is refused, not buffered.
+
+    Reading and hashing share the loop so a file that grows while it is read cannot push
+    more than ``MAX_MODULE_BYTES`` into memory before the refusal.
+    """
+
+    digest = hashlib.sha256()
+    buffer = bytearray()
+    try:
+        with module_file.open("rb") as stream:
+            while True:
+                block = stream.read(MODULE_READ_BLOCK_BYTES)
+                if not block:
+                    return bytes(buffer), digest.hexdigest()
+                if len(buffer) + len(block) > MAX_MODULE_BYTES:
+                    raise UsageError(
+                        f"--file: {module_file} passes the {MAX_MODULE_BYTES} byte bound for a .modl "
+                        "while it was being read; it is not installed"
+                    )
+                digest.update(block)
+                buffer.extend(block)
+    except OSError as error:
+        raise UsageError(f"--file: cannot read {module_file}: {type(error).__name__}") from error
 
 
 def _read_module_xml(payload: bytes, source: Path) -> tuple[str, str]:
@@ -446,9 +468,15 @@ async def _restart(
     artifact: Artifact,
     steps: list[Step],
     *,
+    outcome: str,
+    installed: gw.ModuleIdentity | None,
     sleeper: Callable[[float], Awaitable[None]],
 ) -> int:
-    """Confirm the restart, wait for the Gateway, and prove the module came back."""
+    """Confirm the restart, wait for the Gateway, and prove the module came back.
+
+    The caller's classified outcome and pre-install identity ride along, so an
+    acknowledged upgrade still reports as an upgrade after the restart it asked for.
+    """
 
     try:
         await writer.restart_gateway()
@@ -457,7 +485,7 @@ async def _restart(
             steps.append(Step("restart", FAILED, str(error)))
             return _finish(
                 inputs, artifact, steps, outcome=FAILED, exit_code=1,
-                error=f"the restart request was refused: {error}", installed=None,
+                error=f"the restart request was refused: {error}", installed=installed,
             )
         # A Gateway restarting can drop the response; the readiness wait decides.
         steps.append(Step("restart", DONE, f"no clean answer ({error}); waiting for the Gateway"))
@@ -472,10 +500,10 @@ async def _restart(
                 f"the module did not come back as build={artifact.build} within "
                 f"{RESTART_READY_SECONDS:g}s; the install is still waiting on a restart"
             ),
-            installed=None, restart={"requested": True, "ready": False},
+            installed=installed, restart={"requested": True, "ready": False},
         )
     return _finish(
-        inputs, artifact, steps, outcome=INSTALL, exit_code=0, error=None, installed=None,
+        inputs, artifact, steps, outcome=outcome, exit_code=0, error=None, installed=installed,
         restart={"requested": True, "ready": True, "build": artifact.build, "readback": step.detail},
     )
 
@@ -531,7 +559,9 @@ async def run(
                 certificate=certificate, eula=eula,
             )
         steps.append(Step("install", DONE, f"{artifact.module_id} installed"))
-
+        # An install over an older build is the upgrade the operator acknowledged, and the
+        # report says so whether or not this run also restarted the Gateway.
+        outcome = UPGRADE if installed is not None else INSTALL
         if not inputs.restart:
             # The install is done; the Module only wakes on a restart, and this run was
             # not told to take the Gateway down. Report what is left instead.
@@ -542,11 +572,12 @@ async def run(
                 )
             )
             return _finish(
-                inputs, artifact, steps,
-                outcome=UPGRADE if installed is not None else INSTALL, exit_code=0, error=None,
+                inputs, artifact, steps, outcome=outcome, exit_code=0, error=None,
                 installed=installed, certificate=certificate, eula=eula,
                 restart={"requested": False, "pending": True, "ready": False},
             )
-        return await _restart(inputs, writer, artifact, steps, sleeper=wait)
+        return await _restart(
+            inputs, writer, artifact, steps, outcome=outcome, installed=installed, sleeper=wait,
+        )
 
 

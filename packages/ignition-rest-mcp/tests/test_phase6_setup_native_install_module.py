@@ -75,6 +75,8 @@ class FakeModuleGateway:
         ready_polls: int = 0,
         offline: bool = False,
         restart_refusal: int | None = None,
+        filler: int = 0,
+        total: int | None = None,
     ) -> None:
         self.installed = dict(installed or {})
         self.certificate = certificate
@@ -84,6 +86,10 @@ class FakeModuleGateway:
         self.ready_polls = ready_polls
         self.offline = offline
         self.restart_refusal = restart_refusal
+        #: Unrelated modules ahead of the installed ones, to force a second page.
+        self.filler = filler
+        #: ``metadata.total`` as the Gateway reports it, when it reports one at all.
+        self.total = total
         self.calls: list[tuple[str, str]] = []
         self.uploaded: bytes | None = None
         self.accepted: list[str] = []
@@ -98,13 +104,20 @@ class FakeModuleGateway:
     def paths(self) -> list[str]:
         return [path for _, path in self.calls]
 
-    def _healthy(self) -> httpx.Response:
+    def _healthy(self, request: httpx.Request) -> httpx.Response:
         # A restart takes the Gateway down; it answers only after ``ready_polls`` tries.
         if self.restarts and self.polls < self.ready_polls:
             self.polls += 1
             raise httpx.ConnectError("connection refused")
-        items = [{"id": key, "version": value} for key, value in self.installed.items()]
-        return httpx.Response(200, json={"total": len(items), "items": items})
+        entries = [{"id": f"com.example.mod{index}", "version": "1.0.0 (b2025010101)"}
+                   for index in range(self.filler)]
+        entries += [{"id": key, "version": value} for key, value in self.installed.items()]
+        offset = int(request.url.params.get("offset", "0"))
+        limit = int(request.url.params.get("limit", str(gateway.MODULE_PAGE_SIZE)))
+        body: dict[str, Any] = {"items": entries[offset:offset + limit]}
+        if self.total is not None:
+            body["metadata"] = {"total": self.total}
+        return httpx.Response(200, json=body)
 
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.calls.append((request.method, request.url.path))
@@ -113,7 +126,7 @@ class FakeModuleGateway:
             raise httpx.ConnectError("connection refused", request=request)
         path = request.url.path
         if path == gateway.MODULES_PATH:
-            return self._healthy()
+            return self._healthy(request)
         if path == gateway.MODULE_CERTIFICATE_PATH and request.method == "GET":
             return httpx.Response(200, json=CERTIFICATE) if self.certificate else httpx.Response(404, json={})
         if path == gateway.MODULE_EULA_PATH and request.method == "GET":
@@ -269,6 +282,24 @@ def test_a_refused_restart_is_not_retried(tmp_path: Path) -> None:
     assert "restart request was refused" in report["error"]
 
 
+def test_an_acknowledged_upgrade_with_restart_still_reports_the_upgrade(tmp_path: Path) -> None:
+    """The restart branch reports the upgrade it was told to make, not a fresh install."""
+
+    fake = FakeModuleGateway(installed={MODULE_ID: f"1.3.5-SNAPSHOT (b{OLDER_BUILD})"})
+    code, report, _, _ = install(
+        tmp_path, fake, restart=True, acknowledge_upgrade=True, **ACCEPT_BOTH,
+    )
+
+    assert code == 0
+    assert report["outcome"] == "UPGRADE"
+    assert OLDER_BUILD in report["installedBefore"]
+    assert report["restart"] == {
+        "requested": True, "ready": True, "build": FILE_BUILD,
+        "readback": f"poll 1: version=1.3.5-SNAPSHOT build={FILE_BUILD} "
+                    f"reported=1.3.5-SNAPSHOT (b{FILE_BUILD})",
+    }
+
+
 # --------------------------------------------------------------------- idempotence
 
 
@@ -279,6 +310,34 @@ def test_the_same_build_installed_is_no_change_and_uploads_nothing(tmp_path: Pat
     assert code == 0
     assert report["outcome"] == "NO CHANGE"
     assert fake.paths() == [gateway.MODULES_PATH]
+    assert fake.uploaded is None
+
+
+def test_a_module_on_a_later_page_is_still_found_as_installed(tmp_path: Path) -> None:
+    """Absence is only a fact once the whole bounded inventory has been read."""
+
+    fake = FakeModuleGateway(
+        installed={MODULE_ID: f"1.3.5-SNAPSHOT (b{FILE_BUILD})"}, filler=gateway.MODULE_PAGE_SIZE,
+        total=gateway.MODULE_PAGE_SIZE + 1,
+    )
+    code, report, _, _ = install(tmp_path, fake, **ACCEPT_BOTH)
+
+    assert code == 0
+    assert report["outcome"] == "NO CHANGE"
+    assert fake.paths().count(gateway.MODULES_PATH) == 2
+    assert fake.uploaded is None
+
+
+def test_an_inventory_that_cannot_be_read_to_its_end_refuses_before_upload(tmp_path: Path) -> None:
+    fake = FakeModuleGateway(
+        filler=gateway.MODULE_PAGE_SIZE * gateway.MODULE_PAGES_MAX, total=100_000,
+    )
+    code, report, _, _ = install(tmp_path, fake, **ACCEPT_BOTH)
+
+    assert code == 1
+    assert report["outcome"] == "REFUSED"
+    assert "neither found nor proven absent" in report["error"]
+    assert fake.paths().count(gateway.MODULES_PATH) == gateway.MODULE_PAGES_MAX
     assert fake.uploaded is None
 
 
@@ -340,9 +399,13 @@ def test_a_hash_mismatch_is_refused_before_the_gateway_hears_anything(
 @pytest.mark.parametrize("payload, fragment", [
     (b"not a zip at all", "not a ZIP archive"),
     (lambda: _zip_without_module_xml(), "holds no module.xml"),
-    (lambda: _zip_with(b"<modules><module><id>x</id></module></modules>"), "no <version>"),
-    (lambda: _zip_with(b"<modules><module><id>x</id><version>1.2.3</version></module></modules>"),
-     "no 10-digit build"),
+    (lambda: _zip_with(b"<modules><module></module></modules>"), "carries no <id>"),
+    (lambda: _zip_with(f"<modules><module><id>{MODULE_ID}</id></module></modules>".encode()),
+     "no <version>"),
+    (lambda: _zip_with(
+        f"<modules><module><id>{MODULE_ID}</id><version>1.2.3</version></module></modules>".encode()
+    ), "no 10-digit build"),
+    (lambda: modl(module_id="com.example.other"), "installs the"),
 ])
 def test_an_artifact_that_is_not_a_module_is_a_usage_error(
     tmp_path: Path, payload: Any, fragment: str
@@ -355,6 +418,54 @@ def test_an_artifact_that_is_not_a_module_is_a_usage_error(
         asyncio.run(install_module.run(inputs, gateway_transport=fake.transport))
 
     assert fake.calls == []
+
+
+def test_a_file_beyond_the_read_bound_is_refused_while_it_is_being_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The bound is enforced by the read itself, not by a size check that came before it."""
+
+    monkeypatch.setattr(install_module, "MAX_MODULE_BYTES", 2 * install_module.MODULE_READ_BLOCK_BYTES)
+    data = modl() + b"x" * (4 * install_module.MODULE_READ_BLOCK_BYTES)
+    fake = FakeModuleGateway()
+    inputs = make_inputs(tmp_path, payload=data, sha256=hashlib.sha256(data).hexdigest())
+
+    with pytest.raises(UsageError, match="passes the .* byte bound"):
+        asyncio.run(install_module.run(inputs, gateway_transport=fake.transport))
+
+    assert fake.calls == []
+
+
+def test_an_oversize_body_behind_an_allowed_404_is_drained_and_discarded() -> None:
+    """A 404 says the module carries no EULA; the size of its body is not our business."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, content=b"x" * (gateway.ERROR_BODY_LIMIT_BYTES * 2))
+
+    async def exercise() -> int | None:
+        async with gateway.GatewayRest(ENDPOINT, GATEWAY_TOKEN,
+                                       transport=httpx.MockTransport(handler)) as client:
+            return await client.module_eula_size(MODULE_ID)
+
+    assert asyncio.run(exercise()) is None
+
+
+def test_a_refusal_is_reported_by_its_status_however_big_its_body_is() -> None:
+    """A huge error page is sampled for a snippet, never buffered whole or mistaken for success."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(503, content=b"e" * (gateway.ERROR_BODY_LIMIT_BYTES * 2))
+
+    async def exercise() -> str:
+        async with gateway.GatewayRest(ENDPOINT, GATEWAY_TOKEN,
+                                       transport=httpx.MockTransport(handler)) as client:
+            with pytest.raises(gateway.GatewayProbeError) as caught:
+                await client.module_certificate(MODULE_ID)
+            return str(caught.value)
+
+    message = asyncio.run(exercise())
+    assert "returned HTTP 503" in message
+    assert len(message) < gateway.ERROR_BODY_LIMIT_BYTES
 
 
 def _zip_with(module_xml: bytes) -> bytes:

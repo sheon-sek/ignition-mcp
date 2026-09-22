@@ -22,6 +22,8 @@ from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
 JSON_LIMIT_BYTES = 1_048_576
 #: The EULA route answers HTML; only its size is ever read, never its text.
 EULA_LIMIT_BYTES = 1_048_576
+#: An error body is read to this bound and then reported as a 160-character snippet.
+ERROR_BODY_LIMIT_BYTES = 16_384
 OPENAPI_LIMIT_BYTES = 16 * 1024 * 1024
 ERROR_BODY_SNIPPET = 160
 
@@ -45,6 +47,11 @@ SINGLETON_PATH = "/data/api/v1/resources/singleton/{resource_type}"
 API_TOKEN_PATH = "/data/api/v1/resources/ignition/api-token"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
+#: ``modules/healthy`` is a paged collection: one page asks for this many entries, and
+#: the inventory read is bounded at this many pages. A Gateway that serves more is an
+#: error, never an absence.
+MODULE_PAGE_SIZE = 500
+MODULE_PAGES_MAX = 4
 
 #: Diagnostic capability questions, in report order.  Each is answered from the
 #: OpenAPI path inventory; the routes are never called (no write dispatch).
@@ -233,12 +240,39 @@ class GatewayRest:
         )
         return digest, endpoints
 
-    async def healthy_modules(self) -> list[dict[str, Any]]:
-        document = await self.get_json(MODULES_PATH, params={"limit": "500", "offset": "0"})
-        items = document.get("items") if isinstance(document, dict) else None
-        if not isinstance(items, list):
-            raise GatewayProbeError("modules/healthy returned no items list")
-        return [item for item in items if isinstance(item, dict)]
+    async def module_inventory(self) -> tuple[list[dict[str, Any]], bool]:
+        """The healthy module entries, and whether the whole inventory was read.
+
+        ``modules/healthy`` serves one page at a time, so absence is only a fact when
+        ``metadata.total`` is reached or a page arrives short. The next offset advances
+        by what was actually served, because a Gateway may answer a page of 500 with
+        fewer. A caller that treats a partial page as absence could install over a
+        build it never saw (D10).
+        """
+
+        items: list[dict[str, Any]] = []
+        offset = 0
+        for _ in range(MODULE_PAGES_MAX):
+            document = await self.get_json(
+                MODULES_PATH, params={"limit": str(MODULE_PAGE_SIZE), "offset": str(offset)},
+            )
+            entries = document.get("items") if isinstance(document, dict) else None
+            if not isinstance(entries, list):
+                raise GatewayProbeError("modules/healthy returned no items list")
+            items.extend(item for item in entries if isinstance(item, dict))
+            served = len(entries)
+            offset += served
+            total = _metadata_total(document)
+            if total is None:
+                if served < MODULE_PAGE_SIZE:
+                    return items, True
+            elif offset >= total:
+                return items, True
+            if served == 0:
+                # Nothing came back and the reported total is still ahead: this Gateway
+                # is not paging, so the inventory cannot be completed here.
+                return items, False
+        return items, False
 
     async def mcp_module(self) -> ModuleIdentity | None:
         """Identity of the installed MCP Module, or ``None`` when it is absent."""
@@ -246,9 +280,15 @@ class GatewayRest:
         return await self.module_identity(MCP_MODULE_ID)
 
     async def module_identity(self, module_id: str) -> ModuleIdentity | None:
-        """Identity of one installed module by id, or ``None`` when it is absent."""
+        """Identity of one installed module, or ``None`` when a complete read lacks it."""
 
-        for item in await self.healthy_modules():
+        items, complete = await self.module_inventory()
+        if not complete:
+            raise GatewayProbeError(
+                f"modules/healthy serves more than {MODULE_PAGES_MAX * MODULE_PAGE_SIZE} entries, so "
+                f"{module_id} was neither found nor proven absent; refusing to act on a partial list"
+            )
+        for item in items:
             if item.get("id") == module_id:
                 identity = parse_module_identity(item.get("version"))
                 if identity is None:
@@ -335,31 +375,41 @@ class GatewayRest:
         limit_bytes: int = JSON_LIMIT_BYTES,
         allow_404: bool = False,
     ) -> Probe:
+        """One response, read through a bound whatever its status turns out to be.
+
+        A success is buffered up to the caller's bound and refused when it passes it. A
+        refusal or an allowed 404 is only sampled: its status and a snippet are the whole
+        report, so an oversized body is drained and discarded rather than buffered (D10).
+        """
+
         try:
             async with self._client.stream(method, path, params=params) as response:
+                status = response.status_code
+                succeeded = 200 <= status < 300
+                bound = limit_bytes if succeeded else min(limit_bytes, ERROR_BODY_LIMIT_BYTES)
                 declared = response.headers.get("content-length")
-                if declared is not None and declared.isdigit() and int(declared) > limit_bytes:
+                if succeeded and declared is not None and declared.isdigit() and int(declared) > bound:
                     raise GatewayProbeError(
-                        f"{method} {path} announces {declared} bytes; the bound is {limit_bytes} bytes"
-                    )
-                if response.status_code == 404 and allow_404:
-                    await response.aread()
-                    return Probe(response.status_code, b"")
-                if not response.is_success:
-                    await response.aread()
-                    snippet = _redact(_snippet(response.content), self._token)
-                    raise GatewayProbeError(
-                        f"{method} {path} returned HTTP {response.status_code}"
-                        + (f": {snippet}" if snippet else "")
+                        f"{method} {path} announces {declared} bytes; the bound is {bound} bytes"
                     )
                 body = bytearray()
                 async for chunk in response.aiter_bytes():
-                    if len(body) + len(chunk) > limit_bytes:
-                        raise GatewayProbeError(
-                            f"{method} {path} exceeded {limit_bytes} bytes; refusing to buffer more"
-                        )
+                    if len(body) + len(chunk) > bound:
+                        if succeeded:
+                            raise GatewayProbeError(
+                                f"{method} {path} exceeded {bound} bytes; refusing to buffer more"
+                            )
+                        body.extend(chunk[: max(0, bound - len(body))])
+                        break
                     body.extend(chunk)
-                return Probe(response.status_code, bytes(body))
+                if status == 404 and allow_404:
+                    return Probe(status, b"")
+                if not succeeded:
+                    snippet = _redact(_snippet(bytes(body)), self._token)
+                    raise GatewayProbeError(
+                        f"{method} {path} returned HTTP {status}" + (f": {snippet}" if snippet else "")
+                    )
+                return Probe(status, bytes(body))
         except httpx.HTTPError as error:
             raise GatewayProbeError(f"{method} {path} failed: {_redact(_reason(error), self._token)}") from error
 
@@ -369,6 +419,18 @@ def _decode_json(content: bytes, path: str) -> Any:
         return json.loads(content)
     except ValueError as error:
         raise GatewayProbeError(f"{path} did not return valid JSON: {_reason(error)}") from error
+
+
+def _metadata_total(document: Any) -> int | None:
+    """``metadata.total`` when the Gateway reports it: the size of the whole collection."""
+
+    metadata = document.get("metadata") if isinstance(document, dict) else None
+    if not isinstance(metadata, dict):
+        return None
+    total = metadata.get("total")
+    if isinstance(total, bool) or not isinstance(total, (int, float)):
+        return None
+    return max(int(total), 0)
 
 
 def _snippet(content: bytes) -> str:
