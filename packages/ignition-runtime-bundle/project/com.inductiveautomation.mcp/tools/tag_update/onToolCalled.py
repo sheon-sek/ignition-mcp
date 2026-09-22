@@ -1,6 +1,7 @@
 def onToolCalled(builder, items):
 	from java.lang import Boolean, Number, Enum, Exception as JavaException
 	from java.util import UUID, Date, Map, List
+	from array import array as PyArray
 	import math
 	correlationId = unicode(UUID.randomUUID())
 	logger = system.util.getLogger("IgnitionMCP.Runtime.TagUpdate")
@@ -63,7 +64,18 @@ def onToolCalled(builder, items):
 	OBSERVED_CONFIGURATION_MAX_BYTES = 16384
 	OBSERVED_CONFIGURATION_MAX_DEPTH = 32
 	OBSERVED_STATE_MAX_BYTES = 65536
-	DIAGNOSTIC_MAX_BYTES = 256
+	# D10 output: a Native outcome's text is provider data with no size of its own.
+	# An identifier is returned exactly or not at all, because a truncated one would
+	# assert an identifier the provider never reported; the free-text diagnostic is
+	# returned as a bounded prefix and marked.
+	QUALITY_NAME_MAX_BYTES = 128
+	QUALITY_LEVEL_MAX_BYTES = 128
+	QUALITY_DIAGNOSTIC_MAX_BYTES = 512
+	# The budget a quality text's size marker is counted with: the count is exact for
+	# any text within it -- well beyond a real provider's message -- and stops there
+	# otherwise, so the marker costs bounded work and is a lower bound when the
+	# counter clamped.
+	QUALITY_TEXT_COUNT_BYTES = 8192
 	OUTPUT_MAX_BYTES = 262144
 	# D10: an over-budget refusal states the requested amount, the applicable
 	# limit, and how to split or reduce the request. That last part is a stable
@@ -93,11 +105,39 @@ def onToolCalled(builder, items):
 	def text(value):
 		return "" if value is None else unicode(value)
 
+	def utf8CharacterBytes(character):
+		# The UTF-8 cost of one character, by its code point.
+		code = ord(character)
+		if code < 128:
+			return 1
+		if code < 2048:
+			return 2
+		if code < 65536:
+			return 3
+		return 4
+
 	def boundedText(value, limit):
+		# A bounded label for an error detail or an audit row: it is cut on a character
+		# count, never encoded, and the cut is marked so the shortening is visible.
 		rendered = text(value)
 		if len(rendered) > limit:
 			return rendered[:limit] + "..."
 		return rendered
+
+	def boundedPrefix(value, limit):
+		# A prefix of `value` costing at most `limit` UTF-8 bytes, counted one
+		# character at a time and cut on a character boundary, so the text is never
+		# encoded in full to be cut and the prefix is well formed.
+		rendered = text(value)
+		total = 0
+		index = 0
+		for character in rendered:
+			cost = utf8CharacterBytes(character)
+			if total + cost > limit:
+				break
+			total += cost
+			index += 1
+		return rendered[:index]
 
 	def encodeNulls(value):
 		# D28 ignition-null-v1: escape reserved-key objects to avoid collisions.
@@ -121,47 +161,52 @@ def onToolCalled(builder, items):
 			return bool(value.isGood())
 		return unicode(value).find("Good") == 0
 
+	def exactQualityIdentifier(value, limit):
+		# An identifier is returned exactly or not at all: a truncated one would
+		# assert an identifier the provider never reported, which D10 forbids. The
+		# count is bounded, so the reported size is exact for any realistic identifier
+		# and a lower bound when the counter clamped.
+		rendered = text(value)
+		counted = utf8BytesBounded(rendered, limit)
+		if counted > limit:
+			return (None, utf8BytesBounded(rendered, QUALITY_TEXT_COUNT_BYTES))
+		return (rendered, None)
+
 	def quality(value):
 		if value is None:
 			raise TypeError("Native result has no QualityCode")
 		name = value.getName() if hasattr(value, "getName") else unicode(value)
 		level = value.getLevel() if hasattr(value, "getLevel") else unicode(value)
 		diagnostic = value.getDiagnosticMessage() if hasattr(value, "getDiagnosticMessage") else None
-		# D10: a Gateway diagnostic is free text, so it is bounded like any other
-		# part of the structured result.
-		return {"code": int(value.getCode()), "name": boundedText(name, DIAGNOSTIC_MAX_BYTES), "level": boundedText(level, DIAGNOSTIC_MAX_BYTES), "good": qualityIsGood(value), "diagnosticMessage": optionalText(boundedText(diagnostic, DIAGNOSTIC_MAX_BYTES) if diagnostic is not None else None)}
+		diagnosticText = optionalText(diagnostic)
+		# D10: the provider's QualityCode text has no size of its own, and the per-item
+		# outcomes are what a caller acts on, so every text is bounded before the item
+		# is built. `code` and `good` are always exact; a `name` or `level` over its
+		# ceiling is omitted and its size reported rather than truncated; the free-text
+		# diagnostic keeps a bounded prefix; and each marker is present exactly when its
+		# text was bounded, so nothing about the outcome is silent.
+		rendered = {"code": int(value.getCode()), "good": qualityIsGood(value)}
+		rendered["name"], nameOverLimit = exactQualityIdentifier(name, QUALITY_NAME_MAX_BYTES)
+		rendered["level"], levelOverLimit = exactQualityIdentifier(level, QUALITY_LEVEL_MAX_BYTES)
+		if diagnosticText is None:
+			rendered["diagnosticMessage"] = None
+		else:
+			rendered["diagnosticMessage"] = boundedPrefix(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES)
+			if utf8BytesBounded(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES) > QUALITY_DIAGNOSTIC_MAX_BYTES:
+				rendered["diagnosticMessageOverLimitBytes"] = utf8BytesBounded(diagnosticText, QUALITY_TEXT_COUNT_BYTES)
+		if nameOverLimit is not None:
+			rendered["nameOverLimitBytes"] = nameOverLimit
+		if levelOverLimit is not None:
+			rendered["levelOverLimitBytes"] = levelOverLimit
+		return rendered
 
 	def jsonValue(value):
-		if value is None or isinstance(value, (bool, int, long, basestring)):
-			return value
-		if isinstance(value, Boolean):
-			return value.booleanValue()
-		if isinstance(value, float):
-			if math.isnan(value) or math.isinf(value):
-				return {"type": "non-finite-number", "text": unicode(value)}
-			return value
-		if isinstance(value, Number):
-			typeName = unicode(value.getClass().getName())
-			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
-				return long(unicode(value))
-			if typeName == "java.math.BigDecimal":
-				return {"type": "decimal", "text": unicode(value)}
-			return jsonValue(float(value.doubleValue()))
-		if isinstance(value, Date):
-			return unicode(value.toInstant().toString())
-		if isinstance(value, dict):
-			return dict((unicode(key), jsonValue(child)) for key, child in value.items())
-		if hasattr(value, "iteritems"):
-			return dict((unicode(key), jsonValue(child)) for key, child in value.iteritems())
-		if isinstance(value, Map):
-			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
-		if isinstance(value, (list, tuple, List)):
-			return [jsonValue(child) for child in value]
-		if isinstance(value, Enum):
-			return unicode(value)
-		if hasattr(value, "getClass") and value.getClass().isArray():
-			return [jsonValue(child) for child in value]
-		return {"type": "native-object", "class": unicode(value.getClass().getName()) if hasattr(value, "getClass") else unicode(type(value)), "text": unicode(value)}
+		# The Preflight configuration read has to convert exactly what the caller's own
+		# tag_get_config read published, so it runs the one conversion walk with no
+		# ceilings. The Observed read-back calls the same walk -- configurationValue --
+		# with the two Observed ceilings instead, so no shape can be measured by one
+		# branch set and converted by another (D10).
+		return configurationValue(value, 1, None, None)[0]
 
 	def quoteJsonString(value):
 		# Only " and \ are escaped, and a control character is always the
@@ -206,8 +251,24 @@ def onToolCalled(builder, items):
 		digest.update(canonicalJson(encodedConfiguration).encode("utf-8"))
 		return FINGERPRINT_PREFIX + digest.digest().tostring().encode("hex")
 
-	def utf8Bytes(value):
-		return len(text(value).encode("utf-8"))
+	def utf8BytesBounded(value, budget):
+		# The UTF-8 length of `value` counted one character at a time, so a value is
+		# never encoded just to be measured: the count stops as soon as the budget is
+		# spent and the returned number is then a lower bound (at most one character
+		# past it). Every byte ceiling in this handler is checked with this counter.
+		total = 0
+		for character in text(value):
+			total += utf8CharacterBytes(character)
+			if total > budget:
+				return total
+		return total
+
+	def countBytes(value, maxBytes):
+		# The observed walk's size for one text. It has no ceiling to check when the
+		# Preflight fingerprint conversion runs, so it counts nothing there.
+		if maxBytes is None:
+			return 0
+		return utf8BytesBounded(value, maxBytes)
 
 	def configSize(value, depth):
 		# (bounded size, problem) with problem = (reason, requested, limit). The walk
@@ -218,7 +279,7 @@ def onToolCalled(builder, items):
 		if value is None or isinstance(value, bool) or isinstance(value, Boolean):
 			return (5, None)
 		if isinstance(value, basestring):
-			size = utf8Bytes(value)
+			size = utf8BytesBounded(value, CONFIG_STRING_MAX_BYTES)
 			if size > CONFIG_STRING_MAX_BYTES:
 				return (size, ("configStringOverLimit", size, CONFIG_STRING_MAX_BYTES))
 			return (size, None)
@@ -231,7 +292,7 @@ def onToolCalled(builder, items):
 				childSize, problem = configSize(value.get(key), depth + 1)
 				if problem is not None:
 					return (0, problem)
-				total += utf8Bytes(unicode(key)) + childSize
+				total += utf8BytesBounded(unicode(key), CONFIG_MAX_BYTES) + childSize
 				if total > CONFIG_MAX_BYTES:
 					return (total, ("configOverByteBudget", total, CONFIG_MAX_BYTES))
 			return (total, None)
@@ -249,55 +310,162 @@ def onToolCalled(builder, items):
 			return (total, None)
 		return (64, None)
 
-	def observedConfigurationSize(value, depth, limit):
-		# D10: the Observed read-back is walked raw -- before any conversion -- with
-		# a depth ceiling as well as a byte ceiling, so a deeply nested or very large
-		# native value is refused here and never reaches the recursive jsonValue
-		# below. Measuring what the Gateway returned must not itself materialize an
-		# unbounded value. The walk stops at the first ceiling it crosses, so an
-		# over-budget read-back is never measured in full. Returns (size, problem)
-		# with problem = (reason, requested, limit, advice).
-		if depth > OBSERVED_CONFIGURATION_MAX_DEPTH:
-			return (0, ("observedConfigurationOverDepth", depth, OBSERVED_CONFIGURATION_MAX_DEPTH, OBSERVED_DEPTH_ADVICE))
+	def boundedRenderedValue(converted, rendered, maxBytes):
+		# A converted value whose whole cost is the text it renders: a decimal, an
+		# enum, a native object. That text is rendered once -- a Java toString cannot be
+		# produced in pieces -- and it is counted with an incremental counter that stops
+		# at the ceiling, so the Observed item is refused before an over-budget text can
+		# be published and the reported size is what the counter reached.
+		size = countBytes(rendered, maxBytes)
+		if maxBytes is not None and size > maxBytes:
+			return (None, 0, ("observedConfigurationOverBytes", size, maxBytes, OBSERVED_BYTES_ADVICE))
+		return (converted, size, None)
+
+	def nativeObjectValue(value, maxBytes):
+		# The last resort: any native object that offers no container interface is
+		# published as its class and its own text, so those two strings are what has to
+		# be bounded.
+		className = unicode(value.getClass().getName()) if hasattr(value, "getClass") else unicode(type(value))
+		text = unicode(value)
+		return boundedRenderedValue({"type": "native-object", "class": className, "text": text}, text + className, maxBytes)
+
+	def objectValue(pairs, depth, maxDepth, maxBytes):
+		# The shared body of the three object shapes (plain dict, an object that only
+		# offers `iteritems`, java.util.Map): all three convert to one JSON object and
+		# are measured the same way, key bytes and child bytes included.
+		total = 2
+		converted = {}
+		for key, child in pairs:
+			childValue, childSize, problem = configurationValue(child, depth + 1, maxDepth, maxBytes)
+			if problem is not None:
+				return (None, 0, problem)
+			key = unicode(key)
+			converted[key] = childValue
+			total += countBytes(key, maxBytes) + childSize
+			if maxBytes is not None and total > maxBytes:
+				return (None, total, ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE))
+		return (converted, total, None)
+
+	def arrayValue(children, depth, maxDepth, maxBytes):
+		# The shared body of every array shape (list, tuple, java.util.List, a Java
+		# array that exposes getClass, the PyArray a Jython handler receives a Java array
+		# as): every element is measured as it is converted.
+		total = 2
+		converted = []
+		for child in children:
+			childValue, childSize, problem = configurationValue(child, depth + 1, maxDepth, maxBytes)
+			if problem is not None:
+				return (None, 0, problem)
+			converted.append(childValue)
+			total += childSize
+			if maxBytes is not None and total > maxBytes:
+				return (None, total, ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE))
+		return (converted, total, None)
+
+	def configurationValue(value, depth, maxDepth, maxBytes):
+		# D10: one walk converts and measures, so a value can never be measured by one
+		# branch set and converted by another. Its branches cover every shape a Gateway
+		# return value can take -- plain dict, an object that only offers `iteritems`,
+		# java.util.Map, list/tuple/java.util.List, java.lang.Enum, a Java array that
+		# exposes getClass, the array.array-typed PyArray a Jython 2.7 handler really
+		# receives a Java array as, a Dataset whose column names and cells are counted
+		# before its text is rendered, and a bounded fallback for any other native
+		# object.
+		# maxDepth and maxBytes are the Observed read-back's ceilings and are checked as
+		# the walk descends, so an oversized or deeply nested read-back is refused before
+		# it is materialized, recursed or rendered; the Preflight fingerprint conversion
+		# passes None for both, because it has to reproduce what tag_get_config
+		# published. Returns (converted, size, problem), where
+		# problem = (reason, requested, limit, advice).
+		if maxDepth is not None and depth > maxDepth:
+			return (None, 0, ("observedConfigurationOverDepth", depth, maxDepth, OBSERVED_DEPTH_ADVICE))
 		if value is None:
-			return (4, None)
+			return (None, 4, None)
+		if isinstance(value, bool):
+			return (value, 5, None)
+		if isinstance(value, (int, long)):
+			return (value, 24, None)
 		if isinstance(value, basestring):
-			return (utf8Bytes(value), None)
-		if isinstance(value, (bool, Boolean)):
-			return (5, None)
-		if isinstance(value, (int, long, float, Number)):
-			return (24, None)
-		if isinstance(value, (list, tuple, List)):
-			total = 2
-			for child in value:
-				childSize, problem = observedConfigurationSize(child, depth + 1, limit)
-				if problem is not None:
-					return (0, problem)
-				total += childSize
-				if total > limit:
-					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
-			return (total, None)
-		if isinstance(value, Map):
-			total = 2
-			for entry in value.entrySet():
-				childSize, problem = observedConfigurationSize(entry.getValue(), depth + 1, limit)
-				if problem is not None:
-					return (0, problem)
-				total += utf8Bytes(unicode(entry.getKey())) + childSize
-				if total > limit:
-					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
-			return (total, None)
+			return (value, countBytes(value, maxBytes), None)
+		if isinstance(value, Boolean):
+			return (value.booleanValue(), 5, None)
+		if isinstance(value, float):
+			if math.isnan(value) or math.isinf(value):
+				return ({"type": "non-finite-number", "text": unicode(value)}, 24, None)
+			return (value, 24, None)
+		if isinstance(value, Number):
+			typeName = unicode(value.getClass().getName())
+			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
+				return (long(unicode(value)), 24, None)
+			if typeName == "java.math.BigDecimal":
+				text = unicode(value)
+				return boundedRenderedValue({"type": "decimal", "text": text}, text, maxBytes)
+			return configurationValue(float(value.doubleValue()), depth, maxDepth, maxBytes)
+		if isinstance(value, Date):
+			text = unicode(value.toInstant().toString())
+			return (text, countBytes(text, maxBytes), None)
 		if isinstance(value, dict):
-			total = 2
-			for key in value:
-				childSize, problem = observedConfigurationSize(value[key], depth + 1, limit)
+			return objectValue(value.items(), depth, maxDepth, maxBytes)
+		if hasattr(value, "iteritems"):
+			return objectValue(value.iteritems(), depth, maxDepth, maxBytes)
+		if isinstance(value, Map):
+			pairs = [(entry.getKey(), entry.getValue()) for entry in value.entrySet()]
+			return objectValue(pairs, depth, maxDepth, maxBytes)
+		if isinstance(value, (list, tuple, List)):
+			return arrayValue(value, depth, maxDepth, maxBytes)
+		if isinstance(value, Enum):
+			text = unicode(value)
+			return boundedRenderedValue(text, text, maxBytes)
+		if hasattr(value, "getClass") and value.getClass().isArray():
+			# The array branch jsonValue named, kept so the walk's shape set is a
+			# superset of every shape a Java array can present as.
+			return arrayValue(value, depth, maxDepth, maxBytes)
+		if isinstance(value, PyArray):
+			# A Jython 2.7 handler receives a Java array as an array.array-typed PyArray:
+			# it exposes no getClass, so jsonValue's getClass().isArray() branch never sees
+			# it and the fallback would render it as one text of its own elements. The
+			# elements are walked first, so a huge or nested array is refused before that
+			# text is rendered.
+			converted, size, problem = arrayValue(value, depth, maxDepth, maxBytes)
+			if problem is not None:
+				return (None, 0, problem)
+			return nativeObjectValue(value, maxBytes)
+		if isDataset(value):
+			# The conversion has no Dataset branch -- and neither does tag_get_config's, so
+			# the two handlers' tokens agree -- and the fallback would publish the Dataset
+			# as one text of all its names and cells. Those are counted first, so a
+			# one-cell Dataset under a very large column name, or a deeply nested cell, is
+			# refused before that text is rendered.
+			problem = datasetProblem(value, depth, maxDepth, maxBytes)
+			if problem is not None:
+				return (None, 0, problem)
+			return nativeObjectValue(value, maxBytes)
+		return nativeObjectValue(value, maxBytes)
+
+	def isDataset(value):
+		return hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt")
+
+	def datasetProblem(value, depth, maxDepth, maxBytes):
+		# The Dataset half of the Observed budget, counted without reading a cell's
+		# text: every column name and then every cell, one level deeper. Returns the
+		# same problem tuple as the walk, or None when the Dataset fits.
+		if maxBytes is None:
+			return None
+		total = 8
+		columns = int(value.getColumnCount())
+		for column in range(columns):
+			total += 4 + utf8BytesBounded(value.getColumnName(column), maxBytes)
+			if total > maxBytes:
+				return ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE)
+		for row in range(int(value.getRowCount())):
+			for column in range(columns):
+				unusedValue, childSize, problem = configurationValue(value.getValueAt(row, column), depth + 1, maxDepth, maxBytes)
 				if problem is not None:
-					return (0, problem)
-				total += utf8Bytes(unicode(key)) + childSize
-				if total > limit:
-					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
-			return (total, None)
-		return (64, None)
+					return problem
+				total += childSize
+				if total > maxBytes:
+					return ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE)
+		return None
 
 	def observedProblemMessage(problem):
 		# The per-configuration half of the Observed-state budget. D10: the refusal
@@ -306,11 +474,11 @@ def onToolCalled(builder, items):
 		if reason == "observedConfigurationOverDepth":
 			head = "The Observed configuration is nested " + unicode(requested) + " levels deep, over the " + unicode(limit) + "-level Observed-state depth budget"
 		elif reason == "observedStateOverByteBudget":
-			head = "Returning this configuration would take the Observed state to " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
+			head = "Returning this configuration would take the Observed state to at least " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
 		elif reason == "observedStateBudgetSpent":
-			head = "The " + unicode(limit) + "-byte Observed-state budget is already spent, so this " + unicode(requested) + "-byte configuration is over it"
+			head = "The " + unicode(limit) + "-byte Observed-state budget is already spent, so this configuration of at least " + unicode(requested) + " bytes is over it"
 		else:
-			head = "The Observed configuration is " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
+			head = "The Observed configuration is at least " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
 		return head + "; it was not returned. " + advice
 
 	def observedError(path, code, message):
@@ -645,16 +813,19 @@ def onToolCalled(builder, items):
 		# batch never reaches the policy read, let alone the Gateway.
 		totalInputBytes = 0
 		for index in range(len(paths)):
-			pathBytes = utf8Bytes(paths[index])
+			pathBytes = utf8BytesBounded(paths[index], PATH_MAX_BYTES)
 			if pathBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is " + unicode(pathBytes) + " bytes, over the " + unicode(PATH_MAX_BYTES) + "-byte path ceiling; no item was executed. " + PATH_ADVICE, {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES, "advice": PATH_ADVICE})
+				return toolError("limit_exceeded", "A target path is at least " + unicode(pathBytes) + " bytes, over the " + unicode(PATH_MAX_BYTES) + "-byte path ceiling (a reported byte amount is counted only up to that ceiling); no item was executed. " + PATH_ADVICE, {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES, "advice": PATH_ADVICE})
 			configBytes, problem = configSize(configurations[index], 1)
 			if problem is not None:
 				advice = CONFIG_ADVICE[problem[0]]
-				return toolError("limit_exceeded", "A configuration is over the D10 " + problem[0] + " input ceiling with " + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
+				bytesOverCeiling = problem[0] in ("configStringOverLimit", "configOverByteBudget")
+				counted = "at least " if bytesOverCeiling else ""
+				clause = " (a reported byte amount is counted only up to that ceiling)" if bytesOverCeiling else ""
+				return toolError("limit_exceeded", "A configuration is over the D10 " + problem[0] + " input ceiling with " + counted + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + clause + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
 			totalInputBytes += pathBytes + configBytes + len(fingerprints[index])
 		if totalInputBytes > INPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "The update batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; no item was executed. " + INPUT_BYTES_ADVICE, {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES, "advice": INPUT_BYTES_ADVICE})
+			return toolError("limit_exceeded", "The update batch is at least " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget (a reported byte amount is counted only up to that ceiling); no item was executed. " + INPUT_BYTES_ADVICE, {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES, "advice": INPUT_BYTES_ADVICE})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -797,12 +968,12 @@ def onToolCalled(builder, items):
 			path = paths[index]
 			try:
 				nativeConfiguration = system.tag.getConfiguration(path, False, False)
-				# D10: the raw native read-back is walked with both of its ceilings
-				# before it is converted, so a deeply nested or oversized configuration
-				# is refused as an explicit per-item Observed error instead of being
-				# materialized for the result -- and the item's Native outcome above is
-				# unaffected. Only a read-back that passed the walk is converted.
-				observedSize, problem = observedConfigurationSize(nativeConfiguration, 1, OBSERVED_CONFIGURATION_MAX_BYTES)
+				# D10: the native read-back is converted and measured by one walk, so
+				# every shape it can take is charged what it actually publishes -- a
+				# deeply nested or oversized configuration is refused as an explicit
+				# per-item Observed error instead of being materialized, recursed or
+				# rendered first -- and the item's Native outcome above is unaffected.
+				configuration, observedSize, problem = configurationValue(nativeConfiguration, 1, OBSERVED_CONFIGURATION_MAX_DEPTH, OBSERVED_CONFIGURATION_MAX_BYTES)
 				if problem is None and observedBudgetSpent:
 					problem = ("observedStateBudgetSpent", observedSize, OBSERVED_STATE_MAX_BYTES, OBSERVED_STATE_ADVICE)
 				if problem is None and observedBytes + observedSize > OBSERVED_STATE_MAX_BYTES:
@@ -811,7 +982,6 @@ def onToolCalled(builder, items):
 				if problem is not None:
 					observed.append(observedError(path, "limit_exceeded", observedProblemMessage(problem)))
 					continue
-				configuration = jsonValue(nativeConfiguration)
 				if not isinstance(configuration, (list, tuple, List)) or len(configuration) == 0:
 					raise TypeError("Observed configuration read returned no node")
 				# The fingerprint is taken over the D28-encoded configuration, which is

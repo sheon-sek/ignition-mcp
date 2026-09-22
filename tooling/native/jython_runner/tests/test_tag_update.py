@@ -11,6 +11,7 @@ produced and in which order the checks ran.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -471,8 +472,11 @@ def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> Non
 
     assert error["details"]["reason"] == "pathOverLength"
     assert error["details"]["index"] == 0
-    assert error["details"]["requested"] == 2053
+    # The recorded path is 2053 bytes; the count stops one byte past the 2048-byte
+    # ceiling, so the reported amount is a lower bound and the error says so.
+    assert error["details"]["requested"] == 2049
     assert error["details"]["limit"] == 2048
+    assert "counted only up to that ceiling" in error["message"]
     _assert_reduction_advice(error, "shorten the target path")
 
 
@@ -662,6 +666,122 @@ def test_the_observed_read_back_is_walked_before_it_is_converted() -> None:
     assert "tag_get_config" in observed["error"]["message"]
 
 
+@pytest.mark.parametrize(
+    ("name", "fragment"),
+    [
+        ("observed-configuration-iteritems-over-depth", "33 levels deep"),
+        ("observed-configuration-java-array-over-depth", "33 levels deep"),
+        ("observed-configuration-java-array-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-native-object-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-dataset-column-name-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-dataset-deep-cell", "33 levels deep"),
+    ],
+)
+def test_every_shape_the_observed_read_back_takes_is_bounded_before_conversion(name: str, fragment: str) -> None:
+    """D10: the Observed read-back is one walk that both measures and converts, so
+    every shape a Gateway value reaches a Jython handler as is charged what it
+    actually publishes: a `dict`, an object that only offers `iteritems`, a
+    `java.util.Map`, a list, an enum, a Java array that exposes `getClass`, the
+    `array.array`-typed PyArray a Java array really arrives as, a native object
+    with no container interface, and a Dataset whose column names and cells are
+    counted before its text is rendered. A shape that used to be charged 64 bytes as
+    an opaque scalar is now refused as an explicit per-item Observed `limit_exceeded`
+    stating the requested amount, the ceiling and the reduction advice -- never a
+    conversion, a recursion or an exhaustion that would replace the item's
+    completed Native outcome."""
+    structured = _structured(name)
+
+    assert _statuses(structured) == [(WRITE, "executed")]
+    assert structured["items"][0]["nativeOutcome"]["good"] is True
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert fragment in observed["error"]["message"]
+    assert "tag_get_config" in observed["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["observed-configuration-java-array-over-budget", "observed-configuration-native-object-over-budget"],
+)
+def test_an_over_budget_observed_shape_states_the_amount_it_refused(name: str) -> None:
+    message = _structured(name)["observed"][0]["error"]["message"]
+
+    requested = int(re.search(r"is at least (\d+) bytes, over the 16384-byte", message).group(1))
+    assert requested > 16384
+
+
+def test_a_native_shape_inside_the_budget_is_published_exactly_as_it_was() -> None:
+    """The bound may not change what a legal read-back publishes: an `iteritems`
+    object still converts to an object, a Java array still publishes the
+    native-object text the conversion produced for it before the bound existed, and
+    a native object still publishes its class and its own text -- which is what
+    keeps this Tool's Observed fingerprint identical to the one tag_get_config
+    publishes for the same Tag."""
+    structured = _structured("observed-configuration-native-shapes-within-budget")
+
+    assert _statuses(structured) == [(WRITE, "executed")]
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+
+    assert observed["status"] == "ok"
+    assert observed["fingerprint"].startswith("tcf1:")
+    properties = observed["configuration"][0]["properties"]
+    assert properties["folders"] == {"level01": {"leaf": "done"}}
+    assert properties["valueSource"]["type"] == "native-object"
+    assert "java.lang.Object" in properties["valueSource"]["text"]
+    assert properties["path"]["class"] == "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath"
+    assert properties["path"]["text"] == "[default]IgnitionMCP_CI/WriteTarget"
+
+
+def _native_outcome(name: str) -> dict:
+    return _structured(name)["items"][0]["nativeOutcome"]
+
+
+def test_an_over_ceiling_quality_name_is_omitted_not_truncated() -> None:
+    """D10: a truncated identifier asserts one the provider never reported, so an
+    over-ceiling `name` is omitted with the size that was counted while `code` and
+    `good` stay exact and still identify the outcome."""
+    structured = _structured("native-outcome-oversize-name")
+    quality = structured["items"][0]["nativeOutcome"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["failed"] == 1
+    assert quality["code"] == 260
+    assert quality["good"] is False
+    assert quality["name"] == {"$ignition": "null"}
+    assert quality["nameOverLimitBytes"] == 200
+    assert quality["level"] == "Bad"
+    # A marker is present exactly when its text was bounded.
+    assert "nameOverLimitBytes" not in json.dumps(_structured("allowlisted"))
+
+
+def test_an_over_ceiling_quality_level_is_omitted_not_truncated() -> None:
+    quality = _native_outcome("native-outcome-oversize-level")
+
+    assert quality["code"] == 260
+    assert quality["name"] == "Bad_NotFound"
+    assert quality["level"] == {"$ignition": "null"}
+    assert quality["levelOverLimitBytes"] == 200
+
+
+def test_an_over_ceiling_quality_diagnostic_keeps_a_marked_bounded_prefix() -> None:
+    """The free-text diagnostic is the one QualityCode text that may be shortened,
+    because it is provider prose rather than an identifier; it keeps a bounded
+    prefix and is marked, so the shortening is never silent."""
+    recorded = json.loads(_fixture("native-outcome-oversize-diagnostic").read_text(encoding="utf-8"))
+    diagnostic = recorded["calls"][5]["result"]["items"][0]["diagnosticMessage"]
+    assert len(diagnostic) == 1000
+
+    quality = _native_outcome("native-outcome-oversize-diagnostic")
+
+    assert quality["name"] == "Bad"
+    assert quality["diagnosticMessage"] == diagnostic[:512]
+    assert quality["diagnosticMessageOverLimitBytes"] == 1000
+
+
 def test_the_contract_declares_the_d10_input_bounds() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
 
@@ -674,3 +794,10 @@ def test_the_contract_declares_the_d10_input_bounds() -> None:
     assert contract["inputBounds"]["observedStateMaxBytes"] == 65536
     assert contract["inputBounds"]["outputMaxBytes"] == 262144
     assert contract["inputBounds"]["overBudgetDetails"] == ["requested", "limit", "advice"]
+    assert contract["inputBounds"]["qualityNameMaxBytes"] == 128
+    assert contract["inputBounds"]["qualityLevelMaxBytes"] == 128
+    assert contract["inputBounds"]["qualityDiagnosticMaxBytes"] == 512
+    assert contract["inputBounds"]["qualityTextCountBytes"] == 8192
+    assert contract["inputBounds"]["qualityNameOverLimitField"] == "nameOverLimitBytes"
+    assert contract["inputBounds"]["qualityLevelOverLimitField"] == "levelOverLimitBytes"
+    assert contract["inputBounds"]["qualityDiagnosticOverLimitField"] == "diagnosticMessageOverLimitBytes"

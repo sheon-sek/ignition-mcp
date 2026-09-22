@@ -268,17 +268,32 @@
     "quality": {
       "type": "object",
       "additionalProperties": false,
+      "description": "One Native outcome. `code` and `good` are always exact. `name`, `level` and `diagnosticMessage` are omitted when the provider text was over its ceiling, and then the matching `*OverLimitBytes` field carries the size that was counted (exact up to the counting budget, a lower bound beyond it); a truncated identifier is never reported as the provider's.",
       "properties": {
         "code": {
           "type": "integer"
         },
         "name": {
-          "type": "string",
-          "minLength": 1
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "$ref": "#/$defs/null"
+            }
+          ]
         },
         "level": {
-          "type": "string",
-          "minLength": 1
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "$ref": "#/$defs/null"
+            }
+          ]
         },
         "good": {
           "type": "boolean"
@@ -292,6 +307,18 @@
               "$ref": "#/$defs/null"
             }
           ]
+        },
+        "nameOverLimitBytes": {
+          "type": "integer",
+          "minimum": 129
+        },
+        "levelOverLimitBytes": {
+          "type": "integer",
+          "minimum": 129
+        },
+        "diagnosticMessageOverLimitBytes": {
+          "type": "integer",
+          "minimum": 513
         }
       },
       "required": [

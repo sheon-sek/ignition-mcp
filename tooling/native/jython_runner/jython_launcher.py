@@ -25,6 +25,21 @@ failure path is reachable from a recording:
 ``onCall`` counts that helper's calls in the handler, 1-based. It exists because a
 handler's own serialization step can only be exercised if it can be made to fail,
 and the handler's outcome reporting must not depend on it.
+
+A recorded *value* may also name an explicit native shape, which is how a fixture
+replays a shape JSON cannot express on its own. ``nativeType`` is reserved for
+that, and ``_recorded_value`` decodes it recursively:
+
+    {"nativeType": "Dataset", "columns": [...], "rows": [[...]]}
+    {"nativeType": "iteritems-object", "entries": [[key, value], ...]}
+    {"nativeType": "java-array", "items": [...]}
+    {"nativeType": "native-object", "class": "com.example.Native", "text": "...",
+     "repeat": 4}
+    {"nativeType": "TagPath", "text": "[default]a/b", "type": "native-object"}
+
+``repeat`` multiplies a recorded rendering, so a fixture that bounds a long text
+stays readable. Every other JSON object and array becomes the Jython dict or list
+the Gateway would return.
 """
 
 from __future__ import print_function
@@ -32,7 +47,8 @@ from __future__ import print_function
 import json
 import sys
 
-from java.lang import RuntimeException
+from java.lang import Object, RuntimeException
+from java.lang.reflect import Array as ReflectionArray
 from java.util import ArrayList, LinkedHashMap
 
 
@@ -84,7 +100,7 @@ class _QualifiedValue(object):
     """A recorded QualifiedValue: the handler reads .value/.quality/.timestamp."""
 
     def __init__(self, recorded):
-        self.value = recorded.get("value")
+        self.value = _recorded_value(recorded.get("value"))
         self.quality = _QualityCode(recorded.get("quality") or {})
         self.timestamp = recorded.get("timestamp")
 
@@ -126,6 +142,116 @@ class _RecordedResults(ArrayList):
             self.add(native)
 
 
+class _RecordedDataset(object):
+    """A recorded Dataset: the handler reads columns and cells through the API."""
+
+    def __init__(self, recorded):
+        self.columns = list(recorded.get("columns") or [])
+        self.rows = [list(row) for row in (recorded.get("rows") or [])]
+
+    def getColumnCount(self):
+        return len(self.columns)
+
+    def getColumnName(self, index):
+        return self.columns[index]
+
+    def getRowCount(self):
+        return len(self.rows)
+
+    def getValueAt(self, row, column):
+        return self.rows[row][column]
+
+    def __unicode__(self):
+        # A real Dataset renders its column names and cells when it is printed, so the
+        # recorded one does too: a handler that publishes a Dataset as text has to be
+        # measured against that rendering, not against a Python object's address.
+        return unicode(self.columns) + unicode(self.rows)  # noqa: F821 - Jython 2.7 built-in
+
+    def __str__(self):
+        return self.__unicode__().encode("utf-8")
+
+
+class _RecordedClass(object):
+    """The `getClass()` answer of a recorded native object."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def getName(self):
+        return self.name
+
+    def isArray(self):
+        return False
+
+
+class _RecordedNativeObject(object):
+    """A recorded native object that offers no container interface.
+
+    ``jsonValue`` publishes such an object as its class and its own text, so a
+    fixture records what that text should be; ``repeat`` keeps a deliberately long
+    rendering readable in the fixture file.
+    """
+
+    def __init__(self, recorded):
+        self.className = recorded.get("class", "com.inductiveautomation.ignition.common.RecordedNativeObject")
+        self.text = recorded.get("text", "") * recorded.get("repeat", 1)
+
+    def getClass(self):
+        return _RecordedClass(self.className)
+
+    def __unicode__(self):
+        return unicode(self.text)  # noqa: F821 - Jython 2.7 built-in
+
+    def __str__(self):
+        return self.text.encode("utf-8")
+
+
+class _RecordedIteritems(object):
+    """A recorded native object whose only mapping interface is ``iteritems``.
+
+    It is neither a `dict` nor a `java.util.Map`, so it exercises the branch order
+    a handler's conversion uses for such an object.
+    """
+
+    def __init__(self, entries):
+        self.entries = entries
+
+    def iteritems(self):
+        return self.entries
+
+
+def _recorded_value(value):
+    """Decode one recorded value into the native shape it models.
+
+    A JSON object carrying a ``nativeType`` marker builds that explicit shape;
+    ``nativeType`` is therefore reserved in recorded values. Every other JSON
+    container becomes the Jython dict or list the Gateway would hand back, and an
+    unknown marker fails the run rather than silently replaying a plain dict.
+    """
+    if isinstance(value, dict):
+        marker = value.get("nativeType")
+        if marker == "Dataset":
+            return _RecordedDataset(value)
+        if marker == "TagPath":
+            return _RecordedTagPath(value)
+        if marker == "iteritems-object":
+            return _RecordedIteritems([(key, _recorded_value(child)) for key, child in value["entries"]])
+        if marker == "java-array":
+            items = [_recorded_value(child) for child in value["items"]]
+            array = ReflectionArray.newInstance(Object, len(items))
+            for index in range(len(items)):
+                array[index] = items[index]
+            return array
+        if marker == "native-object":
+            return _RecordedNativeObject(value)
+        if marker is None:
+            return dict((key, _recorded_value(child)) for key, child in value.items())
+        raise _RecordedError("unsupported recorded native value: " + str(marker))
+    if isinstance(value, list):
+        return [_recorded_value(child) for child in value]
+    return value
+
+
 class _QualifiedValues(ArrayList):
     def __init__(self, recorded):
         ArrayList.__init__(self)
@@ -153,7 +279,7 @@ class _Configurations(ArrayList):
         for item in recorded["items"]:
             native = LinkedHashMap()
             for key, value in item.items():
-                native.put(key, value)
+                native.put(key, _recorded_value(value))
             self.add(native)
 
 

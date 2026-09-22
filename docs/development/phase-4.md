@@ -404,8 +404,8 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   D28-null and escaped-reserved-key cases.
 - **Fixture-first coverage.** 9 recorded-Jython tests
   (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over five golden
-  vectors; 56 tests for `tag_update`
-  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 55 fixtures; and 5
+  vectors; 68 tests for `tag_update`
+  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 65 fixtures; and 5
   tests for the `tag_get_config` definition read
   (`tooling/native/jython_runner/tests/test_tag_get_config.py`) over 8 fixtures.
   Together they cover: the policy gate (missing, oversize, length mismatch, malformed,
@@ -421,9 +421,15 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   paths, an item-scoped indeterminate native outcome, a dispatch that raises (the
   item is `outcome_unknown` and later items are `not_executed`), a failed or
   empty observed read, the reduction advice on every over-budget refusal, an
-  Observed read-back past the Observed depth ceiling (the item's Native outcome
-  survives it), and a folder named `_types_` below the provider's first segment in
-  both Tools. The D29 runner gained the `system.tag.getConfiguration` and
+  Observed read-back past the Observed depth ceiling for a plain mapping, for an
+  object whose only mapping interface is `iteritems` and for a nested Java array
+  (the item's Native outcome survives each), an Observed read-back whose Java array,
+  its native-object text or a Dataset is over the byte ceiling, a Dataset whose cell
+  nests deeper than the depth ceiling, a native shape inside the budget publishing
+  exactly what it published before, the QualityCode identifier and diagnostic
+  ceilings (`nameOverLimitBytes`, `levelOverLimitBytes`,
+  `diagnosticMessageOverLimitBytes`), and a folder named `_types_` below the
+  provider's first segment in both Tools. The D29 runner gained the `system.tag.getConfiguration` and
   `system.tag.configure` recordings, so a fixture proves the *absence* of a call
   as well as its result.
 - Contracts: `contracts/tools/runtime/tag_update.contract.json` (CONFIG, not
@@ -570,6 +576,50 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   - *The superseded outage entry is removed.* The Open-questions entry that blamed the missing
     lane-head runs on a repository- or account-wide Actions fault is gone; the corrected entry that
     records the `CONFLICTING` pull request is the only diagnosis left in the runbook.
+- **Review round 3 fixes.** One blocker, addressed:
+  - *Every shape the Observed conversion accepts is measured before it is converted, by one
+    walk.* Round 2 bounded the raw read-back in depth and bytes but recognised only `list`, `tuple`,
+    `java.util.List`, `java.util.Map` and `dict`, while the conversion also expanded an object whose
+    only mapping interface is `iteritems`, expanded a Java array, and rendered any other native
+    object through an unbounded `unicode(value)`. Those shapes were charged 64 bytes as opaque
+    scalars and then materialized, recursed or rendered before any refusal, so an over-budget text
+    reached the result and a deep one recursed first. `configurationValue` is now one walk that
+    converts and measures in the same pass, with `jsonValue` as its no-ceiling wrapper for the
+    Preflight fingerprint — that conversion is byte-for-byte what it was, because it has to
+    reproduce the token `tag_get_config` published — and the Observed read-back calls the walk with
+    the same 16384-byte and 32-level ceilings. Every branch mirrors what a handler really receives:
+    a `dict`, an `iteritems` object, a `java.util.Map`, a list/tuple/`java.util.List`, a
+    `java.lang.Enum`, the array branch the conversion names, and the `array.array`-typed PyArray a
+    Jython 2.7 handler actually receives a Java array as, whose elements are walked before its
+    native-object text is rendered. The fallback renders a native object's class and text once —
+    a Java `toString` cannot be produced in pieces — and refuses the item when they exceed the
+    ceiling, so an over-budget text is never published. Four new fixtures pin the depths and the
+    bytes; a fifth pins that a within-budget `iteritems` object, Java array and native object
+    publish exactly what they published before. All four bound fixtures failed before the handler
+    change with `status: ok`, and a pre-fix run published a 23577-byte array text and a 24000-byte
+    native-object text inside the 16384-byte Observed budget, each charged as a 64-byte scalar. The
+    D29 launcher gained explicit `nativeType` value markers (`iteritems-object`, `java-array`,
+    `native-object`) so a fixture can replay shapes JSON cannot express. The bound values, the error
+    shape and the contract fields are unchanged.
+  - *The #7 fix's round-3 measurement rules are adopted here.* `tag_write`'s round 3 replaced a
+    full-encoding `utf8Bytes` with an incremental `utf8BytesBounded(value, budget)` that stops at the
+    ceiling it checks, counted a Dataset's column names as well as its cells, and stopped truncating
+    a Native `name`/`level`; `tag_update` had the same three gaps. Every byte ceiling in this
+    handler — the Observed walk, the input path, configuration and batch ceilings and the
+    QualityCode text counts — is now counted incrementally, so a caller- or provider-supplied string
+    is never encoded just to be measured, and an over-budget message reports the amount the count
+    reached and says it is a lower bound (the 2053-byte path fixture now reports 2049). A Dataset in
+    the Observed read-back is counted column name by column name and cell by cell, one level deeper,
+    before its text is rendered, so a one-cell Dataset under a very large column name or a deeply
+    nested cell is a `limit_exceeded` Observed error rather than a materialization. A QualityCode
+    `name` or `level` over its 128-byte ceiling is omitted (null) with
+    `nameOverLimitBytes`/`levelOverLimitBytes` reporting the counted size instead of being truncated
+    into prose the provider never reported, and the free-text diagnostic keeps a marked 512-byte
+    prefix. Five fixtures (`observed-configuration-dataset-column-name-over-budget`,
+    `observed-configuration-dataset-deep-cell`, `native-outcome-oversize-name`,
+    `native-outcome-oversize-level`, `native-outcome-oversize-diagnostic`) fail on the previous
+    handler; the output schema's `quality` definition, the contract's `inputBounds` and
+    `nativeOutcomeText`, and `resource.json` carry the new fields and rule.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
@@ -1068,6 +1118,38 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   both Runtime handlers, matching the reading ticket #17 already recorded for the REST plane.
   **For the owner:** no decision; recorded because D10's third clause is now a contract field rather
   than message prose.
+- **Ticket #10 — review round 3 made the Observed bound shape-complete (fixed).** The round-2 walk
+  covered the container types the code happened to list rather than the ones the conversion
+  accepted: an object whose only mapping interface is `iteritems`, a Java array, and any other
+  native object were charged 64 bytes as opaque scalars and then expanded or rendered by the
+  conversion, so an over-budget array or object text reached the result while a deep one recursed
+  first. The handler now has one walk — `configurationValue` — that converts and measures in the
+  same pass, `jsonValue` is its no-ceiling wrapper for the Preflight fingerprint, and the Observed
+  read-back runs it with the 16384-byte and 32-level ceilings. One recorded environment fact shaped
+  the fix: a Jython 2.7 handler receives every Java array as an `array.array`-typed PyArray that
+  exposes no `getClass`, so the conversion's `getClass().isArray()` branch never sees one and the
+  fallback rendered it as one text of all its elements. The walk now measures an array's elements
+  first and only then renders that text, and the text is bounded as well, so an over-budget array or
+  native-object text is a per-item Observed `limit_exceeded` stating the amount, the ceiling and the
+  advice. The D29 launcher gained explicit `nativeType` value markers (`Dataset`,
+  `iteritems-object`, `java-array`, `native-object`) so a fixture can replay those shapes. The same
+  round adopted the #7 lane's round-3 measurement rules — an incremental `utf8BytesBounded` for
+  every byte ceiling, a Dataset's column names counted with its cells, and a QualityCode `name` or
+  `level` that is returned exactly or omitted with `nameOverLimitBytes`/`levelOverLimitBytes` rather
+  than truncated — which is why the contract, the output schema's `quality` definition and
+  `resource.json` did change in this round. **For the owner:** no decision; the Observed bound
+  values (16384 bytes, 32 levels) and the error shape are unchanged.
+- **Ticket #10 — the Preflight fingerprint conversion keeps no ceilings (recorded, not changed).**
+  `tag_update` compares a target's `expectedFingerprint` against the configuration it reads back
+  with the same walk the Observed read-back uses, but with no byte or depth ceiling, because that
+  conversion has to reproduce the token `tag_get_config` published. `tag_get_config` bounds its own
+  read by `maxResults` and the 256 KiB output ceiling and converts without a per-configuration byte
+  or depth ceiling, so a Tag whose configuration is between the 16384-byte Observed budget and that
+  output ceiling is readable and fingerprintable today. Bounding the Preflight conversion would make
+  exactly those targets un-updatable, which is a capability decision rather than a bug fix, so
+  review round 3 bounded only the half this Tool publishes. **For the owner:** decide whether a Tag
+  whose configuration is over the 16384-byte Observed budget may be updated at all, and if so
+  whether the read-side ceilings should be raised to meet it.
 - **Ticket #10 — review round 1 adopted the #7 fix's D10 shape, including one shared linter helper.**
   `_check_input_bounds` is byte-identical to the helper the #7 fix introduces, but this lane calls it
   from the CONFIG path while that fix calls it from the shared `_check_runtime_mutation`, and this
