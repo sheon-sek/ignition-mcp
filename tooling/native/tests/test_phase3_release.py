@@ -63,10 +63,15 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        # The committed evidence rows certify an earlier bundle, so a Phase 4
-        # release carries no tuple until Phase 4 produces its own rows (D21 exact
-        # tuples).
-        self.assertEqual(manifest["testedTuples"], [])
+        # The G4 close-out rows certify this bundle, so a Phase 4 release carries
+        # one exact G4 tuple per Gateway row — D21 exact tuples, and the status
+        # stays UNTESTED (an evidence row never promotes a deployment).
+        self.assertEqual(
+            [(item["gate"], item["gatewayVersion"], item["compatibilityStatus"],
+              item["nativeResponseBinding"]) for item in manifest["testedTuples"]],
+            [("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+             ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION")],
+        )
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)
         self.assertNotIn("__BUNDLE_SOURCE_REVISION__", handler)

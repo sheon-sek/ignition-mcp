@@ -138,11 +138,141 @@ G4 closes only when all of the following are true:
 - 8.3.8 required and 8.3.9 candidate rows produce schema-valid evidence, and no tuple is `SUPPORTED`;
 - all CI commands are green, and the G0–G3 workflows still pass on the branch head.
 
+## L5 failure suite — the G4 case matrix
+
+D26's Gate G4 asks D23's L5 suite to cover eight cases, per Plane, with the
+Runtime plane's timeout, ambiguous-outcome and cancellation cases recorded as a
+limitation. This is that matrix. Every entry names where its proof lives: a live
+case id (with the run that recorded it), the systematic replay of the same case
+set against the recorded Gateway, or a recorded fixture. The machine-readable
+form of this table is `tests/compatibility/g4/close-*.json`, which the two
+committed evidence rows are composed from.
+
+| D26 case | REST plane | Runtime plane |
+|---|---|---|
+| partial failure | **LIVE** (35687123699): the transport partial write — `fault-mid-body-{is-not-attributed-to-this-call,never-reaches-the-gateway,attempts-the-write-once,changes-nothing,audits-the-attempt,audits-not-applied,audits-the-refusal}` (`tests/harness/phase4-live-rest/rest_driver.py:1806`, `:1824`). Per-item batch partial reporting has no REST live case because every REST Mutation Tool is single-resource; the one batch-shaped Tool, `tag_config_import`, pins its partial rule as `recovery_required` in `test_phase4_tag_config_import.py::test_a_partial_import_is_recovery_required_and_never_a_success` | **LIVE** (35707687810): the `tag_delete` stage's "a partial-failure batch after Preflight" — `tagDeletePartialBatchSucceeded=1`, `tagDeletePartialBatchFailed=1`, `tagDeletePartialBatchFirstOutcome=Good`, `tagDeletePartialBatchSecondOutcome=Bad_NotFound`, `tagDeletePartialBatchRetriedNothing=true` (`tests/harness/phase4-live/driver.py:3504`); fixture `tag_write-allowlisted-batch.json` |
+| timeout | **LIVE** (35687123699): `fault-deadline-{is-a-timeout,fires-at-the-deployment-deadline,never-retries,audits-a-cancelled-dispatch,left-a-possibly-applied-change,leaves-a-usable-service}` (`rest_driver.py:1868`) through the `delay_response` proxy fault | **FIXTURE ONLY** — D30's owner ruling. Live: only the input-range refusals (`alarmShelveCapRefusalReason=durationOverPolicyCap`, `alarmShelveHardMaxRefusalReason=durationOutOfRange`). Fixture: `tag_write-timeout-out-of-range.json`, `alarm_shelve-duration-{out-of-range,over-hard-max,over-policy-cap,null}.json` |
+| ambiguous outcome | **LIVE** (35687123699): `fault-after-full-body-{is-ambiguous,reaches-the-gateway,was-answered-before-the-drop,is-never-a-success,audits-an-unresolved-outcome}` (`rest_driver.py:1834`) and the D16 import variants `fault-import-{mid-body,after-full-body}-*` (`rest_driver.py:2338`) | **FIXTURE ONLY** — D30's owner ruling. The live Runtime stages assert only that no ambiguity occurred (`tagWriteBatchOutcomeUnknown=0`, `tagDeletePartialBatchRetriedNothing`, `alarmShelveOutcomeUnknown=0`). Fixtures: `*-native-outcome-indeterminate.json`, `tag_write-native-outcome-count-mismatch.json`, `*-dispatch-raises.json` (14) |
+| permission denied | **LIVE** (35687123699, 35682027818): the refused resource types, the Target-allowlist denials for all eight Tools, the reserved `IgnitionMCPPolicy` provider (update/delete/create/rename-into/rename-away), the read-only credential on `artifact_delete`, and the disabled-class calls — 30 case ids, e.g. `refused-resource-type-is-permission-denied` (`rest_driver.py:1076`), `reserved-provider-update-is-permission-denied` (`:2105`) | **LIVE** (35710377211, 35707687810): every Mutation Tool's segment-boundary sibling denial and reserved-provider refusal; `tag_write` `targetNotAllowlisted` / `reservedProvider` (`driver.py:1292`, `:1336`), the whole-batch Preflight refusal, and the fail-closed `operation_disabled` with no policy at all |
+| oversize | **LIVE** (35687123699): `pipeline-cancel-oversize-{path,event}-is-limit-exceeded` (`rest_driver.py:833`), `artifact-delete-oversize-identifier-is-invalid-argument` (`:958`), `pipeline-cancel-blank-path-is-invalid-argument` (`:841`) | **LIVE** (35710377211, 35707687810): the policy size gate (`oversizePolicyDeclaredLength=39967` over the 32 KiB cap, `oversizePolicyGateState="oversize"`, `oversizePolicyMaterialized=false` — the document is never read) and each Tool's D10 ceilings (`pathOverLength`, `itemsOverPolicyLimit`, `itemsOverHardLimit`, the value/byte budgets) |
+| concurrent modification | **LIVE** (35687123699): the stale signature on update/delete/rename, the occupied destination on create/rename, the stale Project fingerprint, the occupied Tag-import destination (`rest_driver.py:1066`, `:1183`, `:1240`, `:1296`, `:1309`, `:546`, `:710`) | **LIVE** (35710377243, 35707687810): the stale Tag config fingerprint → `conflict` / `fingerprintMismatch` with the target unchanged (`driver.py:1646`, `:3057`, `:3330`, `:3586`), and the raced collision (`tag_create` existing target, `tag_copy` occupied destination) |
+| audit failure | **FIXTURE ONLY (unit)** — no live case exists: the fault proxy has no storage fault, so the D18 fail-closed branch is proven by `test_phase3_safety_executor.py::test_failed_decision_audit_fails_closed_before_dispatch` (`:577`), `test_phase3_invocation.py::{test_decision_failure_fails_closed_before_dispatch,test_attempt_failure_prevents_dispatch,test_missing_result_marks_record_not_outcome}`, `test_phase4_scope_enforcement.py::test_a_denial_survives_an_unwritable_audit_sink`, all raising `AuditWriteError` from a monkeypatched `SqliteAuditSink.write`. Live proves the audit *trail* of every fault outcome (13 `fault-*-audits-*` case ids read from the server's own `audit.db`) | **FIXTURE ONLY** — the live stages install every policy with `auditMode=best_effort` (`driver.py:1105`, `:1386`, `:1950`, `:1967`, `:2834`) and verify the success pair only. Fixtures: `tag_write-{audit-required-attempt-fails,audit-required-profile-missing,audit-result-fails,decision-audit-required-write-fails}.json` and the same four for `tag_update`, `tag_create`, `tag_copy`, `alarm_shelve`/`alarm_unshelve` |
+| cancellation | **LIVE** (35687123699): `fault-cancellation-{answers-request-cancelled,cancels-the-request-it-sent,never-retries,audits-a-cancelled-dispatch,leaves-the-change-in-place}` (`rest_driver.py:1928`) and `fault-import-cancellation-*` (`:2417`) — the caller cancels its own in-flight request and the Tool answers JSON-RPC `-32800` | **NOT PROVEN** — there is no live case and no recorded fixture: `grep -ri cancel` returns nothing under `tests/harness/phase4-live/`, `packages/ignition-runtime-bundle/project/` and `tooling/native/jython_runner/`. D30's Consequences say the three cases are "proven with recorded fixtures only" on the Runtime plane; that sentence is not satisfied for cancellation (see Open questions) |
+
+**No unsafe automatic retry.** D26 requires this to be verified rather than
+assumed, and the same runs prove it three ways: the fault cases assert one
+dispatch per call (`fault-mid-body-attempts-the-write-once`,
+`fault-deadline-never-retries`, `fault-cancellation-never-retries`) against the
+proxy's own `fault-proxy-state.json` counters; the Runtime batch cases record
+`…RetriedNothing` and `…OutcomeUnknown=0`; and the D16 transaction keeps its
+dispatch boundary (`not_sent`/`refused`/`claimed`/`attributable`/`unattributable`)
+with `importDispatched` in the durable row. `test_phase3_safety_structure.py`
+still pins that no code path outside the guarded executor dispatches a Gateway
+write, and `unsafeAutomaticRetryAbsent` is an explicit row field, not a sentence.
+
+### Exact inventories
+
+Runtime profiles (`contracts/profiles/*.yaml`, `tooling/contracts/lint.py`
+`EXPECTED_PROFILE_TOOLS`, and each harness Server Config — all three agree):
+
+| profile | mutation class served | Tools | verified |
+|---|---|---|---|
+| `readonly` | none | 13 | live: G1–G3 rows; unchanged by Phase 4 |
+| `operator` | CONTROL | 16 | live: 35710377211 (`tagWriteOperatorInventoryMatchesProfile`, `alarmShelveOperatorInventoryMatchesProfile`) |
+| `configurator` | CONFIG | 19 | live: 35707687810 (`tagCreateConfiguratorInventoryMatchesProfile`, `tagUpdateConfiguratorInventoryMatchesProfile`) |
+| `full` | CONTROL + CONFIG | 22 | contract + lint only: no harness deploys `full` |
+
+Mutation off is the `readonly` list exactly — 13 Tools, no wildcard — and the
+live rows prove each mutation-capable profile *excludes* the other class
+(`operatorProfileExcludesConfigMutation`, `tagCreateOperatorInventoryExcludesBothTools`).
+
+REST plane (live on both Gateway rows of 35687123699; the class gates are
+`IGNITION_MCP_CONFIG_MUTATION_ENABLED` and `IGNITION_MCP_CONTROL_MUTATION_ENABLED`,
+and the two export Tools additionally need `IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED`
+*and* their capability):
+
+| configuration | Tools | verified |
+|---|---|---|
+| every mutation class disabled | 16 read Tools | live: `inventory-gate-off-exact`, `inventory-reader-exact`; `disabled-class-call-is-refused`, `disabled-class-artifact-delete-is-refused` |
+| CONFIG only | 23 (16 + 7) | live: `inventory-agent-exact` |
+| CONTROL only | 17 (16 + `alarm_pipeline_cancel`) | live: `inventory-operator-exact` |
+| CONFIG + CONTROL | 24 (16 + 8) | contract + lint only: no live row enables both classes |
+| sensitive exports disabled | 14 (16 − 2) | live: G3 rows (`gateOffInventory`) |
+
+The eight REST Mutation Tools are `alarm_pipeline_cancel`, `artifact_delete`,
+`config_resource_create`, `config_resource_delete`, `config_resource_rename`,
+`config_resource_update`, `project_import` and `tag_config_import`. Mutations stay
+disabled by default in every deployment profile.
+
 ## Validation commands
 
 Run the full command block in `AGENTS.md` (Commands) after every ticket. Before spending a live CI run, rehearse locally against `tests/harness/recorded_gateway.py`.
 
 ## Results
+
+### Ticket #23 — G4 close: the L5 failure suite, the evidence rows and the runbook results
+
+- **The L5 case matrix** is the `## L5 failure suite` section above: each of D26's eight
+  G4 cases, on both Planes, with the class of evidence behind it (`LIVE`, `SYSTEMATIC`,
+  `FIXTURE`, `NONE`) and its exact source — a live case id with the run that recorded it,
+  the systematic replay of the same case set against the recorded Gateway, or a recorded
+  fixture/unit test. `SYSTEMATIC` and the live case ids are the ones this runbook's
+  per-ticket Results entries already record; nothing here re-runs them.
+- **Two schema-valid evidence rows**, both composed by the new `tooling.compat` G4 path:
+  [`g4-8.3.8-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.8-mcp-2026021307/README.md)
+  (required; `status VERIFIED`, `nativeResponseBinding VERIFIED_WITH_LIMITATION` with the
+  D27 exact-tuple exception applied) and
+  [`g4-8.3.9-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.9-mcp-2026021307/README.md)
+  (candidate; `status FAILED_NATIVE_BINDING`, `nativeResponseBinding UNVERIFIED_LIMITATION`,
+  `d27ExceptionApplied false`). Both record `compatibilityStatus UNTESTED` and
+  `gateResult VERIFIED_WITH_LIMITATION`; neither claims `SUPPORTED`, and
+  `tooling.compat validate --evidence-dir tests/compatibility/evidence` accepts all eight
+  rows.
+- **A G4 row is a close-out over several runs, not one run's row.** Phase 4 spans two
+  milestones, four workflows and several heads, so the row cites each contributing run and
+  re-reads that run's own harness artifact before it is written — a run is only cited when
+  its document proves it ran green (every stage `ok`, `drift: {}`; every REST case `ok`),
+  matches the row's Gateway/Module identity, and deployed the bundle the row declares. The
+  cited runs are `35710377211` (G4a, milestone 4a), `35710377243` (G4b, 4b part), `35707687810`
+  (G4b, 4b complete) and `35687123699` (REST mutation, milestone 4c); the row records each
+  run's head, its pull-request test merge revision and the bundle it deployed, because the
+  4a runs deployed 0.6.0 while the 4b runs deployed the close-out bundle 0.7.0
+  (`5cdca831…`, independently reproduced from head `dfa4d08`).
+- **`tooling/compat` gained the gate itself.** `GATES` now includes `G4`, and
+  `_apply_g4_rules` enforces, fail-closed: every D26 case recorded on both Planes; a
+  limitation for every claim that is not live; a run id for every claim that is; D30's
+  Runtime fixture-only ruling never contradicted by a live claim; every cited run a green
+  one; `gateResult` consistent with the matrix; every case with no evidence named in
+  `unsatisfiedAcceptance`; `mutationsDisabledByDefault` and `unsafeAutomaticRetryAbsent`
+  explicitly true; and the four Runtime profile inventories equal to
+  `tooling/contracts/lint.py`. `python -m tooling.compat g4 --close <close.json> --artifacts
+  <downloads> --out-dir tests/compatibility/evidence` composes a row and re-validates it
+  before writing, and refuses to overwrite an existing one. `tooling/compat/tests/test_g4.py`
+  (12 cases) proves both committed rows are exactly what their committed close documents say
+  and that every dishonest composition is refused.
+- **Inventories are exact and recorded in the rows** (the tables above): `readonly` 13
+  (unchanged, live from G1–G3), `operator` 16 (live), `configurator` 19 (live), `full` 22
+  (contract + lint only — no harness deploys it, and the row says so); REST 16 read Tools
+  with both mutation classes off, 23 with `CONFIG_MUTATION` on, 17 with `CONTROL_MUTATION` on,
+  24 with both (contract-only) and 14 with the sensitive-export gate off (live, G3 rows).
+- **The release now publishes the G4 tuples.** `tooling.native.cli release` derives
+  `testedTuples` from the committed rows, so a 0.7.0 release carries one `G4` tuple per
+  Gateway row with `compatibilityStatus UNTESTED`; `tooling/native/tests/test_phase3_release.py`
+  asserts exactly that (and still refuses any `SUPPORTED` tuple). Two release builds are
+  byte-identical.
+- **What these rows do not claim.** Two of D26's acceptance items are recorded as
+  `unsatisfiedAcceptance` rather than met: audit failure (`required` mode) is not proven live
+  on either Plane (the REST plane proves the D18 fail-closed branch by unit tests, and every
+  live Runtime stage runs `auditMode=best_effort`), and Runtime cancellation has no evidence
+  at all — no live case and no fixture — which means D30's sentence that the three Runtime
+  cases are "proven with recorded fixtures only" is not satisfied for cancellation. Both are
+  owner questions in this runbook below. The Runtime timeout and ambiguous-outcome cases are
+  limitations with D30's ruling behind them, not gaps.
+- **Deferred work stays deferred and linked.** The D10 bound-accounting precision the owner
+  deferred from the #11 scope cut is [issue #41](https://github.com/sheon-sek/ignition-mcp/issues/41),
+  and the flaky `fault-import-after-full-body` live case is
+  [issue #39](https://github.com/sheon-sek/ignition-mcp/issues/39); both are named in the
+  Open questions summary and neither is silently closed by this ticket.
 
 ### Ticket #14 — REST `config_resource_update` (milestone 4c)
 
@@ -2248,6 +2378,34 @@ are real gaps the reviewer named and they are **not** fixed in this round:
 
 ## Open questions
 
+### Owner questions raised by Phase 4 — summary
+
+Every item below is a decision this phase could not make for itself: the shipped behaviour is the
+conservative one, and an answer changes it. The detailed entries follow in this section.
+
+| # | Question (shipped fail-closed behaviour in brackets) | Raised by |
+|---|---|---|
+| 1 | **`tag_copy` has no new-name parameter.** A copy destination's leaf must equal the source's, because the native call copies each source into a destination *folder* under its own name ([`invalid_argument` / `destinationLeafDiffersFromSource`]; a renaming copy is `tag_copy` + `tag_rename`) | #11 |
+| 2 | **`tag_create`/`tag_update` refuse three configuration keys** D30 §6 does not mention: `value` (that is `tag_write`'s CONTROL operation), `tags` (nested creation is `tag_config_import`'s bulk path) and a `name` that differs from the target's own leaf (`tag_rename`'s job) | #10, #11 |
+| 3 | **The reserved config resource name is compared case-folded** with surrounding whitespace ignored, because Ignition documents no rule for comparing two config resource names ([refused, fail-closed]) | #36 |
+| 4 | **`setup-native apply` needs a Gateway reload before a Server Config it created is served.** The pinned Module answers `tools/list -> -32600` over a config created live on a Project imported live until the Gateway restarts; `verify` now retries read-only, then the *stage* reloads once and re-runs `verify` ([no write is ever re-run]; the CLI's own inline `verify` still has no reload — whether this is a Module defect to raise upstream) | #21 |
+| 5 | **The Preflight fingerprint conversion keeps no ceilings.** Building the D28-encoded canonical JSON of a Tag configuration has no bound of its own before the D30 §2 compare ([the item's input bounds are the only limits]) | #10 |
+| 6 | **The Runtime plane's cancellation case is not proven at all**, and its timeout/ambiguous-outcome cases are fixture-only by D30's own ruling. D30 says all three are "proven with recorded fixtures only"; no cancellation fixture exists, because the Jython handlers cannot observe a cancelled call ([recorded as a limitation, never as live]) | #23 |
+| 7 | **Audit failure (`required` mode) is not live on either plane.** The REST plane proves the D18 fail-closed branch only by unit tests, and every live Runtime stage installs `auditMode=best_effort`. G4's acceptance text asks for live proof on both Planes ([recorded as a limitation and in `unsatisfiedAcceptance`]) | #7, #23 |
+
+Two open issues carry whole categories of work rather than one question:
+
+- **[#41](https://github.com/sheon-sek/ignition-mcp/issues/41) — D10 bound-accounting hardening.** The
+  owner's speed ruling (D30 ruling 6) deferred, without waiving, the exact byte accounting of the
+  Observed walk, the aggregate early stop, and the wording of requested amounts and reduction advice.
+  D10 is unchanged and #41 must be resolved or re-ruled before any claim beyond G4.
+- **[#39](https://github.com/sheon-sek/ignition-mcp/issues/39) — the `fault-import-after-full-body`
+  live case is flaky.** The D16 ambiguous-import case intermittently fails its proxy bookkeeping in
+  CI; it passed on the integration run the G4 rows cite, and the flake is tracked rather than papered
+  over (the same class of proxy flake ticket #20 recorded twice and the runbook repeats below).
+
+### Detail
+
 - **Ticket #7 — the D10 deployment override is two new optional Policy fields.**
   D10's budget layers are "project safe default → deployment override → absolute
   hard ceiling", and the Runtime plane's deployment-owned document is the Runtime
@@ -2923,3 +3081,69 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   tag (the same shape `phase2-live` uses for `mariadb:11.4.13-noble`), so a certification that
   wants a pinned proxy must supply the digest. **For the owner:** confirm the tag, or name the
   digest to pin in `.github/workflows/phase4-live-rest.yml`.
+
+### G4 close (ticket #23)
+
+- **Ticket #23 — the Runtime plane's cancellation case has no evidence at all.** D30's
+  Consequences say "Runtime timeout, ambiguous-outcome and cancellation cases for G4 are
+  proven with recorded fixtures only, and the evidence records that limitation". For timeout
+  and ambiguous outcome that is true (the `tag_write`/`alarm_*`/`tag_update` fixtures listed
+  in the L5 matrix), but for cancellation there is neither a live case nor a recorded
+  fixture: `grep -ri cancel` matches nothing under `tests/harness/phase4-live/`,
+  `packages/ignition-runtime-bundle/project/` or `tooling/native/jython_runner/`, and the
+  handlers have no cancellation path to observe — a blocking Jython call cannot be
+  interrupted (D10), so an MCP `notifications/cancelled` reaches the Module, not the handler.
+  The Gate level is covered by the REST plane's live `fault-cancellation-*` cases; the Runtime
+  plane is recorded as `NONE` in both evidence rows and named in their
+  `unsatisfiedAcceptance`. **For the owner:** accept the case as proven on the REST plane only
+  (and amend D30's sentence, which over-claims for cancellation), or name the Runtime evidence
+  that would satisfy it.
+- **Ticket #23 — audit failure (`required` mode) is not proven live on either Plane.** D26's
+  G4 acceptance asks for it live on both Planes. The REST plane has no live case because the
+  fault proxy injects transport faults only, so the D18 branch is proven by unit tests that
+  raise `AuditWriteError` (the live REST cases prove the audit *trail* of every fault
+  outcome, read from the server's own `audit.db`); the Runtime plane's live stages install
+  every policy with `auditMode=best_effort`, so the `required`-mode failures
+  (`auditAttemptFailed`, `auditProfileUnavailable`, and a denied mutation's `decision` row)
+  are fixture-proven only. Adding a live case would mean a policy in `required` mode plus an
+  audit sink that cannot be written — a new live case and, on the REST plane, a new proxy
+  fault, which the owner's speed ruling excludes from this phase. **For the owner:** accept
+  the fixture/unit proof as the G4 record for this case, or name the live case to add and the
+  run it may use.
+- **Ticket #23 — G4 closes with `VERIFIED_WITH_LIMITATION`, never `VERIFIED`.** Both evidence
+  rows record `gateResult VERIFIED_WITH_LIMITATION`, `compatibilityStatus UNTESTED` and no
+  `SUPPORTED` anywhere, and the two items above are `unsatisfiedAcceptance` rather than
+  prose. D21's deployment-compatibility status is unchanged by this ticket: a row certifies
+  what was verified, never a promotion.
+
+## Execution log
+
+Each row names the merge or implementation commit that landed the ticket on the integration
+branch and the live run that carries its evidence; the per-ticket Results entries above hold
+the full citation. The ticket #23 row follows its own commit, because a commit cannot contain
+its own SHA.
+
+| Milestone | Ticket | Commit(s) | Live evidence |
+|---|---|---|---|
+| 4a | #6 Runtime Target Policy storage + alarm bound characterization | `a377d1b` | 35635887711 (G4a, both rows) |
+| 4a | #7 `tag_write` | `72ae477` (accepted after review round 4; merged in `13a8631`) | 35686795695 (G4a, both rows) |
+| 4a | #8 `alarm_shelve` / `alarm_unshelve` | `c68597f`, `58efda5` (merged in `13a8631`) | 35676245268, then 35710377211 (G4a, both rows) |
+| 4a | #9 `alarm_acknowledge` | — (parked by #6 evidence, closed not planned) | — |
+| 4b | #10 `tag_get_config` fingerprint + `tag_update` | `28d43f4` (merged in `5a3771f`) | 35686795721 (G4b, both rows) |
+| 4b | #11 `tag_create` / `tag_copy` | `245f034`, `5166a14` (merged in `ca27b4b`) | 35710377243 (G4b, both rows) |
+| 4b | #12 `tag_delete` / `tag_move` / `tag_rename` | `a906ab5` (merged in `66dee5a`) | 35707687810 (G4b, both rows) |
+| 4c | #13 named static tokens with per-token scopes | `2bb89e9` | CI only (no Gateway behavior) |
+| 4c | #14 `config_resource_update` | `fd20a74` | 35640169826 (REST mutation, both rows) |
+| 4c | #15 `config_resource_create` / `delete` / `rename` | `5479b3c` | 35654240134 (REST mutation, both rows) |
+| 4c | #16 `project_import` | `ec23af6` (fixes in `006d162`) | 35666670831 (REST mutation, both rows) |
+| 4c | #17 `tag_config_import` | `006d162` | 35666536297 (REST mutation, both rows) |
+| 4c | #18 `alarm_pipeline_cancel` | `006d162` | 35665840461 (REST mutation, both rows) |
+| 4c | #19 `artifact_delete` | `94564a0` | 35668808837 (REST mutation, both rows) |
+| 4c | #20 fault-injecting proxy + live timeout / ambiguous / cancellation | `94564a0` | 35672781303 (REST mutation, both rows) |
+| 4c | #35 config Mutations pinned to the `core` collection | `be4dc50` | 35682027818 (REST mutation, both rows) |
+| 4c | #36 reserved `IgnitionMCPPolicy` config resource | `1bfaf8f` | 35687123699 (REST mutation, both rows) |
+| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35712191958 (apply, both rows) |
+| 4d | #22 opt-in Security Level + API token provisioning | (in flight on `p4/setup-22`; merged after this runbook snapshot) | — |
+| G4 | #23 G4 close | this commit | the four runs the rows cite, above |
+| integration | Runtime lane (#7 #8 #10 #11) merged | `ca27b4b` | CI, G4a 35710377211, G4b 35710377243 green |
+| integration | Final integration head (#7 #8 #10 #11 #12 #21) | `4238653` | G4b 35712192001, apply 35712191958 |

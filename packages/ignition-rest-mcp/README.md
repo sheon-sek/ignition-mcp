@@ -187,6 +187,60 @@ refusal is Mutation-only: `config_resource_get` still serves the resource, and t
 refused call reads nothing and dispatches nothing; the D18 `decision` row records the Target-class
 reason (`denied:target-class:reserved-config-resource:ignition/tag-provider/IgnitionMCPPolicy`).
 
+**`project_import`** (D30/D16, Phase 4 milestone 4c) requires scope `ignition.config`, class
+`CONFIG_MUTATION`, an operation-allowlist entry and a Target-allowlist entry for the existing
+Project (matched exactly and case-sensitively; anything else is `not_found`). It consumes a READY
+`project_archive` or `project_export` artifact the same Mutation principal owns, and carries the
+`expectedFingerprint` (`pcf1:<64 hex>`) the caller read from `project_export` as its D30 §2
+Precondition token. Nothing is staged, backed up or dispatched until that token equals the D16
+baseline export A; a mismatch ends the transaction `CONFLICTED` with `conflict`. The whole D16
+protocol runs underneath: candidate staged and fingerprinted, durable backup, fresh pre-import
+re-export compared with A, exactly-once import (the caller cannot choose `overwrite` — it is always
+sent), post-import re-export C. `C == B` commits, `C == A` is `not_applied`, a claimed success that
+matches neither is `recovery_required`, and the ambiguous cases are reconciled by that same
+comparison and never replayed. The durable transaction row carries `importDispatched` and the
+`dispatchBoundary` classification (`not_sent`/`refused`/`claimed`/`attributable`/`unattributable`),
+so a restart finishes the transaction instead of re-sending an import.
+
+**`tag_config_import`** (D30/D11, Phase 4 milestone 4c) requires the same scope and class, and
+consumes a READY `tag_config_export` artifact (the JSON Tag export) plus the destination
+`provider`/`path`. Its Target is the provider-qualified destination and the allowlist matches at
+segment boundaries; the reserved `IgnitionMCPPolicy` provider is refused with `permission_denied`
+before the allowlist is consulted, whatever the entry says. It takes **no** Precondition token:
+`collisionPolicy=Abort` is always sent and never a parameter, so the import creates Tags and never
+overwrites one — a destination already holding a declared Tag is a `conflict`, checked before
+dispatch and refused by the Gateway inside the race window. A UDT-definition document is refused
+unless the import path is itself the `_types_` subtree (D30 §6). Verification is a bounded
+re-export compared with the declared Tag paths: a claimed success is confirmed only when every
+declared Tag is there, a partly applied import is `recovery_required` (never a success), and an
+ambiguous dispatch is `outcome_unknown` because another writer may have created the same Tags.
+
+**`alarm_pipeline_cancel`** (D30/D12, Phase 4 milestone 4c) requires scope `ignition.control`,
+class `CONTROL_MUTATION`, and an exact Alarm Notification Pipeline path (never a prefix, never
+`*`) plus the Alarm Event id. Its `path` is bounded at 512 characters and its `alarmEventId` at
+128, and control characters in either are `invalid_argument`. Because a cancel's post-state is
+absence, the Tool establishes the pre-state with the same bounded `alarm_pipeline_status` read it
+verifies with: a read that covers every match and does not name that event is `not_found` and
+dispatches nothing, and a read that cannot cover every match is `limit_exceeded` — no partial read
+is ever treated as evidence. A success needs the Gateway's own claim *and* a re-read in which the
+run is gone; a run that is gone after an ambiguous dispatch is `outcome_unknown`. Cancelling the
+pipeline never touches the Alarm Event (D12).
+
+**`artifact_delete`** (D30/D17, Phase 4 milestone 4c) is a `CONFIG_MUTATION` that is destructive
+and dispatches nothing to the Gateway — D30 drops the `DELETE /artifacts/{id}` data-plane route, so
+this Tool is the only delete path and its discovery depends on the class gate alone, never on a
+Gateway capability. Its Target is the exact artifact identifier the caller read, and visibility is
+D17's: only the owning principal may delete, or `ignition.admin`; anything else answers `not_found`
+(no existence oracle), and only a READY artifact is addressable. A RECOVERY artifact whose
+transaction is still retention-locked fails with `conflict` and nothing is unlinked. The removal
+commits the `DELETING` state in one transaction with the lock check, then unlinks and fsyncs, then
+drops the row, so every crash split point is recovered by the store's `reconcile`; the result
+reports the absence as Observed state (`present: false`).
+
+Common rules for all four: a Target outside the allowlist is `permission_denied` (D30 §7), the
+class gate is enforced in discovery and again at call time, and an explicit Gateway rejection is
+final — no read-back may turn it into a success.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`
@@ -199,12 +253,11 @@ remains an operator obligation** (surfaced by `gateway_diagnose` and `setup-nati
 
 ## Operator CLI (`setup-native`)
 
-`ignition-mcp setup-native` detects, plans and verifies an `ignition-runtime-bundle` deployment
-across its documented REST and MCP endpoints. It is code-separated from the server (D25) and ships
-as the `ignition-mcp` console script. Only the read-only half of D20 exists in Phase 3:
-`apply` (Phase 4) and `install-module` (Phase 6) are deliberately **not implemented**, so no
-command in this group can create, update or delete anything on a Gateway. `plan` prints
-intentions and always ends with the line `No changes have been applied.`
+`ignition-mcp setup-native` detects, plans, applies and verifies an `ignition-runtime-bundle`
+deployment across its documented REST and MCP endpoints. It is code-separated from the server (D25)
+and ships as the `ignition-mcp` console script. `install-module` (Phase 6) is deliberately **not
+implemented**. `apply` (Phase 4) is the only command here that writes, it stops on any `BLOCKED`
+plan line, it never rolls back, and it ends by running the `verify` sequence.
 
 ```bash
 ignition-mcp setup-native doctor --bundle-manifest release/ignition-runtime-bundle-0.2.0.manifest.json \
@@ -249,6 +302,32 @@ acceptance sequence (reachable → `initialize` → exact inventories → `resou
 `prompts/get` smokes → `bundle_info`). Compatibility is mapped deterministically from
 `testedTuples` and is never upgraded: an incomplete identity or an unmatched tuple yields
 `UNKNOWN`/`UNTESTED`.
+
+`apply` (Phase 4, D20) observes the Gateway exactly as `plan` does, refuses to write while any line
+is `BLOCKED`, then executes the printed intentions in order: the bundle Project (`CREATE`, or an
+`UPDATE` of a MANAGED Project), the MCP Server Config for the selected profile, and the Runtime
+Target Policy in the reserved `IgnitionMCPPolicy` provider. Every write goes through one curated
+writer with a documented route constant per operation — never through `config_resource_*` — and the
+guards run before dispatch: a name must match the CLI's grammar, a Server Config Tool list must be
+explicit (never `*`), a Server Config is never written without a permissions tree, and the policy is
+validated against `contracts/shared/runtime-target-policy.schema.json` and refused above the
+product-enforced 32 KiB cap before anything is written. A `CREATE` writes the Server Config disabled,
+reads it back and then enables it with the signature that read returned; an `UPDATE` reconciles the
+Tool list in one write and preserves the observed `enabled` and every other operator-held field. The
+policy write is confirmed by a `/tags/export` read-back (repaired once if it disagrees). `apply` ends
+by running `verify` and embeds that report in its own.
+
+```bash
+ignition-mcp setup-native apply --bundle-manifest ... --bundle-zip ... --profile configurator \
+  --policy-file runtime-target-policy.json --server-config-permissions-file permissions.json \
+  --backup-dir ./backup --json
+```
+
+Additional `apply` flags: `--policy-file PATH` (the Runtime Target Policy document),
+`--server-config-permissions-file PATH` (the Security Level tree a `CREATE` needs),
+`--acknowledge-upgrade` (required for a MAJOR change or a downgrade), `--backup-dir PATH` (export the
+deployed Project before an overwrite; without it there is no local copy and no rollback, and the
+Gateway's own configuration backup remains the operator's safety net).
 
 Exit codes: `0` success with no `FAIL` (and no `BLOCKED` for `plan`), `1` a failed check or
 transport error, `2` usage error (bad flags, rejected manifest, unreadable artifact, credential

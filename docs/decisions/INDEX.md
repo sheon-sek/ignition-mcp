@@ -198,6 +198,17 @@ Unchanged: D01, D03, D04, D08, D11–D17, and every architectural principle they
 
 The original D01–D26 architecture / implementation decision backlog is now complete.
 
-**G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence. Phase 4 starts only on a new user-directed feature branch.
+**G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence.
+
+**Phase 4 is at G4 close, pending the owner's review.** The
+[Phase 4 runbook](../development/phase-4.md) holds the scope, the L5 case matrix, the per-ticket
+results and the open questions; the two G4 compatibility rows are
+[`tests/compatibility/evidence/g4-8.3.8-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.8-mcp-2026021307/README.md)
+(required) and
+[`g4-8.3.9-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.9-mcp-2026021307/README.md)
+(candidate). Every Mutation Tool is implemented and every Mutation stays **disabled by default**;
+no Gateway/Module tuple is `SUPPORTED`. The close-out branch has **no pull request to `main`** — the
+owner opens and merges that, and the close is not final until they do. Phase 5 (Perspective) starts
+only on a new user-directed branch.
 
 Treat D01–D30 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
