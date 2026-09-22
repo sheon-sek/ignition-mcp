@@ -95,11 +95,15 @@ A Tool whose class is disabled is hidden from `tools/list` as well as refused at
 **`config_resource_update`** (D30, Phase 4 milestone 4c) is the first REST Mutation Tool. It
 requires scope `ignition.config`, class `CONFIG_MUTATION`, an operation-allowlist entry and a
 Target-allowlist entry. The Target of a config change is the exact `<resourceType>/<name>`, or the
-bare `<resourceType>` for a singleton, always in the **default** configuration collection: the
-Gateway selects a resource by collection as well as by name, so a caller-supplied `collection` is
-refused with `invalid_argument` rather than resolved to a look-alike in another collection, and a
-Target outside the allowlist is `permission_denied` (D30 §7). `*` is still required to allow
-everything. The caller passes the `expectedSignature` it read from `config_resource_get`, which is
+bare `<resourceType>` for a singleton, always in the **`core`** configuration collection (D30 owner
+ruling 5). The Gateway selects a resource by collection as well as by name, so every read and every
+write a config Mutation makes names `collection=core`: the reads, the delete and the rename routes
+send it as a query parameter, and a create/update change item carries it as the field its documented
+request schema declares. A caller-supplied `collection` is accepted only when it is `core`; any other
+value is `invalid_argument` before anything is read or dispatched, rather than being resolved to a
+look-alike in another collection. A Target outside the allowlist is `permission_denied` (D30 §7).
+`*` is still required to allow everything. The caller passes the `expectedSignature` it read from
+`config_resource_get`, which is
 compared against a bounded re-read immediately before dispatch and then sent to the Gateway as its
 native `signature` — a stale token fails with `conflict` and dispatches nothing. The change item is
 validated against the target Gateway's own documented `PUT` request schema (D03), taken from the
@@ -150,8 +154,10 @@ Precondition rule:
   read-back and signature are returned.
 
 Common rules for all four: a Target is `<resourceType>/<name>` (or the bare `<resourceType>` for a
-singleton) in the **default** collection, a caller-supplied `collection` is refused with
-`invalid_argument`, a Target outside the allowlist is `permission_denied` (D30 §7), and an explicit
+singleton) in the **`core`** collection, which is the only collection these Tools address and which
+every read and every write names explicitly (D30 owner ruling 5); a caller-supplied `collection` is
+accepted only when it is `core`, and any other value is `invalid_argument` before anything is
+dispatched; a Target outside the allowlist is `permission_denied` (D30 §7); and an explicit
 Gateway rejection — a 4xx or a 2xx carrying `success=false` with a `problem` — is final: no read-back
 may turn it into a success. A success therefore comes only from a claim the Gateway itself made; an
 ambiguous dispatch whose read-back merely matches the intended state (another writer could have made

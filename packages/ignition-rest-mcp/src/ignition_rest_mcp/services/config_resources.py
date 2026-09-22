@@ -100,9 +100,3 @@ def resource_target_id(capability: ConfigResourceCapability, name: str) -> str:
     """
 
     return capability.resource_type if capability.singleton else f"{capability.resource_type}/{name}"
-
-
-def resource_collection(value: str) -> str:
-    """The optional config collection a change applies in, bounded and trimmed."""
-
-    return bounded_text(value, "collection", 128, allow_empty=True)

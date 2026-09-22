@@ -22,7 +22,12 @@ observe:
 | `allowlisted-update-applies` | an allowlisted change returns structured success |
 | `update-moves-the-signature` | the Resource signature moved, so the caller has a fresh Precondition token |
 | `observed-state-carries-the-change` | the Observed state re-read shows the intended change |
+| `update-reports-the-core-collection` | an omitted `collection` means `core`, and the result reports it (D30 owner ruling 5) |
 | `independent-reread-confirms` | a separate `config_resource_get` agrees with the reported signature |
+| `explicit-core-collection-is-accepted` | naming `core` explicitly is accepted |
+| `explicit-core-collection-reports-core` | …and the result reports the same collection |
+| `non-core-collection-is-invalid-argument` | any other collection value is `invalid_argument` |
+| `non-core-collection-changes-nothing` | …and the resource is left exactly as it was |
 | `stale-signature-is-conflict` | re-sending the pre-change signature is a `conflict` |
 | `stale-signature-changes-nothing` | the refused change left the resource alone |
 | `refused-resource-type-is-permission-denied` | the Gateway's own API token is `permission_denied` under any Target allowlist |
@@ -213,6 +218,19 @@ ambiguous boundary where the armed fault meant a refused connect.
 | `fault-import-mid-body-*` | `NOT_APPLIED` on the read-back, with the ambiguous boundary on the row |
 | `fault-import-after-full-body-*` | D16's reconciliation: the post-import export equals the staged candidate, so the transaction is `COMMITTED` and the content lands |
 | `fault-import-cancellation-*` | the row is left interrupted and the reconcile loop ends it `OUTCOME_UNKNOWN` — never a success, and never a second dispatch |
+| `core-collection-update-applies` | an allowlisted update through the proxy succeeds |
+| `core-collection-update-moves-the-signature` | …and the Resource signature moved |
+| `core-collection-read-count`, `core-collection-is-on-every-read` | the hop saw exactly the update's two reads, both with `collection=core` |
+| `core-collection-write-count`, `core-collection-write-names-the-collection-route` | exactly one `PUT` left the server, to the resource type's documented collection route |
+
+The `core-collection-*` rows are the live form of D30's owner ruling 5. A real Gateway
+answers a read that omits the collection exactly as it answers one that names `core`, so
+Gateway state alone cannot show what the server sent; the proxy owns the hop the server's
+own HTTP client wrote through, and the driver reads its record of the request targets. The
+`collection` field of a *change item* is not observable there (the proxy records targets,
+not bodies): the unit tests pin it against the recorded Gateway, which keys its resource
+state by `(name, collection)` and therefore answers a request that omitted or misnamed the
+collection with the wrong resource or none at all.
 
 "Never a replay" is asserted twice, and independently: the audit log holds exactly one
 `attempt` row for the call, and the proxy's per-method counter shows exactly one write
@@ -232,8 +250,11 @@ than minutes; the deadlines themselves are the production rules, only smaller. I
   a closed one is a *refused* connect rather than a Docker-proxied one.
 - `provision.py` — test-only fixture provisioning through the Gateway's own Native
   REST API: four `ignition/audit-profile` resources (the allowlisted Target, an
-  allowlist control, and the two rename sources). It waits for the required OpenAPI
-  routes first, including the `DELETE` and rename routes the new Tools need, so no
+  allowlist control, and the two rename sources), each created with an explicit
+  `"collection": "core"` item field and read back with `?collection=core`, so the
+  fixtures sit where the Tools look for them (D30 owner ruling 5). It waits for the
+  required OpenAPI routes first, including the `DELETE` and rename routes the new Tools
+  need, so no
   fixture mutation happens before the capability exists. The name the create case
   publishes is deliberately not provisioned. It also confirms the two disposable
   Projects the import cases address are installed and listed, so a missing Project

@@ -29,7 +29,8 @@
       "type": "string",
       "required": false,
       "default": "",
-      "maxLength": 128
+      "maxLength": 128,
+      "note": "the core collection: an omitted or empty value means core, and the Tool sends collection=core on every Gateway read and write it makes; any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)"
     },
     "config": {
       "type": "object",
@@ -63,7 +64,7 @@
   },
   "targetId": {
     "form": "<resourceType>/<name>, or <resourceType> for a singleton",
-    "collection": "the default configuration collection only: the Target allowlist names a resource, so a caller-supplied collection is refused with invalid_argument",
+    "collection": "the core collection only: every read and every write names collection=core (the reads and the DELETE route as a query parameter, a change item as the field its documented request schema declares), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,
@@ -76,7 +77,8 @@
     "unclassified": "refused"
   },
   "fixedKnobs": {
-    "allowInvalidReferences": "false"
+    "allowInvalidReferences": "false",
+    "collection": "core"
   },
   "boundedInputBytes": 262144,
   "requestSchemaValidation": {

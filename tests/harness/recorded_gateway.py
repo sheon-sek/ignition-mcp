@@ -87,6 +87,12 @@ _RESERVED_RESOURCE_SEGMENTS = frozenset({
 #: The documented rename route: ``/data/api/v1/resources/rename/<type>/{name}``.
 _RENAME_ROUTE_PREFIX = "/data/api/v1/resources/rename/"
 
+#: The Gateway's default configuration collection. A read or a change that names no
+#: collection lands in this one, which is what the documented ``collection`` query
+#: parameter's own example says (``core``). D30's owner ruling 5 pins generic config
+#: Mutations to it explicitly, so every request a Mutation makes names it.
+DEFAULT_COLLECTION = "core"
+
 
 def _resource_type_segment(path: str) -> str | None:
     """The exact ``<module>/<typeId>`` a collection path addresses, or ``None``."""
@@ -528,7 +534,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         # Phase 2/3 provisioning behaviour of its own exact-path branch below.
         if path.startswith(_RENAME_ROUTE_PREFIX):
             resource_type, _, name = path[len(_RENAME_ROUTE_PREFIX):].rpartition("/")
-            status, payload = server.apply_resource_rename(resource_type, name, body)
+            # D30 owner ruling 5: the documented rename route takes the collection as a
+            # query parameter, and that is the collection the rename applies to.
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            status, payload = server.apply_resource_rename(
+                resource_type, name, body, _first(query, "collection", DEFAULT_COLLECTION),
+            )
             self._json(status, payload)
             return
         resource_type = _resource_type_segment(path)
@@ -663,7 +674,12 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if resource_type is None:
             self._json(404, {"message": "No recorded response", "status": "404"})
             return
-        status, payload = server.apply_resource_delete(resource_type, name, signature)
+        # D30 owner ruling 5: the documented DELETE route takes the collection as a
+        # query parameter, and that is the collection the delete applies to.
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        status, payload = server.apply_resource_delete(
+            resource_type, name, signature, _first(query, "collection", DEFAULT_COLLECTION),
+        )
         self._json(status, payload)
 
 
@@ -1075,7 +1091,7 @@ class _Server(http.server.ThreadingHTTPServer):
             resource_type, _, name = remainder.rpartition("/")
             if not resource_type or not name:
                 return None
-            return self._resource(resource_type, name, _first(query, "collection", ""))
+            return self._resource(resource_type, name, _first(query, "collection", DEFAULT_COLLECTION))
         for verb in ("names", "list"):
             prefix = f"/data/api/v1/resources/{verb}/"
             if not path.startswith(prefix):
@@ -1160,7 +1176,7 @@ class _Server(http.server.ThreadingHTTPServer):
         return 200, {"success": True, "changes": applied}
 
     def apply_resource_delete(
-        self, resource_type: str, name: str, signature: str,
+        self, resource_type: str, name: str, signature: str, collection: str,
     ) -> tuple[int, dict[str, Any]]:
         """Apply one recorded Gateway resource DELETE.
 
@@ -1173,7 +1189,9 @@ class _Server(http.server.ThreadingHTTPServer):
         entries = self.resources.get(resource_type)
         if entries is None:
             return 404, _NO_SUCH_RESOURCE
-        current = self._singleton(resource_type) if not name else entries.get((name, ""))
+        current = (
+            self._singleton(resource_type) if not name else entries.get((name, collection))
+        )
         if current is None:
             return 404, _NO_SUCH_RESOURCE
         race = self.write_race.pop("delete", None)
@@ -1199,7 +1217,7 @@ class _Server(http.server.ThreadingHTTPServer):
         ]}
 
     def apply_resource_rename(
-        self, resource_type: str, name: str, body: bytes,
+        self, resource_type: str, name: str, body: bytes, collection: str,
     ) -> tuple[int, dict[str, Any]]:
         """Apply one recorded Gateway resource rename POST.
 
@@ -1221,16 +1239,16 @@ class _Server(http.server.ThreadingHTTPServer):
         entries = self.resources.get(resource_type)
         if entries is None:
             return 404, _NO_SUCH_RESOURCE
-        current = entries.get((name, ""))
+        current = entries.get((name, collection))
         if current is None:
             return 404, _NO_SUCH_RESOURCE
         new_name = str(payload["name"])
-        if (new_name, "") in entries:
+        if (new_name, collection) in entries:
             return 409, {"message": f"A resource named {new_name} already exists", "status": "409"}
         race = self.write_race.pop("rename", None)
         if race is not None:
             if race.get("deleted"):
-                del entries[(name, "")]
+                del entries[(name, collection)]
                 current = None
             else:
                 current.update(race)
@@ -1241,10 +1259,10 @@ class _Server(http.server.ThreadingHTTPServer):
             return 404, _NO_SUCH_RESOURCE
         if (problem := self.write_problem.get("rename")) is not None:
             return 200, _refused(problem)
-        del entries[(name, "")]
+        del entries[(name, collection)]
         current["name"] = new_name
         current["signature"] = self.next_signature()
-        entries[(new_name, "")] = current
+        entries[(new_name, collection)] = current
         return 200, {"success": True, "changes": [self._change_notice(resource_type, current)]}
 
     def _document(
@@ -1286,7 +1304,7 @@ class _Server(http.server.ThreadingHTTPServer):
         resource, whose replacement identity is described by its own state.
         """
 
-        collection = change.get("collection", "")
+        collection = change.get("collection", DEFAULT_COLLECTION)
         if not isinstance(collection, str):
             return None, ""
         name = change.get("name")
@@ -1311,7 +1329,7 @@ class _Server(http.server.ThreadingHTTPServer):
         """
 
         name = change.get("name")
-        collection = change.get("collection", "")
+        collection = change.get("collection", DEFAULT_COLLECTION)
         if not isinstance(collection, str):
             return None
         if name is None:
@@ -1774,9 +1792,13 @@ class RecordedGateway:
         config: dict[str, Any] | None = None,
         enabled: bool = True,
         description: str = "",
-        collection: str = "",
+        collection: str = DEFAULT_COLLECTION,
     ) -> dict[str, Any]:
-        """Publish one config resource, returning the stored document."""
+        """Publish one config resource, returning the stored document.
+
+        The collection defaults to the Gateway's own default (``core``); a case that
+        needs a look-alike in another collection names it.
+        """
 
         document: dict[str, Any] = {
             "type": resource_type.rsplit("/", 1)[-1],
@@ -1790,10 +1812,12 @@ class RecordedGateway:
         self._server.resources.setdefault(resource_type, {})[(name, collection)] = document
         return document
 
-    def resource(self, resource_type: str, name: str, collection: str = "") -> dict[str, Any]:
+    def resource(
+        self, resource_type: str, name: str, collection: str = DEFAULT_COLLECTION,
+    ) -> dict[str, Any]:
         return self._server.resources[resource_type][(name, collection)]
 
-    def signature(self, resource_type: str, name: str, collection: str = "") -> str:
+    def signature(self, resource_type: str, name: str, collection: str = DEFAULT_COLLECTION) -> str:
         return str(self.resource(resource_type, name, collection)["signature"])
 
     def refuse_writes_with(self, operation: str, problem: str | None) -> None:
@@ -1836,7 +1860,7 @@ class RecordedGateway:
         self.fail_writes_with("update", status)
 
     def change_resource_out_of_band(
-        self, resource_type: str, name: str, collection: str = "", **fields: Any,
+        self, resource_type: str, name: str, collection: str = DEFAULT_COLLECTION, **fields: Any,
     ) -> str:
         """Change a resource without the MCP server, as another operator would; the
         stored signature moves, so a token read before the change is now stale."""

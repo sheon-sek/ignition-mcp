@@ -183,8 +183,9 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (D30 §7) through a Tool-scoped mapping that leaves the frozen G3 behavior and evidence untouched;
   the change item is validated against the target Gateway's own documented PUT request schema (D03)
   before dispatch, and an update route without a usable schema exposes no update; a
-  collection-qualified change is refused; and a Gateway refusal is never reported as a success when
-  the requested values happened to equal the pre-state.
+  collection-qualified change is refused (superseded by ticket #35, which pins every config Mutation
+  to the `core` collection instead of refusing every collection name); and a Gateway refusal is never
+  reported as a success when the requested values happened to equal the pre-state.
 - The same runs captured each Gateway's `/openapi.json`; the 8.3.9 candidate exposes
   56 resource types, a strict subset of the 8.3.8 document's 57 (the difference is
   the MCP Module's own `server-config`), and every one of them is classified. The
@@ -1153,14 +1154,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   the capturing run. Every listed type is classified. Committing the 12.7 MB document itself is a
   repository-size decision for the owner; until then the classification test enforces the inventory
   and the discovery-by-path rule, and anything unclassified stays refused.
-- **Ticket #14 — a collection-qualified Target policy does not exist yet.** The Gateway reads and
-  changes a config resource by collection as well as by name, so a Target allowlist entry for
-  `<resourceType>/<name>` would otherwise authorize the same name in every collection.
-  `config_resource_update` therefore refuses a caller-supplied `collection` with `invalid_argument`
-  and addresses only the default collection, which closes the gap without inventing an encoding the
-  Target policy has no room for. Supporting collections means amending the Target policy (D08/D30)
-  to name the triple unambiguously; until then a two-collection test proves the refusal, and the
-  fixture keys resource state by `(name, collection)` so the distinction is observable.
+- **Ticket #14 — a collection-qualified Target policy does not exist yet; RESOLVED by the D30 owner
+  ruling of 2026-09-22 (item 5, `config_collection: core_only`).** The Gateway reads and changes a
+  config resource by collection as well as by name, so a Target allowlist entry for
+  `<resourceType>/<name>` would otherwise authorize the same name in every collection. Ticket #14
+  closed that gap by refusing every caller-supplied `collection`; ticket #35 replaced the refusal
+  with the ruling: generic config Mutations always target `core`, the server sends `collection=core`
+  on every read and write it makes, a caller-supplied collection is accepted only when it is `core`,
+  and any other value fails with `invalid_argument` before dispatch. The Target identity stays
+  `<resourceType>/<name>`, now unambiguously *in core*. Supporting a second collection would still
+  mean amending the Target policy (D08/D30) to name the triple; no ticket does that, and the
+  two-collection tests prove that a change reaches the core resource only.
 - **Ticket #14 — the `phase4-live` GitHub environment has no protection rules.** The Phase 4 REST
   live workflow reuses the owner-accepted `phase3-live` deviation (no required reviewers, no wait
   timer, no deployment-branch restriction), already recorded in `docs/development/phase-3.md` Open
