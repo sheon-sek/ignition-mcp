@@ -335,6 +335,28 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     are green on the same head. GitHub Actions created no run between
     2026-09-21T23:49:41Z and 2026-09-22T00:29:12Z, so the round-2 head was briefly
     marked `LIVE EVIDENCE PENDING (Actions outage)`; this run replaced that mark.
+- **Review round 3 fixes** (the ticket report holds the detail):
+  - **Every Observed measurement is bounded.** The walk that decides the Observed
+    budget now counts a Dataset's column names as well as its cells (a tiny cell
+    under a very large name was the shape a cell-only estimate let through), counts
+    every text with an incremental UTF-8 counter that stops at the remaining budget
+    instead of encoding the value to measure it, and carries a 16-level depth limit
+    so a pathologically nested Document reaches the structured Observed error
+    instead of exhausting the interpreter stack. The same counter backs the input
+    ceilings, so a caller-supplied 10 MB string is never encoded to be refused; an
+    over-budget message states the counted amount (a lower bound once the count
+    stops at the ceiling) and says so. Fixtures:
+    `tag_write-observed-dataset-column-name-over-budget`,
+    `tag_write-observed-dataset-deep-cell`, and the enlarged
+    `tag_write-observed-dataset-over-budget` cell (60 000 bytes, reported as
+    "at least 8193 bytes", which proves the count stopped rather than measured).
+  - **A Native identifier is exact or omitted, never truncated.** A `name` or
+    `level` over its 128-byte ceiling is now returned as null with
+    `nameOverLimitBytes`/`levelOverLimitBytes` reporting the counted size, because a
+    truncated identifier asserts one the provider never reported (D10); `code` and
+    `good` are always exact, and the free-text diagnostic keeps its bounded prefix
+    plus its marker. Fixtures: `tag_write-native-outcome-oversize-name` and
+    `tag_write-native-outcome-oversize-level`.
 - **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
     Gateway G4a` run
     [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)

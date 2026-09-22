@@ -261,8 +261,11 @@ def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> Non
 
     assert error["details"]["reason"] == "pathOverLength"
     assert error["details"]["index"] == 0
-    assert error["details"]["requested"] == 2053
+    # The path is 2053 bytes; the count stops one byte past the 2048-byte ceiling,
+    # so the reported amount is a lower bound and the error says so.
+    assert error["details"]["requested"] == 2049
     assert error["details"]["limit"] == 2048
+    assert "lower bound" in error["message"]
 
 
 def test_a_string_value_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
@@ -337,8 +340,9 @@ def test_an_observed_value_over_its_budget_does_not_decide_the_item_outcome() ->
     observed = structured["observed"][0]
     assert observed["status"] == "error"
     assert observed["error"]["code"] == "limit_exceeded"
-    assert "20000" in observed["error"]["message"]
-    assert "8192" in observed["error"]["message"]
+    # The value is 20000 bytes and the walk stops at the budget, so the message
+    # reports what it counted rather than the size it would have had to encode.
+    assert "at least 8193 bytes, over the 8192-byte Observed-state value budget" in observed["error"]["message"]
 
 
 def test_the_observed_state_budget_marks_only_the_values_it_cannot_return() -> None:
@@ -395,10 +399,57 @@ def test_a_dataset_observed_value_is_measured_before_it_is_materialized() -> Non
     observed = structured["observed"][0]
     assert observed["status"] == "error"
     assert observed["error"]["code"] == "limit_exceeded"
-    # The walk measures the cell (20000 bytes, plus the per-cell allowance the
-    # estimate charges) instead of counting one cell at a fixed cost, and the
-    # message names that size and the ceiling it passed.
-    assert "20004 bytes, over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+    # The cell holds 60000 bytes and the walk stops at the budget, so the message
+    # reports what it counted rather than the size it would have had to encode to
+    # learn: a measurement that needed the whole value would be the bug.
+    message = observed["error"]["message"]
+    assert "at least 8193 bytes, over the 8192-byte Observed-state value budget" in message
+    assert "60000" not in message
+
+
+def test_a_dataset_column_name_is_measured_with_its_cells() -> None:
+    """`jsonValue` copies every column name, so a tiny cell under a very large name
+    is exactly the Dataset a cell-only estimate lets through."""
+    recorded = json.loads(
+        _fixture("observed-dataset-column-name-over-budget").read_text(encoding="utf-8")
+    )
+    dataset = recorded["calls"][-1]["result"]["items"][0]["value"]
+    assert len(dataset["columns"][0]) == 20000
+    assert dataset["rows"] == [[1]]
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-column-name-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+
+
+def test_a_deeply_nested_observed_value_is_refused_rather_than_raised() -> None:
+    """The walk carries a depth limit, so a pathologically nested cell reaches the
+    structured Observed budget error instead of exhausting the interpreter stack
+    while it is measured and materialized."""
+    recorded = json.loads(_fixture("observed-dataset-deep-cell").read_text(encoding="utf-8"))
+    cell = recorded["calls"][-1]["result"]["items"][0]["value"]["rows"][0][0]
+    depth = 0
+    while isinstance(cell, list):
+        depth += 1
+        cell = cell[0]
+    assert depth == 40
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-deep-cell")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "nests deeper than the 16-level Observed-state depth budget" in observed["error"]["message"]
 
 
 def test_a_dataset_inside_the_budget_is_still_reported_as_observed_state() -> None:
@@ -428,6 +479,34 @@ def test_an_oversize_native_diagnostic_keeps_the_outcome_and_marks_the_limit() -
     assert quality["diagnosticMessageOverLimitBytes"] == 4000
     assert quality["diagnosticMessage"] == "d" * 512
     assert structured["summary"]["failed"] == 1
+
+
+def test_an_over_limit_quality_name_is_omitted_not_truncated() -> None:
+    """A truncated identifier asserts one the provider never reported (D10), so an
+    over-limit name is omitted with its size instead, and the numeric code - which
+    cannot be oversized - still identifies the outcome."""
+    quality = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-name")
+    )["structuredContent"]["items"][0]["quality"]
+
+    assert quality["code"] == 260
+    assert quality["good"] is False
+    assert quality["name"] == {"$ignition": "null"}
+    assert quality["nameOverLimitBytes"] == 200
+    assert "nameOverLimitBytes" not in json.dumps(
+        run_recorded_tool("tag_write", _fixture("allowlisted-batch"))["structuredContent"]
+    )
+
+
+def test_an_over_limit_quality_level_is_omitted_not_truncated() -> None:
+    quality = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-level")
+    )["structuredContent"]["items"][0]["quality"]
+
+    assert quality["code"] == 260
+    assert quality["level"] == {"$ignition": "null"}
+    assert quality["levelOverLimitBytes"] == 200
+    assert quality["name"] == "Bad_NotFound"
 
 
 def test_long_diagnostics_cannot_hide_a_full_batch_of_outcomes() -> None:
@@ -487,6 +566,11 @@ VALID_POLICY_FIXTURES = (
     "tag_write-observed-dataset-small",
     "tag_write-native-outcome-oversize-diagnostic",
     "tag_write-items-with-long-diagnostics",
+    # Round 3: column names, bounded counting, depth, and the identifiers.
+    "tag_write-observed-dataset-column-name-over-budget",
+    "tag_write-observed-dataset-deep-cell",
+    "tag_write-native-outcome-oversize-name",
+    "tag_write-native-outcome-oversize-level",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (

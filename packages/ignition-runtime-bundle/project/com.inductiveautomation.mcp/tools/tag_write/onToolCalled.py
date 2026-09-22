@@ -39,13 +39,23 @@ def onToolCalled(builder, writes, timeout):
 	OBSERVED_VALUE_MAX_BYTES = 8192
 	OBSERVED_STATE_MAX_BYTES = 65536
 	OBSERVED_DATASET_MAX_CELLS = 2000
+	# How deep the Observed walk follows a value before it refuses it. A consumed
+	# Document or nested array is legitimate, but a pathologically deep one must
+	# reach the structured Observed budget error instead of exhausting the
+	# interpreter stack while it is measured and then materialized.
+	OBSERVED_MAX_DEPTH = 16
 	# D10 output: a Native outcome's text is provider data with no size of its own.
-	# The identifiers an outcome is matched on stay exact; the free-text diagnostic
-	# is bounded and marked, so a verbose provider cannot make the per-item outcomes
-	# impossible to return.
+	# An identifier is returned exactly or not at all, because a truncated one would
+	# assert an identifier the provider never reported; the free-text diagnostic is
+	# returned as a bounded prefix and marked.
 	QUALITY_NAME_MAX_BYTES = 128
 	QUALITY_LEVEL_MAX_BYTES = 128
 	QUALITY_DIAGNOSTIC_MAX_BYTES = 512
+	# The budget a quality text's size marker is *counted* with: the count is exact
+	# for any text within it - well beyond a real provider's message - and stops
+	# there otherwise, so the marker costs bounded work and is a lower bound when the
+	# counter clamped.
+	QUALITY_TEXT_COUNT_BYTES = 8192
 	OUTPUT_MAX_BYTES = 262144
 
 	def toolError(code, message, details):
@@ -86,6 +96,17 @@ def onToolCalled(builder, writes, timeout):
 			return bool(value.isGood())
 		return unicode(value).find("Good") == 0
 
+	def exactQualityIdentifier(value, limit):
+		# An identifier is returned exactly or not at all: a truncated one would
+		# assert an identifier the provider never reported, which D10 forbids. The
+		# count is bounded, so the reported size is exact for any realistic identifier
+		# and a lower bound when the counter clamped.
+		rendered = text(value)
+		counted = utf8BytesBounded(rendered, limit)
+		if counted > limit:
+			return (None, utf8BytesBounded(rendered, QUALITY_TEXT_COUNT_BYTES))
+		return (rendered, None)
+
 	def quality(value):
 		if value is None:
 			raise TypeError("Native write result has no QualityCode")
@@ -93,16 +114,26 @@ def onToolCalled(builder, writes, timeout):
 		level = value.getLevel() if hasattr(value, "getLevel") else unicode(value)
 		diagnostic = value.getDiagnosticMessage() if hasattr(value, "getDiagnosticMessage") else None
 		diagnosticText = optionalText(diagnostic)
-		diagnosticBytes = None if diagnosticText is None else utf8Bytes(diagnosticText)
 		# D10: the provider's QualityCode text has no size of its own, and the
-		# per-item outcomes are what a caller acts on, so the free text is bounded
-		# before the item is built. The identifiers stay exact, the diagnostic keeps
-		# a bounded prefix, and an over-limit diagnostic states the size it had - the
-		# marker is present exactly when the text was bounded, so nothing about the
-		# outcome is silent.
-		rendered = {"code": int(value.getCode()), "name": boundedQualityText(name, QUALITY_NAME_MAX_BYTES), "level": boundedQualityText(level, QUALITY_LEVEL_MAX_BYTES), "good": qualityIsGood(value), "diagnosticMessage": None if diagnosticText is None else boundedQualityText(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES)}
-		if diagnosticBytes is not None and diagnosticBytes > QUALITY_DIAGNOSTIC_MAX_BYTES:
-			rendered["diagnosticMessageOverLimitBytes"] = diagnosticBytes
+		# per-item outcomes are what a caller acts on, so every text is bounded before
+		# the item is built. `code` and `good` are always exact; a `name` or `level`
+		# over its ceiling is omitted and its size reported rather than truncated; the
+		# free-text diagnostic keeps a bounded prefix; and each marker is present
+		# exactly when its text was bounded, so nothing about the outcome is silent.
+		rendered = {"code": int(value.getCode()), "good": qualityIsGood(value)}
+		rendered["name"], nameOverLimit = exactQualityIdentifier(name, QUALITY_NAME_MAX_BYTES)
+		rendered["level"], levelOverLimit = exactQualityIdentifier(level, QUALITY_LEVEL_MAX_BYTES)
+		if diagnosticText is None:
+			rendered["diagnosticMessage"] = None
+		else:
+			diagnosticCounted = utf8BytesBounded(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES)
+			rendered["diagnosticMessage"] = boundedPrefix(diagnosticText, QUALITY_DIAGNOSTIC_MAX_BYTES)
+			if diagnosticCounted > QUALITY_DIAGNOSTIC_MAX_BYTES:
+				rendered["diagnosticMessageOverLimitBytes"] = utf8BytesBounded(diagnosticText, QUALITY_TEXT_COUNT_BYTES)
+		if nameOverLimit is not None:
+			rendered["nameOverLimitBytes"] = nameOverLimit
+		if levelOverLimit is not None:
+			rendered["levelOverLimitBytes"] = levelOverLimit
 		return rendered
 
 	def jsonValue(value):
@@ -190,51 +221,143 @@ def onToolCalled(builder, writes, timeout):
 			return "datasetValue"
 		return "unsupportedValueType"
 
-	def utf8Bytes(value):
-		return len(text(value).encode("utf-8"))
-
-	def boundedQualityText(value, limit):
-		# A bounded prefix cut on a character boundary, so a UTF-8 character is never
-		# split and the bytes the marker reports match the text that is returned.
-		rendered = text(value)
-		if utf8Bytes(rendered) <= limit:
-			return rendered
-		rendered = rendered[:limit]
-		while rendered and utf8Bytes(rendered) > limit:
-			rendered = rendered[:-1]
-		return rendered
-
-	def datasetCellBytes(value, limit):
-		# Walk the Dataset's cells with an early exit: a cell can hold an arbitrarily
-		# large string, so measuring by reading the value would defeat the budget the
-		# measurement exists to enforce. Nothing here materializes a cell, and each
-		# cell carries a small fixed allowance for the JSON punctuation and separators
-		# a Dataset representation adds around it.
+	def utf8BytesBounded(value, budget):
+		# The UTF-8 length of `value` counted one character at a time, so a value is
+		# never encoded just to be measured: the count stops as soon as the budget is
+		# spent, and the returned number is then a lower bound (at most one character
+		# past the budget). A character costs 1, 2, 3 or 4 bytes by its code point.
 		total = 0
-		for row in range(int(value.getRowCount())):
-			for column in range(int(value.getColumnCount())):
-				total += 4 + valueBytesBounded(value.getValueAt(row, column), limit)
-				if total > limit:
-					return total
+		for character in text(value):
+			code = ord(character)
+			if code < 128:
+				total += 1
+			elif code < 2048:
+				total += 2
+			elif code < 65536:
+				total += 3
+			else:
+				total += 4
+			if total > budget:
+				return total
 		return total
 
-	def scalarInputBytes(value):
+	def boundedPrefix(value, limit):
+		# A prefix of `value` costing at most `limit` UTF-8 bytes, counted per
+		# character and cut on a character boundary, so the text is never encoded in
+		# full to be cut and the prefix is well formed.
+		rendered = text(value)
+		total = 0
+		index = 0
+		for character in rendered:
+			code = ord(character)
+			if code < 128:
+				cost = 1
+			elif code < 2048:
+				cost = 2
+			elif code < 65536:
+				cost = 3
+			else:
+				cost = 4
+			if total + cost > limit:
+				break
+			total += cost
+			index += 1
+		return rendered[:index]
+
+	def fits(budget, cost):
+		# The walk's one decision: a cost against the budget left for it.
+		if cost > budget:
+			return (cost, "bytes")
+		return (cost, None)
+
+	def valueCost(value, budget, depth):
+		# The JSON cost of `value` up to `budget` bytes, and why it does not fit:
+		# `(cost, None)` when the whole value can be represented inside the budget
+		# within `depth` levels, else `(cost, "bytes")` or `(cost, "depth")`. Nothing
+		# is materialized and no leaf is encoded: every leaf is counted with
+		# utf8BytesBounded, so an arbitrarily large string, column name or cell is
+		# measured only as far as the budget. The allowances for punctuation keep the
+		# cost an upper bound on what jsonValue would produce.
+		if depth <= 0:
+			return (budget + 1, "depth")
+		if value is None:
+			return fits(budget, 4)
 		if isinstance(value, basestring):
-			return utf8Bytes(value)
+			return fits(budget, utf8BytesBounded(value, budget))
+		if isinstance(value, (bool, Boolean)):
+			return fits(budget, 5)
+		if isinstance(value, (int, long, float, Number)):
+			return fits(budget, 24)
+		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+			# A Dataset's representation carries its column names as well as its
+			# cells, so both are counted: a tiny cell under a very large name is
+			# exactly the shape a cell-only estimate lets through.
+			total = 8
+			columns = int(value.getColumnCount())
+			for column in range(columns):
+				cost, reason = fits(budget - total, 4 + utf8BytesBounded(value.getColumnName(column), budget))
+				total += cost
+				if reason is not None:
+					return (total, reason)
+			for row in range(int(value.getRowCount())):
+				for column in range(columns):
+					cost, reason = valueCost(value.getValueAt(row, column), budget - total, depth - 1)
+					total += cost
+					if reason is not None:
+						return (total, reason)
+			return (total, None)
+		if isinstance(value, (list, tuple, List)):
+			total = 2
+			for child in value:
+				cost, reason = valueCost(child, budget - total, depth - 1)
+				total += cost
+				if reason is not None:
+					return (total, reason)
+			return (total, None)
+		if isinstance(value, Map):
+			total = 2
+			for entry in value.entrySet():
+				cost, reason = fits(budget - total, utf8BytesBounded(entry.getKey(), budget))
+				total += cost
+				if reason is not None:
+					return (total, reason)
+				cost, reason = valueCost(entry.getValue(), budget - total, depth - 1)
+				total += cost
+				if reason is not None:
+					return (total, reason)
+			return (total, None)
+		if isinstance(value, dict):
+			total = 2
+			for key in value:
+				cost, reason = fits(budget - total, utf8BytesBounded(key, budget))
+				total += cost
+				if reason is not None:
+					return (total, reason)
+				cost, reason = valueCost(value[key], budget - total, depth - 1)
+				total += cost
+				if reason is not None:
+					return (total, reason)
+			return (total, None)
+		return fits(budget, 64)
+
+	def scalarInputBytes(value, budget):
+		if isinstance(value, basestring):
+			return utf8BytesBounded(value, budget)
 		return NUMERIC_INPUT_BYTES
 
 	def inputBytes(value):
 		if isinstance(value, (list, tuple, List)):
 			total = 2
 			for child in value:
-				total += scalarInputBytes(child)
+				total += scalarInputBytes(child, INPUT_MAX_BYTES)
 			return total
-		return scalarInputBytes(value)
+		return scalarInputBytes(value, INPUT_MAX_BYTES)
 
 	def inputLimitProblem(path, value):
 		# D10 input ceilings. Every one of them is pure validation over the
-		# request, so an over-budget batch is refused before any native call.
-		pathBytes = utf8Bytes(path)
+		# request, so an over-budget batch is refused before any native call, and
+		# every byte count stops at the ceiling it is checked against.
+		pathBytes = utf8BytesBounded(path, PATH_MAX_BYTES)
 		if pathBytes > PATH_MAX_BYTES:
 			return ("pathOverLength", pathBytes, PATH_MAX_BYTES)
 		if isinstance(value, (list, tuple, List)):
@@ -242,73 +365,38 @@ def onToolCalled(builder, writes, timeout):
 				return ("arrayElementsOverLimit", len(value), ARRAY_MAX_ELEMENTS)
 			for child in value:
 				if isinstance(child, basestring):
-					childBytes = utf8Bytes(child)
+					childBytes = utf8BytesBounded(child, VALUE_STRING_MAX_BYTES)
 					if childBytes > VALUE_STRING_MAX_BYTES:
 						return ("stringValueOverLimit", childBytes, VALUE_STRING_MAX_BYTES)
 			return None
 		if isinstance(value, basestring):
-			valueBytes = utf8Bytes(value)
+			valueBytes = utf8BytesBounded(value, VALUE_STRING_MAX_BYTES)
 			if valueBytes > VALUE_STRING_MAX_BYTES:
 				return ("stringValueOverLimit", valueBytes, VALUE_STRING_MAX_BYTES)
 		return None
 
-	def valueBytesBounded(value, limit):
-		# A structural size with an early exit, so measuring an Observed value the
-		# provider returned cannot itself materialize or walk an unbounded value.
-		if value is None:
-			return 4
-		if isinstance(value, basestring):
-			return utf8Bytes(value)
-		if isinstance(value, (bool, Boolean)):
-			return 5
-		if isinstance(value, (int, long, float, Number)):
-			return 24
-		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
-			return datasetCellBytes(value, limit)
-		if isinstance(value, (list, tuple, List)):
-			total = 2
-			for child in value:
-				total += valueBytesBounded(child, limit)
-				if total > limit:
-					return total
-			return total
-		if isinstance(value, Map):
-			total = 2
-			for entry in value.entrySet():
-				total += utf8Bytes(entry.getKey()) + valueBytesBounded(entry.getValue(), limit)
-				if total > limit:
-					return total
-			return total
-		if isinstance(value, dict):
-			total = 2
-			for key in value:
-				total += utf8Bytes(key) + valueBytesBounded(value[key], limit)
-				if total > limit:
-					return total
-			return total
-		return 64
+	def observedBudgetMessage(noun, cost, reason):
+		if reason == "depth":
+			return "The observed " + noun + " nests deeper than the " + unicode(OBSERVED_MAX_DEPTH) + "-level Observed-state depth budget; it was not returned."
+		return "The observed " + noun + " is at least " + unicode(cost) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
 
-	def observedValueProblem(value):
-		# The per-value half of the Observed-state budget. An over-budget value is
-		# reported as an explicit observed error, never truncated silently.
-		if isinstance(value, basestring):
-			size = utf8Bytes(value)
-			if size > OBSERVED_VALUE_MAX_BYTES:
-				return "The observed value is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
-			return None
-		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+	def observedValueBudget(value):
+		# The per-value half of the Observed-state budget: `(problem, cost)`. A value
+		# that cannot be returned is never materialized, and the message names what the
+		# bounded walk counted (a lower bound when it stopped at the budget) or the
+		# depth it reached. An over-budget value is an explicit observed error, never a
+		# truncation.
+		noun = "Dataset" if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt") else "value"
+		if noun == "Dataset":
 			cells = int(value.getRowCount()) * int(value.getColumnCount())
 			if cells > OBSERVED_DATASET_MAX_CELLS:
-				return "The observed Dataset is " + unicode(cells) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned."
-			size = datasetCellBytes(value, OBSERVED_VALUE_MAX_BYTES)
-			if size > OBSERVED_VALUE_MAX_BYTES:
-				return "The observed Dataset is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
-			return None
-		if not isinstance(value, (bool, Boolean, int, long, float, Number)):
-			size = valueBytesBounded(value, OBSERVED_VALUE_MAX_BYTES)
-			if size > OBSERVED_VALUE_MAX_BYTES:
-				return "The observed value is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
-		return None
+				return ("The observed Dataset is " + unicode(cells) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned.", 0)
+		if isinstance(value, (bool, Boolean, int, long, float, Number)):
+			return (None, valueCost(value, OBSERVED_VALUE_MAX_BYTES, OBSERVED_MAX_DEPTH)[0])
+		cost, reason = valueCost(value, OBSERVED_VALUE_MAX_BYTES, OBSERVED_MAX_DEPTH)
+		if reason is not None:
+			return (observedBudgetMessage(noun, cost, reason), 0)
+		return (None, cost)
 
 	def observedError(path, code, message):
 		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
@@ -526,8 +614,8 @@ def onToolCalled(builder, writes, timeout):
 		for index in range(len(paths)):
 			problem = inputLimitProblem(paths[index], values[index])
 			if problem is not None:
-				return toolError("limit_exceeded", "A write item is over a documented D10 input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
-			totalInputBytes += utf8Bytes(paths[index]) + inputBytes(values[index])
+				return toolError("limit_exceeded", "A write item is over a documented D10 input ceiling; a reported byte amount is counted only up to that ceiling, so it is a lower bound. No item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+			totalInputBytes += utf8BytesBounded(paths[index], INPUT_MAX_BYTES) + inputBytes(values[index])
 		if totalInputBytes > INPUT_MAX_BYTES:
 			return toolError("limit_exceeded", "The write batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
 		stage = "policy_read"
@@ -627,20 +715,21 @@ def onToolCalled(builder, writes, timeout):
 					if value is None or not (hasattr(value, "getValue") and hasattr(value, "getQuality") and hasattr(value, "getTimestamp")):
 						raise TypeError("Native item is not a QualifiedValue")
 					rawValue = value.getValue()
-					# D10: the Observed state carries its own budget, checked before
-					# the value is materialized for the result. An over-budget value
-					# is reported as an explicit observed error, never truncated.
-					problem = observedValueProblem(rawValue)
+					# D10: the Observed state carries its own budget, decided before the
+					# value is materialized. A value the budget cannot return is an
+					# explicit observed error, never a truncation, and the walk that
+					# decides it counts incrementally and bounds its depth.
+					problem, cost = observedValueBudget(rawValue)
 					if problem is None and observedBudgetSpent:
 						problem = "The Observed-state budget of " + unicode(OBSERVED_STATE_MAX_BYTES) + " bytes is already spent; this value was not returned."
-					if problem is None and observedBytes + valueBytesBounded(rawValue, OBSERVED_VALUE_MAX_BYTES) > OBSERVED_STATE_MAX_BYTES:
+					if problem is None and observedBytes + cost > OBSERVED_STATE_MAX_BYTES:
 						problem = "The Observed state already holds " + unicode(observedBytes) + " bytes, so returning this value would pass the " + unicode(OBSERVED_STATE_MAX_BYTES) + "-byte budget; it was not returned."
 						observedBudgetSpent = True
 					if problem is not None:
 						observed.append(observedError(path, "limit_exceeded", problem))
 						continue
 					rendered = jsonValue(rawValue)
-					observedBytes += valueBytesBounded(rawValue, OBSERVED_VALUE_MAX_BYTES)
+					observedBytes += cost
 					observed.append({"path": path, "status": "ok", "value": rendered, "quality": quality(value.getQuality()), "timestamp": jsonValue(value.getTimestamp())})
 				except (Exception, JavaException) as itemExc:
 					logger.error("correlationId=" + correlationId + " observed item serialization failed: " + text(itemExc))
