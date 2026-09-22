@@ -72,6 +72,9 @@ jobs:
       P4_ORIGIN: 127.0.0.1:8093
       MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
       MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
       RELEASE_DIR: dist/release
       # Ticket #56: this workflow runs the module-install stage; G4a/G4b, which share
       # the compose file, keep the mount and never set this.
@@ -275,6 +278,42 @@ jobs:
             --profile readonly \
             "${install_flags[@]}" \
             2>&1 | tee "$EVIDENCE_DIR/setup-native-apply.log"
+
+      - name: Record the run identity for the G6 row (ticket #56)
+        shell: bash
+        run: |
+          # The row `python -m tooling.compat g6` composes after the run is green is
+          # built from the downloaded artifacts alone: the stage's evidence document
+          # and this identity. Everything is machine-readable here; the binding facts
+          # the D27 rules judge are derived by the composer from the release
+          # manifest's own binding status and the pinned tuple.
+          set -euo pipefail
+          release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
+          test -n "$release_manifest"
+          jq -n \
+            --arg gatewayVersion "$GATEWAY_VERSION" \
+            --arg gatewayBuild "$GATEWAY_BUILD" \
+            --arg gatewayImage "$GATEWAY_IMAGE" \
+            --arg gatewayImageDigest "$IMAGE_DIGEST" \
+            --arg sourceRevision "$SOURCE_REVISION" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg moduleVersion "$MCP_MODULE_VERSION" \
+            --arg moduleArtifactVersion "$MCP_MODULE_ARTIFACT_VERSION" \
+            --arg moduleBuild "$MCP_MODULE_BUILD" \
+            --arg moduleSha256 "$MCP_MODULE_SHA256" \
+            --slurpfile manifest "$release_manifest" \
+            '{schemaVersion: 1,
+              runId: $runId, sourceRevision: $sourceRevision,
+              gatewayVersion: $gatewayVersion, gatewayBuild: $gatewayBuild,
+              gatewayImage: $gatewayImage, gatewayImageDigest: $gatewayImageDigest,
+              mcpModuleVersion: $moduleVersion, mcpModuleArtifactVersion: $moduleArtifactVersion,
+              mcpModuleBuild: $moduleBuild, mcpModuleSha256: $moduleSha256,
+              bundleVersion: $manifest[0].bundleVersion,
+              bundleSha256: $manifest[0].artifact.sha256,
+              nativeResponseBindingStatus: $manifest[0].nativeResponseBindingStatus,
+              note: "identity for python -m tooling.compat g6; the row is composed after the run is green"}' \
+            > "$EVIDENCE_DIR/identity.json"
+          cat "$EVIDENCE_DIR/identity.json"
 
       - name: Refresh diagnostics
         if: always()

@@ -36,12 +36,19 @@ RUN = {
 
 
 def _stage() -> dict:
-    """A green apply-stage document of the ticket #56 shape."""
+    """A green apply-stage document of the ticket #56 round-1 shape."""
 
     return {
         "schemaVersion": 1,
         "ticket": 22,
         "ok": True,
+        "bundle": {
+            "filename": "ignition-runtime-bundle-0.7.0.zip",
+            "version": "0.7.0",
+            "sha256": "c" * 64,
+            "nativeResponseBindingStatus": "VERIFIED_WITH_LIMITATION",
+        },
+        "startingBundleVersion": "0.6.0",
         "steps": {
             "install-module": {
                 "exitCode": 0,
@@ -69,12 +76,19 @@ def _stage() -> dict:
                     {"kind": "bundle-project", "action": "NO CHANGE", "ok": True},
                 ]},
             },
-            "downgradeApply": {"exitCode": 0, "report": {"writes": [
-                {"kind": "bundle-project", "action": "UPDATE", "ok": True},
-            ]}},
             "upgradeApply": {
+                "bundleVersionBefore": "0.6.0",
+                "bundleVersionAfter": "0.7.0",
+                "planLine": {
+                    "action": "UPDATE",
+                    "kind": "bundle-project",
+                    "name": "ignition_runtime_apply",
+                    "reason": "redeploy managed bundle 0.6.0 -> 0.7.0 (minor)",
+                },
                 "exitCode": 0,
                 "verifyAttempts": 1,
+                "verifyGreen": True,
+                "verifyRetries": [],
                 "report": {"writes": [
                     {"kind": "bundle-project", "action": "UPDATE", "ok": True},
                 ]},
@@ -84,23 +98,23 @@ def _stage() -> dict:
 
 
 def _identity() -> dict:
+    """The run identity exactly as the workflow's jq step writes it: machine facts only."""
+
     return {
-        "schemaVersion": 6,
+        "schemaVersion": 1,
         "runId": RUN["runId"],
         "sourceRevision": RUN["head"],
         "gatewayVersion": "8.3.8",
         "gatewayBuild": "2026071409",
         "gatewayImage": "inductiveautomation/ignition:8.3.8",
         "gatewayImageDigest": "sha256:" + "b" * 64,
-        "bundleVersion": "0.7.0",
-        "bundleSha256": "c" * 64,
         "mcpModuleVersion": "1.3.5-SNAPSHOT",
         "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
         "mcpModuleBuild": "2026021307",
         "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
-        "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
-        "d27ExceptionApplied": True,
-        "outputSchemaPublished": False,
+        "bundleVersion": "0.7.0",
+        "bundleSha256": "c" * 64,
+        "nativeResponseBindingStatus": "VERIFIED_WITH_LIMITATION",
     }
 
 
@@ -114,9 +128,6 @@ def _tree(tmp_path: Path) -> Path:
 
 
 def _row(tmp_path: Path, stage: dict | None = None, identity: dict | None = None) -> dict:
-    build_g6_row(
-        stage or _stage(), identity or _identity(), RUN,
-    )
     return build_g6_row(stage or _stage(), identity or _identity(), RUN)
 
 
@@ -125,7 +136,6 @@ def test_the_composed_row_passes_the_g6_rules(tmp_path: Path) -> None:
     assert row["gate"] == "G6"
     assert row["gateResult"] == "VERIFIED"
     assert row["compatibilityStatus"] == "UNTESTED"
-    assert row["status"] == "VERIFIED"
     assert set(row["g6"]["cases"]) == set(G6_LIVE_CASES)
     for entry in row["g6"]["cases"].values():
         assert entry["verdict"] == "LIVE" and entry["runIds"] == [RUN["runId"]]
@@ -133,6 +143,25 @@ def test_the_composed_row_passes_the_g6_rules(tmp_path: Path) -> None:
     # this release, so the identity comes from the run, not from a cited row.
     assert row["mcpModuleSha256"] == _identity()["mcpModuleSha256"]
     assert row["bundleVersion"] == _identity()["bundleVersion"]
+    # The binding facts are derived, never hand-authored: the D27 exception applies
+    # to the exact characterized tuple only.
+    assert row["d27ExceptionApplied"] is True
+    assert row["nativeResponseBinding"] == "VERIFIED_WITH_LIMITATION"
+    assert row["outputSchemaPublished"] is False
+    assert row["status"] == "VERIFIED"
+
+
+def test_a_non_d27_tuple_is_recorded_honestly() -> None:
+    identity = _identity()
+    identity.update({
+        "gatewayVersion": "8.3.9", "gatewayBuild": "2026082511",
+        "gatewayImage": "inductiveautomation/ignition:8.3.9",
+    })
+    row = build_g6_row(_stage(), identity, RUN)
+    assert row["d27ExceptionApplied"] is False
+    assert row["nativeResponseBinding"] == "UNVERIFIED_LIMITATION"
+    assert row["outputSchemaPublished"] is False
+    assert row["status"] == "FAILED_NATIVE_BINDING"
 
 
 def test_generate_g6_writes_a_row_the_evidence_tree_accepts(tmp_path: Path) -> None:
@@ -205,6 +234,77 @@ def test_a_missing_upgrade_step_is_refused(tmp_path: Path) -> None:
     with pytest.raises(G6Error) as caught:
         build_g6_row(stage, _identity(), RUN)
     assert "upgradeApply" in str(caught.value)
+
+
+def test_an_upgrade_that_moves_the_version_backward_is_refused(tmp_path: Path) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["bundleVersionBefore"] = "0.8.0"
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "does not move the bundle version forward" in str(caught.value)
+
+
+def test_an_upgrade_plan_that_observes_something_else_is_refused(tmp_path: Path) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["planLine"]["reason"] = "redeploy managed bundle 0.5.0 -> 0.7.0 (minor)"
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "observed transition" in str(caught.value)
+
+
+def test_an_upgrade_that_names_the_wrong_after_version_in_the_plan_is_refused(
+    tmp_path: Path,
+) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["planLine"]["reason"] = "redeploy managed bundle 0.6.0 -> 0.9.0 (minor)"
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "observed transition" in str(caught.value)
+
+
+def test_an_upgrade_that_deploys_another_bundle_than_the_release_is_refused(tmp_path: Path) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["bundleVersionAfter"] = "0.9.0"
+    stage["steps"]["upgradeApply"]["planLine"]["reason"] = "redeploy managed bundle 0.6.0 -> 0.9.0 (minor)"
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "not the released bundle" in str(caught.value)
+
+
+def test_an_upgrade_that_writes_more_than_the_project_is_refused(tmp_path: Path) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["report"]["writes"].append(
+        {"kind": "server-config", "action": "UPDATE", "ok": True},
+    )
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "not exactly the bundle project" in str(caught.value)
+
+
+def test_an_upgrade_without_a_green_verify_is_refused(tmp_path: Path) -> None:
+    stage = _stage()
+    stage["steps"]["upgradeApply"]["verifyGreen"] = False
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "no green verify" in str(caught.value)
+
+
+def test_a_stage_that_deployed_another_release_than_the_identity_names_is_refused(
+    tmp_path: Path,
+) -> None:
+    stage = _stage()
+    stage["bundle"]["sha256"] = "d" * 64
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(stage, _identity(), RUN)
+    assert "the stage deployed bundle" in str(caught.value)
+
+
+def test_an_identity_without_the_binding_status_is_refused(tmp_path: Path) -> None:
+    identity = _identity()
+    del identity["nativeResponseBindingStatus"]
+    with pytest.raises(G6Error) as caught:
+        build_g6_row(_stage(), identity, RUN)
+    assert "nativeResponseBindingStatus" in str(caught.value)
 
 
 def test_a_row_may_not_be_composed_from_a_red_run(tmp_path: Path) -> None:

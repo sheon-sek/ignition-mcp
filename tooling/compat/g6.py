@@ -26,6 +26,8 @@ import re
 from typing import Any
 
 from tooling.compat.evidence import (
+    BINDING_STATUSES,
+    D27_TUPLE,
     G6_LIVE_CASES,
     EvidenceError,
     parse_row,
@@ -39,10 +41,18 @@ RUN_WORKFLOWS = ("Phase 4 Live Gateway apply",)
 #: The stage document a cited run must hold, and the store the row records for it.
 STAGE_DOCUMENT = "setup-native-apply.json"
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
+_SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 
 
 class G6Error(ValueError):
     """The stage artifact or the run contradicts the row it would produce."""
+
+
+def _semver(value: Any, where: str) -> tuple[int, int, int]:
+    match = _SEMVER.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise G6Error(f"{where}: {value!r} is not a MAJOR.MINOR.PATCH bundle version")
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
 def _load(path: Path, what: str) -> dict[str, Any]:
@@ -138,22 +148,74 @@ def _green_second_apply(step: dict[str, Any], where: str) -> str:
 
 
 def _green_upgrade(step: dict[str, Any], where: str) -> str:
-    """The Bundle upgrade step: the real bundle applied under acknowledgement, then green."""
+    """The Bundle upgrade step: the real bundle applied over an older one, then green.
+
+    The shape is the round-1 order: the starting deployment was the lowered release,
+    so the step records the version observed before (and named by the upgrade plan's
+    own read of the Gateway) and the released version deployed after.
+    """
 
     if step.get("exitCode") != 0:
         raise G6Error(f"{where}: the upgrade apply exited {step.get('exitCode')}")
-    if step.get("verifyAttempts") is None or not isinstance(step.get("verifyAttempts"), int):
-        raise G6Error(f"{where}: the upgrade step records no verify attempt count")
-    return f"real bundle redeployed under --acknowledge-upgrade; verify green (attempt {step['verifyAttempts']})"
+    before = _semver(step.get("bundleVersionBefore"), f"{where}: bundleVersionBefore")
+    after = _semver(step.get("bundleVersionAfter"), f"{where}: bundleVersionAfter")
+    if after <= before:
+        raise G6Error(
+            f"{where}: the upgrade does not move the bundle version forward "
+            f"({step.get('bundleVersionBefore')} -> {step.get('bundleVersionAfter')})"
+        )
+    plan_line = step.get("planLine")
+    if not isinstance(plan_line, dict) or plan_line.get("action") != "UPDATE":
+        raise G6Error(f"{where}: the upgrade plan line is not an UPDATE of the managed project")
+    reason = str(plan_line.get("reason", ""))
+    before_text = str(step.get("bundleVersionBefore"))
+    after_text = str(step.get("bundleVersionAfter"))
+    if before_text not in reason or after_text not in reason:
+        raise G6Error(
+            f"{where}: the upgrade plan does not record the observed transition "
+            f"{before_text} -> {after_text}"
+        )
+    if step.get("verifyGreen") is not True or not isinstance(step.get("verifyAttempts"), int) \
+            or step["verifyAttempts"] < 1:
+        raise G6Error(f"{where}: the upgrade step records no green verify")
+    writes = step.get("report", {}).get("writes") if isinstance(step.get("report"), dict) else None
+    if not isinstance(writes, list) or not writes:
+        raise G6Error(f"{where}: the upgrade apply records no writes")
+    failed = [write for write in writes if isinstance(write, dict) and write.get("ok") is not True]
+    if failed:
+        raise G6Error(f"{where}: {len(failed)} upgrade write(s) failed")
+    changed = sorted(
+        str(write.get("kind")) for write in writes
+        if isinstance(write, dict) and write.get("action") in ("CREATE", "UPDATE")
+    )
+    if changed != ["bundle-project"]:
+        raise G6Error(f"{where}: the upgrade wrote {changed}, not exactly the bundle project")
+    return (
+        f"bundle upgrade {before_text} -> {after_text} under --acknowledge-upgrade; "
+        f"verify green (attempt {step['verifyAttempts']})"
+    )
 
 
-def verify_stage(stage: dict[str, Any], run: dict[str, Any], where: str = "stage") -> str:
+def verify_stage(stage: dict[str, Any], run: dict[str, Any], identity: dict[str, Any],
+                 where: str = "stage") -> str:
     """The stage artifact, checked for every case D26's G6 stage owns."""
 
     if stage.get("ok") is not True:
         raise G6Error(
             f"{where}: the stage does not record a passing run; a G6 row may only be "
             "composed from a green stage"
+        )
+    deployed = stage.get("bundle")
+    if not isinstance(deployed, dict):
+        raise G6Error(f"{where}: the stage document records no deployed release")
+    for key in ("version", "sha256"):
+        if not isinstance(deployed.get(key), str) or not deployed[key]:
+            raise G6Error(f"{where}: the deployed release records no {key}")
+    if deployed["version"] != identity.get("bundleVersion") or deployed["sha256"] != identity.get("bundleSha256"):
+        raise G6Error(
+            f"{where}: the stage deployed bundle {deployed['version']!r}/"
+            f"{str(deployed['sha256'])[:12]}... but the run identity names "
+            f"{identity.get('bundleVersion')!r}/{str(identity.get('bundleSha256'))[:12]}..."
         )
     judgements = {
         "module install": _green_install,
@@ -169,6 +231,12 @@ def verify_stage(stage: dict[str, Any], run: dict[str, Any], where: str = "stage
         step_name = G6_LIVE_CASES[case]
         step = _stage_step(stage, step_name, where)
         judgements[case](step, f"{where}: {step_name}")
+    upgrade = _stage_step(stage, "upgradeApply", where)
+    if upgrade.get("bundleVersionAfter") != identity.get("bundleVersion"):
+        raise G6Error(
+            f"{where}: the upgrade deployed {upgrade.get('bundleVersionAfter')!r}, not the "
+            f"released bundle {identity.get('bundleVersion')!r}"
+        )
     return f"{len(G6_LIVE_CASES)} cases corroborated from {STAGE_DOCUMENT}"
 
 
@@ -183,6 +251,59 @@ def _verify_identity(identity: dict[str, Any], run: dict[str, Any], where: str) 
         if not isinstance(identity.get(key), str) or not identity[key]:
             raise G6Error(f"{where}: {key} is missing from the run identity")
     return identity
+
+
+def _identity_facts(identity: dict[str, Any]) -> dict[str, Any]:
+    """The tuple and binding facts the row records, derived from the run identity.
+
+    The identity carries the machine-readable facts only: the gateway and module
+    tuple, the deployed release's version, hash and the manifest's binding status.
+    Everything the D27 rules judge is derived here, so no hand-authored field can
+    flip a row's binding story:
+
+    - the D27 exception is exact-tuple only (D27_TUPLE, fail-closed);
+    - a tuple without a published outputSchema is recorded honestly
+      (``UNVERIFIED_LIMITATION`` / ``FAILED_NATIVE_BINDING``), never excused;
+    - ``outputSchemaPublished`` follows the release manifest's binding status, which
+      is what the bundle's own toolRequirements recorded at build time.
+    """
+
+    for key in ("gatewayVersion", "gatewayBuild", "mcpModuleVersion", "mcpModuleBuild",
+                "mcpModuleSha256", "bundleVersion", "bundleSha256",
+                "nativeResponseBindingStatus"):
+        if not isinstance(identity.get(key), str) or not identity[key]:
+            raise G6Error(f"identity: {key} is missing from the run identity")
+    manifest_status = identity["nativeResponseBindingStatus"]
+    if manifest_status not in BINDING_STATUSES:
+        raise G6Error(f"identity: nativeResponseBindingStatus {manifest_status!r} is unknown")
+    d27 = all(
+        D27_TUPLE[key] == identity[key]
+        for key in ("gatewayVersion", "gatewayBuild", "mcpModuleVersion",
+                    "mcpModuleBuild", "mcpModuleSha256")
+    )
+    if manifest_status == "VERIFIED":
+        binding, status, published = "VERIFIED", "VERIFIED", True
+    elif d27 and manifest_status == "VERIFIED_WITH_LIMITATION":
+        # The D27 exception: the exact characterized tuple, outputSchema still absent.
+        binding, status, published = "VERIFIED_WITH_LIMITATION", "VERIFIED", False
+    elif manifest_status in {"UNVERIFIED_LIMITATION", "FAILED_NATIVE_BINDING"}:
+        binding, status, published = manifest_status, "FAILED_NATIVE_BINDING", False
+    else:
+        # D21's honest mapping: VERIFIED_WITH_LIMITATION or NATIVE_BINDING_PENDING on
+        # a tuple that is not the D27 one is recorded as an unverified limitation.
+        binding, status, published = "UNVERIFIED_LIMITATION", "FAILED_NATIVE_BINDING", False
+    return {
+        "bundleVersion": identity["bundleVersion"],
+        "bundleSha256": identity["bundleSha256"],
+        "mcpModuleVersion": identity["mcpModuleVersion"],
+        "mcpModuleArtifactVersion": identity.get("mcpModuleArtifactVersion", ""),
+        "mcpModuleBuild": identity["mcpModuleBuild"],
+        "mcpModuleSha256": identity["mcpModuleSha256"],
+        "nativeResponseBinding": binding,
+        "d27ExceptionApplied": d27,
+        "outputSchemaPublished": published,
+        "status": status,
+    }
 
 
 def build_g6_row(
@@ -202,28 +323,21 @@ def build_g6_row(
         raise G6Error("run: head must be a 40-character commit SHA")
 
     verified = _verify_identity(identity, run, "identity")
-    corroborated = verify_stage(stage, run)
+    facts = _identity_facts(identity)
+    if not facts["mcpModuleArtifactVersion"]:
+        raise G6Error("identity: mcpModuleArtifactVersion is missing from the run identity")
+    corroborated = verify_stage(stage, run, identity)
 
     row: dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
         "gate": GATE,
         # The tuple is the one the stage installed: this run both puts the Module on
         # the Gateway and deploys the release, so the row measures its own tuple.
-        "bundleVersion": identity["bundleVersion"],
-        "bundleSha256": identity["bundleSha256"],
+        **facts,
         "gatewayVersion": verified["gatewayVersion"],
         "gatewayBuild": verified["gatewayBuild"],
         "gatewayImage": verified["gatewayImage"],
         "gatewayImageDigest": verified["gatewayImageDigest"],
-        "mcpModuleVersion": identity["mcpModuleVersion"],
-        "mcpModuleArtifactVersion": identity["mcpModuleArtifactVersion"],
-        "mcpModuleBuild": identity["mcpModuleBuild"],
-        "mcpModuleSha256": identity["mcpModuleSha256"],
-        "nativeResponseBinding": identity["nativeResponseBinding"],
-        "d27ExceptionApplied": identity["d27ExceptionApplied"],
-        "outputSchemaPublished": identity["outputSchemaPublished"],
-        "status": "VERIFIED",
-        # D21: a G6 row never promotes a deployment either.
         "compatibilityStatus": "UNTESTED",
         "gateResult": "VERIFIED",
         "sourceRevision": head,
@@ -259,14 +373,6 @@ def build_g6_row(
         "unsatisfiedAcceptance": [],
         "stageCorroboration": corroborated,
     }
-    if not isinstance(row["d27ExceptionApplied"], bool):
-        raise G6Error("identity: d27ExceptionApplied must be an explicit boolean")
-    if not isinstance(row["outputSchemaPublished"], bool):
-        raise G6Error("identity: outputSchemaPublished must be an explicit boolean")
-    for key in ("bundleVersion", "bundleSha256", "mcpModuleVersion", "mcpModuleArtifactVersion",
-                "mcpModuleBuild", "mcpModuleSha256", "nativeResponseBinding"):
-        if not isinstance(identity.get(key), str) or not identity[key]:
-            raise G6Error(f"identity: {key} is missing from the run identity")
     return row
 
 

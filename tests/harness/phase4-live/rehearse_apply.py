@@ -11,8 +11,9 @@ provider (including the recorded first-import readiness flake).
 Ticket #56: the rehearsal also runs the module-install phase of the stage against a
 fake started with ``module_install_flow=True`` (no MCP Module until the documented
 install flow puts one there and the Gateway comes back from its restart), then the
-apply stage with the NO CHANGE read-back and the Bundle upgrade case: a lowered real
-release applied first, then the exact release with ``--acknowledge-upgrade``.
+apply stage with the NO CHANGE read-back and the Bundle upgrade in the round-1
+order: the released bundle one version lower is the starting deployment, and the
+exact release is applied over it with ``--acknowledge-upgrade``.
 
 Run it before spending a live ``phase4-live`` run:
 
@@ -104,7 +105,9 @@ def main() -> int:
             )
         shutil.copytree(ROOT / "packages/ignition-runtime-bundle/project", bundle_source / "project")
 
-        # Phase one: the module-install stage against a Gateway with NO module.
+        # Phase one: the module-install stage against a Gateway with NO module. Both
+        # phases share the evidence directory, exactly as the workflow's steps do, so
+        # the apply phase embeds the recorded INSTALL step.
         with RecordedGateway(
             runtime_tools=tuple(readonly_tools),
             runtime_resources=tuple(readonly_resources),
@@ -120,7 +123,7 @@ def main() -> int:
                     "--module-file", str(MODULE_FILE),
                     "--module-sha256", MODULE_SHA256,
                     "--install-only",
-                    "--evidence-dir", str(work / "evidence-install"),
+                    "--evidence-dir", str(work / "evidence"),
                 ],
                 work,
             )
@@ -132,7 +135,9 @@ def main() -> int:
             print("the module-install rehearsal failed", file=sys.stderr)
             return install.returncode
 
-        # Phase two: the apply stage, the NO CHANGE read-back and the Bundle upgrade.
+        # Phase two: the apply stage over the lowered starting deployment, the NO
+        # CHANGE read-back, the idempotency checks, and the Bundle upgrade to the
+        # real released bundle under acknowledgement.
         with RecordedGateway(
             runtime_tools=tuple(readonly_tools),
             runtime_resources=tuple(readonly_resources),
@@ -166,14 +171,20 @@ def main() -> int:
             print(f"the apply stage rehearsal failed (exit {completed.returncode})", file=sys.stderr)
             return completed.returncode
         evidence = json.loads((work / "evidence" / "setup-native-apply.json").read_text(encoding="utf-8"))
+        upgrade = evidence["steps"]["upgradeApply"]
         print("verdict:", json.dumps({
             "ok": evidence.get("ok"),
             "installAgain": evidence["steps"]["install-module-again"]["report"]["outcome"],
             "verifyAttempts": evidence["steps"]["apply"].get("verifyAttempts"),
             "firstApply": [w["action"] for w in evidence["steps"]["apply"]["report"]["writes"]],
             "secondApply": [w["action"] for w in evidence["steps"]["secondApply"]["report"]["writes"]],
-            "downgradeApply": evidence["steps"]["downgradeApply"]["report"]["exitCode"],
-            "upgradeApply": evidence["steps"]["upgradeApply"]["report"]["exitCode"],
+            "startingBundle": evidence.get("startingBundleVersion"),
+            "upgrade": {
+                "from": upgrade["bundleVersionBefore"],
+                "to": upgrade["bundleVersionAfter"],
+                "exitCode": upgrade["exitCode"],
+                "verifyGreen": upgrade["verifyGreen"],
+            },
         }, indent=2, sort_keys=True))
         return 0 if evidence.get("ok") is True else 2
 

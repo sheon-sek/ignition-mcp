@@ -226,7 +226,7 @@ async def run_stage(args: argparse.Namespace) -> int:
             evidence["failure"] = (
                 f"install-module {install_report.get('outcome')} / again {again_report.get('outcome')}"
             )
-        _write(evidence, args)
+        _write(evidence, args, "setup-native-install-module.json")
         print(json.dumps({"stage": "setup-native-install-module", "ok": ok}, sort_keys=True))
         return 0 if ok else 1
     policy_file = args.evidence_dir / "runtime-target-policy.json"
@@ -238,6 +238,20 @@ async def run_stage(args: argparse.Namespace) -> int:
     args.permissions_file = permissions_file
 
     argv = build_argv(args)
+    released_argv = list(argv)
+    lowered_version = ""
+    if args.bundle_source is not None:
+        # Ticket #56, round 1: the starting deployment is the released bundle one
+        # version BELOW the release the run built, so the upgrade that follows deploys
+        # the real release over an older bundle (D21's upgrade path, under
+        # acknowledgement). The build is a real release build of the same project
+        # source and the same revision stamp.
+        args.lowered_release_keepalive = tempfile.TemporaryDirectory(prefix="setup-native-lowered-")
+        lowered_dir, lowered_version = _build_lowered_release(
+            args, Path(args.lowered_release_keepalive.name),
+        )
+        argv = _argv_with_bundle(argv, lowered_dir)
+    released = json.loads(args.bundle_manifest.read_text(encoding="utf-8"))
     evidence: dict[str, Any] = {
         "schemaVersion": 1,
         "ticket": 22,
@@ -256,12 +270,30 @@ async def run_stage(args: argparse.Namespace) -> int:
         "mcpUrl": f"{args.base_url.rstrip('/')}/data/mcp/{args.server_config}",
         "sourceRevision": args.source_revision,
         "runId": os.environ.get("GITHUB_RUN_ID", ""),
+        "bundle": {
+            "filename": str(released["artifact"]["filename"]),
+            "version": str(released["bundleVersion"]),
+            "sha256": str(released["artifact"]["sha256"]),
+            "nativeResponseBindingStatus": str(released["nativeResponseBindingStatus"]),
+        },
+        "startingBundleVersion": lowered_version,
         "steps": {},
     }
 
     if args.module_file is not None:
-        # The workflow already ran the install with --install-only; this run's proof is
-        # the NO CHANGE read-back: the CLI sees the installed build and uploads nothing.
+        # The workflow already ran the install with --install-only; this run embeds
+        # that phase's recorded INSTALL step (it is the only live record of the
+        # install) and adds its own proof: a NO CHANGE read-back that uploads nothing.
+        install_document = args.evidence_dir / "setup-native-install-module.json"
+        if not install_document.is_file():
+            _fail(evidence, args, f"the install-only phase left no {install_document.name} to embed")
+            return 1
+        installed = json.loads(install_document.read_text(encoding="utf-8"))
+        if installed.get("ok") is not True:
+            _fail(evidence, args, "the install-only phase did not record a green install")
+            return 1
+        evidence["steps"]["install-module"] = installed["steps"]["install-module"]
+        # The NO CHANGE read-back: the CLI sees the installed build and uploads nothing.
         again_code, again_text, again_report = await run_module_install(args)
         evidence["steps"]["install-module-again"] = {
             "exitCode": again_code, "report": again_report, "output": again_text,
@@ -369,33 +401,55 @@ async def run_stage(args: argparse.Namespace) -> int:
 
     # ---------------------------------------------------------------- ticket #56 upgrade
     if args.bundle_source is not None:
-        lower_code, lower_text, lower_report = await _apply_lowered_bundle(evidence, args, argv)
-        evidence["steps"]["downgradeApply"] = {
-            "exitCode": lower_code, "report": lower_report, "output": lower_text,
-        }
-        if lower_code != 0:
-            _fail(evidence, args, f"the lowered-bundle apply did not land (exit {lower_code})")
+        # The starting deployment is the lowered release; the upgrade deploys the real
+        # released bundle over it, under --acknowledge-upgrade (D21's upgrade path).
+        plan_code, plan_text, plan_report = await run_command("plan", released_argv)
+        plan_line = _bundle_project_action(plan_report)
+        if plan_code != 0 or plan_line is None or plan_line.get("action") != "UPDATE":
+            _fail(evidence, args, f"the released bundle was not planned as an upgrade: {plan_line}")
             return 1
-
-        upgrade_argv = [*argv, "--acknowledge-upgrade"]
-        with tempfile.TemporaryDirectory(prefix="bundle-upgrade-real-") as real_dir:
-            real_code, real_text, real_report = await _apply_released_bundle(
-                evidence, args, upgrade_argv, Path(real_dir),
-            )
-        evidence["steps"]["upgradeApply"] = {
-            "exitCode": real_code, "report": real_report, "output": real_text,
-        }
-        if real_code != 0:
-            _fail(evidence, args, f"the real-bundle apply with --acknowledge-upgrade failed (exit {real_code})")
+        real_version = str(released["bundleVersion"])
+        if lowered_version not in str(plan_line.get("reason", "")) or real_version not in str(plan_line.get("reason", "")):
+            _fail(evidence, args, f"the upgrade plan does not observe {lowered_version} -> {real_version}: {plan_line}")
             return 1
-        # The upgrade case's own judgement: the *deployed* bundle serves the real
-        # version again, through the same endpoint the first apply verified.
+        evidence["steps"]["upgradePlan"] = {
+            "exitCode": plan_code, "report": plan_report, "output": plan_text,
+        }
+        upgrade_argv = [*released_argv, "--acknowledge-upgrade"]
+        apply_code, apply_text, apply_report = await run_command("apply", upgrade_argv)
         attempts = 1
-        if not _last_verify_ok(evidence):
-            attempts = await _reverify(evidence, args, upgrade_argv, attempts)
-        evidence["steps"]["upgradeApply"]["verifyAttempts"] = attempts
-        if not _last_verify_ok(evidence):
+        retries: list[dict[str, Any]] = []
+        green = _verify_ok(apply_report.get("verify"))
+        while not green and attempts <= VERIFY_ATTEMPTS:
+            await asyncio.sleep(VERIFY_WAIT_SECONDS)
+            verify_code, verify_text, verify_report = await run_command("verify", upgrade_argv)
+            retries.append({
+                "attempt": attempts, "exitCode": verify_code,
+                "report": verify_report, "output": verify_text,
+            })
+            green = verify_code == 0 and _verify_ok(verify_report)
+            attempts += 1
+        written_kinds = sorted({
+            write.get("kind") for write in (apply_report.get("writes") or [])
+            if write.get("action") in ("CREATE", "UPDATE")
+        })
+        evidence["steps"]["upgradeApply"] = {
+            "bundleVersionBefore": lowered_version,
+            "bundleVersionAfter": real_version,
+            "planLine": plan_line,
+            "exitCode": apply_code,
+            "verifyAttempts": attempts,
+            "verifyGreen": green,
+            "verifyRetries": retries,
+            "writtenKinds": written_kinds,
+            "report": apply_report,
+            "output": apply_text,
+        }
+        if not green:
             _fail(evidence, args, "verify never went green after the bundle upgrade")
+            return 1
+        if written_kinds != ["bundle-project"]:
+            _fail(evidence, args, f"the upgrade wrote more than the bundle project: {written_kinds}")
             return 1
 
     evidence["ok"] = True
@@ -407,6 +461,11 @@ async def run_stage(args: argparse.Namespace) -> int:
         "verifyAttempts": verify_attempts,
         "provisioning": provisioning,
         "secondApply": [write.get("action") for write in (second_apply_report.get("writes") or [])],
+        "upgrade": None if "upgradeApply" not in evidence["steps"] else {
+            "from": evidence["steps"]["upgradeApply"]["bundleVersionBefore"],
+            "to": evidence["steps"]["upgradeApply"]["bundleVersionAfter"],
+            "verifyGreen": evidence["steps"]["upgradeApply"]["verifyGreen"],
+        },
     }, sort_keys=True))
     return 0
 
@@ -418,32 +477,42 @@ def _verify_ok(report: Any) -> bool:
 # ------------------------------------------------------------------ ticket #56 upgrade
 
 
-async def _apply_lowered_bundle(
-    evidence: dict[str, Any], args: argparse.Namespace, argv: list[str],
-) -> tuple[int, str, dict[str, Any]]:
-    """Lower the release to a higher MAJOR than the deployed one and apply it.
+def _bundle_project_action(report: dict[str, Any]) -> dict[str, Any] | None:
+    """The plan's bundle-project line, if the plan carried one."""
 
-    The lowered build is a real, validated release of the same project (D21: only
-    BUNDLE_VERSION moves), so the apply that lands it exercises the same import the
-    real upgrade will undo.
+    for action in report.get("actions") or []:
+        if isinstance(action, dict) and action.get("kind") == "bundle-project":
+            return action
+    return None
+
+
+def _build_lowered_release(args: argparse.Namespace, work: Path) -> tuple[Path, str]:
+    """Build the starting deployment: the released bundle one version below.
+
+    The lowered build is a real, validated release of the same project source and the
+    same revision stamp (D21: only BUNDLE_VERSION moves), so the apply that lands it
+    exercises the same import the real upgrade then replaces.
     """
 
-    manifest = json.loads(args.bundle_manifest.read_text(encoding="utf-8"))
-    real_version = str(manifest["bundleVersion"])
-    parts = [int(part) for part in real_version.split(".")]
-    lowered = f"{parts[0] + 1}.0.0"
-    with tempfile.TemporaryDirectory(prefix="bundle-upgrade-lowered-") as temporary:
-        source = Path(temporary) / "source"
-        source.mkdir()
-        shutil.copytree(args.bundle_source / "project", source / "project")
-        for sibling in ("BUNDLE_VERSION", "RESOURCE_SCHEMA_VERSION"):
-            shutil.copy(args.bundle_source / sibling, source / sibling)
-        (source / "BUNDLE_VERSION").write_text(lowered + "\n", encoding="utf-8")
-        _repoint_bundle_version(source / "project", lowered)
-        release_dir = _rebuild_release(source, Path(temporary) / "release", lowered,
-                                       source_revision=args.source_revision)
-        lowered_argv = _argv_with_bundle([*argv, "--acknowledge-upgrade"], release_dir)
-        return await run_command("apply", lowered_argv)
+    released = json.loads(args.bundle_manifest.read_text(encoding="utf-8"))
+    real_version = str(released["bundleVersion"])
+    major, minor, patch = (int(part) for part in real_version.split("."))
+    if patch:
+        lowered = f"{major}.{minor}.{patch - 1}"
+    elif minor:
+        lowered = f"{major}.{minor - 1}.0"
+    else:
+        raise SystemExit(f"cannot lower {real_version}: there is no version below it to deploy first")
+    source = work / "source"
+    source.mkdir()
+    shutil.copytree(args.bundle_source / "project", source / "project")
+    for sibling in ("BUNDLE_VERSION", "RESOURCE_SCHEMA_VERSION"):
+        shutil.copy(args.bundle_source / sibling, source / sibling)
+    (source / "BUNDLE_VERSION").write_text(lowered + "\n", encoding="utf-8")
+    _repoint_bundle_version(source / "project", lowered)
+    release_dir = _rebuild_release(source, work / "release", lowered,
+                                   source_revision=args.source_revision)
+    return release_dir, lowered
 
 
 def _repoint_bundle_version(project: Path, bundle_version: str) -> None:
@@ -517,29 +586,6 @@ def _argv_with_bundle(argv: list[str], release_dir: Path) -> list[str]:
         replaced.append(item)
         index += 1
     return replaced
-
-
-async def _apply_released_bundle(
-    evidence: dict[str, Any], args: argparse.Namespace, argv: list[str], work: Path,
-) -> tuple[int, str, dict[str, Any]]:
-    """Re-stamp the exact release the run built and apply it with its real version.
-
-    The lowered apply left a higher MAJOR on the Gateway, so the real bundle is the
-    downgrade D20 refuses without ``--acknowledge-upgrade``; the caller passes the
-    flag. The release is rebuilt byte-identically from the release the run built (same
-    project source, same revision stamp), which keeps the upgrade honest: it deploys
-    the artifact the release evidence describes.
-    """
-
-    with tempfile.TemporaryDirectory(prefix="bundle-upgrade-source-") as temporary:
-        source = Path(temporary) / "source"
-        source.mkdir()
-        shutil.copytree(args.bundle_source / "project", source / "project")
-        for sibling in ("BUNDLE_VERSION", "RESOURCE_SCHEMA_VERSION"):
-            shutil.copy(args.bundle_source / sibling, source / sibling)
-        release_dir = _rebuild_release(source, work / "release", "real",
-                                       source_revision=args.source_revision)
-        return await run_command("apply", _argv_with_bundle(argv, release_dir))
 
 
 # ------------------------------------------------------------------ ticket #22 probes
@@ -683,9 +729,9 @@ def _fail(evidence: dict[str, Any], args: argparse.Namespace, reason: str) -> No
     print(f"setup-native apply stage failed: {reason}", file=sys.stderr)
 
 
-def _write(evidence: dict[str, Any], args: argparse.Namespace) -> None:
+def _write(evidence: dict[str, Any], args: argparse.Namespace, name: str = "setup-native-apply.json") -> None:
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
-    path = args.evidence_dir / "setup-native-apply.json"
+    path = args.evidence_dir / name
     blob = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
     secret = _secret_line(args.runtime_token_file)
     if secret and secret in blob:
