@@ -38,8 +38,8 @@ def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
 class EvidenceTest(unittest.TestCase):
     def test_repository_evidence_passes_readonly(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4"})
-        self.assertEqual(len(rows), 8)
+        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4", "G5"})
+        self.assertEqual(len(rows), 10)
         d27 = next(row for row in rows if row.directory == D27_DIR)
         self.assertTrue(d27.is_d27_tuple and d27.d27_exception_applied)
         g3_d27 = next(row for row in rows if row.directory == G3_D27_DIR)
