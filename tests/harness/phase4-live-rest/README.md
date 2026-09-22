@@ -64,12 +64,12 @@ observe:
 | `project-import-commits` | an uploaded archive imports into an existing Project and the D16 transaction ends `COMMITTED` |
 | `project-import-baseline-is-the-callers-read` | the transaction's baseline A is the fingerprint `project_export` reported to the caller |
 | `project-import-verifies-its-own-candidate` | the post-import export C equals the staged candidate B (D16 reconcile) |
-| `project-import-reports-the-dispatch` | the committed transaction reports that it dispatched |
+| `project-import-reports-the-dispatch` | the committed transaction reports `importDispatched: true` — an import request left the server; the field is false only when nothing was sent |
 | `project-export-fingerprint-is-independent` | the fingerprint the server reports for a fresh export equals this harness's own `pcf1` computation |
 | `project-import-content-lands` | that independent fingerprint equals the candidate the import reported |
 | `project-import-marker-is-present` | the entry the candidate carried is in the Project the Gateway now serves |
 | `project-import-of-the-current-content-is-no-change` | re-importing that content is D16's `NO_CHANGE` |
-| `project-import-no-change-dispatches-nothing` | …and nothing was dispatched |
+| `project-import-no-change-dispatches-nothing` | …and nothing was dispatched, so `importDispatched` is false |
 | `project-import-stale-fingerprint-is-conflict` | the pre-commit fingerprint is a stale Precondition token (D30 §2) |
 | `project-import-stale-fingerprint-changes-nothing` | …and the refused import changed nothing |
 | `project-import-non-allowlisted-project-is-permission-denied` | D30 §7 for a Project the Target allowlist does not name |
@@ -86,6 +86,10 @@ observe:
 | `tag-import-non-allowlisted-path-is-permission-denied` | D30 §7 for a destination path the Target allowlist does not name |
 | `tag-import-non-allowlisted-path-creates-nothing` | …and that path holds none of the source Tags |
 | `tag-import-invisible-artifact-is-not-found` | D30 §6: a Tag export another principal owns answers `not_found` |
+| `tag-import-under-the-allowlisted-prefix-applies` | D30 §1/D08: the allowlisted entry is a path *prefix*, so a destination below it is authorized |
+| `tag-import-prefix-destination-serves-every-source-tag` | …and an independent export of that nested destination serves the source Tags |
+| `tag-import-reserved-policy-provider-is-permission-denied` | D30 §1: the Runtime Target Policy's provider is reserved |
+| `tag-import-reserved-policy-provider-says-which-rule` | …and the error names the reserved-provider rule, not the Target allowlist |
 | `pipeline-cancel-config-credential-is-permission-denied` | the cancel's effect is CONTROL, so the config credential never reaches the handler |
 | `pipeline-cancel-non-allowlisted-pipeline-is-permission-denied` | D30 §7 for a pipeline the Target allowlist does not name |
 | `pipeline-cancel-path-under-the-target-is-permission-denied` | D30 §6: the allowlist holds exact paths, never prefixes, so a path *under* the Target is a different Target |
@@ -136,6 +140,15 @@ Tool-scoped; see `docs/development/phase-4.md`). That is the code both
 `config_resource_*`, `project_import` and `tag_config_import` answer; the frozen Phase 3 machinery the G3
 harness drives keeps its recorded `operation_disabled` because the code is declared per
 operation.
+
+The Tag import cases also pin the two Target rules that are this Tool's alone
+(D30 §1): the allowlisted entry is a provider-qualified path *prefix* that matches at
+segment boundaries, so the nested destination the cases import into is authorized by the
+entry for its parent; and the Runtime Target Policy's own provider is reserved, so an
+import addressed to it is refused by provider before the allowlist is consulted. The
+second case runs against a deployment whose Target allowlist does not name that provider
+either, and asserts the message, so a run tells a reserved-provider refusal from an
+ordinary allowlist denial.
 
 The deployment this driver runs against enables the config *and* control mutation
 classes, the sensitive exports (the Project cases read their Precondition token from

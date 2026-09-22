@@ -717,6 +717,11 @@ class _Server(http.server.ThreadingHTTPServer):
         #: Modelled, not recorded: the import route reports a clean success and creates
         #: nothing, so only the bounded re-export can tell the difference.
         self.tag_import_lies = False
+        #: Modelled, not recorded: the 2xx body the import route answers with whatever
+        #: the transition did, for a case that needs a response this server cannot
+        #: interpret (a negative count, a count of the wrong type, ``null``). Set it
+        #: through :meth:`answer_tag_import_with`.
+        self.tag_import_body: Any = _UNSET
         #: config resource state: resource type -> (name, collection) -> document.
         #: Keying by collection as well as name is what makes the fixture able to
         #: tell two resources with one name in different collections apart. Seed it
@@ -877,14 +882,31 @@ class _Server(http.server.ThreadingHTTPServer):
     def apply_tag_import(
         self, provider: str, path: str, body: bytes, *, collision_policy: str,
     ) -> tuple[int, Any]:
-        """Apply one recorded Tag import against a modelled provider's state.
+        """Apply one recorded Tag import and answer with the route's own report.
 
-        The recorded transition: the document's Tag nodes are created under ``path``,
-        and ``Abort`` refuses the whole import when any of them already exists there
-        (D30 §4). The write hooks model the same boundaries the config-resource routes
-        model, keyed by ``"tag_import"``: a competing writer at dispatch time
-        (``write_race``), an ambiguous status that applies nothing (``write_status``),
-        and a reported failure inside a 200 (``write_problem``).
+        The transition is the recorded one; when a case has substituted a response body
+        (:meth:`answer_tag_import_with`) the transition still happens, and only the body
+        the route reports it with changes — the state is real while the response is
+        unreadable, which is exactly the case a verification-based Tool must not read as
+        a success.
+        """
+
+        status, payload = self._tag_import_transition(provider, path, body, collision_policy)
+        if self.tag_import_body is not _UNSET:
+            return 200, self.tag_import_body
+        return status, payload
+
+    def _tag_import_transition(
+        self, provider: str, path: str, body: bytes, collision_policy: str,
+    ) -> tuple[int, Any]:
+        """The recorded Tag import transition against a modelled provider's state.
+
+        The document's Tag nodes are created under ``path``, and ``Abort`` refuses the
+        whole import when any of them already exists there (D30 §4). The write hooks
+        model the same boundaries the config-resource routes model, keyed by
+        ``"tag_import"``: a competing writer at dispatch time (``write_race``), an
+        ambiguous status that applies nothing (``write_status``), and a reported failure
+        inside a 200 (``write_problem``).
         """
 
         if race := self.write_race.pop("tag_import", None):
@@ -1305,6 +1327,11 @@ class _Server(http.server.ThreadingHTTPServer):
 #: carrying ``success=false`` with a ``problem`` for a refusal).
 _INVALID_BODY: dict[str, Any] = {"message": "Invalid request body", "status": "400"}
 _NO_SUCH_RESOURCE: dict[str, Any] = {"message": "No such resource", "status": "404"}
+
+
+#: Sentinels for a modelled route override that has not been set. ``object()`` rather
+#: than ``None`` because ``None`` is itself a modelled body (an empty or JSON-null 2xx).
+_UNSET: Any = object()
 _SIGNATURE_MISMATCH: dict[str, Any] = {
     "message": "Signature mismatch: the resource changed after it was read",
     "status": "409",
@@ -1649,6 +1676,17 @@ class RecordedGateway:
         if shape not in {"summary", "list"}:
             raise ValueError("shape must be 'summary' or 'list'")
         self._server.tag_import_wire_shape = shape
+
+    def answer_tag_import_with(self, body: Any) -> None:
+        """Answer the Tag import with ``body`` inside a 200, whatever it did.
+
+        Modelled, not recorded: the case is a Gateway whose 2xx report this server cannot
+        interpret (a negative or non-numeric count, a count that disagrees with its
+        failure list, a ``null`` body). The import itself still applies, so a Tool that
+        treats the unreadable report as a success would return one here.
+        """
+
+        self._server.tag_import_body = body
 
     # ------------------------------------------------------- alarm pipelines
 

@@ -46,7 +46,8 @@
   },
   "targetId": {
     "form": "the exact Alarm Notification Pipeline path, as alarm_pipeline_list reports it",
-    "match": "D30 §6: exact pipeline paths or `*`, never prefixes. The Target is the caller's own path string, so an allowlist entry authorizes exactly the pipeline the Gateway reported for it and a path under (or above) it is a different Target.",
+    "match": "exact",
+    "matchNote": "D30 §6: exact pipeline paths or `*`, never prefixes. The Target is the caller's own path string, so an allowlist entry authorizes exactly the pipeline the Gateway reported for it and a path under (or above) it is a different Target.",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,

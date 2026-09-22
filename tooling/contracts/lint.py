@@ -122,6 +122,12 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: D30 §5 governs config-resource Mutations; a Tag import's Target is a
         #: provider-qualified path, not a config resource.
         "refusedResourceTypes": False,
+        #: D30 §1/D08: the Target is a provider-qualified Tag path, so its allowlist
+        #: entries match as prefixes at segment boundaries.
+        "targetMatch": "provider_qualified_prefix_at_segment_boundaries",
+        #: D30 §1: the Runtime Target Policy's own provider, refused whatever the
+        #: allowlist says.
+        "reservedTagProviders": ("IgnitionMCPPolicy",),
         #: D03 request-schema validation governs the config-resource write bodies; this
         #: Tool sends a Tag export document, gated by its own byte cap and JSON parse.
         "requestSchemaValidation": False,
@@ -203,6 +209,11 @@ EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES = frozenset({
 })
 EXPECTED_RECOVERY_LOCK_RELEASED_ON = frozenset({"COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"})
 EXPECTED_RECOVERY_LOCK_HELD_ON = frozenset({"OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"})
+#: The durable dispatch classification a restart reconciles from (#16). Every value is a
+#: distinct conclusion about one attempt, and restart recovery acts on all five.
+EXPECTED_DISPATCH_BOUNDARIES = (
+    "not_sent", "refused", "claimed", "attributable", "unattributable",
+)
 
 CURRENT_RUNTIME_TOOLS = [
     "bundle_info",
@@ -406,6 +417,41 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: D30 §7 decides permission_denied for a Target denial")
         if target.get("wildcard") != "*" or target.get("denyByDefault") is not True:
             raise ContractError(f"{tool_name}: the Target allowlist stays deny-by-default with an explicit *")
+        if target.get("match", "exact") != spec.get("targetMatch", "exact"):
+            raise ContractError(
+                f"{tool_name}: the Target match rule must be declared exactly (D08/D30 §1)"
+            )
+        # D30 §1: a Tool whose Target can write Tags must declare the reserved provider
+        # it refuses, and no other Tool may claim one.
+        reserved = spec.get("reservedTagProviders")
+        declared_reserved = tool.get("reservedTagProviders")
+        if reserved is None:
+            if "reservedTagProviders" in tool:
+                raise ContractError(
+                    f"{tool_name}: D30 §1's reserved provider governs Tag Mutations; "
+                    "this Tool's Target is not a Tag path"
+                )
+        else:
+            if not isinstance(declared_reserved, dict) or tuple(
+                declared_reserved.get("providers", ())
+            ) != tuple(reserved):
+                raise ContractError(
+                    f"{tool_name}: the reserved Tag providers must be declared exactly (D30 §1)"
+                )
+            if declared_reserved.get("denialCode") != "permission_denied":
+                raise ContractError(
+                    f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §1/§7)"
+                )
+            if declared_reserved.get("layer") != "target-class":
+                raise ContractError(
+                    f"{tool_name}: a reserved provider is refused as a Target class, before "
+                    "the Target allowlist"
+                )
+            if not re.search(r"\*", str(declared_reserved.get("rule", ""))):
+                raise ContractError(
+                    f"{tool_name}: the reserved-provider rule must state that it holds "
+                    "whatever the allowlist says, including *"
+                )
         if spec["requestSchemaValidation"]:
             schema_validation = tool.get("requestSchemaValidation")
             if not isinstance(schema_validation, dict) or (
@@ -436,6 +482,33 @@ def lint_contracts(root: str | Path) -> None:
                 raise ContractError(f"{tool_name}: D30 §7 maps a conflict to the conflict code")
             if surface.get("OUTCOME_UNKNOWN") != "error: outcome_unknown":
                 raise ContractError(f"{tool_name}: an unresolved outcome stays outcome_unknown")
+            # D30 §2 across a restart: the durable dispatch classification is what makes a
+            # known refusal stay NOT_APPLIED, and its vocabulary decides what a restart may
+            # attribute, so the contract declares it exactly (a Tool cannot quietly widen
+            # what a re-export may be credited with).
+            boundaries = transaction.get("dispatchBoundary")
+            if not isinstance(boundaries, dict) or (
+                tuple(boundaries.get("values", ())) != EXPECTED_DISPATCH_BOUNDARIES
+            ):
+                raise ContractError(
+                    f"{tool_name}: the durable dispatch classification must be declared "
+                    "exactly (D30 §2, D16 restart reconciliation)"
+                )
+            if boundaries.get("durable") is not True:
+                raise ContractError(f"{tool_name}: the dispatch classification must be durable")
+            if "NOT_APPLIED" not in str(boundaries.get("restartRule", "")):
+                raise ContractError(
+                    f"{tool_name}: restart reconciliation must state what a recorded "
+                    "refusal becomes"
+                )
+            # D16 `importAttempted` is not this field: `importDispatched` answers whether a
+            # dispatch happened at all, and the schema's own description is the client's
+            # contract, so the declaration is required.
+            dispatched = transaction.get("importDispatched")
+            if not isinstance(dispatched, str) or not dispatched:
+                raise ContractError(
+                    f"{tool_name}: the importDispatched semantics must be declared"
+                )
         rejection = tool.get("rejectionPolicy")
         if not isinstance(rejection, dict) or "D30 §2" not in str(rejection.get("rule", "")):
             raise ContractError(f"{tool_name}: a mutation must declare the D30 §2 rejection policy")

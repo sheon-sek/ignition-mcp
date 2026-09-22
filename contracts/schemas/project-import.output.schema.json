@@ -43,7 +43,7 @@
       "pattern": "^pcf1:[0-9a-f]{64}$"
     },
     "importDispatched": {
-      "description": "False for NO_CHANGE, and for a commit recovered from an ambiguous dispatch.",
+      "description": "True when this call dispatched an import request: the request left the server and the Gateway may have applied it. That covers a commit confirmed by the Gateway's response and a commit recovered from an ambiguous dispatch, where the import really happened. False only when nothing was sent: NO_CHANGE, or a refusal or non-attempt that ended the transaction before any byte left the process. It is never false when the project may already hold the candidate.",
       "type": "boolean"
     },
     "designerWarning": {

@@ -12,8 +12,16 @@ Where each rule lands:
 - **D30 §3 Preflight and Target.** The D08 chain — verified principal, authorization
   scope, deployment class, operation allowlist, the operation's Target-class rule and
   the Target allowlist — runs inside the guarded executor before anything is dispatched.
-  The Target is the exact ``[provider]path`` the import creates under, so a Target the
+  The Target is the ``[provider]path`` the import creates Tags under, and D30 §1/D08
+  match a Target allowlist entry as a provider-qualified path prefix at a segment
+  boundary: `[default]CI/Imports` authorizes `[default]CI/Imports` and everything below
+  it, never `[default]CI/Imports2`, and `*` must be written explicitly. A Target the
   deployment does not name answers ``permission_denied`` (D30 §7) with nothing sent.
+- **D30 §1 reserved provider.** The Runtime Target Policy lives in the reserved
+  ``IgnitionMCPPolicy`` provider (#6), and D30 §1 requires that the Runtime plane cannot
+  write it. The refusal is a product rule: any Tag Mutation addressed to that provider is
+  refused by provider *before* the Target allowlist, with ``permission_denied``, so
+  neither `*` nor an entry naming the provider can change or extend the policy document.
 - **D30 §2 no Precondition token.** A Tag import carries no token: ``Abort`` *is* its
   concurrency rule. It is checked against the Gateway before dispatch (D11 collision
   policy), so a destination that already holds a declared Tag is a ``conflict`` that
@@ -41,7 +49,8 @@ and live-proven by the Runtime plane importing a ``{"tags": [...]}`` document).
 from __future__ import annotations
 
 import json
-from typing import Any, AsyncIterator
+from functools import partial
+from typing import Any, AsyncIterator, Callable, TypeGuard
 
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore, validate_artifact_id
 from ignition_rest_mcp.artifacts.model import Artifact
@@ -69,7 +78,13 @@ from ignition_rest_mcp.safety.executor import (
     mutation_failure,
     preflight_mutation,
 )
-from ignition_rest_mcp.safety.policy import CONFIG_MUTATION, MutationOperation
+from ignition_rest_mcp.safety.policy import (
+    CONFIG_MUTATION,
+    TARGET_MATCH_PROVIDER_PREFIX,
+    MutationOperation,
+    PolicyDecision,
+)
+from ignition_rest_mcp.safety.reserved_tag_providers import refuse_reserved_tag_provider_decision
 from ignition_rest_mcp.safety.verification import verdict
 from ignition_rest_mcp.services.artifacts import artifact_visible
 from ignition_rest_mcp.services.config_resources import bounded_text
@@ -87,6 +102,9 @@ TAG_CONFIG_IMPORT = MutationOperation(
     destructive=False,
     target_denial_code="permission_denied",
     rejection_is_final=True,
+    #: D30 §1/D08: the Target is a provider-qualified Tag path, so an entry authorizes
+    #: the subtree below it at a segment boundary.
+    target_match=TARGET_MATCH_PROVIDER_PREFIX,
 )
 
 IMPORT_PATH = "/data/api/v1/tags/import"
@@ -136,6 +154,12 @@ async def tag_config_import(
     path = _import_path(path)
     validate_artifact_id(artifact_id)
     target_id = tag_target_id(provider, path)
+    #: D30 §1: the reserved policy provider is refused by provider, before the Target
+    #: allowlist, so neither `*` nor an entry naming it can reach the Runtime Target
+    #: Policy. Built once and handed to both the early chain and the executor's.
+    target_policy: Callable[[], PolicyDecision] = partial(
+        refuse_reserved_tag_provider_decision, provider,
+    )
     #: D30 §3: the whole chain runs before the artifact is read, so a Target the
     #: deployment does not name is refused without consuming the caller's artifact.
     #: The guarded executor runs the same chain again around the dispatch, which stays
@@ -144,7 +168,7 @@ async def tag_config_import(
         registry=registry, settings=settings, context=context,
         preflight=MutationPreflight(
             operation=TAG_CONFIG_IMPORT, principal=principal, target_id=target_id,
-            target_type="tag-provider",
+            target_type="tag-provider", target_policy=target_policy,
             audit_fields={"provider": provider, "path": path},
         ),
     )
@@ -196,6 +220,7 @@ async def tag_config_import(
             verify=verify,
             precondition=precondition,
             rejection=_gateway_rejection,
+            target_policy=target_policy,
             audit_fields={"provider": provider, "path": path},
             target_type="tag-provider",
         ),
@@ -594,30 +619,47 @@ def _gateway_rejection(dispatch: WriteDispatchResult) -> GatewayError | None:
     )
 
 
+def _is_count(value: Any) -> TypeGuard[int]:
+    """Whether one reported count is a number this server can read.
+
+    A count that is negative, not a number at all, or a boolean is not a count: the
+    response is uninterpretable, and an uninterpretable response is never a claim
+    (D30 §2).
+    """
+
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+
 def _failure_count(body: Any) -> int | None:
     """How many failures a 2xx import response reports, or ``None`` if it reports none.
 
-    ``None`` is also the answer for a response this server cannot interpret: an
-    uninterpretable body is not a claim of success either (see
-    :func:`_is_claimed_success`), so the call is never reported as one.
+    ``None`` is also the answer for a response this server cannot interpret: a count
+    that is negative or not a number, a ``failures`` value that is not a list, or a
+    count that disagrees with the failure list it carries. An uninterpretable body is
+    not a claim of success either (see :func:`_is_claimed_success`), so the call is
+    never reported as one.
     """
 
     if isinstance(body, list):
         return len(body)
-    if isinstance(body, dict):
-        failures = body.get("failures")
-        count = body.get("failureCount")
-        if isinstance(count, int) and not isinstance(count, bool):
-            if count == 0 and failures in (None, []):
-                return 0
-            return count if count > 0 else len(failures or [])
+    if not isinstance(body, dict):
         return None
-    return None
+    count = body.get("failureCount")
+    failures = body.get("failures")
+    successes = body.get("successCount")
+    if not _is_count(count) or (successes is not None and not _is_count(successes)):
+        return None
+    if failures is not None:
+        if not isinstance(failures, list) or count != len(failures):
+            return None
+    return count
 
 
 def _reported_successes(body: Any) -> int:
+    """How many successes a 2xx response reports, 0 when it reports none readably."""
+
     count = body.get("successCount") if isinstance(body, dict) else None
-    return count if isinstance(count, int) and not isinstance(count, bool) else 0
+    return count if _is_count(count) else 0
 
 
 def _is_collision(body: Any) -> bool:

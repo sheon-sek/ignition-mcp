@@ -144,12 +144,14 @@ IMPORT_QUERY_RE = re.compile(r"^ignition/named-query/.+/query\.sql$")
 IMPORT_MARKER_PREFIX = "mcp-p4-import"
 
 #: The Tag import cases (#17): the provider ``provision.py`` creates, the path its
-#: source Tags are provisioned at, the destination the Target allowlist names, and a
-#: second destination it deliberately does not.
+#: source Tags are provisioned at, the destination the Target allowlist names (as a
+#: *prefix*, D30 §1), a second destination it deliberately does not, and the provider
+#: D30 §1 reserves for the Runtime Target Policy.
 DEFAULT_TAG_PROVIDER = "MCP_CI_TAGS"
 DEFAULT_TAG_SOURCE_PATH = "source"
 DEFAULT_TAG_TARGET_PATH = "target"
 DEFAULT_TAG_CONTROL_PATH = "target_not_allowed"
+DEFAULT_RESERVED_TAG_PROVIDER = "IgnitionMCPPolicy"
 
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
@@ -464,6 +466,9 @@ async def project_import_cases(
                body.get("baselineFingerprint"))
         _check(cases, "project-import-verifies-its-own-candidate", body.get("candidateFingerprint"),
                body.get("resultFingerprint"))
+        # importDispatched answers "did an import request leave the server", not "did the
+        # Gateway acknowledge it": a commit (confirmed or recovered) reports true, and only
+        # a call that sent nothing — here the no-op below — reports false.
         _check(cases, "project-import-reports-the-dispatch", True, body.get("importDispatched"))
 
         # Independent evidence: re-export the Project, fingerprint it here, and look for
@@ -581,13 +586,19 @@ async def tag_import_cases(
     source_path: str,
     target_path: str,
     control_path: str,
+    nested_path: str = "",
+    reserved_provider: str = DEFAULT_RESERVED_TAG_PROVIDER,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """The Tag config import cases (ticket #17).
 
     ``provision.py`` published the source Tags and the MCP Module published the export
     artifact, so the import's content is real Gateway state and the bytes it dispatched
-    are the bytes ``tag_config_export`` produced.
+    are the bytes ``tag_config_export`` produced. ``nested_path`` defaults to a path
+    below ``target_path``, which is the destination the Target allowlist authorizes as a
+    prefix (D30 §1).
     """
+
+    nested_path = nested_path or f"{target_path}/nested"
 
     cases: list[dict[str, Any]] = []
     observations: dict[str, Any] = {}
@@ -674,6 +685,37 @@ async def tag_import_cases(
         })
         _check(cases, "tag-import-invisible-artifact-is-not-found", "not_found",
                _envelope_code(invisible))
+
+        # D30 §1/D08: the allowlisted entry is a provider-qualified path *prefix*, so a
+        # destination below the path it names is authorized, and the Tags really land.
+        nested = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": source["artifact"]["artifactId"], "provider": provider,
+            "path": nested_path,
+        })
+        nested_body = nested.get("structuredContent") if not nested.get("isError") else None
+        observations["tagNestedResult"] = (
+            nested_body if isinstance(nested_body, dict) else error_envelope(nested)
+        )
+        _check(cases, "tag-import-under-the-allowlisted-prefix-applies", True,
+               isinstance(nested_body, dict))
+        nested_served = await _tag_names_at(agent, artifacts, agent_token, provider, nested_path)
+        observations["tagNestedNames"] = sorted(nested_served or ())
+        _check(cases, "tag-import-prefix-destination-serves-every-source-tag", True,
+               declared <= (nested_served or set()))
+
+        # D30 §1: the Runtime Target Policy's provider is reserved, whatever the Target
+        # allowlist says, so a Tag import addressed to it never reaches the Gateway.
+        reserved = await agent.call(TAG_IMPORT_TOOL, {
+            "artifactId": source["artifact"]["artifactId"], "provider": reserved_provider,
+            "path": target_path,
+        })
+        observations["tagReservedProviderResult"] = error_envelope(reserved)
+        _check(cases, "tag-import-reserved-policy-provider-is-permission-denied",
+               TARGET_DENIAL_CODE, _envelope_code(reserved))
+        _check(cases, "tag-import-reserved-policy-provider-says-which-rule",
+               True, "reserved Runtime Target Policy" in str(
+                   observations["tagReservedProviderResult"].get("message", "")
+               ))
     finally:
         await artifacts.aclose()
     return cases, observations
