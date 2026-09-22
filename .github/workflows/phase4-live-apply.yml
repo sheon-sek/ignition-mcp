@@ -132,7 +132,7 @@ jobs:
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
       - name: Start a fresh Gateway
-        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+        run: docker compose up -d --no-build
 
       - name: Wait for initial Gateway commissioning
         shell: bash
@@ -140,7 +140,7 @@ jobs:
           set -euo pipefail
           deadline=$((SECONDS + 480))
           while (( SECONDS < deadline )); do
-            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            docker compose logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
             if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
               tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
               exit 1
@@ -167,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          cid="$(docker compose ps -q gateway)"
           rm -rf artifacts/security-bootstrap
           mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
           docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
@@ -185,10 +185,10 @@ jobs:
           # milestone 4a/4b rows do. Nothing else is installed: this stage writes the
           # bundle Project and the Server Config itself.
           set -euo pipefail
-          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          cid="$(docker compose ps -q gateway)"
           data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
           docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
-          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+          docker compose stop -t 30 gateway
 
           docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
           docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
@@ -199,7 +199,7 @@ jobs:
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
               /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
-          docker compose -f "$COMPOSE_FILE" start gateway
+          docker compose start gateway
 
       - name: Wait for the authenticated Native REST plane
         shell: bash
@@ -217,7 +217,7 @@ jobs:
             sleep 3
           done
           echo "the authenticated Native REST plane never became ready" >&2
-          docker compose -f "$COMPOSE_FILE" logs --no-color gateway | tail -n 200 >&2
+          docker compose logs --no-color gateway | tail -n 200 >&2
           exit 1
 
       - name: Install the MCP Module with setup-native (ticket #56)
@@ -320,8 +320,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p "$EVIDENCE_DIR"
-          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
-          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+          docker compose ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
           docker image inspect "$GATEWAY_IMAGE" > "$EVIDENCE_DIR/gateway-image-inspect.json" 2>&1 || true
           sha256sum "$MODULE_FILE" > "$EVIDENCE_DIR/mcp-module.sha256" 2>&1 || true
 
@@ -337,4 +337,4 @@ jobs:
       - name: Destroy the disposable Gateway
         if: always()
         shell: bash
-        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+        run: docker compose down -v --remove-orphans || true
