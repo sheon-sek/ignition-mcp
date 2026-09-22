@@ -17,16 +17,6 @@ Only recorded state crosses the boundary (``system.tag.*``, ``system.config.*``,
 (``system.util.jsonDecode``, ``jsonEncode``, ``getLogger``) are real
 implementations in this process.
 
-A recorded value may also carry a ``nativeType`` marker for a shape JSON cannot
-express, so a fixture can replay what a handler distinguishes by duck typing:
-``{"nativeType": "Dataset", "columns": [...], "rows": [[...]]}`` becomes the
-Dataset-like object whose ``getColumnCount``/``getColumnName``/``getRowCount``/
-``getValueAt`` a handler reads, ``{"nativeType": "JavaArray", "items": [...]}``
-becomes an ``Object[]`` (which Jython hands a handler as an ``array.array``), and
-``{"nativeType": "JythonLong"|"BigInteger"|"BigDecimal", "text": "..."}`` becomes the
-interpreter's own ``long`` or the Java number, whose decimal text is not the JSON
-number a fixture would otherwise carry.
-
 A fixture may also inject a failure of one of those real helpers so a handler's
 failure path is reachable from a recording:
 
@@ -35,6 +25,31 @@ failure path is reachable from a recording:
 ``onCall`` counts that helper's calls in the handler, 1-based. It exists because a
 handler's own serialization step can only be exercised if it can be made to fail,
 and the handler's outcome reporting must not depend on it.
+
+A recorded *value* may also name an explicit native shape, which is how a fixture
+replays a shape JSON cannot express on its own. ``nativeType`` is reserved for
+that, and ``_recorded_value`` decodes it recursively:
+
+    {"nativeType": "Dataset", "columns": [...], "rows": [[...]]}
+    {"nativeType": "big-integer" | "java-big-decimal", "digits": 20000}
+    {"nativeType": "JythonLong" | "BigInteger" | "BigDecimal", "text": "..."}
+    {"nativeType": "iteritems-object", "entries": [[key, value], ...]}
+    {"nativeType": "java-array" | "JavaArray", "items": [...]}
+    {"nativeType": "native-object", "class": "com.example.Native", "text": "...",
+     "repeat": 4}
+    {"nativeType": "TagPath", "text": "[default]a/b", "type": "native-object"}
+
+``repeat`` multiplies a recorded rendering, so a fixture that bounds a long text
+stays readable. Every other JSON object and array becomes the Jython dict or list
+the Gateway would return.
+
+The vocabulary is the union of the two Runtime lanes' recordings, so either
+lane's fixtures run in the merged tree: ``JavaArray``, ``JythonLong``,
+``BigInteger`` and ``BigDecimal`` are the `tag_write` fix's names for the same
+recorded shapes this lane records as ``java-array``, ``big-integer`` and
+``java-big-decimal`` (``big-integer`` is the interpreter's own ``long``, which is
+what Jython really hands a handler for a Java integer; ``JythonLong`` and
+``BigInteger`` record that number's text as a ``long`` or as the Java number).
 """
 
 from __future__ import print_function
@@ -43,8 +58,8 @@ import json
 import sys
 
 from java.lang import Object, RuntimeException
-from java.lang.reflect import Array
 from java.math import BigDecimal, BigInteger
+from java.lang.reflect import Array as ReflectionArray
 from java.util import ArrayList, LinkedHashMap
 
 
@@ -110,60 +125,6 @@ class _QualifiedValue(object):
         return self.timestamp
 
 
-def _recorded_value(recorded):
-    """A recorded Tag value: JSON scalars and arrays as they are, plus the native
-    shapes a handler distinguishes by duck typing. A ``nativeType`` marker turns a
-    recorded mapping into the Java-like object the handler sees, so a fixture can
-    replay a value shape JSON cannot express (a Dataset, a Java array) or a Java
-    number whose text is not the JSON number a fixture would otherwise carry."""
-
-    if isinstance(recorded, dict):
-        marker = recorded.get("nativeType")
-        if marker == "Dataset":
-            return _RecordedDataset(recorded)
-        if marker == "JavaArray":
-            return _recorded_java_array(recorded)
-        if marker == "JythonLong":
-            return long(recorded["text"].encode("ascii"))  # noqa: F821 - Jython 2.7 built-in
-        if marker == "BigInteger":
-            return BigInteger(recorded["text"].encode("ascii"))
-        if marker == "BigDecimal":
-            return BigDecimal(recorded["text"].encode("ascii"))
-    return recorded
-
-
-def _recorded_java_array(recorded):
-    """A recorded Java array: an ``Object[]``, which Jython hands a handler as an
-    ``array.array``, so this replays the shape a Gateway returns for an array Tag
-    value. JSON has no array type of its own, so a fixture names it explicitly."""
-
-    items = recorded.get("items") or []
-    native = Array.newInstance(Object, len(items))
-    for index in range(len(items)):
-        native[index] = _recorded_value(items[index])
-    return native
-
-
-class _RecordedDataset(object):
-    """A recorded Dataset: the handler reads columns and cells through the API."""
-
-    def __init__(self, recorded):
-        self.columns = list(recorded.get("columns") or [])
-        self.rows = [list(row) for row in (recorded.get("rows") or [])]
-
-    def getColumnCount(self):
-        return len(self.columns)
-
-    def getColumnName(self, index):
-        return self.columns[index]
-
-    def getRowCount(self):
-        return len(self.rows)
-
-    def getValueAt(self, row, column):
-        return self.rows[row][column]
-
-
 class _RecordedTagPath(object):
     def __init__(self, recorded):
         self.nativeType = recorded["nativeType"]
@@ -190,6 +151,153 @@ class _RecordedResults(ArrayList):
                     value = _RecordedTagPath(value)
                 native.put(key, value)
             self.add(native)
+
+
+class _RecordedDataset(object):
+    """A recorded Dataset: the handler reads columns and cells through the API."""
+
+    def __init__(self, recorded):
+        self.columns = list(recorded.get("columns") or [])
+        self.rows = [list(row) for row in (recorded.get("rows") or [])]
+
+    def getColumnCount(self):
+        return len(self.columns)
+
+    def getColumnName(self, index):
+        return self.columns[index]
+
+    def getRowCount(self):
+        return len(self.rows)
+
+    def getValueAt(self, row, column):
+        return self.rows[row][column]
+
+    def __unicode__(self):
+        # A real Dataset renders its column names and cells when it is printed, so the
+        # recorded one does too: a handler that publishes a Dataset as text has to be
+        # measured against that rendering, not against a Python object's address.
+        return unicode(self.columns) + unicode(self.rows)  # noqa: F821 - Jython 2.7 built-in
+
+    def __str__(self):
+        return self.__unicode__().encode("utf-8")
+
+
+class _RecordedClass(object):
+    """The `getClass()` answer of a recorded native object."""
+
+    def __init__(self, name):
+        self.name = name
+
+    def getName(self):
+        return self.name
+
+    def isArray(self):
+        return False
+
+
+class _RecordedNativeObject(object):
+    """A recorded native object that offers no container interface.
+
+    ``jsonValue`` publishes such an object as its class and its own text, so a
+    fixture records what that text should be; ``repeat`` keeps a deliberately long
+    rendering readable in the fixture file.
+    """
+
+    def __init__(self, recorded):
+        self.className = recorded.get("class", "com.inductiveautomation.ignition.common.RecordedNativeObject")
+        self.text = recorded.get("text", "") * recorded.get("repeat", 1)
+
+    def getClass(self):
+        return _RecordedClass(self.className)
+
+    def __unicode__(self):
+        return unicode(self.text)  # noqa: F821 - Jython 2.7 built-in
+
+    def __str__(self):
+        return self.text.encode("utf-8")
+
+
+class _RecordedIteritems(object):
+    """A recorded native object whose only mapping interface is ``iteritems``.
+
+    It is neither a `dict` nor a `java.util.Map`, so it exercises the branch order
+    a handler's conversion uses for such an object.
+    """
+
+    def __init__(self, entries):
+        self.entries = entries
+
+    def iteritems(self):
+        return self.entries
+
+
+def _recorded_value(value):
+    """Decode one recorded value into the native shape it models.
+
+    A JSON object carrying a ``nativeType`` marker builds that explicit shape;
+    ``nativeType`` is therefore reserved in recorded values. Every other JSON
+    container becomes the Jython dict or list the Gateway would hand back, and an
+    unknown marker fails the run rather than silently replaying a plain dict.
+
+    Every name either lane records decodes here, so no lane's fixture can fail in
+    the merged tree: ``JavaArray``/``JythonLong``/``BigInteger``/``BigDecimal`` are
+    the `tag_write` fix's names, ``java-array``/``big-integer``/``java-big-decimal``
+    this lane's, and each name keeps the shape its own lane's recordings carry.
+
+    A mapping is copied with its children decoded, not regex-replaced, and any other
+    JSON object -- one whose ``nativeType`` is not a string, say -- is returned
+    unchanged, so no recorded mapping is rewritten into a shape a fixture did not
+    ask for. No recorded marker builds a Jython dict that carries ``$ignition``:
+    that key is reserved for the D28 forms, and a test that needs a reserved-key
+    mapping builds it from the handler's own published candidate.
+    """
+    if isinstance(value, dict):
+        marker = value.get("nativeType")
+        if marker == "Dataset":
+            return _RecordedDataset(value)
+        if marker == "big-integer":
+            # A Jython long with `digits` decimal digits: a handler has to count its
+            # digits rather than copy its text.
+            return long("1" * int(value["digits"]))  # noqa: F821 - Jython 2.7 built-in
+        if marker == "JythonLong":
+            # The #7 lane's name for that same interpreter long, recorded as its text.
+            return long(value["text"].encode("ascii"))  # noqa: F821 - Jython 2.7 built-in
+        if marker == "java-big-decimal":
+            return BigDecimal("1" * int(value["digits"]) + ".5")
+        if marker == "BigInteger":
+            # The #7 lane's recorded Java number: its decimal text is not the JSON
+            # number a fixture would otherwise carry.
+            return BigInteger(value["text"].encode("ascii"))
+        if marker == "BigDecimal":
+            return BigDecimal(value["text"].encode("ascii"))
+        if marker == "TagPath":
+            return _RecordedTagPath(value)
+        if marker == "iteritems-object":
+            return _RecordedIteritems([(key, _recorded_value(child)) for key, child in value["entries"]])
+        if marker in ("java-array", "JavaArray"):
+            # One builder for both names, so the two lanes cannot drift apart.
+            return _recorded_java_array(value)
+        if marker == "native-object":
+            return _RecordedNativeObject(value)
+        if marker is None:
+            return dict((key, _recorded_value(child)) for key, child in value.items())
+        raise _RecordedError("unsupported recorded native value: " + str(marker))
+    if isinstance(value, list):
+        return [_recorded_value(child) for child in value]
+    return value
+
+
+def _recorded_java_array(recorded):
+    """A recorded Java array: an ``Object[]`` whose elements are decoded too.
+
+    Jython hands a handler a Java array as an ``array.array``-typed PyArray, so this
+    replays the shape a Gateway returns for an array Tag value.
+    """
+    items = [_recorded_value(child) for child in recorded.get("items") or []]
+    array = ReflectionArray.newInstance(Object, len(items))
+    for index in range(len(items)):
+        array[index] = items[index]
+    return array
 
 
 class _QualifiedValues(ArrayList):
@@ -219,7 +327,7 @@ class _Configurations(ArrayList):
         for item in recorded["items"]:
             native = LinkedHashMap()
             for key, value in item.items():
-                native.put(key, value)
+                native.put(key, _recorded_value(value))
             self.add(native)
 
 

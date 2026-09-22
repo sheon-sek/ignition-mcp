@@ -11,6 +11,7 @@ produced and in which order the checks ran.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -47,6 +48,19 @@ def _problem_reasons(error: dict) -> list[tuple[str, str]]:
 
 def _statuses(structured: dict) -> list[tuple[str, str]]:
     return [(item["path"], item["status"]) for item in structured["items"]]
+
+
+def _assert_reduction_advice(error: dict, instruction: str) -> None:
+    """D10: an over-budget refusal states the requested amount, the applicable
+    limit, and how to split or reduce the request. The last part is a stable
+    `advice` detail field and the same sentence in the message."""
+    advice = error["details"]["advice"]
+
+    assert isinstance(advice, str) and advice
+    assert instruction in advice.lower()
+    assert advice in error["message"]
+    assert str(error["details"]["requested"]) in error["message"]
+    assert str(error["details"]["limit"]) in error["message"]
 
 
 WRITE = "[default]IgnitionMCP_CI/WriteTarget"
@@ -345,7 +359,10 @@ def test_every_item_shape_refusal_is_reported_in_one_batch() -> None:
 def test_the_item_hard_ceiling_reports_what_it_refused() -> None:
     error = _error("items-over-hard-limit", "limit_exceeded")
 
-    assert error["details"] == {"reason": "itemsOverHardLimit", "requested": 101, "limit": 100}
+    assert error["details"]["reason"] == "itemsOverHardLimit"
+    assert error["details"]["requested"] == 101
+    assert error["details"]["limit"] == 100
+    _assert_reduction_advice(error, "split")
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_update-*.json"))
@@ -433,11 +450,10 @@ def test_the_batch_default_is_twenty_and_a_deployment_may_raise_it_within_the_ca
     to the 100-target hard ceiling through the Runtime Target Policy."""
     error = _error("over-policy-limit", "limit_exceeded")
 
-    assert error["details"] == {
-        "reason": "itemsOverPolicyLimit",
-        "requested": 21,
-        "limit": 20,
-    }
+    assert error["details"]["reason"] == "itemsOverPolicyLimit"
+    assert error["details"]["requested"] == 21
+    assert error["details"]["limit"] == 20
+    _assert_reduction_advice(error, "split")
     # The same 21 targets run when the document raises the limit to 25, so the
     # refusal above is the deployment default and not a hidden hard cap.
     structured = _structured("policy-raises-item-limit")
@@ -456,8 +472,12 @@ def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> Non
 
     assert error["details"]["reason"] == "pathOverLength"
     assert error["details"]["index"] == 0
-    assert error["details"]["requested"] == 2053
+    # The recorded path is 2053 bytes; the count stops one byte past the 2048-byte
+    # ceiling, so the reported amount is a lower bound and the error says so.
+    assert error["details"]["requested"] == 2049
     assert error["details"]["limit"] == 2048
+    assert "counted only up to that ceiling" in error["message"]
+    _assert_reduction_advice(error, "shorten the target path")
 
 
 def test_a_configuration_string_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
@@ -467,6 +487,7 @@ def test_a_configuration_string_over_the_byte_ceiling_is_refused_before_any_nati
     assert error["details"]["index"] == 0
     assert error["details"]["requested"] == 16385
     assert error["details"]["limit"] == 16384
+    _assert_reduction_advice(error, "shorten the string value")
 
 
 def test_a_configuration_array_over_the_element_ceiling_is_refused_before_any_native_call() -> None:
@@ -475,6 +496,7 @@ def test_a_configuration_array_over_the_element_ceiling_is_refused_before_any_na
     assert error["details"]["reason"] == "configArrayOverLimit"
     assert error["details"]["requested"] == 1001
     assert error["details"]["limit"] == 1000
+    _assert_reduction_advice(error, "prune")
 
 
 def test_a_configuration_deeper_than_the_depth_ceiling_is_refused_before_any_native_call() -> None:
@@ -483,6 +505,7 @@ def test_a_configuration_deeper_than_the_depth_ceiling_is_refused_before_any_nat
     assert error["details"]["reason"] == "configOverDepth"
     assert error["details"]["requested"] == 9
     assert error["details"]["limit"] == 8
+    _assert_reduction_advice(error, "flatten")
 
 
 def test_a_configuration_over_its_byte_budget_is_refused_before_any_native_call() -> None:
@@ -491,6 +514,7 @@ def test_a_configuration_over_its_byte_budget_is_refused_before_any_native_call(
     assert error["details"]["reason"] == "configOverByteBudget"
     assert error["details"]["limit"] == 32768
     assert error["details"]["requested"] > error["details"]["limit"]
+    _assert_reduction_advice(error, "split")
 
 
 def test_the_aggregate_input_byte_budget_is_finite() -> None:
@@ -501,6 +525,11 @@ def test_the_aggregate_input_byte_budget_is_finite() -> None:
     assert error["details"]["reason"] == "inputOverByteBudget"
     assert error["details"]["limit"] == 65536
     assert error["details"]["requested"] > error["details"]["limit"]
+    # The six items of the batch are worth 72714 bytes between them, but the refusal
+    # counts only up to the aggregate budget and stops there, so the reported amount
+    # sits just past the ceiling instead of being the whole batch rescan.
+    assert error["details"]["requested"] - error["details"]["limit"] < 4096
+    _assert_reduction_advice(error, "split the batch")
 
 
 def test_a_denied_target_is_audited_as_a_decision_and_dispatches_no_change() -> None:
@@ -567,7 +596,10 @@ def test_an_observed_configuration_over_its_budget_does_not_decide_the_item_outc
     observed = structured["observed"][0]
     assert observed["status"] == "error"
     assert observed["error"]["code"] == "limit_exceeded"
-    assert "16384" in observed["error"]["message"]
+    # D10: the refusal states the requested size, the 16384-byte limit and the
+    # reduction advice, and the item's own Native outcome stays above it.
+    assert "over the 16384-byte Observed-state budget" in observed["error"]["message"]
+    assert "tag_get_config" in observed["error"]["message"]
 
 
 def test_the_observed_state_budget_marks_only_the_configurations_it_cannot_return() -> None:
@@ -579,6 +611,11 @@ def test_the_observed_state_budget_marks_only_the_configurations_it_cannot_retur
     assert statuses[:6] == ["ok"] * 6
     assert statuses[6:] == ["error"] * 3
     assert structured["observed"][6]["error"]["code"] == "limit_exceeded"
+    # Every Observed budget error states the requested amount, the limit and the
+    # reduction advice, so a caller knows which call to make next.
+    for entry in structured["observed"][6:]:
+        assert "65536-byte Observed-state budget" in entry["error"]["message"]
+        assert "tag_get_config" in entry["error"]["message"]
 
 
 def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
@@ -594,6 +631,172 @@ def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
     assert "serializ" in structured["observed"][0]["error"]["message"]
 
 
+def test_a_folder_named_types_below_the_provider_is_an_ordinary_target() -> None:
+    """D30 6 names `[provider]_types_/...`: only the first post-provider segment
+    selects the definition namespace, so a folder that happens to be called
+    `_types_` deeper in the path is an ordinary Tag target and needs no explicit
+    `_types_` allowlist entry."""
+    assert _recorded_targets("nested-folder-types-target") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.tag.exists",
+        "system.tag.getConfiguration",
+        "system.util.audit",
+        "system.tag.configure",
+        "system.util.audit",
+        "system.tag.getConfiguration",
+    ]
+    structured = _structured("nested-folder-types-target")
+
+    assert _statuses(structured) == [("[default]IgnitionMCP_CI/_types_/FolderTarget", "executed")]
+    assert structured["summary"]["succeeded"] == 1
+
+
+def test_the_observed_read_back_is_walked_before_it_is_converted() -> None:
+    """D10: the raw native read-back is bounded in depth and bytes before any
+    conversion, so a deeply nested configuration is an explicit per-item Observed
+    `limit_exceeded` and never a recursion, an exhaustion or an `upstream_error`
+    that would replace the item's completed Native outcome."""
+    structured = _structured("observed-configuration-over-depth")
+
+    assert _statuses(structured) == [(WRITE, "executed")]
+    assert structured["items"][0]["nativeOutcome"]["good"] is True
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "33 levels deep" in observed["error"]["message"]
+    assert "32-level Observed-state depth budget" in observed["error"]["message"]
+    assert "tag_get_config" in observed["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    ("name", "fragment"),
+    [
+        ("observed-configuration-iteritems-over-depth", "33 levels deep"),
+        ("observed-configuration-java-array-over-depth", "33 levels deep"),
+        ("observed-configuration-java-array-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-native-object-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-dataset-column-name-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-dataset-deep-cell", "33 levels deep"),
+        ("observed-configuration-wide-empty-strings", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-big-integer-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-java-big-decimal-over-budget", "over the 16384-byte Observed-state budget"),
+    ],
+)
+def test_every_shape_the_observed_read_back_takes_is_bounded_before_conversion(name: str, fragment: str) -> None:
+    """D10: the Observed read-back is one walk that both measures and converts, so
+    every shape a Gateway value reaches a Jython handler as is charged what it
+    actually publishes: a `dict`, an object that only offers `iteritems`, a
+    `java.util.Map`, a list, an enum, a Java array that exposes `getClass`, the
+    `array.array`-typed PyArray a Java array really arrives as, a native object
+    with no container interface, a Dataset whose column names and cells are counted
+    before its text is rendered, a collection wide enough that only its per-member
+    punctuation bounds it, and an integer or decimal wide enough that only its
+    emitted digits bound it. A shape that used to be charged 64 bytes as an opaque
+    scalar is now refused as an explicit per-item Observed `limit_exceeded`
+    stating the requested amount, the ceiling and the reduction advice -- never a
+    conversion, a recursion or an exhaustion that would replace the item's
+    completed Native outcome."""
+    structured = _structured(name)
+
+    assert _statuses(structured) == [(WRITE, "executed")]
+    assert structured["items"][0]["nativeOutcome"]["good"] is True
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert fragment in observed["error"]["message"]
+    assert "tag_get_config" in observed["error"]["message"]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "observed-configuration-java-array-over-budget",
+        "observed-configuration-native-object-over-budget",
+        "observed-configuration-wide-empty-strings",
+        "observed-configuration-big-integer-over-budget",
+        "observed-configuration-java-big-decimal-over-budget",
+    ],
+)
+def test_an_over_budget_observed_shape_states_the_amount_it_refused(name: str) -> None:
+    message = _structured(name)["observed"][0]["error"]["message"]
+
+    requested = int(re.search(r"is at least (\d+) bytes, over the 16384-byte", message).group(1))
+    assert requested > 16384
+
+
+def test_a_native_shape_inside_the_budget_is_published_exactly_as_it_was() -> None:
+    """The bound may not change what a legal read-back publishes: an `iteritems`
+    object still converts to an object, a Java array still publishes the
+    native-object text the conversion produced for it before the bound existed, and
+    a native object still publishes its class and its own text -- which is what
+    keeps this Tool's Observed fingerprint identical to the one tag_get_config
+    publishes for the same Tag."""
+    structured = _structured("observed-configuration-native-shapes-within-budget")
+
+    assert _statuses(structured) == [(WRITE, "executed")]
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+
+    assert observed["status"] == "ok"
+    assert observed["fingerprint"].startswith("tcf1:")
+    properties = observed["configuration"][0]["properties"]
+    assert properties["folders"] == {"level01": {"leaf": "done"}}
+    assert properties["valueSource"]["type"] == "native-object"
+    assert "java.lang.Object" in properties["valueSource"]["text"]
+    assert properties["path"]["class"] == "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath"
+    assert properties["path"]["text"] == "[default]IgnitionMCP_CI/WriteTarget"
+
+
+def _native_outcome(name: str) -> dict:
+    return _structured(name)["items"][0]["nativeOutcome"]
+
+
+def test_an_over_ceiling_quality_name_is_omitted_not_truncated() -> None:
+    """D10: a truncated identifier asserts one the provider never reported, so an
+    over-ceiling `name` is omitted with the size that was counted while `code` and
+    `good` stay exact and still identify the outcome."""
+    structured = _structured("native-outcome-oversize-name")
+    quality = structured["items"][0]["nativeOutcome"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["failed"] == 1
+    assert quality["code"] == 260
+    assert quality["good"] is False
+    assert quality["name"] == {"$ignition": "null"}
+    assert quality["nameOverLimitBytes"] == 200
+    assert quality["level"] == "Bad"
+    # A marker is present exactly when its text was bounded.
+    assert "nameOverLimitBytes" not in json.dumps(_structured("allowlisted"))
+
+
+def test_an_over_ceiling_quality_level_is_omitted_not_truncated() -> None:
+    quality = _native_outcome("native-outcome-oversize-level")
+
+    assert quality["code"] == 260
+    assert quality["name"] == "Bad_NotFound"
+    assert quality["level"] == {"$ignition": "null"}
+    assert quality["levelOverLimitBytes"] == 200
+
+
+def test_an_over_ceiling_quality_diagnostic_keeps_a_marked_bounded_prefix() -> None:
+    """The free-text diagnostic is the one QualityCode text that may be shortened,
+    because it is provider prose rather than an identifier; it keeps a bounded
+    prefix and is marked, so the shortening is never silent."""
+    recorded = json.loads(_fixture("native-outcome-oversize-diagnostic").read_text(encoding="utf-8"))
+    diagnostic = recorded["calls"][5]["result"]["items"][0]["diagnosticMessage"]
+    assert len(diagnostic) == 1000
+
+    quality = _native_outcome("native-outcome-oversize-diagnostic")
+
+    assert quality["name"] == "Bad"
+    assert quality["diagnosticMessage"] == diagnostic[:512]
+    assert quality["diagnosticMessageOverLimitBytes"] == 1000
+
+
 def test_the_contract_declares_the_d10_input_bounds() -> None:
     contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
 
@@ -601,4 +804,15 @@ def test_the_contract_declares_the_d10_input_bounds() -> None:
     assert contract["inputBounds"]["hardItems"] == 100
     assert contract["inputBounds"]["hardItemsPolicyField"] == "tagUpdateMaxItems"
     assert contract["inputBounds"]["maxInputBytes"] == 65536
+    assert contract["inputBounds"]["observedConfigurationMaxBytes"] == 16384
+    assert contract["inputBounds"]["observedConfigurationMaxDepth"] == 32
+    assert contract["inputBounds"]["observedStateMaxBytes"] == 65536
     assert contract["inputBounds"]["outputMaxBytes"] == 262144
+    assert contract["inputBounds"]["overBudgetDetails"] == ["requested", "limit", "advice"]
+    assert contract["inputBounds"]["qualityNameMaxBytes"] == 128
+    assert contract["inputBounds"]["qualityLevelMaxBytes"] == 128
+    assert contract["inputBounds"]["qualityDiagnosticMaxBytes"] == 512
+    assert contract["inputBounds"]["qualityTextCountBytes"] == 8192
+    assert contract["inputBounds"]["qualityNameOverLimitField"] == "nameOverLimitBytes"
+    assert contract["inputBounds"]["qualityLevelOverLimitField"] == "levelOverLimitBytes"
+    assert contract["inputBounds"]["qualityDiagnosticOverLimitField"] == "diagnosticMessageOverLimitBytes"

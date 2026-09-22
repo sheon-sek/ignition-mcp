@@ -76,10 +76,15 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		return True
 
 	def isUdtDefinitionPath(value):
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# path, and reading it recursively stays an ordinary read.
 		closing = value.find("]")
 		if closing <= 0:
 			return False
-		return UDT_NAMESPACE in [segment for segment in value[closing + 1:].split("/") if segment]
+		segments = [segment for segment in value[closing + 1:].split("/") if segment]
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
 
 	# D30 2: the Tag config fingerprint. Repo-defined, versioned `tcf1` and
 	# deterministic: SHA-256 over the canonical JSON text of the D28-encoded

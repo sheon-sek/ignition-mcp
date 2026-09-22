@@ -49,6 +49,23 @@ Matching rules:
   JSON number a fixture would otherwise carry.
 - `system.util.jsonEncode`, `jsonDecode` and `getLogger` are real implementations in the
   Jython process; only Gateway state is recorded.
+- A recorded *value* may name an explicit native shape with a reserved `nativeType` key,
+  which is how a fixture replays a shape JSON cannot express: `Dataset`
+  (`{"columns": [...], "rows": [[...]]}`, the object whose
+  `getColumnCount`/`getColumnName`/`getRowCount`/`getValueAt` a handler reads), `TagPath`,
+  `iteritems-object`
+  (`{"entries": [[key, value], ...]}`, an object whose only mapping interface is
+  `iteritems`), `java-array` (`{"items": [...]}`, a real Java array), `native-object`
+  (`{"class": ..., "text": ..., "repeat": ...}`, a native object with no container
+  interface; `repeat` multiplies the text), and the numbers whose decimal text is not the
+  JSON number a fixture would carry: `big-integer` / `java-big-decimal`
+  (`{"digits": 20000}`, this lane's readable form) and `JythonLong` / `BigInteger` /
+  `BigDecimal` (`{"text": "..."}`, the `tag_write` fix's form). Decoding is recursive, and
+  every other JSON object or array becomes the Jython dict or list the Gateway would
+  return. The vocabulary is the **union** of both Runtime lanes' recordings --
+  `JavaArray` is the `java-array` builder, `JythonLong` the interpreter `long` whose text
+  it records, and `BigInteger`/`BigDecimal` the Java numbers -- so each lane's fixtures run
+  in the merged tree.
 
 `run_recorded_tool(tool, fixture)` requires a successful result and validates
 `structuredContent` against the contract's `outputSchema`.
