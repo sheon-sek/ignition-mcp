@@ -23,29 +23,7 @@ NON_D27_DIR = "g2-8.3.9-mcp-2026021307"
 G3_D27_DIR = "g3-8.3.8-mcp-2026021307"
 G3_NON_D27_DIR = "g3-8.3.9-mcp-2026021307"
 G4_DIRS = ("g4-8.3.8-mcp-2026021307", "g4-8.3.9-mcp-2026021307")
-#: The G6 rows (ticket #56) are composed from the live run's artifacts after it goes
-#: green, so this pin accepts the gate the moment its rows land without waiting for
-#: that commit: with the rows present the expected gate set gains G6, and the row
-#: count grows by two. The rules themselves accept G6 either way.
 G6_DIRS = ("g6-8.3.8-mcp-2026021307", "g6-8.3.9-mcp-2026021307")
-
-
-def _expected_gates() -> set[str]:
-    gates = {"G0", "G1", "G2", "G3", "G4", "G5"}
-    if all((REPO_EVIDENCE / directory / "evidence.json").is_file() for directory in G6_DIRS):
-        gates.add("G6")
-    return gates
-
-
-def _expected_rows() -> int:
-    return len(_expected_gates()) + 4  # two Gateway tuples per D27-tuple gate
-
-
-def _committed_g6_rows() -> list:  # type: ignore[no-untyped-def]
-    if not all((REPO_EVIDENCE / directory / "evidence.json").is_file() for directory in G6_DIRS):
-        return []
-    rows = load_evidence(REPO_EVIDENCE)
-    return [row for row in rows if row.gate == "G6"]
 
 
 def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
@@ -61,8 +39,15 @@ def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
 class EvidenceTest(unittest.TestCase):
     def test_repository_evidence_passes_readonly(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual({row.gate for row in rows}, _expected_gates())
-        self.assertEqual(len(rows), _expected_rows())
+        # G0 (1 row), G1 (1), and two Gateway tuples per gate from G2 on: 12 rows now
+        # that the G6 rows (ticket #56) are committed.
+        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4", "G5", "G6"})
+        self.assertEqual(len(rows), 12)
+        for directory in G6_DIRS:
+            g6 = next(row for row in rows if row.directory == directory)
+            self.assertEqual(g6.gate, "G6")
+            self.assertEqual(g6.compatibility_status, "UNTESTED")
+            self.assertEqual(g6.d27_exception_applied, g6.is_d27_tuple)
         d27 = next(row for row in rows if row.directory == D27_DIR)
         self.assertTrue(d27.is_d27_tuple and d27.d27_exception_applied)
         g3_d27 = next(row for row in rows if row.directory == G3_D27_DIR)

@@ -178,11 +178,13 @@ def test_generate_g6_writes_a_row_the_evidence_tree_accepts(tmp_path: Path) -> N
     g6 = [row for row in rows if row.gate == "G6"]
     assert len(g6) == 1
     assert g6[0].is_d27_tuple
-    # The committed tree with the new row still validates as a whole.
+    # The committed tree with the generated row still validates as a whole. The
+    # repository tree now already holds both G6 rows, so the generated row replaces
+    # its own copy there instead of colliding with it.
     with_committed = tmp_path / "with-committed"
     with_committed.mkdir()
     shutil.copytree(ROOT / "tests/compatibility/evidence", with_committed / "evidence")
-    shutil.copytree(directory, with_committed / "evidence" / directory.name)
+    shutil.copytree(directory, with_committed / "evidence" / directory.name, dirs_exist_ok=True)
     assert {row.gate for row in load_evidence(with_committed / "evidence")} == {
         "G0", "G1", "G2", "G3", "G4", "G5", "G6",
     }
