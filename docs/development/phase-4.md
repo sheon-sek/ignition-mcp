@@ -1040,7 +1040,107 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     rows** (attempt 2, same run id, artifacts re-read). Recorded rather than hidden; nothing
     in this ticket touches the Project-import path.
 
+### Ticket #36 — refuse the `IgnitionMCPPolicy` Tag-provider config resource by name (milestone 4c)
+
+- **Rule (D30 §5 and owner ruling 4, `reserved_provider_config_resource`).** The
+  `ignition/tag-provider` config resource named exactly `IgnitionMCPPolicy` — the provider
+  the Runtime Target Policy lives in (D30 §1, ticket #6) — is refused by
+  `config_resource_create`, `config_resource_update`, `config_resource_delete` and
+  `config_resource_rename` with `permission_denied`, **before** the Target allowlist is
+  consulted, so an explicit `*` and an entry naming the Target change nothing. It is a
+  refusal by *name inside an allowed type*, kept separate from D30 §5's Refused resource
+  types: `ignition/tag-provider` stays classified as allowed and every other Tag provider
+  stays manageable through the same Tools. The rule is decided from the Target's identity,
+  so a refused call reads nothing and dispatches nothing, and Preflight lists the item as
+  failed before anything executes (D30 §3). `config_resource_get` is untouched: the refusal
+  is Mutation-only, so the provider's configuration stays readable.
+- **Both names of a rename.** A rename changes its source and produces a resource at its
+  destination (D30 §3), so the rule covers both: renaming another provider *into* the
+  reserved name is refused as well as renaming the reserved provider *away*. The denial's
+  message and the audited reason name `ignition/tag-provider/IgnitionMCPPolicy`; the
+  Target the recorded `decision` row is attributed to is the call's first Target, which for
+  a refused destination is the source — the reason is what names the reserved resource, and
+  the contract says so.
+- **Exact name, and fail-closed on case.** The whole name is compared, never a substring,
+  so `IgnitionMCPPolicyStaging` is a different resource and stays manageable — the same
+  reading D30 §1 gives the reserved Tag provider, which matches its provider component and
+  not one of its characters. The comparison trims surrounding whitespace and folds case,
+  because Ignition documents no rule for how two config resource names compare and a name
+  that differs only in case could address the same resource: exactly the same fail-closed
+  choice `safety/reserved_tag_providers.py` already makes for the provider name. The live
+  harness records the measurement behind that choice (`provision.json` →
+  `policyProviders.caseFoldedLookup`: how a real Gateway answers a read of the reserved
+  name with its case folded), and it is recorded as an open question below.
+- **Code.** `safety/reserved_config_resources.py` holds the reserved identity
+  (`ignition/tag-provider` + `IgnitionMCPPolicy`), `reserved_config_resource` (the
+  whole-name lookup) and `reserved_config_resource_decision`, which returns the
+  `target-class` `permission_denied` denial with the reason
+  `reserved-config-resource:<resourceType>/<name>`. `services/config_mutation.py` builds
+  each Tool's Target-class rule from it: `_target_policy` / `_single_target_policy` for the
+  one-Target Tools, and `_multiple_target_policy` for the rename, which answers for *any*
+  of its names because the D08 chain evaluates an operation's Target-class rule once and
+  applies the verdict to every Target of the call. The Refused resource type is still
+  answered first (it is the stronger statement about the Target) and the two rules stay
+  two: a type rule and a name rule. `safety/executor.py`'s `_layer_message` gained the
+  branch that names the reserved resource in the caller's message.
+- **Fixture first.** `tests/harness/recorded_gateway.py` now records the Tag-provider
+  type's `PUT`, `DELETE` and rename routes (the capability snapshot withholds the Tool for
+  a type without them, so a refusal could never be reached), and its
+  `find/ignition/tag-provider/<name>` route serves seeded resources like any other type —
+  it keeps answering ticket #6's recorded provider document for the harness that
+  provisions the policy. `phase4_fixtures.py` seeds the three providers (the reserved one,
+  an ordinary one, and the longer look-alike). With the rule present but inert, the cases
+  failed exactly as the hole describes: the update **applied** (`enabled: false`, one
+  `PUT`), the delete **removed** the policy's provider, and both renames came back
+  `conflict` from the collision probe instead of the name rule.
+- **Tests.** `test_phase4_config_resource_update.py` (+6 cases, 36 total) covers the
+  refusal under `*` and under an entry naming the Target, the fail-closed folded name, the
+  accepted ordinary provider, the accepted look-alike, the still-readable reserved
+  resource, and one structural case pinning that the type stays allowed while only the name
+  is reserved. `test_phase4_config_resource_create_delete_rename.py` (+6 cases, 47 total)
+  covers the create refusal, the delete refusal (both allowlists), both rename directions,
+  an accepted rename inside the type, and a delete of the look-alike name. The contracts
+  declare `reservedResourceNames` per Tool — a block separate from `refusedResourceTypes`,
+  with the rename declaring both of its Target names — and `tooling/contracts/lint.py`
+  checks it exactly, including that the rule keeps saying "allowed type" and that
+  `ignition/tag-provider` stays in `shared/refused-resource-types.json`'s allowed list.
+  Five new linter drift cases pin those checks.
+- **Documentation.** The package README states the rule in the "Common rules for all four"
+  paragraph, the live harness README documents the new cases and why they live in the fault
+  mode, and `provision.py`'s docstring records the provider fixtures.
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **217/217 cases**
+  against the recorded Gateway (194 before this ticket; the 23 new ones are the
+  reserved-provider section, which runs after the `#20` fault cases and after ticket #35's
+  wire case, exactly as the brief requires, because the fault instance's tool budget makes
+  those timing-sensitive).
+- **The live form of the rule.** Live evidence is recorded in the ticket report
+  (`36-impl.md`) and cited here once the runs settle: the reserved-name cases live in
+  `--mode fault` after the `#20` cases, where the proxy's own record of the hop is what
+  proves a refused call sent the Gateway **no config-resource request at all**, while an
+  accepted call beside it shows exactly one `PUT`. Every one of those Targets — the
+  reserved one included — is in the deployment's Target allowlist, and one rename is aimed
+  at an *occupied* destination, so neither an allowlist denial nor the D11 collision could
+  be mistaken for the name rule.
+
 ## Open questions
+
+- **Ticket #36 — the reserved name is refused case-insensitively, and Ignition documents no
+  rule for it.** D30 owner ruling 4 names one resource, `ignition/tag-provider` +
+  `IgnitionMCPPolicy`, and says nothing about how Ignition compares two config resource
+  names. The ticket asked for the conservative reading, and that is what shipped: the name
+  is trimmed and case-folded before it is compared, so a resource named
+  `ignitionmcppolicy` is refused exactly like the reserved one. The cost of the choice is
+  bounded and fail-closed — a deployment that really holds a *different* resource whose
+  name differs only in case cannot manage it through `config_resource_*` (it can still be
+  read, and `setup-native`/Designer remain its paths) — whereas the other reading would
+  leave a case-folded name able to delete or reconfigure the policy's storage provider if
+  Ignition turns out to treat the two names as one. The live harness records the measurement
+  that would settle it in every run: `provision.json` → `policyProviders.caseFoldedLookup`
+  reads the reserved provider's name with its case folded through the Gateway's own REST
+  API and records the status (200 = this Gateway treats the two names as one resource, 404
+  = it does not). **For the owner:** if the recorded status is 404 on both supported
+  Gateway versions, the rule may be narrowed to an exact, case-sensitive comparison without
+  weakening D30 §1; the harness measurement is the evidence for that amendment.
 
 - **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
   evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
@@ -1244,13 +1344,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`reservedTagProviders`) and the linter require it for a Tool whose Target is a Tag path,
   and the live REST driver asserts the refusal and its message on every row. **Residual,
   recorded for the owner:** the rule covers Tag Mutations, which is what D30 §1 protects;
-  `config_resource_update`/`delete` can still change the `ignition/tag-provider` *resource*
-  because D30 §5 classifies that type as allowed. That is a different plane — the provider's
-  configuration, not the policy Tag — and it fails closed rather than open: removing or
-  breaking the provider leaves the policy unreadable, which every Runtime Mutation answers
-  with `operation_disabled` (D30 §1/§7). If the owner wants that resource type refused as
-  well, it is a one-line addition to `contracts/shared/refused-resource-types.json` and the
-  Runtime Text Resource that mirrors it.
+  `config_resource_update`/`delete` could still change the `ignition/tag-provider`
+  *resource* because D30 §5 classifies that type as allowed. That is a different plane —
+  the provider's configuration, not the policy Tag — and it failed closed rather than open:
+  removing or breaking the provider leaves the policy unreadable, which every Runtime
+  Mutation answers with `operation_disabled` (D30 §1/§7). If the owner wanted that resource
+  refused as well, it was a one-line addition to
+  `contracts/shared/refused-resource-types.json` and the Runtime Text Resource that mirrors
+  it. **CLOSED by ticket #36** (D30 owner ruling 4, the reserved-name rule): the *one*
+  resource — `ignition/tag-provider` named `IgnitionMCPPolicy` — is now refused by all four
+  `config_resource_*` Tools, while the type stays allowed so every other provider remains
+  manageable. The owner chose the by-name rule over the type rule, and the refused-types
+  file is unchanged.
 - **Resolved (#16 review round 1) — which artifacts `project_import` consumes: keep the
   union.** D30 §6 names a READY `project_archive`; the ticket names "the artifact ID of a
   READY `project_archive` ... (uploaded through `POST /artifacts` or produced by

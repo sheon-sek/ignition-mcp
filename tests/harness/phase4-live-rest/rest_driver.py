@@ -45,6 +45,13 @@ Live cases (tickets #14, #15, #16, #17, #18 and #19):
   ``artifact_list``), the D30 §6 ownership rule in both directions, the CONFIG scope for
   a read-only credential, both D10 input bounds, the data plane's missing ``DELETE``, and
   the class gate at discovery and at call time.
+- D30 owner ruling 4 (#36): the Tag-provider *config resource* named ``IgnitionMCPPolicy``
+  — the provider the Runtime Target Policy lives in — is refused by name by every config
+  Mutation, and the rejection is invisible on the Gateway, so those cases live in the
+  fault mode where the proxy's record of the hop is the proof that a refused call sent
+  the Gateway nothing at all. Beside them, an ordinary Tag provider and a name that only
+  *begins* with the reserved one stay manageable: it is a refusal of one name inside an
+  allowed type, not of the type.
 
 The Project cases need the D16 writer enabled (``IGNITION_MCP_PROJECT_WRITER_ENABLED``,
 ``IGNITION_MCP_GATEWAY_ID``), artifact upload and the sensitive exports this driver
@@ -164,6 +171,14 @@ DEFAULT_TAG_SOURCE_PATH = "source"
 DEFAULT_TAG_TARGET_PATH = "target"
 DEFAULT_TAG_CONTROL_PATH = "target_not_allowed"
 DEFAULT_RESERVED_TAG_PROVIDER = "IgnitionMCPPolicy"
+#: Phase 4 ticket #36 (D30 owner ruling 4): the Tag-provider *config resources* the
+#: reserved-name cases address, provisioned by ``provision.py``. The reserved one is the
+#: provider the Runtime Target Policy lives in — the same name the Tag-import case refuses
+#: — and the other two prove the refusal is by *name* inside an allowed type: one is an
+#: ordinary provider, the other begins with the reserved name but is a different resource.
+DEFAULT_PROVIDER_RESOURCE_TYPE = "ignition/tag-provider"
+DEFAULT_OTHER_PROVIDER = "MCP_CI_TAG_CONFIG"
+DEFAULT_LOOKALIKE_PROVIDER = "IgnitionMCPPolicyStaging"
 
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
@@ -2018,6 +2033,175 @@ async def core_collection_wire_cases(
     return cases, observations
 
 
+async def _resource_requests_after(faults: ProxyFaults, mark: int) -> list[dict[str, Any]]:
+    """The config-resource requests the hop saw after ``mark``.
+
+    Filtered by the resource route so the capability watcher's own Gateway reads (and
+    anything else the server does in the background) cannot be mistaken for a dispatch.
+    """
+
+    state = await faults.state()
+    return [
+        entry for entry in state.get("requests", [])
+        if int(entry.get("seq", 0)) > mark
+        and RESOURCE_COLLECTION_PATH in str(entry.get("target", ""))
+    ]
+
+
+def _refusal_message(result: dict[str, Any]) -> str:
+    """The message of a refusal envelope, or an empty string for anything else."""
+
+    if not result.get("isError"):
+        return ""
+    try:
+        message = error_envelope(result).get("message")
+    except ProbeError:
+        return ""
+    return message if isinstance(message, str) else ""
+
+
+async def reserved_config_resource_cases(
+    *, agent: "Session", faults: ProxyFaults, provider_type: str, reserved: str,
+    other: str, lookalike: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """D30 owner ruling 4 (ticket #36): one name is refused, the type is not.
+
+    The refusal is decided from the Target's identity, so Gateway state cannot show what
+    the call did: the hop's own record is what proves a refused call sent the Gateway
+    **nothing at all** (no read, no write). The deployment's Target allowlist names every
+    Target below — including the reserved one — so a `permission_denied` here is the name
+    rule and not the allowlist, and an accepted call beside it proves the type stays
+    manageable.
+
+    It runs after the ``#20`` fault cases and after ticket #35's wire case, for the reason
+    that case runs there: the fault instance's tool budget is deliberately small, and this
+    ticket must not put requests in front of evidence it does not own.
+    """
+
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {}
+    reserved_id = f"{provider_type}/{reserved}"
+    armed = await faults.arm("none")
+    _check(cases, "reserved-provider-hop-is-listening", True, bool(armed.get("listening")))
+
+    read = await agent.call("config_resource_get", {
+        "resourceType": provider_type, "name": reserved, "collection": "",
+        "defaultIfUndefined": False,
+    })
+    observations["policyProviderRead"] = _refusal_code(read)
+    _check(cases, "reserved-provider-config-resource-is-readable", True, not read.get("isError"))
+    signature = (read.get("structuredContent") or {}).get("signature")
+    observations["policyProviderSignature"] = signature
+
+    # ------------------------------------------------------------ update (refused)
+    mark = await faults.mark()
+    refused_update = await agent.call(UPDATE_TOOL, {
+        "resourceType": provider_type, "expectedSignature": signature, "name": reserved,
+        "enabled": False,
+    })
+    hop = await _resource_requests_after(faults, mark)
+    observations["reservedUpdateHop"] = hop
+    observations["reservedUpdateResult"] = _refusal_code(refused_update)
+    _check(cases, "reserved-provider-update-is-permission-denied", TARGET_DENIAL_CODE,
+           _refusal_code(refused_update))
+    _check(cases, "reserved-provider-update-says-which-rule", True,
+           reserved_id in _refusal_message(refused_update))
+    _check(cases, "reserved-provider-update-dispatches-nothing", 0, len(hop))
+    _check(cases, "reserved-provider-update-changes-nothing", signature,
+           await agent.signature(provider_type, reserved))
+
+    # ------------------------------------------------------------ delete (refused)
+    mark = await faults.mark()
+    refused_delete = await agent.call(DELETE_TOOL, {
+        "resourceType": provider_type, "expectedSignature": signature, "name": reserved,
+    })
+    hop = await _resource_requests_after(faults, mark)
+    observations["reservedDeleteHop"] = hop
+    _check(cases, "reserved-provider-delete-is-permission-denied", TARGET_DENIAL_CODE,
+           _refusal_code(refused_delete))
+    _check(cases, "reserved-provider-delete-dispatches-nothing", 0, len(hop))
+    _check(cases, "reserved-provider-delete-changes-nothing", signature,
+           await agent.signature(provider_type, reserved))
+
+    # ------------------------------------------------------------ create (refused)
+    mark = await faults.mark()
+    refused_create = await agent.call(CREATE_TOOL, {
+        "resourceType": provider_type, "name": reserved,
+    })
+    hop = await _resource_requests_after(faults, mark)
+    observations["reservedCreateHop"] = hop
+    _check(cases, "reserved-provider-create-is-permission-denied", TARGET_DENIAL_CODE,
+           _refusal_code(refused_create))
+    _check(cases, "reserved-provider-create-dispatches-nothing", 0, len(hop))
+
+    # ------------------------------------------------------------ rename (refused)
+    other_signature = await agent.signature(provider_type, other)
+    mark = await faults.mark()
+    refused_rename_in = await agent.call(RENAME_TOOL, {
+        "resourceType": provider_type, "expectedSignature": other_signature,
+        "name": other, "newName": reserved,
+    })
+    hop = await _resource_requests_after(faults, mark)
+    observations["reservedRenameInHop"] = hop
+    _check(cases, "renaming-a-provider-into-the-reserved-name-is-permission-denied",
+           TARGET_DENIAL_CODE, _refusal_code(refused_rename_in))
+    _check(cases, "renaming-a-provider-into-the-reserved-name-says-which-rule", True,
+           reserved_id in _refusal_message(refused_rename_in))
+    _check(cases, "renaming-a-provider-into-the-reserved-name-dispatches-nothing", 0, len(hop))
+    _check(cases, "renaming-a-provider-into-the-reserved-name-changes-nothing", other_signature,
+           await agent.signature(provider_type, other))
+
+    # The destination is occupied, and the call is still refused by name: the name rule
+    # runs before the collision probe, so the refusal cannot be the collision's.
+    mark = await faults.mark()
+    refused_rename_away = await agent.call(RENAME_TOOL, {
+        "resourceType": provider_type, "expectedSignature": signature,
+        "name": reserved, "newName": other,
+    })
+    hop = await _resource_requests_after(faults, mark)
+    observations["reservedRenameAwayHop"] = hop
+    _check(cases, "renaming-the-reserved-provider-away-is-permission-denied",
+           TARGET_DENIAL_CODE, _refusal_code(refused_rename_away))
+    _check(cases, "renaming-the-reserved-provider-away-dispatches-nothing", 0, len(hop))
+    _check(cases, "renaming-the-reserved-provider-away-changes-nothing", signature,
+           await agent.signature(provider_type, reserved))
+
+    # ------------------------------------------- the type itself stays manageable
+    mark = await faults.mark()
+    accepted = await agent.call(UPDATE_TOOL, {
+        "resourceType": provider_type, "expectedSignature": other_signature, "name": other,
+        "description": "Disposable Phase 4 CI Tag provider (updated live)",
+    })
+    hop = await _resource_requests_after(faults, mark)
+    accepted_body = accepted.get("structuredContent") if not accepted.get("isError") else {}
+    observations["otherProviderHop"] = hop
+    _check(cases, "another-provider-update-applies", True, not accepted.get("isError"))
+    _check(
+        cases, "another-provider-update-moves-the-signature", True,
+        isinstance(accepted_body.get("signature"), str)
+        and accepted_body.get("signature") != other_signature,
+    )
+    _check(cases, "another-provider-update-dispatches-one-write", 1,
+           len([entry for entry in hop if entry.get("method") == "PUT"]))
+
+    lookalike_signature = await agent.signature(provider_type, lookalike)
+    lookalike_update = await agent.call(UPDATE_TOOL, {
+        "resourceType": provider_type, "expectedSignature": lookalike_signature,
+        "name": lookalike, "description": "Disposable Phase 4 CI Tag provider (look-alike)",
+    })
+    lookalike_body = (
+        lookalike_update.get("structuredContent") if not lookalike_update.get("isError") else {}
+    )
+    _check(cases, "a-name-that-begins-with-the-reserved-name-update-applies", True,
+           not lookalike_update.get("isError"))
+    _check(
+        cases, "a-name-that-begins-with-the-reserved-name-moves-the-signature", True,
+        isinstance(lookalike_body.get("signature"), str)
+        and lookalike_body.get("signature") != lookalike_signature,
+    )
+    return cases, observations
+
+
 async def fault_import_cases(
     *, agent: "Session", rest_url: str, agent_token: str, project: str, faults: ProxyFaults,
     evidence: Evidence, raw_dir: Path,
@@ -2275,6 +2459,10 @@ async def fault_import_cases(
 async def run_fault_mode(
     *, rest_url: str, agent_token: str, proxy_control_url: str, data_dir: Path,
     resource_type: str, allowlisted: str, project: str, tool_timeout_seconds: float, raw_dir: Path,
+    provider_type: str = DEFAULT_PROVIDER_RESOURCE_TYPE,
+    reserved_provider: str = DEFAULT_RESERVED_TAG_PROVIDER,
+    other_provider: str = DEFAULT_OTHER_PROVIDER,
+    lookalike_provider: str = DEFAULT_LOOKALIKE_PROVIDER,
 ) -> dict[str, Any]:
     """D23's injected timeout, ambiguous outcome and cancellation, on a real Gateway.
 
@@ -2315,6 +2503,12 @@ async def run_fault_mode(
         )
         cases.extend(collection_cases)
         observations.update(collection_observations)
+        provider_cases, provider_observations = await reserved_config_resource_cases(
+            agent=agent, faults=faults, provider_type=provider_type, reserved=reserved_provider,
+            other=other_provider, lookalike=lookalike_provider,
+        )
+        cases.extend(provider_cases)
+        observations.update(provider_observations)
     finally:
         await faults.arm("none")
         await agent.aclose()
@@ -2356,6 +2550,8 @@ async def _run(args: argparse.Namespace) -> int:
             proxy_control_url=args.proxy_control_url, data_dir=args.data_dir,
             resource_type=args.resource_type, allowlisted=args.allowlisted, project=args.project,
             tool_timeout_seconds=args.tool_timeout_seconds, raw_dir=args.raw_dir,
+            provider_type=args.provider_type, reserved_provider=args.reserved_provider,
+            other_provider=args.other_provider, lookalike_provider=args.lookalike_provider,
         )
     else:
         mode = await run_gate_off(
@@ -2398,6 +2594,11 @@ def main() -> int:
     parser.add_argument("--tag-source-path", default=DEFAULT_TAG_SOURCE_PATH)
     parser.add_argument("--tag-target-path", default=DEFAULT_TAG_TARGET_PATH)
     parser.add_argument("--tag-control-path", default=DEFAULT_TAG_CONTROL_PATH)
+    #: Ticket #36: the Tag-provider *config resources* the reserved-name cases address.
+    parser.add_argument("--provider-type", default=DEFAULT_PROVIDER_RESOURCE_TYPE)
+    parser.add_argument("--reserved-provider", default=DEFAULT_RESERVED_TAG_PROVIDER)
+    parser.add_argument("--other-provider", default=DEFAULT_OTHER_PROVIDER)
+    parser.add_argument("--lookalike-provider", default=DEFAULT_LOOKALIKE_PROVIDER)
     parser.add_argument("--pipeline", default=DEFAULT_PIPELINE)
     parser.add_argument("--control-pipeline", default=DEFAULT_CONTROL_PIPELINE)
     parser.add_argument("--alarm-event-id", default=DEFAULT_ALARM_EVENT_ID)
