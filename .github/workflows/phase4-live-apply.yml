@@ -85,7 +85,7 @@ jobs:
           set -euo pipefail
           uv lock --check
           echo "$MCP_MODULE_SHA256  $MODULE_FILE" | sha256sum -c -
-          uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+          uv sync --locked --package ignition-rest-mcp
           uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
           uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
           uv run --no-sync python -m tooling.native.cli release \
