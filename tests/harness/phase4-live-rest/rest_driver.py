@@ -1115,9 +1115,15 @@ async def run_gate_on(
             explicit_body.get("collection"),
         )
 
+        # The token the accepted update reported; if that update failed, the call below
+        # still carries a well-formed token (the collection check precedes the signature
+        # read), so the case fails on its own observation instead of a driver traceback.
+        core_token = explicit_body.get("signature")
         refused_collection = await agent.call(UPDATE_TOOL, {
             "resourceType": resource_type,
-            "expectedSignature": explicit_body.get("signature"),
+            "expectedSignature": (
+                core_token if isinstance(core_token, str) and core_token else core_signature
+            ),
             "name": allowlisted,
             "collection": OTHER_COLLECTION,
             "enabled": False,

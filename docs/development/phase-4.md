@@ -863,7 +863,80 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   Phase 4 Live Gateway REST mutation run above.** The first push after the outage (see Open
   questions) produced all three.
 
+### Ticket #35 — pin generic config Mutations to the `core` collection (milestone 4c)
+
+- **Rule (D30 owner ruling 5, `config_collection: core_only`).**
+  `config_resource_create/update/delete/rename` name `core` on every Gateway read and write
+  they make: the pre-dispatch read and the verification read-back send `?collection=core`,
+  a change item carries `"collection": "core"` when the type's documented item schema
+  declares the field (every committed 8.3.8 type does), and the documented `DELETE` and
+  rename routes send it as their own query parameter. The update/create routes document no
+  collection query parameter at all, so there the item field is the mechanism. A
+  caller-supplied `collection` is accepted only when it is exactly `core`; any other value
+  is `invalid_argument` before anything is read or dispatched. The Target identity stays
+  `<resourceType>/<name>` — now unambiguously *in core* — so no Target allowlist entry
+  changes. `_default_collection`, which refused every collection name, is replaced by
+  `_core_collection`, and the read helpers no longer take a collection at all: there is one
+  value they may send.
+- **Contract and Docs.** The four REST contracts declare `collection` as a D30 §4 fixed
+  knob beside `allowInvalidReferences`/`confirm`/`references` and say what the parameter
+  now means; `tooling/contracts/lint.py` checks the knob, so the pin cannot drift from the
+  contract silently. The package README and this runbook (including the #14 open question
+  this ticket resolves) replace the "non-default collections are refused" wording.
+  `collection` deliberately stays a bounded string with `invalid_argument` as its refusal
+  code rather than an input enum: an enum would turn a bad value into an MCP-level schema
+  error and lose the D06/D30 §7 taxonomy. D03 is untouched — the item field is validated
+  against the Gateway's own documented item schema, which documents `collection` for every
+  committed type.
+- **Fixture-first coverage.** `tests/harness/recorded_gateway.py` keys its resource state by
+  `(name, collection)`, so its seeded default is now `core`, its `DELETE` and rename routes
+  honour the documented query parameter, and every request entry keeps the request target
+  with the query string the tests assert. New cases in
+  `test_phase4_config_resource_update.py` (30 cases) and
+  `test_phase4_config_resource_create_delete_rename.py` (40 cases): an explicit `core` is
+  accepted, an omitted collection is sent as `core` on the wire (reads, item field and, for
+  the delete/rename, the query), a non-core value is refused with **no** request at all and
+  no audit row, and a same-named look-alike in another collection keeps its signature and
+  its enabled flag across an update, a delete and a rename. The full `AGENTS.md` command
+  block is green (**919 pytest cases**, ruff, mypy strict, lock, workflow linter, native
+  validate/build/release, compat, contract lint, `sync_schemas` no-op).
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **193/193 cases**
+  against the recorded Gateway (182 before this ticket; the 11 new ones are the five gate-on
+  collection cases and the six fault-mode wire cases).
+- **Live**: see Open questions for the PR handover; the run IDs, the case counts per row and
+  the conclusion are recorded below once the runs on the ticket head settle.
+- **The live form of the rule.** A real Gateway answers a read that omits the collection
+  exactly as it answers one that names `core`, so Gateway state cannot show which request
+  the server sent. The fault-mode instance therefore reads the proxy hop's own record of the
+  request targets: two reads with `?collection=core` and exactly one `PUT` to
+  `/data/api/v1/resources/<type>?allowInvalidReferences=false`. The `collection` *item*
+  field is not visible there (the proxy records targets, not bodies); it is pinned by the
+  unit cases against the fixture, which answers a request that omitted or misnamed the
+  collection with the wrong resource or none at all.
+- **Out of scope by ruling.** The owner ruling governs the generic config *Mutations*, so
+  `config_resource_get` keeps its own `collection` parameter: it is the caller's read, and
+  reading a look-alike in another collection is how a caller can see that two same-named
+  resources really are two. A signature read there cannot be used by a Mutation — the
+  Mutation read-compares the `core` resource and answers `conflict` — and the mutation
+  surface itself never addresses any collection but `core`.
+- **Not this ticket.** D30 owner ruling 4 (issue #36) refuses the Tag-provider config
+  resource named `IgnitionMCPPolicy` by name inside these Tools; the collection pin is
+  orthogonal to it (that resource is `ignition/tag-provider`, name `IgnitionMCPPolicy`,
+  collection `core`), and #36 is left untouched here.
+
 ## Open questions
+
+- **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
+  evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
+  `2026-09-22T01:27:45Z` with head `200c8b9`, so the push of `2368b58` created **no**
+  workflow runs: a `pull_request` workflow has nothing to run for a branch whose PR is
+  closed. The lane rule ("one draft PR per lane; pushes trigger every `pull_request`
+  workflow") was restored by opening draft PR #37 from the same branch and base, whose
+  creation re-triggered CI, Phase 3 G3, the Phase 4 REST mutation run and G4a on the same
+  head — the live rows quoted in this ticket's Results section are from those runs.
+  **For the coordinator:** this is a handover artifact, not a lane failure; if the lane is
+  merged again, the next ticket needs another draft PR (or the workflows need a
+  `workflow_dispatch` entry point) before any head can carry live evidence.
 
 - **Ticket #19 — GitHub Actions delivered no runs for the documentation-only head.** The
   code head `51b25b2` has all four workflows green (CI, Phase 3 G3, Phase 4 G4a, Phase 4
