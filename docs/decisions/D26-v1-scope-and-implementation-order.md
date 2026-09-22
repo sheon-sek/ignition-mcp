@@ -681,7 +681,7 @@ These items leave v1. Issue #57 tracks them:
 - scheduled soak and leak checks;
 - the nightly canary.
 
-`alarm_status` and `alarm_journal` stay parked under the D12 Phase 2 bounded-execution amendment, and their absence is a known v1 limitation. G6 item 1 is assessed against every other Tool in the D26 v1 inventory.
+`alarm_status`, `alarm_journal` and `alarm_acknowledge` stay parked, and their absence is a known v1 limitation. The two query Tools are parked under the D12 Phase 2 bounded-execution amendment, and their handlers are held in `packages/ignition-runtime-bundle/deferred/`. `alarm_acknowledge` is parked by the ticket #9 outcome under the D12 Phase 4 amendment for the same reason: the recorded exact-path `queryStatus` evidence in `docs/development/phase-4.md` shows one Alarm path returning 1, then 2, then 3 items across three unacknowledged activate and clear cycles, with no native limit or continuation, so the handler has no bounded source for its Observed state. G6 item 1 is assessed against every other Tool in the D26 v1 inventory.
 
 G6 never records `SUPPORTED`. The 8.3.8 tuple closes as `VERIFIED_WITH_LIMITATION` under D27. The 8.3.9 tuple carries `FAILED_NATIVE_BINDING`, the binding status recorded at G3, G4 and G5. The Runtime Bundle stays 0.x, and D21 plus D23 evidence, not the v1 name, decides any 1.0.0 claim.
 

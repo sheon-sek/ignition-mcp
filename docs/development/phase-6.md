@@ -35,7 +35,10 @@ Out of v1, tracked in issue #57: the compatibility semantic diff, the full failu
 G4 and G5 cases, scheduled soak and leak checks, and the nightly canary.
 
 Still parked, and a known v1 limitation: `alarm_status` and `alarm_journal` under the D12 Phase 2
-bounded-execution amendment. G6 item 1 is assessed against every other Tool in the D26 v1 inventory.
+bounded-execution amendment, with their handlers held in `packages/ignition-runtime-bundle/deferred/`,
+and `alarm_acknowledge` under the D12 Phase 4 amendment by the ticket #9 outcome, for the same
+unbounded exact-path `queryStatus` reason. G6 item 1 is assessed against every other Tool in the D26
+v1 inventory.
 
 ## Tickets
 
@@ -57,8 +60,8 @@ bounded-execution amendment. G6 item 1 is assessed against every other Tool in t
 
 Open. Close it only against a real Gateway run with persisted evidence.
 
-- [ ] 1. The D26 v1 required surface is implemented, except `alarm_status` and `alarm_journal`, which
-      stay parked under D12 and are recorded as a v1 limitation.
+- [ ] 1. The D26 v1 required surface is implemented, except the three parked Alarm Tools
+      `alarm_status`, `alarm_journal` and `alarm_acknowledge`, which are recorded as a v1 limitation.
 - [ ] 2. Every public contract, profile and hard budget passes L0 and L2.
 - [ ] 3. The `ignition-rest` required capabilities pass L3 on the declared tuples.
 - [ ] 4. The Runtime Bundle passes a real MCP `initialize`, then lists, reads, gets and calls.
@@ -116,8 +119,3 @@ VERIFIED or VERIFIED_WITH_LIMITATION verdict for each tuple.
 1. #54 records two facts that only a live run settles: the exact upload content type, and whether the
    Gateway enforces the upload, accept, install order. The runbook documents the sequence the command
    performs, and the live stage in #56 confirms or corrects it.
-2. G6 item 1 says the D26 v1 surface is implemented. D12's alarm inventory also lists
-   `alarm_acknowledge`, which has no contract in `contracts/tools/runtime/` and no handler under
-   `project/com.inductiveautomation.mcp/tools/`. The D12 amendment parks it unless a bounded exact-path
-   `queryStatus` is proven. The owner needs to record whether item 1 is assessed with or without
-   `alarm_acknowledge` before G6 can close.

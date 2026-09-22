@@ -466,9 +466,13 @@ credential cannot leak through a traceback.
 
 ## Known v1 limitations
 
-- `alarm_status` and `alarm_journal` are parked in `packages/ignition-runtime-bundle/deferred/` under
-  the D12 Phase 2 bounded-execution amendment. They are not discoverable on the Runtime plane, and
-  re-enabling them needs a native pre-execution bound plus fresh live evidence.
+- Three Alarm Tools are parked, and that is the known v1 gap on the Runtime plane. `alarm_status` and
+  `alarm_journal` are held in `packages/ignition-runtime-bundle/deferred/` under the D12 Phase 2
+  bounded-execution amendment. `alarm_acknowledge` is parked under the D12 Phase 4 amendment by the
+  ticket #9 outcome, for the same reason: an exact-path `queryStatus` has no native limit or
+  continuation, so it cannot bound the acknowledge pre-check or the Observed state. None of the three
+  is discoverable or callable, the profiles do not list them, and re-enabling one needs a native
+  pre-execution bound plus fresh live evidence.
 - The pinned official MCP Module publishes `structuredContent` and `isError` but no Tool
   `outputSchema` (D27). Repo-owned schemas in `contracts/schemas/` remain the binding output contract.
 - The Module drops object-valued JSON nulls, so Runtime output uses the `ignition-null-v1` encoding
