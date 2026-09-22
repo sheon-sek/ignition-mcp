@@ -634,6 +634,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #19 — GitHub Actions delivered no runs for the documentation-only head.** The
+  code head `51b25b2` has all four workflows green (CI, Phase 3 G3, Phase 4 G4a, Phase 4
+  Live Gateway REST mutation with 98/98 cases in both rows), and the two commits after it
+  change `docs/development/phase-4.md` alone. Their pushes produced **no** workflow runs:
+  `GET /repos/…/actions/runs` shows nothing created repo-wide after `2026-09-21T23:49:41Z`
+  (the runtime lane's push), the PR's head is the docs commit, and its only check suite is
+  another app's. Nothing in this ticket changed a workflow, and the full `AGENTS.md`
+  command block was re-run on that exact head locally — ruff, `uv lock --check`,
+  `tooling.contracts.lint` and **887 pytest cases** green. **For the owner/coordinator:**
+  re-check the runs after the next push (a lane merge or any code commit re-triggers them);
+  if the gap persists it is a repository-level Actions problem, not a lane one.
+
 - **Ticket #19 — the Target of an artifact removal is the artifact's own identifier.**
   D30 §6 fixes this Tool's class, its ownership rule and its retention rule but says
   nothing about its Target form, and D08 requires a Target allowlist. What is
