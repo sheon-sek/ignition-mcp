@@ -610,7 +610,43 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   `items[].expectedFingerprint`, an explained absent token, the D11 collision rule, and — for a
   copy — no configuration at all and a declared source rule. `BUNDLE_VERSION` goes 0.5.0 → 0.6.0
   (D21 MINOR), and both Phase 4 Server Configs carry the new version.
-- **Live.** PENDING — recorded after the lane's push (workflow `Phase 4 Live Gateway G4b`).
+- **Live** (workflow `Phase 4 Live Gateway G4b`,
+  [run 35686364679](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686364679) on `d33251e`,
+  both rows green with `drift: {}` on 8.3.8 `2026071409` (required) and 8.3.9 `2026082511`
+  (candidate); CI, Phase 0 G0, Phase 3 G3, Phase 4 G4a and the REST mutation run are green on the
+  same head):
+  - the deployed `configurator` inventory is exactly `contracts/profiles/configurator.yaml`, both new
+    Tools included, and the `operator` deployment serves neither of them (CONTROL ≠ CONFIG);
+  - `tag_create` created a node the provider's own export shows, with a `Good` Native outcome, an
+    Observed state that matches an independent `tag_get_config` re-read and a `tcf1` fingerprint that
+    recomputes from the published configuration; the two audit rows for the run's correlation ID
+    carry the service identity as actor;
+  - the same call against the node it had just created is `conflict` / `targetExists`, changed
+    nothing, listed only the colliding item and still wrote its decision row;
+  - the segment-boundary sibling was refused (`permission_denied` / `targetNotAllowlisted`), the
+    whole-batch Preflight dispatched nothing, the reserved policy provider was refused under an
+    explicit `*` with the probe Tag and the policy document unchanged, a UDT definition was refused
+    under `*` and under a plain prefix and reached the existence check under an explicit `_types_`
+    entry, and a 21-item batch was refused with `limit_exceeded` / `itemsOverPolicyLimit` (101 items
+    with `itemsOverHardLimit`);
+  - `tag_copy` copied a Tag to a fresh destination that keeps the source's leaf, confirmed by an
+    independent read of the destination and by the source keeping its fingerprint, with the copy's
+    own audit pair; the second call on that now-occupied destination is `conflict` /
+    `destinationExists` and left it exactly as it was;
+  - a destination whose leaf differs from the source's was refused as `invalid_argument` /
+    `destinationLeafDiffersFromSource` before any read, a source that is not there as `not_found` /
+    `sourceMissing`, an over-long destination as `limit_exceeded` / `pathOverLength` naming the
+    2048-byte ceiling, and 21 items as `itemsOverPolicyLimit`;
+  - the destination alone is measured against the `tag_copy` allowlist: the same path one segment
+    outside the allowed prefix was refused as a destination and answered by the endpoint stage as a
+    *source*, a UDT destination needed the explicit `_types_` entry, and the reserved provider was
+    refused at **both** ends under an explicit `*` with the probe values unchanged;
+  - the first run on this head
+    ([35685286129](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685286129)) failed its
+    copy over-budget case: the harness built an over-long destination whose leaf was not the
+    source's, so the shipped handler answered `destinationLeafDiffersFromSource` where the modelled
+    fake had answered `pathOverLength`. `d33251e` fixes the case, the fake's selection order and the
+    selector test; the run above is the one that records this ticket's evidence.
 
 ### Ticket #16 — REST `project_import` (milestone 4c)
 
