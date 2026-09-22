@@ -104,10 +104,15 @@ def test_batch_reloads_every_fingerprint_before_any_item_is_dispatched() -> None
     targets = [call["target"] for call in document["calls"]]
 
     reads = [index for index, target in enumerate(targets) if target == "system.tag.getConfiguration"]
+    existence = [index for index, target in enumerate(targets) if target == "system.tag.exists"]
     first_configure = targets.index("system.tag.configure")
     assert targets[first_configure - 1] == "system.util.audit"
-    assert sorted(reads[:2]) == [2, 3]
-    assert all(index < first_configure for index in reads[:2])
+    # One existence check per target, each followed by its own configuration read,
+    # and all of them before the first dispatch. The later reads are the observed
+    # half of the result.
+    assert len(existence) == 2
+    assert len(reads) == 4
+    assert all(index < first_configure for index in existence + reads[:2])
 
     structured = _structured("batch-with-a-bad-native-outcome")
     assert _statuses(structured) == [(WRITE, "executed"), (TEXT, "executed")]
@@ -137,16 +142,32 @@ def test_one_stale_item_refuses_the_whole_batch_before_anything_executes() -> No
 
 
 def test_a_missing_target_is_not_found_and_is_never_created() -> None:
+    """A configuration read cannot answer this question: the Gateway synthesizes a
+    default node for a path that is not there (the ticket #10 live run recorded the
+    same one on 8.3.8 and 8.3.9), so `system.tag.exists` decides, and the missing
+    fixture records only that call — the handler never dispatches anything."""
     error = _error("missing-target", "not_found")
 
     assert error["details"]["reason"] == "preflightPreconditionFailed"
     assert _problem_reasons(error) == [("[default]IgnitionMCP_CI/Missing", "targetMissing")]
 
 
-def test_a_preflight_read_that_raises_is_still_a_refusal() -> None:
-    error = _error("preflight-read-raises", "not_found")
+def test_an_existence_check_that_raises_refuses_the_batch() -> None:
+    error = _error("existence-check-fails", "upstream_error")
 
-    assert _problem_reasons(error) == [(WRITE, "configurationReadFailed")]
+    assert _problem_reasons(error) == [(WRITE, "existenceCheckFailed")]
+
+
+def test_an_existence_check_that_answers_something_else_is_not_a_yes() -> None:
+    error = _error("existence-check-indeterminate", "upstream_error")
+
+    assert _problem_reasons(error) == [(WRITE, "existenceCheckIndeterminate")]
+
+
+def test_an_empty_configuration_read_for_an_existing_target_is_refused() -> None:
+    error = _error("configuration-unavailable", "upstream_error")
+
+    assert _problem_reasons(error) == [(WRITE, "configurationUnavailable")]
 
 
 def test_the_first_failing_item_decides_the_refusal_code() -> None:
@@ -331,10 +352,17 @@ RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_update-*.jso
 
 
 def test_every_recorded_fixture_is_exercised_by_this_module() -> None:
-    source = Path(__file__).read_text(encoding="utf-8")
+    # The read-token flow pairs a tag_get_config fixture with a tag_update one, so
+    # both modules are searched for a reference.
+    sources = [
+        Path(__file__).read_text(encoding="utf-8"),
+        (Path(__file__).with_name("test_tag_get_config.py")).read_text(encoding="utf-8"),
+    ]
     for name in RECORDED_FIXTURES:
         case = name[len("tag_update-") : -len(".json")]
-        assert f'"{case}"' in source, f"{name} is not referenced by a test"
+        assert any(f'"{case}"' in source or f'"{name[:-len(".json")]}"' in source for source in sources), (
+            f"{name} is not referenced by a test"
+        )
 
 
 def test_recorded_policy_documents_satisfy_the_shipped_schema() -> None:
@@ -356,6 +384,9 @@ def test_recorded_policy_documents_satisfy_the_shipped_schema() -> None:
 
     valid = [
         "allowlisted",
+        "configuration-unavailable",
+        "existence-check-fails",
+        "existence-check-indeterminate",
         "batch-with-a-bad-native-outcome",
         "fingerprint-mismatch",
         "preflight-refuses-whole-batch-on-stale-fingerprint",
@@ -389,3 +420,185 @@ def test_handler_is_self_contained_and_tab_indented() -> None:
             continue
         indentation = line[: len(line) - len(line.lstrip())]
         assert set(indentation) <= {"\t"}, line
+
+
+def _recorded_targets(name: str) -> list[str]:
+    """The ordered native calls a fixture replays (the negative half of a case)."""
+    document = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    return [entry["target"] for entry in document["calls"]]
+
+
+def test_the_batch_default_is_twenty_and_a_deployment_may_raise_it_within_the_cap() -> None:
+    """D10: the project safe default is 20 targets, the deployment may raise it up
+    to the 100-target hard ceiling through the Runtime Target Policy."""
+    error = _error("over-policy-limit", "limit_exceeded")
+
+    assert error["details"] == {
+        "reason": "itemsOverPolicyLimit",
+        "requested": 21,
+        "limit": 20,
+    }
+    # The same 21 targets run when the document raises the limit to 25, so the
+    # refusal above is the deployment default and not a hidden hard cap.
+    structured = _structured("policy-raises-item-limit")
+    assert structured["summary"]["requested"] == 21
+    assert structured["summary"]["succeeded"] == 21
+
+
+def test_a_policy_item_limit_outside_the_d10_hard_cap_fails_closed() -> None:
+    error = _error("policy-item-limit-invalid", "operation_disabled")
+
+    assert error["details"]["reason"] == "policyTagUpdateMaxItems"
+
+
+def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("path-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "pathOverLength"
+    assert error["details"]["index"] == 0
+    assert error["details"]["requested"] == 2053
+    assert error["details"]["limit"] == 2048
+
+
+def test_a_configuration_string_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("config-string-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "configStringOverLimit"
+    assert error["details"]["index"] == 0
+    assert error["details"]["requested"] == 16385
+    assert error["details"]["limit"] == 16384
+
+
+def test_a_configuration_array_over_the_element_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("config-array-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "configArrayOverLimit"
+    assert error["details"]["requested"] == 1001
+    assert error["details"]["limit"] == 1000
+
+
+def test_a_configuration_deeper_than_the_depth_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("config-over-depth", "limit_exceeded")
+
+    assert error["details"]["reason"] == "configOverDepth"
+    assert error["details"]["requested"] == 9
+    assert error["details"]["limit"] == 8
+
+
+def test_a_configuration_over_its_byte_budget_is_refused_before_any_native_call() -> None:
+    error = _error("config-over-byte-budget", "limit_exceeded")
+
+    assert error["details"]["reason"] == "configOverByteBudget"
+    assert error["details"]["limit"] == 32768
+    assert error["details"]["requested"] > error["details"]["limit"]
+
+
+def test_the_aggregate_input_byte_budget_is_finite() -> None:
+    """Every item is inside its own ceilings and the batch is still refused, so the
+    aggregate budget is what bounds the request."""
+    error = _error("input-over-byte-budget", "limit_exceeded")
+
+    assert error["details"]["reason"] == "inputOverByteBudget"
+    assert error["details"]["limit"] == 65536
+    assert error["details"]["requested"] > error["details"]["limit"]
+
+
+def test_a_denied_target_is_audited_as_a_decision_and_dispatches_no_change() -> None:
+    """D08/D18: a denied mutation is audited. The ordered call list is the proof:
+    one decision row after the policy read, and no `configure` at all."""
+    assert _recorded_targets("decision-audit-on-denial") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.util.audit",
+    ]
+    error = _error("decision-audit-on-denial", "permission_denied")
+
+    assert error["details"]["reason"] == "preflightTargetRefused"
+    assert error["details"]["auditRecorded"] is True
+
+
+def test_a_precondition_denial_is_audited_as_a_decision_too() -> None:
+    assert _recorded_targets("decision-audit-on-conflict") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.tag.exists",
+        "system.tag.getConfiguration",
+        "system.util.audit",
+    ]
+    conflict = _error("decision-audit-on-conflict", "conflict")
+    assert conflict["details"]["auditRecorded"] is True
+
+    assert _recorded_targets("decision-audit-on-missing-target") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.tag.exists",
+        "system.util.audit",
+    ]
+    missing = _error("decision-audit-on-missing-target", "not_found")
+    assert missing["details"]["auditRecorded"] is True
+
+
+def test_audit_off_still_records_no_denial_row() -> None:
+    assert _recorded_targets("decision-audit-off") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+    ]
+    error = _error("decision-audit-off", "permission_denied")
+
+    assert error["details"]["auditRecorded"] is False
+
+
+def test_required_mode_gates_the_denial_row_on_the_audit_profile() -> None:
+    recorded = _error("decision-audit-required", "permission_denied")
+    assert recorded["details"]["auditRecorded"] is True
+
+    # A required mode whose denial row cannot be written refuses the call rather
+    # than reporting an unaudited denial.
+    failed = _error("decision-audit-required-write-fails", "operation_disabled")
+    assert failed["details"]["reason"] == "auditAttemptFailed"
+    assert failed["details"]["phase"] == "decision"
+
+
+def test_an_observed_configuration_over_its_budget_does_not_decide_the_item_outcome() -> None:
+    structured = _structured("observed-configuration-over-budget")
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "16384" in observed["error"]["message"]
+
+
+def test_the_observed_state_budget_marks_only_the_configurations_it_cannot_return() -> None:
+    structured = _structured("observed-state-budget-exhausted")
+
+    assert [item["status"] for item in structured["items"]] == ["executed"] * 9
+    assert structured["summary"]["succeeded"] == 9
+    statuses = [entry["status"] for entry in structured["observed"]]
+    assert statuses[:6] == ["ok"] * 6
+    assert statuses[6:] == ["error"] * 3
+    assert structured["observed"][6]["error"]["code"] == "limit_exceeded"
+
+
+def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
+    """The change was dispatched and its outcome is known; failing to serialize the
+    Observed state must not turn the batch into an `outcome_unknown`."""
+    structured = _structured("serialization-fails")
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    assert structured["summary"]["auditRecorded"] is True
+    assert structured["observed"][0]["status"] == "error"
+    assert structured["observed"][0]["error"]["code"] == "schema_mismatch"
+    assert "serializ" in structured["observed"][0]["error"]["message"]
+
+
+def test_the_contract_declares_the_d10_input_bounds() -> None:
+    contract = json.loads(CONTRACT.read_text(encoding="utf-8"))
+
+    assert contract["inputBounds"]["defaultItems"] == 20
+    assert contract["inputBounds"]["hardItems"] == 100
+    assert contract["inputBounds"]["hardItemsPolicyField"] == "tagUpdateMaxItems"
+    assert contract["inputBounds"]["maxInputBytes"] == 65536
+    assert contract["inputBounds"]["outputMaxBytes"] == 262144

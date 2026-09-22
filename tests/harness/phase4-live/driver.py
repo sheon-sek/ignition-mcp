@@ -1368,6 +1368,8 @@ def tag_update_paths() -> dict[str, str]:
         "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
         "nestedTarget": f"[{policy_document.TAG_FIXTURE_PROVIDER}]{root}/Nested/Inner",
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
+        "writeProbe": policy_document.WRITE_PROBE_PATH,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
     }
@@ -1401,15 +1403,31 @@ def tag_config(client: mcp_client.McpClient, path: str) -> dict[str, Any]:
     return {"fingerprint": fingerprint, "configuration": configuration}
 
 
+def tag_config_or_none(client: mcp_client.McpClient, path: str) -> dict[str, Any] | None:
+    """One `tag_get_config` read that tolerates a Tool Error, for diagnostics.
+
+    The ticket #10 live evidence needs the *shape* of what a Gateway answers for a
+    path that is not there; the recorded fake answers a Tool Error for it, so a
+    rehearsal records the refusal instead of the template.
+    """
+    try:
+        return tag_config(client, path)
+    except (StageFailure, mcp_client.McpError):
+        return None
+
+
 def derived_fingerprint(configuration: Any) -> str:
     """The documented rule, applied outside the handler.
 
     D30 2 defines the Tag config fingerprint over the D28-encoded configuration
     the same read publishes, so a live read lets the driver recompute it with the
     contracts linter's own copy of the rule: the handler's Jython implementation
-    and the repository's Python one then have to agree on real Gateway data.
+    and the repository's Python one then have to agree on real Gateway data. The
+    published `configuration` is *already* the encoded value, so it is hashed as
+    it stands — encoding it again would escape a published null marker or literal
+    `$ignition` object a second time and report a false mismatch.
     """
-    return lint.tag_config_fingerprint(lint.encode_nulls(configuration))
+    return lint.tag_config_fingerprint(configuration)
 
 
 def stage_tag_update_no_policy(config: Config) -> dict[str, Any]:
@@ -1597,6 +1615,28 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
         str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in matching
     )
 
+    # Case 2b: a Folder is a target like any other, and `system.tag.exists` answers
+    # for one: the merge lands on the folder node and the independent read shows it.
+    folder = paths["nestedFolder"]
+    folder_before = tag_config(client, folder)
+    folder_structured = expect_structured(client, "tag_update", {
+        "items": [{
+            "path": folder,
+            "expectedFingerprint": folder_before["fingerprint"],
+            "config": {"documentation": policy_document.TAG_UPDATE_FOLDER_CONFIG},
+        }],
+    })
+    raw["folderUpdate"] = bounded(folder_structured, 20_000)
+    folder_after = tag_config(client, folder)
+    folder_items = folder_structured.get("items") or [{}]
+    folder_node = folder_after["configuration"][0] if folder_after["configuration"] else {}
+    facts["tagUpdateFolderTargetStatus"] = str(folder_items[0].get("status", ""))
+    facts["tagUpdateFolderTargetNativeOutcome"] = str((folder_items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagUpdateFolderTargetIndependentReadShowsTheChange"] = (
+        folder_node.get("documentation") == policy_document.TAG_UPDATE_FOLDER_CONFIG
+    )
+    facts["tagUpdateFolderTargetFingerprintChanged"] = folder_after["fingerprint"] != folder_before["fingerprint"]
+
     # Case 3: the token from before the change is stale now, so the same call is
     # refused and the target keeps the values the first call wrote.
     stale = expect_tool_error(client, "tag_update", {
@@ -1614,6 +1654,8 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
         facts["tagUpdateStaleFingerprintCode"] == "conflict"
         and facts["tagUpdateStaleFingerprintReason"] == "fingerprintMismatch"
     )
+    # D18: a refused Precondition is a denied Mutation and is audited too.
+    facts["tagUpdateStaleFingerprintAuditRecorded"] = (stale.get("details") or {}).get("auditRecorded")
     unchanged = tag_config(client, paths["target"])
     facts["tagUpdateStaleFingerprintChangedNothing"] = (
         unchanged["fingerprint"] == after["fingerprint"]
@@ -1642,9 +1684,21 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     )
     if not facts["tagUpdateNeverCreatesTarget"]:
         raise StageFailure(f"a missing target must be not_found: {json.dumps(absent)[:600]}")
-    missing_read = expect_tool_error(client, "tag_get_config", {"path": paths["missingTarget"]})
-    raw["missingTargetRead"] = bounded(missing_read)
-    facts["tagUpdateMissingTargetStillAbsent"] = True
+    # The read alone cannot answer "is it there": a Gateway answers a configuration
+    # read for a path that is not there with a synthesized default node. The evidence
+    # records that shape and then proves absence through the provider's own export.
+    missing_read = tag_config_or_none(client, paths["missingTarget"])
+    raw["missingTargetRead"] = bounded(missing_read, 8_000)
+    facts["tagUpdateMissingTargetReadAnswersATemplate"] = bool(
+        missing_read and missing_read.get("configuration")
+    )
+    facts["tagUpdateMissingTargetReadFingerprint"] = (missing_read or {}).get("fingerprint", "")
+    export_status, exported = gateway_rest.export_tags(config.base_url, config.api_token, "default")
+    found = policy_document.find_tag(gateway_rest.decode(exported), "Missing") if export_status == 200 else None
+    raw["missingTargetExport"] = {"status": export_status, "found": bounded(found, 2_000)}
+    facts["tagUpdateMissingTargetAbsentFromExport"] = export_status == 200 and found is None
+    if not facts["tagUpdateMissingTargetAbsentFromExport"]:
+        raise StageFailure("the refused update left a Tag that the provider export shows")
 
     # Case 5: the segment-boundary sibling is refused and untouched.
     sibling = expect_tool_error(client, "tag_update", {
@@ -1662,6 +1716,9 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
         facts["tagUpdateSiblingDenialCode"] == "permission_denied"
         and facts["tagUpdateSiblingDenialReason"] == "targetNotAllowlisted"
     )
+    # D18: the denial is audited, and the response says whether its decision row
+    # was written.
+    facts["tagUpdateSiblingDenialAuditRecorded"] = (sibling.get("details") or {}).get("auditRecorded")
     if not facts["tagUpdateSiblingDenialIsSegmentBoundary"]:
         raise StageFailure(f"the segment-boundary sibling was not refused: {json.dumps(sibling)[:600]}")
     sibling_value = read_tag_value(client, paths["siblingTarget"])
@@ -1687,8 +1744,15 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     if not facts["tagUpdateUdtNeedsExplicitTypesEntry"]:
         raise StageFailure(f"a UDT definition needs an explicit _types_ entry: {json.dumps(plain_udt)[:600]}")
 
-    # Case 7: an explicit _types_ entry lets the target through to the existence
-    # check, which is what proves the entry is honoured rather than ignored.
+    # Case 7: an explicit _types_ entry lets the target through, and the token it
+    # compares is the one the caller's own `tag_get_config` read published for that
+    # exact definition — the read has to be allowed for the update to be reachable
+    # at all. The definition does not exist on the disposable Gateway, so the flow
+    # ends at the existence check; that is what proves the entry is honoured.
+    definition_read = tag_config(client, paths["udtTarget"])
+    raw["udtDefinitionRead"] = bounded(definition_read, 8_000)
+    facts["tagUpdateUdtDefinitionReadIsAllowed"] = definition_read["fingerprint"].startswith("tcf1:")
+    facts["tagUpdateUdtDefinitionReadNodes"] = len(definition_read["configuration"])
     installed = install_tag_update_policy(
         config, client, allowlist=policy_document.TAG_UPDATE_TYPES_ALLOWLIST,
     )
@@ -1702,7 +1766,7 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     honoured = expect_tool_error(client, "tag_update", {
         "items": [{
             "path": paths["udtTarget"],
-            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "expectedFingerprint": definition_read["fingerprint"],
             "config": {"documentation": "phase4-should-not-apply"},
         }],
     })
@@ -1772,11 +1836,41 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     if not facts["tagUpdateBareWildcardDoesNotCoverUdt"]:
         raise StageFailure(f"a bare * must not cover a UDT definition: {json.dumps(wildcard_udt)[:600]}")
 
-    # Case 10: a batch whose second item is refused is refused whole, so the
-    # first item's target still carries the values the allowlisted call wrote.
+    # Case 9b: D10's deployment item limit refuses an over-budget batch before any
+    # native call.
+    over = expect_tool_error(client, "tag_update", {
+        "items": [{
+            "path": paths["target"],
+            "expectedFingerprint": "tcf1:" + "0" * 64,
+            "config": {"documentation": "phase4-should-not-apply"},
+        }] * 21,
+    })
+    raw["overPolicyLimit"] = bounded(over)
+    facts["tagUpdateOverPolicyLimitCode"] = str(over.get("code", ""))
+    facts["tagUpdateOverPolicyLimitReason"] = str((over.get("details") or {}).get("reason", ""))
+    facts["tagUpdateOverPolicyLimitIsRefused"] = (
+        facts["tagUpdateOverPolicyLimitCode"] == "limit_exceeded"
+        and facts["tagUpdateOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+    )
+    if not facts["tagUpdateOverPolicyLimitIsRefused"]:
+        raise StageFailure(f"an over-budget batch must be refused: {json.dumps(over)[:600]}")
+
+    # Case 10: with the ordinary allowlist back in place, a batch whose second item
+    # is outside it is refused whole, so the first item's target keeps its values.
+    # (The wildcard policy above covers the sibling, so the allowlist has to come
+    # back before this case means what it says.)
+    reinstalled = install_tag_update_policy(config, client, allowlist=policy_document.TAG_UPDATE_ALLOWLIST)
+    raw["installAllowlistPolicy"] = bounded(reinstalled, 20_000)
+    facts["tagUpdateAllowlistPolicyReinstalled"] = reinstalled["ok"]
+    if not reinstalled["ok"]:
+        raise StageFailure(
+            "the running provider never served the plain allowlist policy again: "
+            f"{json.dumps(reinstalled['attempts'][-1], sort_keys=True)[:800]}"
+        )
+    current = tag_config(client, paths["target"])
     batch = expect_tool_error(client, "tag_update", {
         "items": [
-            {"path": paths["target"], "expectedFingerprint": after["fingerprint"],
+            {"path": paths["target"], "expectedFingerprint": current["fingerprint"],
              "config": {"documentation": "phase4-batch-should-not-apply"}},
             {"path": paths["siblingTarget"], "expectedFingerprint": "tcf1:" + "0" * 64,
              "config": {"documentation": "phase4-batch-should-not-apply"}},
@@ -1786,7 +1880,7 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
     facts["tagUpdatePreflightRefusalCode"] = str(batch.get("code", ""))
     facts["tagUpdatePreflightRefusalItems"] = len((batch.get("details") or {}).get("items") or [])
     batch_after = tag_config(client, paths["target"])
-    facts["tagUpdatePreflightExecutedNothing"] = batch_after["fingerprint"] == after["fingerprint"]
+    facts["tagUpdatePreflightExecutedNothing"] = batch_after["fingerprint"] == current["fingerprint"]
     if not facts["tagUpdatePreflightExecutedNothing"]:
         raise StageFailure("a refused Preflight executed part of its batch")
     return {
@@ -2074,6 +2168,14 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
                     "code": facts.get("tagUpdateStaleFingerprintCode"),
                     "reason": facts.get("tagUpdateStaleFingerprintReason"),
                     "changedNothing": facts.get("tagUpdateStaleFingerprintChangedNothing"),
+                    "auditRecorded": facts.get("tagUpdateStaleFingerprintAuditRecorded"),
+                },
+                "inputBounds": {
+                    "overPolicyLimitCode": facts.get("tagUpdateOverPolicyLimitCode"),
+                    "overPolicyLimitReason": facts.get("tagUpdateOverPolicyLimitReason"),
+                },
+                "deniedMutationAudit": {
+                    "siblingDenialRecorded": facts.get("tagUpdateSiblingDenialAuditRecorded"),
                 },
                 "missingTarget": {
                     "code": facts.get("tagUpdateMissingTargetCode"),
@@ -2087,6 +2189,7 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
                     "preflightExecutedNothing": facts.get("tagUpdatePreflightExecutedNothing"),
                 },
                 "udtDefinitions": {
+                    "definitionReadIsAllowed": facts.get("tagUpdateUdtDefinitionReadIsAllowed"),
                     "refusedUnderPlainPrefix": facts.get("tagUpdateUdtNeedsExplicitTypesEntry"),
                     "refusedUnderBareWildcard": facts.get("tagUpdateBareWildcardDoesNotCoverUdt"),
                     "explicitTypesEntryHonoured": facts.get("tagUpdateTypesEntryIsHonoured"),

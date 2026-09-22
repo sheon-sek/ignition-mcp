@@ -27,6 +27,7 @@ from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.invocation.lifecycle import enforce_output_budget, invoke_tool
 from ignition_rest_mcp.models import (
+    AlarmPipelineCancelResult,
     AlarmPipelineListResult,
     AlarmPipelineStatusResult,
     ArtifactInfoResult,
@@ -48,8 +49,10 @@ from ignition_rest_mcp.models import (
     OpenApiInfoResource,
     ProjectListResult,
     ProjectExportResult,
+    ProjectImportResult,
     StorageDiagnostics,
     TagConfigExportResult,
+    TagConfigImportResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.observability.metrics import Metrics
@@ -58,6 +61,9 @@ from ignition_rest_mcp.runtime import RuntimeState
 from ignition_rest_mcp.services.exports import (
     project_export as project_export_service,
     tag_config_export as tag_config_export_service,
+)
+from ignition_rest_mcp.services.alarm_pipeline_cancel import (
+    alarm_pipeline_cancel as alarm_pipeline_cancel_service,
 )
 from ignition_rest_mcp.services.artifacts import (
     artifact_info as artifact_info_service,
@@ -75,6 +81,12 @@ from ignition_rest_mcp.services.gateway import (
     gateway_diagnose as diagnose_service,
     gateway_info as info_service,
     openapi_info_resource,
+)
+from ignition_rest_mcp.services.project_import import (
+    project_import as project_import_service,
+)
+from ignition_rest_mcp.services.tag_config_import import (
+    tag_config_import as tag_config_import_service,
 )
 from ignition_rest_mcp.services.readonly import (
     alarm_pipeline_list as alarm_pipeline_list_service,
@@ -492,6 +504,89 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="project_import",
+        description=(
+            "Import a Project archive artifact into an existing Project through Native REST, "
+            "preconditioned on the fingerprint project_export reported and reconciled by the D16 "
+            "Project transaction (deployment-gated; destructive)."
+        ),
+        output_schema=ProjectImportResult.model_json_schema(),
+        tags={"mutation", "destructive", "scope:ignition.config", "capability:project_import"},
+    )
+    async def project_import(
+        projectName: str, artifactId: str, expectedFingerprint: str,
+    ) -> ProjectImportResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ProjectImportResult:
+            return await project_import_service(
+                state.require_transactions(), state.require_artifacts(), state.require_registry(),
+                settings, state.require_records(), context,
+                principal=principal, project_name=projectName, artifact_id=artifactId,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "project_import", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="tag_config_import",
+        description=(
+            "Import a JSON Tag export artifact under a provider-qualified path through Native "
+            "REST, creating Tags only (the collision policy is always Abort), and verify it with "
+            "a bounded re-export of the same provider and path (deployment-gated)."
+        ),
+        output_schema=TagConfigImportResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:tag_config_import"},
+    )
+    async def tag_config_import(
+        artifactId: str, provider: str, path: str = "",
+    ) -> TagConfigImportResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> TagConfigImportResult:
+            return await tag_config_import_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(),
+                settings, context,
+                principal=principal, artifact_id=artifactId, provider=provider, path=path,
+            )
+
+        return await _invoke(
+            "tag_config_import", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="alarm_pipeline_cancel",
+        description=(
+            "Cancel one Alarm Notification Pipeline run — an exact pipeline path plus the "
+            "Alarm Event it is running for — through Native REST, verified by a bounded "
+            "pipeline status re-read (deployment-gated; destructive; the Alarm Event "
+            "itself is never acknowledged or cleared)."
+        ),
+        output_schema=AlarmPipelineCancelResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.control",
+            "capability:alarm_pipeline_cancel",
+        },
+    )
+    async def alarm_pipeline_cancel(path: str, alarmEventId: str) -> AlarmPipelineCancelResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> AlarmPipelineCancelResult:
+            return await alarm_pipeline_cancel_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal, path=path, alarm_event_id=alarmEventId,
+            )
+
+        return await _invoke(
+            "alarm_pipeline_cancel", "FAST", flow,
+            permission_class="CONTROL", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
@@ -883,6 +978,9 @@ DEPLOYMENT_GATED_TOOLS = {
     "config_resource_create": "config_mutation_enabled",
     "config_resource_delete": "config_mutation_enabled",
     "config_resource_rename": "config_mutation_enabled",
+    "project_import": "config_mutation_enabled",
+    "tag_config_import": "config_mutation_enabled",
+    "alarm_pipeline_cancel": "control_mutation_enabled",
 }
 
 
@@ -899,9 +997,12 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "config_resource_create": "config_resource_create",
         "config_resource_delete": "config_resource_delete",
         "config_resource_rename": "config_resource_rename",
+        "project_import": "project_import",
+        "tag_config_import": "tag_config_import",
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",
+        "alarm_pipeline_cancel": "alarm_pipeline_cancel",
         "project_export": "project_export",
         "tag_config_export": "tag_config_export",
     }

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_get_config",
+  "parameterOrder": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "maxResults"
+  ],
+  "arguments": {
+    "path": "[default]IgnitionMCP_CI/Missing",
+    "recursive": false,
+    "overridesOnly": false,
+    "maxResults": 50
+  },
+  "calls": [
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Missing",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "name": "Missing",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Missing",
+              "type": "native-object"
+            },
+            "tagType": "Unknown"
+          }
+        ]
+      }
+    }
+  ]
+}

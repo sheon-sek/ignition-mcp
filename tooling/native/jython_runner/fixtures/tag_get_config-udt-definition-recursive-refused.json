@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_get_config",
+  "parameterOrder": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "maxResults"
+  ],
+  "arguments": {
+    "path": "[default]_types_/IgnitionMCP_CI/ProbeType",
+    "recursive": true,
+    "overridesOnly": false,
+    "maxResults": 50
+  },
+  "calls": []
+}

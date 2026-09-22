@@ -32,11 +32,33 @@ def onToolCalled(builder, items):
 	FINGERPRINT_PREFIX = "tcf1:"
 	FINGERPRINT_HEX = "0123456789abcdef"
 	FINGERPRINT_LENGTH = 69
+	# Ticket #10 live evidence: a Gateway answers system.tag.getConfiguration for a
+	# path that is not there with a synthesized default node, so a CONFIG Mutation's
+	# existence check is a separate, dedicated primitive. `system.tag.exists` is it.
 	# The handler fixes the Gateway's collision policy: MergeOverwrite is what makes
 	# this a merge-update, and Preflight has already read every target, so a merge
 	# cannot create one that the read found missing.
 	COLLISION_POLICY = "MergeOverwrite"
+	# D10 budgets: the project safe default is 20 targets, the deployment may raise
+	# it through the Runtime Target Policy up to the 100-target hard ceiling, and
+	# every request is bounded by path, configuration-string, array, depth, per-item
+	# byte and one finite aggregate byte ceiling.
+	DEFAULT_MAX_ITEMS = 20
 	HARD_MAX_ITEMS = 100
+	POLICY_MAX_ITEMS_FIELD = "tagUpdateMaxItems"
+	PATH_MAX_BYTES = 2048
+	CONFIG_STRING_MAX_BYTES = 16384
+	CONFIG_ARRAY_MAX_ELEMENTS = 1000
+	CONFIG_MAX_DEPTH = 8
+	CONFIG_MAX_BYTES = 32768
+	INPUT_MAX_BYTES = 65536
+	NUMERIC_INPUT_BYTES = 32
+	# D10 output: the Observed state carries its own budget, so a configuration it
+	# cannot return never becomes the reason a completed change's outcomes
+	# disappear, and a Native diagnostic never runs unbounded either.
+	OBSERVED_CONFIGURATION_MAX_BYTES = 16384
+	OBSERVED_STATE_MAX_BYTES = 65536
+	DIAGNOSTIC_MAX_BYTES = 256
 	OUTPUT_MAX_BYTES = 262144
 
 	def toolError(code, message, details):
@@ -83,7 +105,9 @@ def onToolCalled(builder, items):
 		name = value.getName() if hasattr(value, "getName") else unicode(value)
 		level = value.getLevel() if hasattr(value, "getLevel") else unicode(value)
 		diagnostic = value.getDiagnosticMessage() if hasattr(value, "getDiagnosticMessage") else None
-		return {"code": int(value.getCode()), "name": unicode(name), "level": unicode(level), "good": qualityIsGood(value), "diagnosticMessage": optionalText(diagnostic)}
+		# D10: a Gateway diagnostic is free text, so it is bounded like any other
+		# part of the structured result.
+		return {"code": int(value.getCode()), "name": boundedText(name, DIAGNOSTIC_MAX_BYTES), "level": boundedText(level, DIAGNOSTIC_MAX_BYTES), "good": qualityIsGood(value), "diagnosticMessage": optionalText(boundedText(diagnostic, DIAGNOSTIC_MAX_BYTES) if diagnostic is not None else None)}
 
 	def jsonValue(value):
 		if value is None or isinstance(value, (bool, int, long, basestring)):
@@ -159,6 +183,120 @@ def onToolCalled(builder, items):
 		digest = MessageDigest.getInstance("SHA-256")
 		digest.update(canonicalJson(encodedConfiguration).encode("utf-8"))
 		return FINGERPRINT_PREFIX + digest.digest().tostring().encode("hex")
+
+	def utf8Bytes(value):
+		return len(text(value).encode("utf-8"))
+
+	def configSize(value, depth):
+		# (bounded size, problem) with problem = (reason, requested, limit). The walk
+		# stops at the first ceiling it crosses, so an over-budget request is never
+		# measured in full.
+		if depth > CONFIG_MAX_DEPTH:
+			return (0, ("configOverDepth", depth, CONFIG_MAX_DEPTH))
+		if value is None or isinstance(value, bool) or isinstance(value, Boolean):
+			return (5, None)
+		if isinstance(value, basestring):
+			size = utf8Bytes(value)
+			if size > CONFIG_STRING_MAX_BYTES:
+				return (size, ("configStringOverLimit", size, CONFIG_STRING_MAX_BYTES))
+			return (size, None)
+		if isinstance(value, (int, long, float, Number)):
+			return (NUMERIC_INPUT_BYTES, None)
+		if isinstance(value, (dict, Map)):
+			keys = value.keys() if isinstance(value, dict) else [entry.getKey() for entry in value.entrySet()]
+			total = 2
+			for key in keys:
+				childSize, problem = configSize(value.get(key), depth + 1)
+				if problem is not None:
+					return (0, problem)
+				total += utf8Bytes(unicode(key)) + childSize
+				if total > CONFIG_MAX_BYTES:
+					return (total, ("configOverByteBudget", total, CONFIG_MAX_BYTES))
+			return (total, None)
+		if isinstance(value, (list, tuple, List)):
+			if len(value) > CONFIG_ARRAY_MAX_ELEMENTS:
+				return (0, ("configArrayOverLimit", len(value), CONFIG_ARRAY_MAX_ELEMENTS))
+			total = 2
+			for child in value:
+				childSize, problem = configSize(child, depth + 1)
+				if problem is not None:
+					return (0, problem)
+				total += childSize
+				if total > CONFIG_MAX_BYTES:
+					return (total, ("configOverByteBudget", total, CONFIG_MAX_BYTES))
+			return (total, None)
+		return (64, None)
+
+	def valueBytesBounded(value, limit):
+		# The Observed half of the same idea: measuring what the Gateway returned
+		# must not itself materialize an unbounded value.
+		if value is None:
+			return 4
+		if isinstance(value, basestring):
+			return utf8Bytes(value)
+		if isinstance(value, (bool, Boolean)):
+			return 5
+		if isinstance(value, (int, long, float, Number)):
+			return 24
+		if isinstance(value, (list, tuple, List)):
+			total = 2
+			for child in value:
+				total += valueBytesBounded(child, limit)
+				if total > limit:
+					return total
+			return total
+		if isinstance(value, Map):
+			total = 2
+			for entry in value.entrySet():
+				total += utf8Bytes(unicode(entry.getKey())) + valueBytesBounded(entry.getValue(), limit)
+				if total > limit:
+					return total
+			return total
+		if isinstance(value, dict):
+			total = 2
+			for key in value:
+				total += utf8Bytes(unicode(key)) + valueBytesBounded(value[key], limit)
+				if total > limit:
+					return total
+			return total
+		return 64
+
+	def observedConfigurationProblem(value):
+		# The per-configuration half of the Observed-state budget. An over-budget
+		# configuration is an explicit observed error, never a silent truncation and
+		# never a reason to lose the item's Native outcome.
+		size = valueBytesBounded(value, OBSERVED_CONFIGURATION_MAX_BYTES)
+		if size > OBSERVED_CONFIGURATION_MAX_BYTES:
+			return "The Observed configuration is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_CONFIGURATION_MAX_BYTES) + "-byte Observed-state configuration budget; it was not returned."
+		return None
+
+	def observedError(path, code, message):
+		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
+
+	def omittedObserved(reason):
+		return [observedError(paths[index], "schema_mismatch", reason) for index in range(len(paths))]
+
+	OBSERVED_OMITTED_SERIALIZATION = "The Observed state was omitted because the structured result could not be serialized; the per-item outcomes above are complete."
+	OBSERVED_OMITTED_CEILING = "The Observed state was omitted to keep the structured result inside the 256 KiB output ceiling; the per-item outcomes above are complete."
+
+	def buildDomain(observedEntries, outcomeCounts):
+		domain = {
+			"items": results,
+			"observed": observedEntries,
+			"summary": {"requested": len(paths), "succeeded": outcomeCounts[0], "failed": outcomeCounts[1], "outcomeUnknown": outcomeCounts[2], "notExecuted": outcomeCounts[3], "auditMode": auditMode, "auditRecorded": auditRecorded},
+			"meta": {"correlationId": correlationId},
+		}
+		return encodeNulls(domain)
+
+	def encodeDomain(observedEntries, outcomeCounts):
+		# The serializer is not allowed to decide a mutation's result: a failure
+		# here is caught so the per-item Native outcomes still reach the caller.
+		try:
+			domain = buildDomain(observedEntries, outcomeCounts)
+			return (domain, system.util.jsonEncode(domain))
+		except (Exception, JavaException) as encodeExc:
+			logger.warn("correlationId=" + correlationId + " structured result serialization failed: " + text(encodeExc))
+			return (None, None)
 
 	def validFingerprint(value):
 		if not isinstance(value, basestring) or len(value) != FINGERPRINT_LENGTH:
@@ -299,6 +437,12 @@ def onToolCalled(builder, items):
 			auditProfile = document.get("auditProfile")
 			if not (isinstance(auditProfile, basestring) and auditProfile.strip()):
 				return "policyAuditProfile"
+		if hasKey(document, POLICY_MAX_ITEMS_FIELD):
+			# D10: the deployment may raise the 20-target default, never above the
+			# 100-target hard ceiling.
+			maxItems = document.get(POLICY_MAX_ITEMS_FIELD)
+			if isinstance(maxItems, bool) or not isinstance(maxItems, (int, long)) or maxItems < 1 or maxItems > HARD_MAX_ITEMS:
+				return "policyTagUpdateMaxItems"
 		if hasKey(document, "alarmShelveMaxSeconds"):
 			shelveCap = document.get("alarmShelveMaxSeconds")
 			if isinstance(shelveCap, bool) or not isinstance(shelveCap, (int, long)) or shelveCap <= 0:
@@ -390,11 +534,23 @@ def onToolCalled(builder, items):
 			return "configNameChangeNotAllowed"
 		return None
 
+	def existenceProblem(value):
+		# system.tag.exists answers a boolean; anything else is not an answer, and a
+		# non-answer must not be read as "the target is there".
+		if isinstance(value, bool):
+			return None if value else "targetMissing"
+		if isinstance(value, Boolean):
+			return None if value.booleanValue() else "targetMissing"
+		return "existenceCheckIndeterminate"
+
 	def configurationFingerprint(path):
+		# The configuration read alone is not an existence check: a Gateway answers a
+		# path that is not there with a synthesized default node (the ticket #10 live
+		# run recorded the same one on 8.3.8 and 8.3.9), so `system.tag.exists` decides.
 		nativeConfiguration = system.tag.getConfiguration(path, False, False)
 		configuration = jsonValue(nativeConfiguration)
 		if not isinstance(configuration, (list, tuple, List)) or len(configuration) == 0:
-			return (None, "targetMissing")
+			return (None, "configurationUnavailable")
 		encoded = encodeNulls(configuration)
 		return (tagConfigFingerprint(encoded), None)
 
@@ -436,6 +592,19 @@ def onToolCalled(builder, items):
 			configurations.append(item.get("config"))
 		if inputProblems:
 			return toolError("invalid_argument", "Every item must carry an absolute provider-qualified config path, the tcf1 fingerprint of that target's own tag_get_config read, and a non-empty configuration object; no item was executed.", {"reason": "preflightInputFailed", "items": inputProblems})
+		# D10 input ceilings: pure validation over the request, so an over-budget
+		# batch never reaches the policy read, let alone the Gateway.
+		totalInputBytes = 0
+		for index in range(len(paths)):
+			pathBytes = utf8Bytes(paths[index])
+			if pathBytes > PATH_MAX_BYTES:
+				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
+			configBytes, problem = configSize(configurations[index], 1)
+			if problem is not None:
+				return toolError("limit_exceeded", "A configuration is over a documented D10 input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+			totalInputBytes += pathBytes + configBytes + len(fingerprints[index])
+		if totalInputBytes > INPUT_MAX_BYTES:
+			return toolError("limit_exceeded", "The update batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -449,6 +618,17 @@ def onToolCalled(builder, items):
 		auditProfile = policy.get("auditProfile")
 		if auditProfile is not None:
 			auditProfile = unicode(auditProfile).strip()
+		# D10: a usable Policy is what raises the 20-target project default, and the
+		# document validation above keeps its value inside the 100-target ceiling.
+		effectiveMaxItems = DEFAULT_MAX_ITEMS
+		if hasKey(policy, POLICY_MAX_ITEMS_FIELD):
+			effectiveMaxItems = int(policy.get(POLICY_MAX_ITEMS_FIELD))
+		if len(paths) > effectiveMaxItems:
+			return toolError("limit_exceeded", "items exceeds the deployment's limit of " + unicode(effectiveMaxItems) + " targets; split the batch or raise " + POLICY_MAX_ITEMS_FIELD + " in the Runtime Target Policy.", {"reason": "itemsOverPolicyLimit", "requested": len(paths), "limit": effectiveMaxItems})
+		if auditMode == "required" and not auditProfileAvailable(auditProfile):
+			# D30 6: the required-mode audit profile is checked before anything is
+			# executed and before any audit row is attempted.
+			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no item was executed.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
 		stage = "preflight_targets"
 		policyProblems = []
 		for index in range(len(paths)):
@@ -465,31 +645,55 @@ def onToolCalled(builder, items):
 			if not matchesAllowlist(path, entries):
 				policyProblems.append({"index": index, "path": path, "reason": "targetNotAllowlisted", "code": "permission_denied"})
 		if policyProblems:
-			return toolError("permission_denied", "Every target must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry) and outside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems})
-		if auditMode == "required" and not auditProfileAvailable(auditProfile):
-			return toolError("operation_disabled", "The Runtime audit mode is required but the configured audit profile is unavailable; no item was executed.", {"reason": "auditProfileUnavailable", "auditProfile": boundedText(auditProfile, 128)})
+			# D18: a denied mutation is audited. The decision row is the only row a
+			# denial produces, and `off` mode still records nothing.
+			refusedText = ",".join([problem["path"] for problem in policyProblems])
+			decisionRecorded = auditWrite("decision", refusedText, "outcome=denied code=permission_denied refused=" + unicode(len(policyProblems)) + " requested=" + unicode(len(paths)))
+			if auditMode == "required" and not decisionRecorded:
+				return toolError("operation_disabled", "The Runtime audit mode is required but the denied-mutation record could not be written; no item was executed.", {"reason": "auditAttemptFailed", "phase": "decision"})
+			return toolError("permission_denied", "Every target must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry) and outside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems, "auditRecorded": decisionRecorded})
 		stage = "preflight_fingerprint"
-		# D30 2 and 3: every target's token is read and compared before any item
-		# executes. A mismatch is conflict and a target the read cannot find is
-		# not_found, so this Tool never creates one.
+		# D30 2 and 3: every target is checked to exist and its token is compared
+		# before any item executes. A target that is not there is not_found (so this
+		# Tool never creates one) and a mismatch is conflict.
 		preconditionProblems = []
 		for index in range(len(paths)):
+			path = paths[index]
 			try:
-				actual, failure = configurationFingerprint(paths[index])
+				present = system.tag.exists(path)
+			except (Exception, JavaException) as exc:
+				logger.warn("correlationId=" + correlationId + " target=" + unicode(index) + " existence check failed: " + text(exc))
+				preconditionProblems.append({"index": index, "path": path, "reason": "existenceCheckFailed", "code": "upstream_error"})
+				continue
+			existence = existenceProblem(present)
+			if existence == "targetMissing":
+				preconditionProblems.append({"index": index, "path": path, "reason": "targetMissing", "code": "not_found"})
+				continue
+			if existence is not None:
+				preconditionProblems.append({"index": index, "path": path, "reason": existence, "code": "upstream_error"})
+				continue
+			try:
+				actual, failure = configurationFingerprint(path)
 			except (Exception, JavaException) as exc:
 				logger.warn("correlationId=" + correlationId + " target=" + unicode(index) + " configuration read failed: " + text(exc))
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": "configurationReadFailed", "code": "not_found"})
+				preconditionProblems.append({"index": index, "path": path, "reason": "configurationReadFailed", "code": "upstream_error"})
 				continue
 			if failure is not None:
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": failure, "code": "not_found"})
+				preconditionProblems.append({"index": index, "path": path, "reason": failure, "code": "upstream_error"})
 				continue
 			if actual != fingerprints[index]:
-				preconditionProblems.append({"index": index, "path": paths[index], "reason": "fingerprintMismatch", "code": "conflict", "expectedFingerprint": fingerprints[index], "observedFingerprint": actual})
+				preconditionProblems.append({"index": index, "path": path, "reason": "fingerprintMismatch", "code": "conflict", "expectedFingerprint": fingerprints[index], "observedFingerprint": actual})
 		if preconditionProblems:
 			# D30 7 decides the code; the first failing item in item order decides
 			# which one, and every failing item is listed.
 			code = unicode(preconditionProblems[0].get("code", "conflict"))
-			return toolError(code, "Every target's Tag config fingerprint must match the token from its own tag_get_config read, and every target must exist; no item was executed.", {"reason": "preflightPreconditionFailed", "allowlistKey": ALLOWLIST_KEY, "items": preconditionProblems})
+			# D18: a denied mutation is audited, whatever the reason. A refused
+			# Preflight dispatches nothing and writes one decision row.
+			refusedText = ",".join([problem["path"] for problem in preconditionProblems])
+			decisionRecorded = auditWrite("decision", refusedText, "outcome=denied code=" + code + " refused=" + unicode(len(preconditionProblems)) + " requested=" + unicode(len(paths)))
+			if auditMode == "required" and not decisionRecorded:
+				return toolError("operation_disabled", "The Runtime audit mode is required but the denied-mutation record could not be written; no item was executed.", {"reason": "auditAttemptFailed", "phase": "decision"})
+			return toolError(code, "Every target must exist and its Tag config fingerprint must match the token from its own tag_get_config read; no item was executed.", {"reason": "preflightPreconditionFailed", "allowlistKey": ALLOWLIST_KEY, "items": preconditionProblems, "auditRecorded": decisionRecorded})
 		stage = "audit_attempt"
 		targetText = ",".join(paths)
 		attemptRecorded = auditWrite("attempt", targetText, "outcome=attempt requested=" + unicode(len(paths)))
@@ -536,34 +740,58 @@ def onToolCalled(builder, items):
 		auditRecorded = bool(attemptRecorded and resultRecorded)
 		stage = "observed_read"
 		observed = []
+		observedBytes = 0
+		observedBudgetSpent = False
 		for index in range(len(paths)):
+			path = paths[index]
 			try:
-				nativeConfiguration = system.tag.getConfiguration(paths[index], False, False)
+				nativeConfiguration = system.tag.getConfiguration(path, False, False)
 				configuration = jsonValue(nativeConfiguration)
 				if not isinstance(configuration, (list, tuple, List)) or len(configuration) == 0:
 					raise TypeError("Observed configuration read returned no node")
+				# D10: the Observed state carries its own budget, measured on the raw
+				# native configuration before it is materialized for the result. An
+				# over-budget configuration is an explicit observed error; the item's
+				# Native outcome above is unaffected.
+				problem = observedConfigurationProblem(nativeConfiguration)
+				if problem is None and observedBudgetSpent:
+					problem = "The Observed-state budget of " + unicode(OBSERVED_STATE_MAX_BYTES) + " bytes is already spent; this configuration was not returned."
+				if problem is None and observedBytes + valueBytesBounded(nativeConfiguration, OBSERVED_CONFIGURATION_MAX_BYTES) > OBSERVED_STATE_MAX_BYTES:
+					problem = "The Observed state already holds " + unicode(observedBytes) + " bytes, so returning this configuration would pass the " + unicode(OBSERVED_STATE_MAX_BYTES) + "-byte budget; it was not returned."
+					observedBudgetSpent = True
+				if problem is not None:
+					observed.append(observedError(path, "limit_exceeded", problem))
+					continue
 				# The fingerprint is taken over the D28-encoded configuration, which is
-				# exactly what the domain-level encoding below publishes: the raw
-				# value is stored so the encoding happens once.
-				observed.append({"path": paths[index], "status": "ok", "fingerprint": tagConfigFingerprint(encodeNulls(configuration)), "configuration": configuration})
+				# exactly what the domain-level encoding below publishes, so the raw
+				# value is stored and the encoding happens once.
+				observedBytes += valueBytesBounded(nativeConfiguration, OBSERVED_CONFIGURATION_MAX_BYTES)
+				observed.append({"path": path, "status": "ok", "fingerprint": tagConfigFingerprint(encodeNulls(configuration)), "configuration": configuration})
 			except (Exception, JavaException) as itemExc:
 				logger.warn("correlationId=" + correlationId + " observed read failed for target=" + unicode(index) + ": " + text(itemExc))
-				observed.append({"path": paths[index], "status": "error", "error": {"code": "upstream_error", "message": "The observed Tag configuration could not be read.", "correlationId": correlationId}})
+				observed.append(observedError(path, "upstream_error", "The observed Tag configuration could not be read."))
 		stage = "serialization"
 		notExecuted = 0
 		for result in results:
 			if result["status"] == "not_executed":
 				notExecuted += 1
-		domain = {
-			"items": results,
-			"observed": observed,
-			"summary": {"requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "notExecuted": notExecuted, "auditMode": auditMode, "auditRecorded": auditRecorded},
-			"meta": {"correlationId": correlationId},
-		}
-		domain = encodeNulls(domain)
-		encoded = system.util.jsonEncode(domain)
-		if len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "Structured output exceeds the 256 KiB default limit; the changes may already have been applied, so re-read with tag_get_config.", {"reason": "outputOverLimit"})
+		outcomeCounts = (succeeded, failed, outcomeUnknown, notExecuted)
+		# The per-item Native outcomes are established facts by now, so neither an
+		# over-budget Observed state nor a serializer failure may replace them with
+		# a Tool error. The result is rendered with the full Observed state and,
+		# when that cannot be returned, without it.
+		domain, encoded = encodeDomain(observed, outcomeCounts)
+		if encoded is None:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_SERIALIZATION), outcomeCounts)
+		elif len(encoded.encode("utf-8")) > OUTPUT_MAX_BYTES:
+			domain, encoded = encodeDomain(omittedObserved(OBSERVED_OMITTED_CEILING), outcomeCounts)
+		if encoded is None:
+			return toolError("upstream_error", "The Tag configuration change completed but its structured result could not be serialized.", {"reason": "serializationFailure", "stage": stage, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
+		payloadBytes = len(encoded.encode("utf-8"))
+		if payloadBytes > OUTPUT_MAX_BYTES:
+			# D10: over-budget states what was requested, the limit, and what did
+			# execute, so a completed change is never silent.
+			return toolError("limit_exceeded", "The structured result is " + unicode(payloadBytes) + " bytes, over the " + unicode(OUTPUT_MAX_BYTES) + "-byte output ceiling, even without the Observed state; update fewer targets or use narrower configurations, and re-read with tag_get_config.", {"reason": "outputOverLimit", "requestedBytes": payloadBytes, "limitBytes": OUTPUT_MAX_BYTES, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " stage=" + stage + " tag_update failed: " + text(exc))

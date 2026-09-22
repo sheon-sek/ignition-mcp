@@ -65,15 +65,13 @@
       }
     },
     {
-      "target": "system.tag.getConfiguration",
+      "target": "system.tag.exists",
       "args": [
-        "[default]IgnitionMCP_CI/Missing",
-        false,
-        false
+        "[default]IgnitionMCP_CI/Missing"
       ],
       "result": {
-        "kind": "configurations",
-        "items": []
+        "kind": "boolean",
+        "value": false
       }
     }
   ]

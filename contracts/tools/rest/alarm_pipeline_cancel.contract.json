@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "name": "alarm_pipeline_cancel",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONTROL",
+  "requiredScope": "ignition.control",
+  "mutationClass": "CONTROL_MUTATION",
+  "destructive": true,
+  "budgetClass": "FAST",
+  "deploymentGate": "IGNITION_MCP_CONTROL_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "path": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "source": "alarm_pipeline_list.items[].path",
+      "note": "the fully qualified Alarm Notification Pipeline path the Gateway reports (project:<name>:/pipeline:<name>); matched exactly, and a '*' is refused because the allowlist's wildcard is not a path"
+    },
+    "alarmEventId": {
+      "type": "string",
+      "required": true,
+      "maxLength": 128,
+      "note": "the Alarm Event whose pipeline run is cancelled; the Gateway's own identifier, so the bound is deliberately looser than a UUID's 36 characters"
+    }
+  },
+  "outputSchema": "contracts/schemas/alarm-pipeline-cancel.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/alarm-notification/api/v1/pipeline",
+    "DELETE /data/alarm-notification/api/v1/pipeline"
+  ],
+  "capabilityId": "alarm_pipeline_cancel",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "none",
+    "policy": "D30 §2 lists no Precondition token for this Tool. Its concurrency rule is the pre-dispatch read and the bounded verification below: the run the caller addresses must exist at dispatch time, and an ambiguous dispatch whose run disappeared is never credited to this caller."
+  },
+  "preDispatchRead": {
+    "rule": "D30 §2 attribution: a cancel's post-state is absence, which on its own proves nothing, so the Tool establishes the pre-state with the same bounded alarm_pipeline_status read it verifies with. A read that covers every run the Gateway matched and does not name the requested alarm event is `not_found`, and nothing is dispatched.",
+    "notFoundCode": "not_found",
+    "unestablishedCode": "limit_exceeded"
+  },
+  "targetId": {
+    "form": "the exact Alarm Notification Pipeline path, as alarm_pipeline_list reports it",
+    "match": "exact",
+    "matchNote": "D30 §6: exact pipeline paths or `*`, never prefixes. The Target is the caller's own path string, so an allowlist entry authorizes exactly the pipeline the Gateway reported for it and a path under (or above) it is a different Target.",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "fixedKnobs": {},
+  "fixedKnobsNote": "D30 §4's fixed knobs govern config-resource writes, a Tag import's collision policy and a Project import's overwrite flag. This Tool sends exactly the two facts the documented route takes — path and alarmEventId — and nothing else, so it has no knob to fix.",
+  "inputBounds": {
+    "path": "512 characters, refused with the requested length and the limit (D10)",
+    "alarmEventId": "128 characters, refused with the requested length and the limit (D10)",
+    "controlCharacters": "refused in either input, so neither reaches an audit row or a log line",
+    "emptyComponents": "invalid_argument, and a `*` in the path is invalid_argument rather than a Target lookup"
+  },
+  "readBound": {
+    "source": "alarm_pipeline_status, the read Tool D12 names as the canonical bounded verification source",
+    "page": "one page at offset 0, at most 100 instances per call (D10)",
+    "exhaustiveWhen": "the page covers every run the Gateway matched (matching - offset <= returned items)",
+    "unestablishedDisposition": "limit_exceeded, naming the matched run count and the 100-instance bound; nothing is dispatched, and no partial read is ever treated as evidence"
+  },
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit Gateway rejection is final for this Tool — a 4xx, or the 2xx the route documents carrying `success=false` with a problem. A cancelled run is not the caller's to claim when the Gateway refused the cancel, so the refusal is mapped to `conflict` (D30 §7: the run is no longer in the state the caller read) and no read-back may turn it into a success.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (a 2xx answering `success: true`) and the bounded re-read of the same pipeline path no longer reports a run for the requested alarm event"
+    ],
+    "uninterpretableResponse": "a 2xx body this Tool cannot read as a claim (no `success` field, or the wrong type) is not a success either: the bounded re-read decides, and a change it cannot attribute to this call is outcome_unknown",
+    "ambiguousAttribution": "an ambiguous dispatch (possibly sent with no response, or a 5xx) is reconciled only by the bounded re-read: a run still reported is `not_applied`, and a run that is gone is `outcome_unknown` — another operator may have cancelled the same run, so absence cannot be attributed to this call",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "a bounded alarm_pipeline_status re-read of the same pipeline path, returned as Observed state: the instances that read served, and whether a run for the requested alarm event is still among them. A claimed success is confirmed only by that run being absent from a read that covered every match.",
+  "alarmEventUntouched": "D12: cancelling a notification pipeline does not clear or acknowledge the Alarm Event. The Tool touches only the pipeline runtime route; it never calls an Alarm Event, Tag or configuration route."
+}

@@ -16,16 +16,38 @@
       "minItems": 1,
       "maxItems": 100,
       "default": 20,
-      "itemRequired": ["path", "expectedFingerprint", "config"],
+      "itemRequired": [
+        "path",
+        "expectedFingerprint",
+        "config"
+      ],
       "itemProperties": {
-        "path": {"type": "string", "providerQualified": true, "configPath": true, "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry"},
-        "expectedFingerprint": {"type": "string", "pattern": "^tcf1:[0-9a-f]{64}$", "source": "tag_get_config.fingerprint"},
-        "config": {"type": "object", "nonEmpty": true}
+        "path": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry"
+        },
+        "expectedFingerprint": {
+          "type": "string",
+          "pattern": "^tcf1:[0-9a-f]{64}$",
+          "source": "tag_get_config.fingerprint"
+        },
+        "config": {
+          "type": "object",
+          "nonEmpty": true
+        }
       }
     }
   },
   "outputSchema": "contracts/schemas/tag-update.output.schema.json",
-  "nativeRequirements": ["system.tag.readBlocking", "system.tag.getConfiguration", "system.tag.configure", "system.util.audit"],
+  "nativeRequirements": [
+    "system.tag.readBlocking",
+    "system.tag.exists",
+    "system.tag.getConfiguration",
+    "system.tag.configure",
+    "system.util.audit"
+  ],
   "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
   "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
   "nativeOutcome": "one system.tag.configure call per item; its single QualityCode is that item's outcome, and Observed state never decides success",
@@ -36,7 +58,7 @@
     "parameter": "items[].expectedFingerprint",
     "source": "tag_get_config.fingerprint",
     "enforcedBy": "handler_read_compare",
-    "comparedRead": "system.tag.getConfiguration(path, false, false) for every item, before any item executes",
+    "comparedRead": "system.tag.exists(path) and then system.tag.getConfiguration(path, false, false) for every item, before any item executes",
     "mismatchCode": "conflict",
     "raceWindowDocumented": true,
     "raceWindow": "D30 2: the compare and the change are two steps, so a competing writer can change or delete a target between the Preflight read and system.tag.configure. The handler narrows what it can (every fingerprint is read before any dispatch, and a target the Preflight read found missing is refused with not_found) and claims no atomicity. A target that disappears inside the window is re-created by MergeOverwrite, which is the same race the D16 final-import window documents; a caller that needs a narrower window re-reads with tag_get_config and retries the whole batch."
@@ -71,5 +93,35 @@
   },
   "automaticRetryAfterAmbiguousOutcome": false,
   "ambiguousOutcomeScope": "an item whose own dispatch raised is outcome_unknown and ends the batch (later items are not_executed); an item whose dispatch answered an unattributable QualityCode is outcome_unknown and the batch continues. Nothing is replayed",
-  "nullEncoding": "ignition-null-v1"
+  "nullEncoding": "ignition-null-v1",
+  "existenceCheck": {
+    "call": "system.tag.exists(path) for every item, before that item's fingerprint is read and before any item executes",
+    "why": "a Gateway answers system.tag.getConfiguration for a path that is not there with a synthesized default node, so the configuration read alone cannot tell the caller whether the target exists; the ticket #10 live run recorded the same synthesized node on 8.3.8 and 8.3.9",
+    "missing": "not_found (details.items[].reason = targetMissing), and nothing is dispatched",
+    "unanswered": "upstream_error (reasons existenceCheckFailed / existenceCheckIndeterminate): a Gateway that raises or answers something that is not a boolean is never read as present",
+    "observedReadBacks": "the provider export is the independent absence check the harness uses"
+  },
+  "inputBounds": {
+    "itemsParameter": "items",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagUpdateMaxItems",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxBytes": 2048,
+    "configStringMaxBytes": 16384,
+    "configArrayMaxElements": 1000,
+    "configMaxDepth": 8,
+    "configMaxBytes": 32768,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "observedConfigurationMaxBytes": 16384,
+    "observedStateMaxBytes": 65536,
+    "outputMaxBytes": 262144
+  },
+  "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused Precondition each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes"
 }

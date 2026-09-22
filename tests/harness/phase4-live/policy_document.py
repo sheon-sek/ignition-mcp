@@ -319,6 +319,10 @@ TAG_UPDATE_UDT_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_R
 #: The properties the positive update merges: a description and engineering units
 #: are configuration, not a value write, and both must show in the re-read.
 TAG_UPDATE_CONFIG = {"documentation": "phase4-updated", "engUnits": "kPa"}
+#: A Folder is a target too: `system.tag.exists` has to answer for one, and the
+#: merge has to land on the folder node.
+TAG_UPDATE_FOLDER = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/Nested"
+TAG_UPDATE_FOLDER_CONFIG = "phase4-folder-updated"
 TAG_UPDATE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
 TAG_UPDATE_TYPES_ALLOWLIST = (
     f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",

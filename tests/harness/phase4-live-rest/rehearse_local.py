@@ -37,8 +37,19 @@ sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from rest_driver import (  # noqa: E402
+    ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
+    DEFAULT_ALARM_EVENT_ID,
+    DEFAULT_CONTROL_PIPELINE,
+    DEFAULT_CONTROL_PROJECT,
+    DEFAULT_PIPELINE,
+    DEFAULT_PROJECT,
+    DEFAULT_TAG_CONTROL_PATH,
+    DEFAULT_TAG_PROVIDER,
+    DEFAULT_TAG_SOURCE_PATH,
+    DEFAULT_TAG_TARGET_PATH,
     RENAMED_RESOURCE,
+    TAG_IMPORT_TOOL,
     RENAME_SOURCE,
     RENAME_SOURCE_2,
     REFUSED_NAME,
@@ -50,10 +61,28 @@ from rest_driver import (  # noqa: E402
 )
 
 RESOURCE_TYPE = "ignition/audit-profile"
+#: The two Projects the import cases use: the allowlisted Target and a Project the
+#: Target allowlist does not name. Both are provisioned live by the workflow.
+PROJECT = DEFAULT_PROJECT
+CONTROL_PROJECT = DEFAULT_CONTROL_PROJECT
+#: The Tag surface the #17 cases address: the provider the live Gateway creates (and
+#: whose source Tags ``provision.py`` publishes), the path they are published at, and
+#: the destination the Target allowlist names.
+TAG_PROVIDER = DEFAULT_TAG_PROVIDER
+TAG_SOURCE_PATH = DEFAULT_TAG_SOURCE_PATH
+TAG_TARGET_PATH = DEFAULT_TAG_TARGET_PATH
+TAG_CONTROL_PATH = DEFAULT_TAG_CONTROL_PATH
+#: The pipeline surface the #18 cases address: the exact path the Target allowlist
+#: names (in the Project the import cases use, so it is run-unique live), a second
+#: pipeline it does not name, and an alarm event no run holds.
+PIPELINE = DEFAULT_PIPELINE
+CONTROL_PIPELINE = DEFAULT_CONTROL_PIPELINE
+ALARM_EVENT_ID = DEFAULT_ALARM_EVENT_ID
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
 AGENT_TOKEN = "phase4-rehearsal-agent"
+OPERATOR_TOKEN = "phase4-rehearsal-operator"
 #: The same per-Tool Target allowlists the live workflow configures: one entry list
 #: per Mutation Tool, and every name a case addresses that must be allowed.
 MUTATION_TARGETS = {
@@ -72,6 +101,12 @@ MUTATION_TARGETS = {
         f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
         f"{RESOURCE_TYPE}/{RENAMED_RESOURCE}",
     ),
+    # D30 §6: the Target of the Project import is the Project itself.
+    "project_import": (PROJECT,),
+    # D30 §3/#17: the Target of a Tag import is the provider-qualified destination path.
+    TAG_IMPORT_TOOL: (f"[{TAG_PROVIDER}]{TAG_TARGET_PATH}",),
+    # D30 §6/#18: the Target of a pipeline cancel is the exact pipeline path.
+    ALARM_CANCEL_TOOL: (PIPELINE,),
 }
 
 
@@ -90,6 +125,8 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
             StaticToken(name="rehearsal-reader", token=READER_TOKEN, scopes=("ignition.read",)),
             StaticToken(name="rehearsal-agent", token=AGENT_TOKEN,
                         scopes=("ignition.read", "ignition.config")),
+            StaticToken(name="rehearsal-operator", token=OPERATOR_TOKEN,
+                        scopes=("ignition.read", "ignition.control")),
         ),
         service_identity="phase4-rehearsal", watcher_interval_seconds=2.0, request_timeout_seconds=10.0,
         structured_output_limit_bytes=262_144, log_format="text", data_dir=data_dir,
@@ -100,11 +137,11 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         artifact_total_bytes=1_073_741_824, artifact_max_count=1000, artifact_min_free_bytes=104_857_600,
         artifact_min_free_ratio=0.05, artifact_export_ttl_hours=24, artifact_recovery_ttl_days=7,
         artifact_staging_deadline_seconds=900.0, artifact_cleanup_interval_seconds=3600.0,
-        artifact_cleanup_batch=50, artifact_upload_enabled=False, sensitive_exports_enabled=False,
-        config_mutation_enabled=mutation_enabled, control_mutation_enabled=False,
+        artifact_cleanup_batch=50, artifact_upload_enabled=True, sensitive_exports_enabled=True,
+        config_mutation_enabled=mutation_enabled, control_mutation_enabled=mutation_enabled,
         admin_mutation_enabled=False, mutation_operations=tuple(MUTATION_TARGETS),
         mutation_targets=MUTATION_TARGETS,
-        project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=False,
+        project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=True,
         project_lock_timeout_seconds=10.0, project_lock_max_entries=32,
         project_reconcile_interval_seconds=3600.0, project_verification_timeout_seconds=60.0,
     )
@@ -132,6 +169,46 @@ def _server(settings: Settings) -> Iterator[str]:
     finally:
         instance.should_exit = True
         thread.join(timeout=15)
+
+
+def _project_archive(marker: str) -> bytes:
+    """A Project archive in the shape the recorded Gateway serves on export."""
+
+    import io
+    import json
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr(
+            zipfile.ZipInfo("project.json", date_time=(1980, 1, 1, 0, 0, 0)),
+            json.dumps({
+                "title": f"Phase 4 REST rehearsal {marker}",
+                "description": "fixture", "parent": "", "enabled": True, "inheritable": False,
+            }, sort_keys=True).encode("utf-8"),
+        )
+        archive.writestr(
+            zipfile.ZipInfo("ignition/named-query/mcp_probe/query.sql", date_time=(1980, 1, 1, 0, 0, 0)),
+            b"SELECT 1",
+        )
+    return buffer.getvalue()
+
+
+def _source_tags() -> list[dict[str, Any]]:
+    """The same source Tag document ``provision.py`` publishes on the live Gateway."""
+
+    return [
+        {"name": "Folder", "tagType": "Folder", "tags": [
+            {"name": "Int", "tagType": "AtomicTag", "valueSource": "memory",
+             "dataType": "Int4", "value": 7, "enabled": True},
+            {"name": "Inner", "tagType": "Folder", "tags": [
+                {"name": "Text", "tagType": "AtomicTag", "valueSource": "memory",
+                 "dataType": "String", "value": "p4-rest", "enabled": True},
+            ]},
+        ]},
+        {"name": "Sibling", "tagType": "AtomicTag", "valueSource": "memory",
+         "dataType": "String", "value": "keep", "enabled": True},
+    ]
 
 
 def _seed(gateway: RecordedGateway) -> None:
@@ -164,6 +241,12 @@ def _seed(gateway: RecordedGateway) -> None:
         config={"profile": {"type": "basic-token"}, "settings": {"tokenHash": "<redacted>"}},
         description="Disposable CI-only API token",
     )
+    # The Tag provider the #17 cases address: its state is the source document
+    # ``provision.py`` imports into ``source`` on the live Gateway, so an export of that
+    # path serves the same Tags here as it does there.
+    gateway.seed_tags(TAG_PROVIDER, [
+        {"name": TAG_SOURCE_PATH, "tagType": "Folder", "tags": _source_tags()},
+    ])
 
 
 def main() -> int:
@@ -172,16 +255,28 @@ def main() -> int:
     args = parser.parse_args()
 
     args.raw_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, RecordedGateway() as gateway:
+    projects = {
+        PROJECT: _project_archive("target"),
+        CONTROL_PROJECT: _project_archive("control"),
+    }
+    with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, \
+            RecordedGateway(projects=projects) as gateway:
         _seed(gateway)
         with _server(_settings(gateway, data_dir, mutation_enabled=True)) as url:
             gate_on = asyncio.run(run_gate_on(
                 rest_url=url, reader_token=READER_TOKEN, agent_token=AGENT_TOKEN,
+                operator_token=OPERATOR_TOKEN,
                 resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
                 unallowlisted=UNALLOWLISTED, singleton_type=SINGLETON_TYPE,
                 created_name=CREATED_RESOURCE, rename_source=RENAME_SOURCE,
                 rename_source_2=RENAME_SOURCE_2, renamed_name=RENAMED_RESOURCE,
-                unallowlisted_renamed=UNALLOWLISTED_RENAMED, raw_dir=args.raw_dir,
+                unallowlisted_renamed=UNALLOWLISTED_RENAMED,
+                project=PROJECT, control_project=CONTROL_PROJECT,
+                tag_provider=TAG_PROVIDER, tag_source_path=TAG_SOURCE_PATH,
+                tag_target_path=TAG_TARGET_PATH, tag_control_path=TAG_CONTROL_PATH,
+                pipeline=PIPELINE, control_pipeline=CONTROL_PIPELINE,
+                alarm_event_id=ALARM_EVENT_ID,
+                raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(

@@ -8,11 +8,11 @@
   ],
   "attributes": {
     "title": "tag_get_config",
-    "description": "Read bounded Tag configuration with system.tag.getConfiguration, plus the Tag config fingerprint (D30 2, `tcf1:`) of exactly the configuration the read returned: the Precondition token tag_update compares. The internal UDT definition namespace is reserved for udt_type_* tools.",
+    "description": "Read bounded Tag configuration with system.tag.getConfiguration, plus the Tag config fingerprint (D30 2, `tcf1:`) of exactly the configuration the read returned: the Precondition token tag_update compares. One exact UDT definition can be read (recursive=false) so a CONFIG Mutation's token can be obtained; the recursive view of the definition namespace stays udt_type_get's.",
     "parameters": [
       {
         "name": "path",
-        "description": "Absolute provider-qualified Tag, Folder, or UDT instance path outside _types_.",
+        "description": "Absolute provider-qualified Tag, Folder, or UDT instance path, or one exact [provider]_types_/... definition with recursive=false.",
         "type": "string",
         "required": true
       },

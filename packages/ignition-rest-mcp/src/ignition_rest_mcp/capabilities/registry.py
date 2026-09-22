@@ -22,8 +22,13 @@ PROJECT_LIST_PATH = "/data/api/v1/projects/list"
 AUDIT_QUERY_PATH = "/data/api/v1/audit/log/{name}"
 ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
+#: D26 ticket #18: the cancel is the same documented path as the status read, addressed
+#: with ``DELETE``. The `alarm_pipeline_cancel` capability requires both routes, because
+#: the bounded status read *is* the Tool's verification (D30 §6).
+ALARM_PIPELINE_CANCEL_PATH = ALARM_PIPELINE_STATUS_PATH
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
+TAG_CONFIG_IMPORT_PATH = "/data/api/v1/tags/import"
 PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
@@ -330,10 +335,24 @@ def _semantic_capabilities(
     if any(item.rename_path_template is not None for item in resource_types.values()):
         semantic.add("config_resource_rename")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
-    # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
-    # capability only gates internal machinery and future Phase 4 exposure (D08/D26).
+    # is in the OpenAPI inventory. Phase 3 never dispatched the import; Phase 4's
+    # `project_import` Tool is gated on this capability (D08/D26).
     if ("POST", PROJECT_IMPORT_PATH) in endpoints:
         semantic.add("project_import")
+    # `tag_config_import` (D26 ticket #17) creates Tags from a JSON Tag export. Its
+    # route is the only thing that decides whether the Tool is exposed: the import it
+    # sends is the documented one, and the export it verifies against is separately
+    # gated by `tag_config_export`.
+    if ("POST", TAG_CONFIG_IMPORT_PATH) in endpoints:
+        semantic.add("tag_config_import")
+    # `alarm_pipeline_cancel` (D26 ticket #18) stops one Alarm Notification Pipeline run.
+    # The route that decides it is the documented DELETE, but the bounded status read
+    # D30 §6 makes its verification has to be there too: without it the Tool could never
+    # establish whether a cancel landed, so it is not exposed at all.
+    if ("DELETE", ALARM_PIPELINE_CANCEL_PATH) in endpoints and (
+        "GET", ALARM_PIPELINE_STATUS_PATH
+    ) in endpoints:
+        semantic.add("alarm_pipeline_cancel")
     if ("GET", DESIGNERS_PATH) in endpoints:
         semantic.add("designer_sessions")
     if ("GET", PROJECT_FIND_PATH) in endpoints:

@@ -1,9 +1,12 @@
 name: Phase 4 Live Gateway REST mutation
 
-# Milestone 4c live proof for the first REST Mutation Tool
-# (`config_resource_update`): the allowlisted update, the stale-signature
-# refusal, the Refused resource type, and the exact REST inventory with the
-# config mutation class enabled and disabled, against real disposable Gateways.
+# Milestone 4c live proof for the Phase 4 REST Mutation Tools
+# (`config_resource_update`, `config_resource_create`, `config_resource_delete`,
+# `config_resource_rename`, `project_import`, `tag_config_import` and
+# `alarm_pipeline_cancel`): their allowlisted changes and refusals, the D30
+# Precondition tokens and Target rules, and the exact REST inventory per
+# credential with the mutation classes enabled and disabled, against real
+# disposable Gateways.
 #
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment. That environment
@@ -50,6 +53,9 @@ jobs:
       EVIDENCE_DIR: artifacts/phase4-rest-${{ matrix.gateway_version }}
       READER_TOKEN: phase4-rest-reader-${{ github.run_id }}
       AGENT_TOKEN: phase4-rest-agent-${{ github.run_id }}
+      # The CONTROL credential (#18): the cancel Tool requires `ignition.control`, so the
+      # run proves scope-by-effect with a credential that has it and one that does not.
+      OPERATOR_TOKEN: phase4-rest-operator-${{ github.run_id }}
       HARNESS: tests/harness/phase4-live-rest
       RESOURCE_TYPE: ignition/audit-profile
       ALLOWLISTED_RESOURCE: MCP_CI_AUDIT
@@ -63,6 +69,23 @@ jobs:
       RENAME_SOURCE_2: MCP_CI_AUDIT_RENAME_SOURCE_2
       RENAMED_RESOURCE: MCP_CI_AUDIT_RENAMED
       UNALLOWLISTED_RENAMED: MCP_CI_AUDIT_RENAMED_NOT_ALLOWED
+      # The Project import cases: an allowlisted Target Project and a second existing
+      # Project the Target allowlist does not name. Both are provisioned below, and
+      # either a disposable directory or fresh state, never a real Project.
+      IMPORT_PROJECT: mcp_p4_rest_${{ github.run_id }}_${{ github.run_attempt }}
+      IMPORT_CONTROL_PROJECT: mcp_p4_rest_control_${{ github.run_id }}_${{ github.run_attempt }}
+      # The Tag import cases: a disposable provider holding the source Tags, the path
+      # they are provisioned at, the destination the Target allowlist names, and a
+      # second destination it deliberately does not.
+      TAG_PROVIDER: mcp_p4_rest_tags_${{ github.run_id }}_${{ github.run_attempt }}
+      TAG_SOURCE_PATH: source
+      TAG_TARGET_PATH: target
+      TAG_CONTROL_PATH: target_not_allowed
+      # The pipeline cancel case's alarm event: the identifier no run on a fresh Gateway
+      # holds, which is what makes the no-run refusal deterministic live.
+      ALARM_EVENT_ID: "00000000-0000-4000-8000-000000000000"
+      # The D16 writer identity: one stable operator-chosen ID per Gateway.
+      GATEWAY_ID: phase4-rest-${{ matrix.gateway_version }}-${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -87,6 +110,7 @@ jobs:
           set -euo pipefail
           echo "::add-mask::$READER_TOKEN"
           echo "::add-mask::$AGENT_TOKEN"
+          echo "::add-mask::$OPERATOR_TOKEN"
 
       - name: Pull the exact service image
         shell: bash
@@ -149,11 +173,17 @@ jobs:
           docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
           docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
           docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+          # The two disposable Projects the import cases address: the Target, and a
+          # second Project the Target allowlist deliberately does not name.
+          docker cp tests/harness/phase3-live/fixture-project "$cid:/usr/local/bin/ignition/data/projects/$IMPORT_PROJECT"
+          docker cp tests/harness/phase3-live/fixture-project "$cid:/usr/local/bin/ignition/data/projects/$IMPORT_CONTROL_PROJECT"
           docker run --rm --volumes-from "$cid" --entrypoint /bin/sh --user 0:0 "$GATEWAY_IMAGE" \
             -c "chown -R '$data_owner' \
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
-              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci \
+              /usr/local/bin/ignition/data/projects/$IMPORT_PROJECT \
+              /usr/local/bin/ignition/data/projects/$IMPORT_CONTROL_PROJECT"
           docker compose -f "$COMPOSE_FILE" start gateway
 
       - name: Wait for authenticated Native REST
@@ -196,15 +226,29 @@ jobs:
           print(f"openapi: {len(raw)} bytes, {len(paths)} paths, sha256 {digest}")
           PY
 
+      - name: Derive the pipeline cancel paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Phase 4 ticket #18: the Target of a pipeline cancel is one exact pipeline
+          # path inside a Project this run owns, so the Target allowlist and the paths
+          # the driver addresses are the same run-unique strings.
+          echo "PIPELINE=project:$IMPORT_PROJECT:/pipeline:MCP_CI_Notify" >> "$GITHUB_ENV"
+          echo "CONTROL_PIPELINE=project:$IMPORT_CONTROL_PROJECT:/pipeline:MCP_CI_Notify" >> "$GITHUB_ENV"
+
       - name: Provision the Phase 4 REST fixtures
         shell: bash
         run: |
           set -euo pipefail
           uv run --locked --package ignition-rest-mcp python "$HARNESS/provision.py" \
             --api-token "$CI_API_TOKEN" \
+            --project "$IMPORT_PROJECT" \
+            --control-project "$IMPORT_CONTROL_PROJECT" \
+            --tag-provider "$TAG_PROVIDER" \
+            --tag-source-path "$TAG_SOURCE_PATH" \
             --evidence "$EVIDENCE_DIR/provision.json"
 
-      - name: Start ignition-rest with the config mutation class enabled
+      - name: Start ignition-rest with both mutation classes enabled
         shell: bash
         run: |
           set -euo pipefail
@@ -214,14 +258,19 @@ jobs:
           IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
           IGNITION_MCP_DEPLOYMENT_PROFILE=development \
           IGNITION_MCP_AUTH_MODE=static-token \
-          IGNITION_MCP_STATIC_TOKENS="$(jq -nc --arg r "$READER_TOKEN" --arg a "$AGENT_TOKEN" \
-            '{"reader":{"token":$r,"scopes":["ignition.read"]},"config-agent":{"token":$a,"scopes":["ignition.read","ignition.config"]}}')" \
+          IGNITION_MCP_STATIC_TOKENS="$(jq -nc --arg r "$READER_TOKEN" --arg a "$AGENT_TOKEN" --arg o "$OPERATOR_TOKEN" \
+            '{"reader":{"token":$r,"scopes":["ignition.read"]},"config-agent":{"token":$a,"scopes":["ignition.read","ignition.config"]},"operator-agent":{"token":$o,"scopes":["ignition.read","ignition.control"]}}')" \
           IGNITION_MCP_HOST=127.0.0.1 \
           IGNITION_MCP_PORT=8765 \
           IGNITION_MCP_PATH=/mcp \
           IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
           IGNITION_MCP_CONFIG_MUTATION_ENABLED=true \
-          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename \
+          IGNITION_MCP_CONTROL_MUTATION_ENABLED=true \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true \
+          IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED=true \
+          IGNITION_MCP_PROJECT_WRITER_ENABLED=true \
+          IGNITION_MCP_GATEWAY_ID="$GATEWAY_ID" \
+          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel \
           IGNITION_MCP_MUTATION_TARGETS="$(jq -nc \
             --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
             --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
@@ -229,10 +278,16 @@ jobs:
             --arg rename_source_2 "$RESOURCE_TYPE/$RENAME_SOURCE_2" \
             --arg renamed "$RESOURCE_TYPE/$RENAMED_RESOURCE" \
             --arg singleton "$SINGLETON_TYPE" \
+            --arg project "$IMPORT_PROJECT" \
+            --arg tag_target "[$TAG_PROVIDER]$TAG_TARGET_PATH" \
+            --arg pipeline "$PIPELINE" \
             '{config_resource_update: [$allowlisted, $singleton],
               config_resource_create: [$created, $rename_source, $rename_source_2],
               config_resource_delete: [$allowlisted, $created],
-              config_resource_rename: [$rename_source, $rename_source_2, $renamed]}')" \
+              config_resource_rename: [$rename_source, $rename_source_2, $renamed],
+              project_import: [$project],
+              tag_config_import: [$tag_target],
+              alarm_pipeline_cancel: [$pipeline]}')" \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
           echo "$!" > artifacts/rest-gate-on.pid
@@ -248,7 +303,7 @@ jobs:
           cat "$EVIDENCE_DIR/ignition-rest-gate-on.log" >&2
           exit 1
 
-      - name: Run the live mutation cases (class enabled)
+      - name: Run the live mutation cases (classes enabled)
         id: gateon
         shell: bash
         run: |
@@ -258,6 +313,7 @@ jobs:
             --rest-url http://127.0.0.1:8765 \
             --reader-token "$READER_TOKEN" \
             --agent-token "$AGENT_TOKEN" \
+            --operator-token "$OPERATOR_TOKEN" \
             --resource-type "$RESOURCE_TYPE" \
             --allowlisted "$ALLOWLISTED_RESOURCE" \
             --singleton-type "$SINGLETON_TYPE" \
@@ -266,6 +322,15 @@ jobs:
             --rename-source-2 "$RENAME_SOURCE_2" \
             --renamed-name "$RENAMED_RESOURCE" \
             --unallowlisted-renamed "$UNALLOWLISTED_RENAMED" \
+            --project "$IMPORT_PROJECT" \
+            --control-project "$IMPORT_CONTROL_PROJECT" \
+            --tag-provider "$TAG_PROVIDER" \
+            --tag-source-path "$TAG_SOURCE_PATH" \
+            --tag-target-path "$TAG_TARGET_PATH" \
+            --tag-control-path "$TAG_CONTROL_PATH" \
+            --pipeline "$PIPELINE" \
+            --control-pipeline "$CONTROL_PIPELINE" \
+            --alarm-event-id "$ALARM_EVENT_ID" \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
             > "$EVIDENCE_DIR/driver-gate-on.log" 2>&1
@@ -282,7 +347,7 @@ jobs:
           curl --silent --max-time 5 http://127.0.0.1:8765/metrics > "$EVIDENCE_DIR/metrics.txt" 2>&1 || true
           wc -c "$EVIDENCE_DIR/metrics.txt"
 
-      - name: Restart ignition-rest with the config mutation class disabled
+      - name: Restart ignition-rest with the mutation classes disabled
         shell: bash
         run: |
           set -euo pipefail
@@ -299,6 +364,7 @@ jobs:
           IGNITION_MCP_PORT=8765 \
           IGNITION_MCP_PATH=/mcp \
           IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true \
           IGNITION_MCP_CONFIG_MUTATION_ENABLED=false \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-off.log" 2>&1 &
@@ -311,7 +377,7 @@ jobs:
           cat "$EVIDENCE_DIR/ignition-rest-gate-off.log" >&2
           exit 1
 
-      - name: Run the live inventory case (class disabled)
+      - name: Run the live inventory case (classes disabled)
         id: gateoff
         shell: bash
         run: |

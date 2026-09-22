@@ -416,6 +416,9 @@ def test_not_sent_is_known_non_attempt_without_drift(tmp_path: Path) -> None:
             assert result.external_drift_detected is False
             assert result.error is not None and result.error.code == "gateway_unavailable"
             assert len(gateway.dispatch_calls) == 1  # one dispatch *attempt* that never sent
+            # The durable class a restart reads: nothing was sent, so no re-export may
+            # ever credit this attempt with the Project's content.
+            assert await _boundary(env, result.transaction_id) == "not_sent"
         finally:
             await env.stop()
 
@@ -464,6 +467,10 @@ def test_rejected_4xx_is_not_applied_and_never_retried(tmp_path: Path) -> None:
             assert len(gateway.dispatch_calls) == 1
             assert gateway.state == BASE_BYTES
             assert result.external_drift_detected is False
+            # The frozen G3 operation does not make a refusal final, so its durable class
+            # stays D16's attributable one: a re-export equal to the candidate B is a
+            # recovered success for it, exactly as before Phase 4.
+            assert await _boundary(env, result.transaction_id) == "attributable"
         finally:
             await env.stop()
 
@@ -670,7 +677,8 @@ def test_designer_ignore_skips_the_endpoint(tmp_path: Path) -> None:
 
 async def _seed(
     env: _Env, state: TransactionState, *, candidate_bytes: bytes,
-    baseline_fp: str | None = None,
+    baseline_fp: str | None = None, boundary: str | None = None,
+    error_code: str | None = None,
 ) -> str:
     a_writer = await env.store.create(
         kind="project_export", sensitivity="CONFIDENTIAL", retention_class="EPHEMERAL",
@@ -694,6 +702,9 @@ async def _seed(
         candidate_artifact=artifact_b.artifact_id, candidate_fingerprint=_fingerprint_bytes(candidate_bytes),
         # a persisted IMPORT_SENT/VERIFYING row implies the pre-dispatch persist ran
         import_dispatched=state in {TransactionState.IMPORT_SENT, TransactionState.VERIFYING},
+        # D16 restart reconciliation reads the durable dispatch classification: a row
+        # written before Phase 4 has none and is reconciled by the read-only comparison.
+        dispatch_boundary=boundary, error_code=error_code,
     )
     return txn_id
 
@@ -706,6 +717,18 @@ async def _row(env: _Env, txn_id: str) -> tuple[str, int, str | None]:
         ).fetchone()
     )
     return str(row[0]), int(row[1]), None if row[2] is None else str(row[2])
+
+
+async def _boundary(env: _Env, txn_id: str) -> str | None:
+    """The durable dispatch class one row carries (the restart reconciliation input)."""
+
+    row = await env.storage.state.run(
+        lambda conn: conn.execute(
+            "SELECT dispatch_boundary FROM project_transactions WHERE transaction_id = ?",
+            (txn_id,),
+        ).fetchone()
+    )
+    return None if row[0] is None else str(row[0])
 
 
 def test_restart_pre_import_becomes_failed_pre_import(tmp_path: Path) -> None:
@@ -807,6 +830,113 @@ def test_restart_when_reexport_fails_is_outcome_unknown(tmp_path: Path) -> None:
             await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10)
             state, _, error = await _row(env, txn_id)
             assert state == "OUTCOME_UNKNOWN" and error == "outcome_unknown"
+        finally:
+            await env.stop()
+
+    _run(scenario())
+
+
+def test_restart_refused_dispatch_is_not_applied_without_a_read_back(tmp_path: Path) -> None:
+    """D30 §2: a refusal the Gateway already gave is final, so the restarted process must
+    not export the Project at all. A competing writer can hold the very candidate B this
+    attempt asked for (the Gateway here serves exactly that), and no read-back can tell
+    that apart from this call's own success."""
+
+    gateway = FakeGateway(project_bytes=EDIT_BYTES)
+    env = _ready(tmp_path, gateway)
+
+    async def scenario() -> None:
+        try:
+            txn_id = await _seed(env, TransactionState.IMPORT_SENT, candidate_bytes=EDIT_BYTES,
+                                 boundary="refused", error_code="conflict")
+            assert await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10) == 1
+            state, dispatched, error = await _row(env, txn_id)
+            assert state == "NOT_APPLIED" and error == "conflict" and dispatched == 1
+            assert gateway.export_calls == 0
+        finally:
+            await env.stop()
+
+    _run(scenario())
+
+
+def test_restart_unrecorded_answer_is_never_a_recovered_success(tmp_path: Path) -> None:
+    """The crash window *inside* the dispatch: the Gateway may have answered — a refusal
+    is indistinguishable from an ambiguous boundary when nothing was written down — so a
+    re-export that equals the candidate B may not be claimed as this attempt's success.
+    The transaction reports OUTCOME_UNKNOWN and keeps the recovery snapshot."""
+
+    gateway = FakeGateway(project_bytes=EDIT_BYTES)
+    env = _ready(tmp_path, gateway)
+
+    async def scenario() -> None:
+        try:
+            txn_id = await _seed(env, TransactionState.IMPORT_SENT, candidate_bytes=EDIT_BYTES,
+                                 boundary="unattributable")
+            assert await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10) == 1
+            state, _, error = await _row(env, txn_id)
+            assert state == "OUTCOME_UNKNOWN" and error == "outcome_unknown"
+            assert gateway.export_calls == 1  # the read-back happened; it just proves nothing
+            recovery = [row for row in await env.artifact_states() if row[1] == "RECOVERY"]
+            assert recovery and all(row[2] == 1 for row in recovery)
+        finally:
+            await env.stop()
+
+    _run(scenario())
+
+
+def test_restart_not_sent_dispatch_is_not_applied_without_a_read_back(tmp_path: Path) -> None:
+    """A recorded known non-attempt needs no read-back either: nothing left the process,
+    so the Project showing the candidate is another writer's work."""
+
+    gateway = FakeGateway(project_bytes=EDIT_BYTES)
+    env = _ready(tmp_path, gateway)
+
+    async def scenario() -> None:
+        try:
+            txn_id = await _seed(env, TransactionState.IMPORT_SENT, candidate_bytes=EDIT_BYTES,
+                                 boundary="not_sent", error_code="gateway_unavailable")
+            assert await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10) == 1
+            state, dispatched, error = await _row(env, txn_id)
+            assert state == "NOT_APPLIED" and error == "gateway_unavailable" and dispatched == 0
+            assert gateway.export_calls == 0
+        finally:
+            await env.stop()
+
+    _run(scenario())
+
+
+def test_restart_claimed_success_is_committed_when_the_candidate_is_there(tmp_path: Path) -> None:
+    """A recorded claim is confirmed the way D16 confirms one: C == B."""
+
+    gateway = FakeGateway(project_bytes=EDIT_BYTES)
+    env = _ready(tmp_path, gateway)
+
+    async def scenario() -> None:
+        try:
+            txn_id = await _seed(env, TransactionState.IMPORT_SENT, candidate_bytes=EDIT_BYTES,
+                                 boundary="claimed")
+            assert await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10) == 1
+            state, dispatched, _ = await _row(env, txn_id)
+            assert state == "COMMITTED" and dispatched == 1
+        finally:
+            await env.stop()
+
+    _run(scenario())
+
+
+def test_restart_claimed_success_without_the_candidate_is_recovery_required(tmp_path: Path) -> None:
+    """The Gateway claimed the import and nothing landed: that is recovery_required, not
+    "not applied" — the claim is unconfirmed, so the snapshot stays locked."""
+
+    env = _ready(tmp_path)  # the Gateway still serves the baseline
+
+    async def scenario() -> None:
+        try:
+            txn_id = await _seed(env, TransactionState.IMPORT_SENT, candidate_bytes=EDIT_BYTES,
+                                 boundary="claimed")
+            assert await env.service.reconcile_interrupted(batch=5, per_txn_seconds=10) == 1
+            state, _, error = await _row(env, txn_id)
+            assert state == "RECOVERY_REQUIRED" and error == "outcome_unknown"
         finally:
             await env.stop()
 

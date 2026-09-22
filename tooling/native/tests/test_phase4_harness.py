@@ -82,6 +82,8 @@ def _tag_update_paths() -> dict[str, str]:
     return {
         "writeTarget": policy_document.TAG_UPDATE_TARGET,
         "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
+        "writeProbe": policy_document.WRITE_PROBE_PATH,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
@@ -921,6 +923,7 @@ def test_tag_update_case_selector_replays_the_recorded_refusals() -> None:
         tag_update_paths: dict[str, str] = {}
         tag_config = {
             policy_document.TAG_UPDATE_TARGET: [{"name": "WriteTarget", "value": 0}],
+            policy_document.TAG_UPDATE_FOLDER: [{"name": "Nested", "tagType": "Folder"}],
         }
 
     class _Policy(_Server):
@@ -937,8 +940,12 @@ def test_tag_update_case_selector_replays_the_recorded_refusals() -> None:
 
     target = policy_document.TAG_UPDATE_TARGET
     fresh = recorded_gateway._tag_config_fingerprint(_Server.tag_config[target])
+    folder_fresh = recorded_gateway._tag_config_fingerprint(
+        _Server.tag_config[policy_document.TAG_UPDATE_FOLDER]
+    )
     cases = [
         (_Policy, [item(target, fresh)], "allowlisted"),
+        (_Policy, [item(policy_document.TAG_UPDATE_FOLDER, folder_fresh)], "allowlisted"),
         (_Policy, [item(target, "tcf1:" + "0" * 64)], "stale-fingerprint"),
         (_Policy, [item("[IgnitionMCPPolicy]WriteProbe", fresh)], "reserved-provider-refusal"),
         (_Policy, [item(policy_document.TAG_FIXTURE_SIBLING_PATH, fresh)], "sibling-denial"),
@@ -995,18 +1002,27 @@ def test_tag_update_stages_record_the_live_facts(stub_mcp: dict[str, Any], tmp_p
     assert facts["tagUpdateFingerprintStableAcrossReads"] is True
     assert facts["tagUpdateUpdateStatus"] == "executed"
     assert facts["tagUpdateIndependentReadShowsTheChange"] is True
+    # A Folder is a target too, and the existence check answers for one.
+    assert facts["tagUpdateFolderTargetStatus"] == "executed"
+    assert facts["tagUpdateFolderTargetIndependentReadShowsTheChange"] is True
+    assert facts["tagUpdateFolderTargetFingerprintChanged"] is True
     assert facts["tagUpdateObservedFingerprintChanged"] is True
     assert facts["tagUpdateIndependentReadMatchesObserved"] is True
     assert facts["tagUpdateStaleFingerprintIsConflict"] is True
     assert facts["tagUpdateStaleFingerprintChangedNothing"] is True
     assert facts["tagUpdateNeverCreatesTarget"] is True
+    assert facts["tagUpdateMissingTargetAbsentFromExport"] is True
     assert facts["tagUpdateSiblingDenialIsSegmentBoundary"] is True
     assert facts["tagUpdateUdtNeedsExplicitTypesEntry"] is True
+    assert facts["tagUpdateUdtDefinitionReadIsAllowed"] is True
     assert facts["tagUpdateTypesEntryIsHonoured"] is True
     assert facts["tagUpdateBareWildcardDoesNotCoverUdt"] is True
     assert facts["tagUpdateReservedProviderRefusedUnderWildcard"] is True
     assert facts["tagUpdatePolicyDocumentUnclobbered"] is True
     assert facts["tagUpdatePreflightExecutedNothing"] is True
+    assert facts["tagUpdateOverPolicyLimitIsRefused"] is True
+    assert facts["tagUpdateSiblingDenialAuditRecorded"] is True
+    assert facts["tagUpdateStaleFingerprintAuditRecorded"] is True
     assert no_policy["tagUpdateNoPolicyFailsClosed"] is True
     assert no_policy["tagUpdateNoPolicyReason"] == "declaredLengthUnavailable"
     assert setup["tagUpdatePolicyInstalled"] is True
@@ -1474,6 +1490,22 @@ def test_phase4_live_workflow_is_guarded_and_environment_scoped() -> None:
     # Frozen expectations: drift must fail the job now.
     assert 'if [[ "$rc" == "3" ]]; then' in text
     assert 'echo "characterization drifted' in text
+
+
+def test_the_live_fingerprint_verifier_reproduces_the_golden_vectors() -> None:
+    """The driver recomputes the published fingerprint with the contracts linter's
+    own copy of the D30 rule. The published configuration is already D28 encoded,
+    so the verifier hashes it as it stands: a null marker or a literal `$ignition`
+    object must not be escaped a second time."""
+    document = json.loads(
+        (ROOT / "contracts/shared/tag-config-fingerprint.json").read_text(encoding="utf-8")
+    )
+    for vector in document["goldenVectors"]:
+        assert driver.derived_fingerprint(vector["configuration"]) == vector["fingerprint"], vector["name"]
+    # The two vectors that reach the encoding rule are the ones the double encoding
+    # would break, so the check is not vacuous.
+    names = {vector["name"] for vector in document["goldenVectors"]}
+    assert {"explicit-null-property", "escaped-reserved-key-object"} <= names
 
 
 def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:

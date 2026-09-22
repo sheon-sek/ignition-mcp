@@ -65,6 +65,16 @@
       }
     },
     {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
       "target": "system.tag.getConfiguration",
       "args": [
         "[default]IgnitionMCP_CI/WriteTarget",
@@ -79,7 +89,11 @@
             "defaultValue": 0,
             "enabled": true,
             "name": "WriteTarget",
-            "path": "[default]IgnitionMCP_CI/WriteTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "type": "native-object"
+            },
             "tagType": "AtomicTag",
             "value": 0,
             "valueSource": "memory"

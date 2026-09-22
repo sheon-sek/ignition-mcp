@@ -1,7 +1,7 @@
 {
   "content": [
     {
-      "text": "{\"code\": \"not_found\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_update\", \"items\": [{\"code\": \"not_found\", \"index\": 0, \"path\": \"__MISSING__\", \"reason\": \"targetMissing\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target's Tag config fingerprint must match the token from its own tag_get_config read, and every target must exist; no item was executed.\"}",
+      "text": "{\"code\": \"not_found\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_update\", \"auditRecorded\": true, \"items\": [{\"code\": \"not_found\", \"index\": 0, \"path\": \"__MISSING__\", \"reason\": \"targetMissing\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target must exist and its Tag config fingerprint must match the token from its own tag_get_config read; no item was executed.\"}",
       "type": "text"
     }
   ],

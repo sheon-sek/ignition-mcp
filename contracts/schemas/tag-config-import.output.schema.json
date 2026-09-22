@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:tag-config-import:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "provider": {"type": "string", "minLength": 1, "maxLength": 256},
+    "path": {"type": "string", "maxLength": 1024},
+    "artifact": {
+      "description": "The READY JSON Tag export this call consumed (D17/D30 §6).",
+      "$ref": "#/$defs/artifactRef"
+    },
+    "observedState": {
+      "description": "The bounded re-export of the same provider and path, compared with the Tag paths the artifact declares. Both lists hold provider-relative Tag paths; `missing` is empty on every returned result, because a declared Tag the re-export does not show is recovery_required rather than data.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "present": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        },
+        "missing": {
+          "type": "array",
+          "maxItems": 500,
+          "items": {"type": "string", "minLength": 1, "maxLength": 1024}
+        }
+      },
+      "required": ["present", "missing"]
+    }
+  },
+  "required": ["correlationId", "provider", "path", "artifact", "observedState"],
+  "$defs": {
+    "artifactRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "artifactId": {"type": "string", "minLength": 1, "maxLength": 128},
+        "mediaType": {"type": "string", "minLength": 1},
+        "sizeBytes": {"type": "integer", "minimum": 0},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "kind": {"enum": ["project_archive", "project_export", "tag_config_export"]},
+        "filename": {"type": "string", "minLength": 1, "maxLength": 255},
+        "sensitivity": {"enum": ["INTERNAL", "CONFIDENTIAL", "RESTRICTED"]},
+        "retentionClass": {"enum": ["EPHEMERAL", "EXPORT", "RECOVERY"]},
+        "createdAt": {"type": "string", "minLength": 1},
+        "expiresAt": {"type": ["string", "null"]},
+        "download": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": {"type": "string", "pattern": "^/artifacts/[A-Za-z0-9._:-]+$"}
+          },
+          "required": ["path"]
+        }
+      },
+      "required": [
+        "artifactId", "mediaType", "sizeBytes", "sha256", "kind", "filename",
+        "sensitivity", "retentionClass", "createdAt", "expiresAt", "download"
+      ]
+    }
+  }
+}

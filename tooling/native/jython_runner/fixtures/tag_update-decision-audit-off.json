@@ -1,0 +1,68 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_update",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI2/WriteTarget",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000",
+        "config": {
+          "documentation": "phase4-updated"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 164
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_update\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"off\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

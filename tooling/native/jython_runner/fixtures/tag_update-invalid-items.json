@@ -9,32 +9,32 @@
       "not-an-object",
       {
         "path": "[default]IgnitionMCP_CI/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e"
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3"
       },
       {
         "path": "[default]IgnitionMCP_CI//Setpoint",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "enabled": true
         }
       },
       {
         "path": "[default]",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "enabled": true
         }
       },
       {
         "path": "prov:default:/tag:IgnitionMCP_CI",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "enabled": true
         }
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget*",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "enabled": true
         }
@@ -55,26 +55,26 @@
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {}
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "value": 5
         }
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "tags": []
         }
       },
       {
         "path": "[default]IgnitionMCP_CI2/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "name": "Other"
         }

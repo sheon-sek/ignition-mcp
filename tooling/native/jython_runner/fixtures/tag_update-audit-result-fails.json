@@ -8,7 +8,7 @@
     "items": [
       {
         "path": "[default]IgnitionMCP_CI/WriteTarget",
-        "expectedFingerprint": "tcf1:ccbf767107fa4aa0e7314bf7203fb7b4e882912cbefea0c25f8ac78a345a892e",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
         "config": {
           "documentation": "phase4-updated"
         }
@@ -65,6 +65,16 @@
       }
     },
     {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
       "target": "system.tag.getConfiguration",
       "args": [
         "[default]IgnitionMCP_CI/WriteTarget",
@@ -79,7 +89,11 @@
             "defaultValue": 0,
             "enabled": true,
             "name": "WriteTarget",
-            "path": "[default]IgnitionMCP_CI/WriteTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "type": "native-object"
+            },
             "tagType": "AtomicTag",
             "value": 0,
             "valueSource": "memory"
@@ -154,7 +168,11 @@
             "enabled": true,
             "engUnits": "kPa",
             "name": "WriteTarget",
-            "path": "[default]IgnitionMCP_CI/WriteTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "type": "native-object"
+            },
             "tagType": "AtomicTag",
             "value": 0,
             "valueSource": "memory"
