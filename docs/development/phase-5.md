@@ -28,9 +28,9 @@ Every write goes through `ProjectTransactionService` with a Perspective `Candida
 
 ## Tickets
 
-1. P5-1: the typed Perspective adapter and the five reads.
-2. P5-2: the four writes. It starts after P5-1 is merged into `phase-5`.
-3. P5-3: the G5 live stage inside the existing `phase4-live-rest` harness and workflow. It runs in parallel with P5-2 and adds no new workflow.
+1. P5-1 (#48): the typed Perspective adapter and the five reads.
+2. P5-2 (#49): the four writes. It starts after P5-1 is merged into `phase-5`.
+3. P5-3 (#50): the G5 live stage inside the existing `phase4-live-rest` harness and workflow. It runs in parallel with P5-2 and adds no new workflow.
 
 ## Delivery rules
 

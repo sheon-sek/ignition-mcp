@@ -172,7 +172,7 @@ def test_a_logical_path_maps_to_its_view_entries_and_back() -> None:
 @pytest.mark.parametrize("path", [
     "", "/Pages/Overview", "Pages/Overview/", "Pages//Overview", "Pages/./Overview",
     "Pages/../Overview", "..", "Pages\\Overview", "Pages/Over*view", "Pages/Over:view",
-    "Pages/Over\nview", "C:/Pages",
+    "Pages/Over\nview", "C:/Pages", "Pages/\ud800",
 ])
 def test_a_path_that_could_escape_or_name_another_resource_is_refused(path: str) -> None:
     with pytest.raises(GatewayError) as captured:
@@ -321,6 +321,98 @@ def test_view_get_refuses_a_traversal_path_before_anything_is_exported(tmp_path:
             await perspective_view_get(
                 env.client, env.registry, env.store, env.context("perspective_view_get"),
                 project_name="Demo", path="../Pages/Overview", deadline_seconds=10,
+            )
+        assert captured.value.code == "invalid_argument"
+        assert env.requests == []
+        assert await env.artifact_count() == 0
+        await env.stop()
+
+    _run(scenario())
+
+
+def test_a_broken_view_document_error_names_the_logical_path_not_the_archive_entry(
+    tmp_path: Path,
+) -> None:
+    """D15 keeps the archive layout server-side, so no message echoes an entry."""
+
+    env = _Env(tmp_path, body=_export_zip(extra={f"{VIEWS}/Pages/Overview/view.json": b"not-json"}))
+
+    async def scenario() -> None:
+        await env.start()
+        with pytest.raises(GatewayError) as captured:
+            await perspective_view_get(
+                env.client, env.registry, env.store, env.context("perspective_view_get"),
+                project_name="Demo", path="Pages/Overview", deadline_seconds=10,
+            )
+        message = str(captured.value)
+        assert captured.value.code == "schema_mismatch"
+        assert "Pages/Overview" in message
+        assert "view.json" not in message
+        assert "com.inductiveautomation" not in message
+        await env.stop()
+
+    _run(scenario())
+
+
+def test_an_oversize_document_error_names_the_logical_path(tmp_path: Path) -> None:
+    archive = tmp_path / "demo.zip"
+    archive.write_bytes(_export_zip(views={"Pages/Overview": {"root": {"type": "x"}}}))
+
+    with pytest.raises(GatewayError) as captured:
+        perspective.read_view_document(
+            str(archive), "Pages/Overview", budget=perspective.ViewBudget(max_bytes=16),
+        )
+
+    message = str(captured.value)
+    assert captured.value.code == "limit_exceeded"
+    assert "Pages/Overview" in message
+    assert "view.json" not in message
+
+
+def test_document_reads_report_secret_fields_as_redacted(tmp_path: Path) -> None:
+    env = _Env(
+        tmp_path,
+        body=_export_zip(
+            views={"Pages/Overview": {"root": {"type": "x"}, "password": "top-secret"}},
+            page_config={"pages": ["*"], "apiKey": "page-secret"},
+            session_props={"props": {"accessToken": "session-secret"}},
+        ),
+    )
+
+    async def scenario() -> None:
+        await env.start()
+        view = await perspective_view_get(
+            env.client, env.registry, env.store, env.context("perspective_view_get"),
+            project_name="Demo", path="Pages/Overview", deadline_seconds=10,
+        )
+        assert view.view["password"] == "<redacted>"
+        assert view.view["root"] == {"type": "x"}
+        assert "top-secret" not in json.dumps(view.view)
+        config = await perspective_page_config_get(
+            env.client, env.registry, env.store, env.context("perspective_page_config_get"),
+            project_name="Demo", deadline_seconds=10,
+        )
+        assert config.config["apiKey"] == "<redacted>"
+        props = await perspective_session_props_get(
+            env.client, env.registry, env.store, env.context("perspective_session_props_get"),
+            project_name="Demo", deadline_seconds=10,
+        )
+        assert props.props["props"]["accessToken"] == "<redacted>"
+        assert "session-secret" not in json.dumps(props.props)
+        await env.stop()
+
+    _run(scenario())
+
+
+def test_a_path_that_cannot_be_utf8_encoded_is_refused_before_any_export(tmp_path: Path) -> None:
+    env = _Env(tmp_path, body=_export_zip(views={"Pages/Overview": {"root": {"type": "x"}}}))
+
+    async def scenario() -> None:
+        await env.start()
+        with pytest.raises(GatewayError) as captured:
+            await perspective_view_get(
+                env.client, env.registry, env.store, env.context("perspective_view_get"),
+                project_name="Demo", path="Pages/\ud800", deadline_seconds=10,
             )
         assert captured.value.code == "invalid_argument"
         assert env.requests == []

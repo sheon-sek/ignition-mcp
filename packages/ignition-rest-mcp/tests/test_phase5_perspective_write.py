@@ -28,6 +28,7 @@ import ignition_rest_mcp.server as server_module
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.projects import perspective
 from ignition_rest_mcp.projects.perspective import PatchKind, ResourcePatch
+from ignition_rest_mcp.services.config_resources import REDACTED_PLACEHOLDER
 from ignition_rest_mcp.storage.database import Database
 from ignition_rest_mcp.storage.schema import STATE_DDL
 from phase4_fixtures import (
@@ -625,6 +626,34 @@ def test_a_document_carrying_the_redaction_placeholder_is_refused(
     assert "redacted_value" in refusal["message"]
     # The refusal happens before the inheritance walk, so the Project is not exported again.
     assert len(_export_paths(gateway)) == exports_before
+    assert _import_requests(gateway) == []
+    assert _transactions(tmp_path) == []
+
+
+def test_the_placeholder_a_read_emits_is_the_value_a_write_refuses(tmp_path: Path) -> None:
+    """The read path's redaction and the write path's refusal are one value.
+
+    `perspective_view_get` returns a secret-named field as `<redacted>`, and the
+    write Tools refuse a document carrying that value, so an agent cannot round-trip
+    a read into a write and store the placeholder as the secret.
+    """
+
+    document = {"root": {"type": "ia.container.coord"}, "custom": {"apiKey": "s3cret"}}
+    with RecordedGateway(projects={PROJECT: _project_archive(views={VIEW_PATH: document})}) as gateway:
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            read = structured(
+                agent.call("perspective_view_get", {"projectName": PROJECT, "path": VIEW_PATH})
+            )
+            result = _upsert(
+                agent, view=read["view"], fingerprint=str(read["fingerprint"]),
+            )
+
+    assert read["view"]["custom"]["apiKey"] == REDACTED_PLACEHOLDER
+    refusal = envelope(result)
+    assert refusal["code"] == "invalid_argument"
+    assert "redacted_value" in refusal["message"]
     assert _import_requests(gateway) == []
     assert _transactions(tmp_path) == []
 

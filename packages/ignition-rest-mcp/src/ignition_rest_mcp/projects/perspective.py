@@ -22,6 +22,11 @@ Project from the resource types this server understands). A delete removes the
 View's own entries, and the folder's marker entries only when the View was all
 that folder held, so a folder that still holds other Views keeps them.
 
+Every caller-facing message names the Logical resource, never the archive entry:
+the layout stays server-side, and a message that echoed an entry would hand the
+caller the path the public API refuses to accept. Every read that needs to say
+which document a refusal is about passes a ``label`` into :func:`read_document`.
+
 Archive layout, as Ignition 8.3 exports the Perspective module:
 
 .. code-block:: text
@@ -120,18 +125,28 @@ class ViewValidation:
 def validate_logical_resource_path(value: str) -> str:
     """Return a Logical resource path unchanged, or refuse it (D15).
 
-    Refused with ``invalid_argument``: a non-string or empty value, a leading
-    ``/``, a backslash, any empty, ``.`` or ``..`` segment, a control character,
-    and a character Ignition refuses in a resource name. Refused with
-    ``limit_exceeded``: a path over :data:`MAX_LOGICAL_PATH_BYTES`.
+    Refused with ``invalid_argument``: a non-string or empty value, text that
+    cannot be UTF-8 encoded (a lone surrogate), a leading ``/``, a backslash, any
+    empty, ``.`` or ``..`` segment, a control character, and a character Ignition
+    refuses in a resource name. Refused with ``limit_exceeded``: a path over
+    :data:`MAX_LOGICAL_PATH_BYTES`.
     """
 
     if not isinstance(value, str) or not value:
         raise GatewayError("invalid_argument", "path must be a non-empty Logical resource path")
-    if len(value.encode("utf-8")) > MAX_LOGICAL_PATH_BYTES:
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError as error:
+        # A lone surrogate cannot address a resource: it survives neither JSON
+        # transport nor the archive's own name encoding.
+        raise GatewayError(
+            "invalid_argument",
+            "path must be text that can be encoded as UTF-8; it contains an unpaired surrogate",
+        ) from error
+    if len(encoded) > MAX_LOGICAL_PATH_BYTES:
         raise GatewayError(
             "limit_exceeded",
-            f"path is {len(value.encode('utf-8'))} bytes, over the {MAX_LOGICAL_PATH_BYTES}-byte limit; "
+            f"path is {len(encoded)} bytes, over the {MAX_LOGICAL_PATH_BYTES}-byte limit; "
             "name the View directly instead of qualifying it further",
         )
     if value.startswith("/"):
@@ -227,9 +242,15 @@ def list_view_paths(archive_path: str) -> list[str]:
 
 
 def read_document(
-    archive_path: str, entry: str, *, budget: ViewBudget | None = None,
+    archive_path: str, entry: str, *, label: str, budget: ViewBudget | None = None,
 ) -> dict[str, Any] | None:
     """The JSON object at ``entry``, or ``None`` when the archive has no such entry.
+
+    ``label`` is what a caller-facing message names: the Logical resource path
+    (``Local View 'Pages/Overview'``) or the Project-level document's name. The
+    archive entry itself never reaches a message, because D15 keeps the archive
+    layout server-side and a message that echoed an entry would hand the caller
+    the very path the public API refuses to accept.
 
     ``limit_exceeded`` when the entry declares more than ``budget.max_bytes``,
     ``schema_mismatch`` when its bytes are not a UTF-8 JSON object: the document
@@ -244,7 +265,7 @@ def read_document(
             if info.file_size > limits.max_bytes:
                 raise GatewayError(
                     "limit_exceeded",
-                    f"{entry} declares {info.file_size} bytes, over the {limits.max_bytes}-byte "
+                    f"{label} is {info.file_size} bytes, over the {limits.max_bytes}-byte "
                     "document limit; this server cannot return it whole",
                 )
             payload = archive.read(info)
@@ -258,18 +279,22 @@ def read_document(
         document = json.loads(payload.decode("utf-8"))
     except (UnicodeDecodeError, ValueError, RecursionError) as error:
         raise GatewayError(
-            "schema_mismatch", f"the Project export entry {entry} is not UTF-8 JSON this server can read",
+            "schema_mismatch", f"{label} in the Project export is not UTF-8 JSON this server can read",
         ) from error
     if not isinstance(document, dict):
-        raise GatewayError("schema_mismatch", f"the Project export entry {entry} is not a JSON object")
+        raise GatewayError("schema_mismatch", f"{label} in the Project export is not a JSON object")
     return document
 
 
-def read_view_document(archive_path: str, logical_path: str) -> dict[str, Any]:
+def read_view_document(
+    archive_path: str, logical_path: str, *, budget: ViewBudget | None = None,
+) -> dict[str, Any]:
     """The View document at one Logical resource path, or ``not_found``."""
 
     path = validate_logical_resource_path(logical_path)
-    document = read_document(archive_path, view_document_entry(path))
+    document = read_document(
+        archive_path, view_document_entry(path), label=f"Local View {path!r}", budget=budget,
+    )
     if document is None:
         raise GatewayError("not_found", f"this Project has no Local View at {path!r}")
     return document
@@ -278,13 +303,17 @@ def read_view_document(archive_path: str, logical_path: str) -> dict[str, Any]:
 def read_page_config(archive_path: str) -> dict[str, Any] | None:
     """The Project's Page configuration document, or ``None`` when it has none locally."""
 
-    return read_document(archive_path, PAGE_CONFIG_ENTRY)
+    return read_document(
+        archive_path, PAGE_CONFIG_ENTRY, label="the Project's Page configuration document",
+    )
 
 
 def read_session_props(archive_path: str) -> dict[str, Any] | None:
     """The Project's Session properties document, or ``None`` when it has none locally."""
 
-    return read_document(archive_path, SESSION_PROPS_ENTRY)
+    return read_document(
+        archive_path, SESSION_PROPS_ENTRY, label="the Project's Session properties document",
+    )
 
 
 def validate_view_document(document: Any, *, budget: ViewBudget | None = None) -> ViewValidation:

@@ -2,8 +2,11 @@
 
 Each Gateway-backed read exports the Project through the same bounded capture the
 D16 transaction service uses, reads the documents it needs from the private
-staging copy, and then aborts the staging writer. A read publishes no artifact,
-never returns the archive, and does not change anything.
+staging copy, and then aborts the staging writer. A read publishes no artifact and
+never returns the archive, and every document it returns passes through the same
+``redact()`` the config reads use, so a secret field in a View, the Page
+configuration or the Session properties is reported as ``<redacted>`` rather than
+echoed.
 
 Reads return Local resources only. Gateway export is the local-project boundary
 (D15), so a View that a Project inherits from an ancestor is not in this archive
@@ -32,6 +35,7 @@ from ignition_rest_mcp.models import (
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.projects import perspective
 from ignition_rest_mcp.projects.capture import staged_project
+from ignition_rest_mcp.services.config_resources import redact
 from ignition_rest_mcp.services.readonly import bounded_page_request, require_capability
 
 #: The capability every Perspective read is gated on. The Project export route is
@@ -89,7 +93,7 @@ async def perspective_view_get(
             correlationId=context.correlation_id,
             projectName=staged.name,
             path=path,
-            view=document,
+            view=redact(document),
             fingerprint=staged.fingerprint,
         )
 
@@ -135,7 +139,7 @@ async def perspective_page_config_get(
         return PerspectivePageConfigGetResult(
             correlationId=context.correlation_id,
             projectName=staged.name,
-            config=config,
+            config=redact(config),
             fingerprint=staged.fingerprint,
         )
 
@@ -163,6 +167,6 @@ async def perspective_session_props_get(
         return PerspectiveSessionPropsGetResult(
             correlationId=context.correlation_id,
             projectName=staged.name,
-            props=props,
+            props=redact(props),
             fingerprint=staged.fingerprint,
         )
