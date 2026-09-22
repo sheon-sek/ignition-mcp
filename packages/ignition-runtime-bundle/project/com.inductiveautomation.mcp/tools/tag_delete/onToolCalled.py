@@ -295,7 +295,12 @@ def onToolCalled(builder, items):
 		return True
 
 	def isUdtDefinitionTarget(value):
-		return UDT_NAMESPACE in targetSegments(value)
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# target, matched by the ordinary allowlist.
+		segments = targetSegments(value)
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
 
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified prefixes matched at
@@ -328,11 +333,12 @@ def onToolCalled(builder, items):
 
 	def matchesUdtAllowlist(path, entries):
 		# D30 6: a UDT definition target needs an explicit _types_ entry; a bare *
-		# does not cover it, and the entry itself has to name the _types_ segment.
+		# does not cover it, and the entry itself has to name the _types_ segment the
+		# same positional way the target does.
 		for entry in entries:
 			if entry == WILDCARD:
 				continue
-			if UDT_NAMESPACE not in targetSegments(entry):
+			if not isUdtDefinitionTarget(entry):
 				continue
 			if matchesEntry(path, entry):
 				return True

@@ -90,6 +90,17 @@ jobs:
       TAG_SOURCE_PATH: source
       TAG_TARGET_PATH: target
       TAG_CONTROL_PATH: target_not_allowed
+      # Ticket #36 (D30 owner ruling 4): the Tag-provider *config resources* the
+      # reserved-name cases address. `IgnitionMCPPolicy` is the provider the Runtime
+      # Target Policy lives in and is refused by name; the other two prove the refusal is
+      # a name inside an allowed type — one is an ordinary provider, the other begins
+      # with the reserved name but is a different resource. All three are provisioned by
+      # `provision.py`, and all three appear in the per-Tool Target allowlists below, so a
+      # refusal cannot be mistaken for an allowlist denial.
+      PROVIDER_TYPE: ignition/tag-provider
+      RESERVED_PROVIDER: IgnitionMCPPolicy
+      OTHER_PROVIDER: MCP_CI_TAG_CONFIG
+      LOOKALIKE_PROVIDER: IgnitionMCPPolicyStaging
       # The pipeline cancel case's alarm event: the identifier no run on a fresh Gateway
       # holds, which is what makes the no-run refusal deterministic live.
       ALARM_EVENT_ID: "00000000-0000-4000-8000-000000000000"
@@ -277,6 +288,9 @@ jobs:
           # failures drive must be allowed exactly the same operations and Targets, or a
           # fault case could pass on a deployment that differs from the one the other
           # cases prove.
+          # Ticket #36: the Tag-provider resources are deliberately part of the config
+          # Target allowlists — including the reserved one the Tools must refuse — so a
+          # `permission_denied` in those cases is the name rule and not the allowlist.
           echo "IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete" >> "$GITHUB_ENV"
           jq -nc \
             --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
@@ -288,10 +302,13 @@ jobs:
             --arg project "$IMPORT_PROJECT" \
             --arg tag_target "[$TAG_PROVIDER]$TAG_TARGET_PATH" \
             --arg pipeline "$PIPELINE" \
-            '{config_resource_update: [$allowlisted, $singleton],
-              config_resource_create: [$created, $rename_source, $rename_source_2],
-              config_resource_delete: [$allowlisted, $created],
-              config_resource_rename: [$rename_source, $rename_source_2, $renamed],
+            --arg reserved_provider "$PROVIDER_TYPE/$RESERVED_PROVIDER" \
+            --arg other_provider "$PROVIDER_TYPE/$OTHER_PROVIDER" \
+            --arg lookalike_provider "$PROVIDER_TYPE/$LOOKALIKE_PROVIDER" \
+            '{config_resource_update: [$allowlisted, $singleton, $reserved_provider, $other_provider, $lookalike_provider],
+              config_resource_create: [$created, $rename_source, $rename_source_2, $reserved_provider, $other_provider, $lookalike_provider],
+              config_resource_delete: [$allowlisted, $created, $reserved_provider, $other_provider],
+              config_resource_rename: [$rename_source, $rename_source_2, $renamed, $reserved_provider, $other_provider],
               project_import: [$project],
               tag_config_import: [$tag_target],
               alarm_pipeline_cancel: [$pipeline],
@@ -510,6 +527,10 @@ jobs:
             --resource-type "$RESOURCE_TYPE" \
             --allowlisted "$ALLOWLISTED_RESOURCE" \
             --project "$IMPORT_PROJECT" \
+            --provider-type "$PROVIDER_TYPE" \
+            --reserved-provider "$RESERVED_PROVIDER" \
+            --other-provider "$OTHER_PROVIDER" \
+            --lookalike-provider "$LOOKALIKE_PROVIDER" \
             --tool-timeout-seconds "$FAULT_TOOL_TIMEOUT_SECONDS" \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw/fault" \

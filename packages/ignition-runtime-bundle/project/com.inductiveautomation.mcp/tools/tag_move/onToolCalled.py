@@ -295,7 +295,12 @@ def onToolCalled(builder, items):
 		return True
 
 	def isUdtDefinitionTarget(value):
-		return UDT_NAMESPACE in targetSegments(value)
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# target, matched by the ordinary allowlist.
+		segments = targetSegments(value)
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
 
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified prefixes matched at
@@ -328,11 +333,12 @@ def onToolCalled(builder, items):
 
 	def matchesUdtAllowlist(path, entries):
 		# D30 6: a UDT definition target needs an explicit _types_ entry; a bare *
-		# does not cover it, and the entry itself has to name the _types_ segment.
+		# does not cover it, and the entry itself has to name the _types_ segment the
+		# same positional way the target does.
 		for entry in entries:
 			if entry == WILDCARD:
 				continue
-			if UDT_NAMESPACE not in targetSegments(entry):
+			if not isUdtDefinitionTarget(entry):
 				continue
 			if matchesEntry(path, entry):
 				return True
@@ -521,6 +527,17 @@ def onToolCalled(builder, items):
 					return None
 				return value[0]
 			return value
+
+		def collisionOutcome(path, nativeQuality):
+			# D30 4 and 7: the check-to-dispatch race. Fixing collisionPolicy=Abort means the
+			# Mutation can only have been refused, never applied, so a destination that is
+			# there now is the collision another writer created in the window - conflict,
+			# never a success and never replayed. Only a plain boolean true is an answer: a
+			# check that raises or answers something else leaves the item with the Native
+			# outcome the provider itself gave.
+			if qualityIsGood(nativeQuality):
+				return False
+			return destinationAppeared(path)
 
 		def destinationAppeared(path):
 			# The post-dispatch half of the collision rule: a destination or new path
@@ -777,7 +794,7 @@ def onToolCalled(builder, items):
 				# answers as present is that collision - conflict, never a success -
 				# and it is attributable, so the rest of the batch still runs.
 				if destinationAppeared(destinations[index]):
-					results.append({"sourcePath": sources[index], "destinationPath": destinations[index], "status": "conflict", "reason": "destinationAppeared"})
+					results.append({"sourcePath": sources[index], "destinationPath": destinations[index], "status": "conflict", "reason": "destinationExists"})
 					failed += 1
 					continue
 				logger.warn("correlationId=" + correlationId + " item=" + unicode(index) + " move is indeterminate: " + text(exc))
@@ -789,6 +806,13 @@ def onToolCalled(builder, items):
 			if outcome is None:
 				results.append({"sourcePath": sources[index], "destinationPath": destinations[index], "status": "outcome_unknown"})
 				outcomeUnknown += 1
+				continue
+			if collisionOutcome(destinations[index], outcome):
+				# The destination appeared after the Preflight existence check and Abort
+				# left it alone: the conflict D11 and D30 2 name, reported per item with
+				# the provider's own outcome still attached.
+				results.append({"sourcePath": sources[index], "destinationPath": destinations[index], "status": "conflict", "reason": "destinationExists", "nativeOutcome": quality(outcome)})
+				failed += 1
 				continue
 			results.append({"sourcePath": sources[index], "destinationPath": destinations[index], "status": "executed", "nativeOutcome": quality(outcome)})
 			if qualityIsGood(outcome):

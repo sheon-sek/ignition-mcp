@@ -75,7 +75,7 @@
     "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
     "leaf": "the target's last segment names the node the call removes, and one path-list entry is one target: the handler never expands a Folder into its children"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only, and the rule is positional: D30 6 names [provider]_types_/..., so only the first post-provider segment selects the definition namespace, and an entry has to name _types_ the same way. A bare * does not cover a UDT definition; a folder that merely happens to be called _types_ deeper in the path is an ordinary target (D30 6)",
   "neverCreatesTarget": "not_found",
   "missingTargetFails": "not_found (details.items[].reason = targetMissing): a target the Preflight existence check does not find refuses the whole batch before anything is dispatched, so a delete never creates a node it was asked to remove",
   "collisionPolicy": "not_applicable",

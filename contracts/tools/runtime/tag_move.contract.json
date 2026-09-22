@@ -86,13 +86,13 @@
   },
   "sourcePath": {
     "readable": "system.tag.exists(sourcePath) must answer true (not_found, details.items[].reason = sourceMissing) and system.tag.getConfiguration(sourcePath, false, false) must answer a node (upstream_error, reasons sourceReadFailed / configurationUnavailable) before any item executes",
-    "allowlistChecked": "D30 6 measures a move at both ends, so unlike a copy the source itself is checked against the tag_move allowlist (permission_denied, reason targetNotAllowlisted) and a source inside the _types_ namespace needs an entry that itself names _types_",
+    "allowlistChecked": "D30 6 measures a move at both ends, so unlike a copy the source itself is checked against the tag_move allowlist (permission_denied, reason targetNotAllowlisted), and a source whose first post-provider segment is _types_ needs an entry that itself names _types_ the same positional way",
     "reservedProvider": "a source inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a source or a destination inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only, and the rule is positional: D30 6 names [provider]_types_/..., so only the first post-provider segment selects the definition namespace. A source or a destination inside it is refused with permission_denied unless an entry that itself names _types_ that way matches it, so a bare * does not cover a UDT definition; a folder that merely happens to be called _types_ deeper in the path is an ordinary target (D30 6)",
   "collisionPolicy": "Abort",
   "existingTargetFails": "conflict (details.items[].reason = destinationExists): the move lands at a path that already holds something, and D11 forbids replacing it",
-  "neverOverwrites": "the handler sends collisionPolicy=Abort, so a destination that appears between the Preflight existence check and the dispatch aborts that item's move instead of overwriting it, and the aborted call is reported as that item's conflict (details.items[].reason = destinationAppeared) once the Gateway answers the destination as present; the source is left in place either way",
+  "neverOverwrites": "the handler sends collisionPolicy=Abort, so a destination that appears between the Preflight existence check and the dispatch is never overwritten: the call either raises or answers a non-Good QualityCode, and one bounded system.tag.exists check for that item's own destination decides it - a destination the Gateway answers as present is that item's conflict (details.items[].reason = destinationExists, the same reason the Preflight refusal uses) with the provider's own Native outcome still attached, and the source is left in place either way",
   "fixedKnobs": {
     "collisionPolicy": "Abort"
   },

@@ -281,3 +281,40 @@ def test_every_recorded_fixture_is_exercised_by_this_module() -> None:
     for name in RECORDED_FIXTURES:
         case = name[len("tag_move-") : -len(".json")]
         assert f'"{case}"' in source, f"{name} is not referenced by a test"
+
+
+def test_a_destination_that_appears_at_dispatch_is_conflict_not_a_success() -> None:
+    """D30 2 and 4: the check-to-dispatch race.
+
+    Preflight found the destination free, `collisionPolicy=Abort` left whatever
+    appeared in the window alone, and the bounded post-failure existence check found
+    it present. That is the collision D11 and D30 2 name, reported per item with the
+    provider's own Native outcome still attached - never a success, and never
+    replayed.
+    """
+    structured = _structured("raced-collision")
+
+    assert structured["items"] == [{
+        "sourcePath": WRITE,
+        "destinationPath": NESTED_WRITE,
+        "status": "conflict",
+        "reason": "destinationExists",
+        "nativeOutcome": {
+            "code": 772, "name": "Bad_Unsupported", "level": "Error", "good": False,
+            "diagnosticMessage": "A node already exists at this path",
+        },
+    }]
+    assert structured["summary"] == {
+        "requested": 1,
+        "succeeded": 0,
+        "failed": 1,
+        "outcomeUnknown": 0,
+        "notExecuted": 0,
+        "auditMode": "best_effort",
+        "auditRecorded": True,
+    }
+    calls = _recorded_targets("raced-collision")
+    assert calls.count("system.tag.move") == 1
+    # The abandoned destination is the Observed state, and the source stayed put.
+    assert structured["observed"][0]["path"] == NESTED_WRITE
+    assert structured["observed"][1] == {"path": WRITE, "status": "ok", "absent": True}

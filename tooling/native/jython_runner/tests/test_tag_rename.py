@@ -276,3 +276,39 @@ def test_every_recorded_fixture_is_exercised_by_this_module() -> None:
     for name in RECORDED_FIXTURES:
         case = name[len("tag_rename-") : -len(".json")]
         assert f'"{case}"' in source, f"{name} is not referenced by a test"
+
+
+def test_a_new_path_that_appears_at_dispatch_is_conflict_not_a_success() -> None:
+    """D30 2 and 4: the check-to-dispatch race on a rename.
+
+    Preflight found the new path free, `collisionPolicy=Abort` left whatever appeared
+    in the window alone, and the bounded post-failure existence check found it
+    present. That is the collision D11 and D30 2 name, reported per item with the
+    provider's own Native outcome still attached - never a success, and never
+    replayed.
+    """
+    structured = _structured("raced-collision")
+
+    assert structured["items"] == [{
+        "path": WRITE,
+        "newPath": RENAMED,
+        "status": "conflict",
+        "reason": "newPathExists",
+        "nativeOutcome": {
+            "code": 772, "name": "Bad_Unsupported", "level": "Error", "good": False,
+            "diagnosticMessage": "A node already exists at this path",
+        },
+    }]
+    assert structured["summary"] == {
+        "requested": 1,
+        "succeeded": 0,
+        "failed": 1,
+        "outcomeUnknown": 0,
+        "notExecuted": 0,
+        "auditMode": "best_effort",
+        "auditRecorded": True,
+    }
+    assert _recorded_targets("raced-collision").count("system.tag.rename") == 1
+    # The Observed state is the new path that exists and the old path that does not.
+    assert structured["observed"][0]["path"] == RENAMED
+    assert structured["observed"][1] == {"path": WRITE, "status": "ok", "absent": True}

@@ -80,6 +80,15 @@ _OPENAPI_OPERATIONS = (
     # audit log the recorded attempt/result rows are read back from.
     ("get", "/data/api/v1/resources/find/ignition/audit-profile/{name}"),
     ("get", "/data/api/v1/audit/log/{name}"),
+    # Phase 4 ticket #36: the same provider type through the generic config Mutations.
+    # D30 owner ruling 4 refuses the resource named `IgnitionMCPPolicy` by name, and
+    # the cases that prove the *rest* of the type stays manageable need its update,
+    # delete and rename routes to exist - a type without them has no such Tool at all
+    # (the capability snapshot withholds it), so the refusal being asserted could
+    # never be reached.
+    ("put", "/data/api/v1/resources/ignition/tag-provider"),
+    ("delete", "/data/api/v1/resources/ignition/tag-provider/{name}/{signature}"),
+    ("post", "/data/api/v1/resources/rename/ignition/tag-provider/{name}"),
 )
 
 #: Path segments under ``/data/api/v1/resources/`` that name an operation rather
@@ -745,9 +754,19 @@ def _allowlisted(path: str, entries: list[str]) -> bool:
 
 
 def _names_udt_namespace(path: str) -> bool:
-    """Whether the path itself sits inside a provider's `_types_` namespace."""
+    """Whether the path itself sits inside a provider's `_types_` namespace.
+
+    D30 §6 names `[provider]_types_/...`, so the rule is positional: only the first
+    post-provider segment selects the definition namespace, and a folder that merely
+    happens to be called `_types_` deeper in the path is an ordinary target. The
+    shipped handlers implement exactly this, and the fake has to as well or a
+    rehearsal would answer a path the Gateway does not.
+    """
     closing = path.find("]")
-    return closing > 0 and "_types_" in path[closing + 1:].split("/")
+    if closing <= 0:
+        return False
+    segments = [segment for segment in path[closing + 1:].split("/") if segment]
+    return bool(segments) and segments[0] == "_types_"
 
 
 def _udt_allowlisted(path: str, entries: list[str]) -> bool:
@@ -1649,14 +1668,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         if path.startswith("/data/api/v1/resources/find/ignition/tag-provider/"):
             name = path.rsplit("/", 1)[-1]
-            if name != server.policy_provider:
-                self._json(404, {"message": "No resource", "status": "404"})
+            # Ticket #6's recorded provider document, for the harness that provisions the
+            # Runtime Target Policy through this route. Every other name — and the same
+            # name before that harness has created it — is the generic recorded behaviour
+            # below, so a test that seeds its own Tag-provider resources (ticket #36's
+            # by-name refusal) reads them back like any other resource.
+            if name == server.policy_provider and server.policy_provider_created:
+                self._json(200, _fixture("phase4/tag-provider-find.json"))
                 return
-            if not server.policy_provider_created:
-                self._json(404, {"message": "No resource", "status": "404"})
-                return
-            self._json(200, _fixture("phase4/tag-provider-find.json"))
-            return
         if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
             self._json(200, {"name": "phase3-runtime"})
             return

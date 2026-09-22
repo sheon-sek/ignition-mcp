@@ -47,7 +47,7 @@
   "nativeOutcome": "one system.tag.configure call per item; its single QualityCode is that item's outcome, and Observed state never decides success",
   "preconditionToken": {
     "kind": "none",
-    "why": "D30 2 gives tag_create no Precondition token: the caller's own earlier read cannot exist, because the target must not. The concurrency rule is D11's collision rule instead — the target must be absent, and the handler fixes collisionPolicy=Abort so a race that creates it anyway aborts rather than overwrites.",
+    "why": "D30 2 gives tag_create no Precondition token: the caller's own earlier read cannot exist, because the target must not. The concurrency rule is D11's collision rule instead \u2014 the target must be absent, and the handler fixes collisionPolicy=Abort so a race that creates it anyway aborts rather than overwrites.",
     "existingTarget": "conflict",
     "existingTargetCheck": "system.tag.exists(path) for every item before any item executes",
     "existingTargetReason": "targetExists"
@@ -68,7 +68,7 @@
     "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
     "leaf": "the target's last segment is the definition name sent to system.tag.configure, and a config that names a different one is invalid_argument"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target whose first post-provider segment is _types_ (D30 6's [provider]_types_/...) is refused with permission_denied unless a matching entry whose own first post-provider segment is _types_ covers it, so a bare * does not cover a UDT definition, while a folder that is merely called _types_ deeper in the path stays an ordinary target (D30 6)",
   "collisionPolicy": "Abort",
   "existingTargetFails": "conflict (details.items[].reason = targetExists): D30 2 and D11 give a create no Precondition token, so an existing target is the collision the caller is told about, and no item is executed",
   "neverOverwrites": "the handler sends collisionPolicy=Abort, so a target that appears between the Preflight existence check and the dispatch aborts that item's configure instead of being overwritten; nothing is ever replaced",
@@ -113,5 +113,6 @@
   },
   "observedState": "the created node's own tag_get_config read: `system.tag.getConfiguration(path, false, false)`, published with the D30 2 fingerprint of that read. It is Observed state and never decides success, and the fingerprint is the token the caller's next tag_update/tag_delete would use",
   "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused existence check each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
-  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes"
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes",
+  "racedCollision": "the check-to-dispatch race: system.tag.exists answers absent, the item is dispatched, and a competing writer creates the target first. The fixed collisionPolicy=Abort refuses the dispatch instead of replacing what is there, and the item is reported as conflict with details.items[].reason = targetExists and its own Native outcome attached, never as a successful create and never by replaying the mutation. Which QualityCode the provider returns for that Abort is not established by this repository, so the outcome is decided by one bounded post-failure system.tag.exists for that item's own target: a boolean true is the collision, and a raised or non-boolean check leaves the item's own Native outcome standing rather than claiming either outcome"
 }
