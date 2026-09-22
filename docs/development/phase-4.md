@@ -547,7 +547,9 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   repository at all: three pushes to `p4/runtime` (`25c8516`, `b5dde77`, `8593cb8`), a close/reopen
   of draft PR #27 and a rerun of an older G4a row produced no new `github-actions` check suites for
   those heads (only the `claude` app's suite appears), while the platform had accepted the same
-  repository's runs minutes earlier. The lesson for the coordinator: the head's live row is
+  repository's runs minutes earlier. A probe pull request (#33, opened and immediately closed, from
+  a throwaway branch at the same head) fired nothing either, so the cause is repository- or
+  account-wide rather than specific to this pull request. The lesson for the coordinator: the head's live row is
   outstanding for that reason, not for a red result. Everything the head changes *after* the last
   live row is either documentation or the harness's own batch-case expectation; the shipped
   `tag_update` handler the live row exercised (`system.tag.exists` included) is byte-identical on
