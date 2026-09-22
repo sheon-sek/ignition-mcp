@@ -37,12 +37,15 @@ sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from fault_proxy import FaultProxy  # noqa: E402
+from provision import child_project_archive, parent_project_archive  # noqa: E402
 from rest_driver import (  # noqa: E402
     ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
     DEFAULT_ALARM_EVENT_ID,
     DEFAULT_LOOKALIKE_PROVIDER,
     DEFAULT_OTHER_PROVIDER,
+    DEFAULT_PERSPECTIVE_CHILD,
+    DEFAULT_PERSPECTIVE_PARENT,
     DEFAULT_PROVIDER_RESOURCE_TYPE,
     DEFAULT_CONTROL_PIPELINE,
     DEFAULT_CONTROL_PROJECT,
@@ -53,6 +56,10 @@ from rest_driver import (  # noqa: E402
     DEFAULT_TAG_PROVIDER,
     DEFAULT_TAG_SOURCE_PATH,
     DEFAULT_TAG_TARGET_PATH,
+    PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL,
+    PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL,
+    PERSPECTIVE_VIEW_DELETE_TOOL,
+    PERSPECTIVE_VIEW_UPSERT_TOOL,
     RENAMED_RESOURCE,
     TAG_IMPORT_TOOL,
     RENAME_SOURCE,
@@ -91,6 +98,11 @@ LOOKALIKE_PROVIDER = DEFAULT_LOOKALIKE_PROVIDER
 PIPELINE = DEFAULT_PIPELINE
 CONTROL_PIPELINE = DEFAULT_CONTROL_PIPELINE
 ALARM_EVENT_ID = DEFAULT_ALARM_EVENT_ID
+#: Phase 5 (P5-3): the Perspective fixture, the parent Project whose View the child
+#: inherits, and the child the write allowlist names. Both are seeded as archives here
+#: and imported by ``provision.py`` live.
+PERSPECTIVE_PARENT = DEFAULT_PERSPECTIVE_PARENT
+PERSPECTIVE_CHILD = DEFAULT_PERSPECTIVE_CHILD
 ALLOWLISTED = "MCP_CI_AUDIT"
 UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
@@ -143,6 +155,13 @@ MUTATION_TARGETS = {
     "artifact_delete": ("*",),
     # D30 §6/#18: the Target of a pipeline cancel is the exact pipeline path.
     ALARM_CANCEL_TOOL: (PIPELINE,),
+    # Phase 5 (P5-3): every Perspective write addresses the child Project, which is also
+    # the Project the inherited-resource case writes *into*, so the refusal there is the
+    # inherited rule and never the allowlist: this Project is authorized.
+    PERSPECTIVE_VIEW_UPSERT_TOOL: (PERSPECTIVE_CHILD,),
+    PERSPECTIVE_VIEW_DELETE_TOOL: (PERSPECTIVE_CHILD,),
+    PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL: (PERSPECTIVE_CHILD,),
+    PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL: (PERSPECTIVE_CHILD,),
 }
 
 
@@ -285,6 +304,23 @@ def _project_archive(marker: str) -> bytes:
     return buffer.getvalue()
 
 
+def _perspective_archives() -> dict[str, bytes]:
+    """The two Perspective Projects, in the layout a real export uses.
+
+    The parent defines the View the child does not define locally (so the child inherits
+    it), and the child defines its own View, a Page configuration, Session properties and
+    one unrelated resource. These are ``provision.py``'s own archive builders, so the
+    rehearsal seeds byte-for-byte the fixture a live run imports.
+    """
+
+    return {
+        PERSPECTIVE_PARENT: parent_project_archive("Phase 5 REST rehearsal parent"),
+        PERSPECTIVE_CHILD: child_project_archive(
+            "Phase 5 REST rehearsal child", PERSPECTIVE_PARENT,
+        ),
+    }
+
+
 def _source_tags() -> list[dict[str, Any]]:
     """The same source Tag document ``provision.py`` publishes on the live Gateway."""
 
@@ -361,6 +397,7 @@ def main() -> int:
     projects = {
         PROJECT: _project_archive("target"),
         CONTROL_PROJECT: _project_archive("control"),
+        **_perspective_archives(),
     }
     with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, \
             RecordedGateway(projects=projects) as gateway:
@@ -379,6 +416,7 @@ def main() -> int:
                 tag_target_path=TAG_TARGET_PATH, tag_control_path=TAG_CONTROL_PATH,
                 pipeline=PIPELINE, control_pipeline=CONTROL_PIPELINE,
                 alarm_event_id=ALARM_EVENT_ID,
+                parent_project=PERSPECTIVE_PARENT, child_project=PERSPECTIVE_CHILD,
                 raw_dir=args.raw_dir,
             ))
         with _server(_settings(gateway.base_url, data_dir, mutation_enabled=False)) as url:
