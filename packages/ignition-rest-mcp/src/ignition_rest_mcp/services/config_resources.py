@@ -16,6 +16,12 @@ from ignition_rest_mcp.errors import GatewayError
 
 MAX_RESOURCE_TYPE_LENGTH = 512
 
+#: The exact string :func:`redact` substitutes for a secret-named or embedded-secret
+#: value. A write refuses a document that carries it (D15/D17: a caller must never be
+#: able to write the placeholder back as if it were the secret), so the writer's check
+#: and the redactor's output are one constant rather than two literals.
+REDACTED_PLACEHOLDER = "<redacted>"
+
 _SECRET_KEYS = {
     "password",
     "passwd",
@@ -47,12 +53,12 @@ def bounded_text(value: str, name: str, maximum: int, *, allow_empty: bool) -> s
 def redact(value: Any, *, key: str = "") -> Any:
     normalized = key.replace("-", "_").lower()
     if normalized in _SECRET_KEYS:
-        return "<redacted>"
+        return REDACTED_PLACEHOLDER
     if isinstance(value, dict):
         if value.get("type") == "Embedded" and isinstance(value.get("data"), dict):
             data = value["data"]
             if {"protected", "encrypted_key", "iv", "ciphertext", "tag"}.issubset(data):
-                return {"type": "Embedded", "data": "<redacted>"}
+                return {"type": "Embedded", "data": REDACTED_PLACEHOLDER}
         return {str(child_key): redact(child, key=str(child_key)) for child_key, child in value.items()}
     if isinstance(value, list):
         return [redact(child) for child in value]

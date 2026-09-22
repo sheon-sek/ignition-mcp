@@ -96,7 +96,7 @@ async def project_import(
 
     name = validate_project_name(project_name)
     validate_artifact_id(artifact_id)
-    fingerprint = _expected_fingerprint(expected_fingerprint)
+    fingerprint = expected_project_fingerprint(expected_fingerprint)
     await preflight_mutation(
         registry=registry, settings=settings, context=context,
         preflight=MutationPreflight(
@@ -110,8 +110,8 @@ async def project_import(
         context=context, principal=principal, operation=PROJECT_IMPORT_TOOL_OPERATION,
         expected_fingerprint=fingerprint,
     )
-    await _link_transaction(records, context, result, metrics)
-    failure = _failure(result)
+    await link_transaction(records, context, result, metrics)
+    failure = terminal_failure(result)
     if failure is not None:
         raise failure
     return ProjectImportResult(
@@ -127,11 +127,12 @@ async def project_import(
     )
 
 
-def _expected_fingerprint(value: str) -> str:
+def expected_project_fingerprint(value: str) -> str:
     """The caller's Precondition token, checked for shape before any work.
 
     A malformed token cannot match any Project, so it is an input error rather than a
-    transaction that is created only to end ``CONFLICTED``.
+    transaction that is created only to end ``CONFLICTED``. Shared with the Phase 5
+    Perspective writes, whose Precondition token is the same ``pcf1`` fingerprint.
     """
 
     if not isinstance(value, str) or FINGERPRINT_RE.fullmatch(value) is None:
@@ -165,7 +166,7 @@ async def _import_archive(
     return artifact
 
 
-async def _link_transaction(
+async def link_transaction(
     records: OperationRecordStore, context: OperationContext, result: TransactionResult,
     metrics: Any,
 ) -> None:
@@ -173,7 +174,8 @@ async def _link_transaction(
 
     The transaction outlives the call, so a caller that received an error still has a
     way back to it through ``operation_diagnose``. The record is diagnostics: a local
-    storage failure must never turn an import that ran into a failed call.
+    storage failure must never turn an import that ran into a failed call. Shared with
+    the Phase 5 Perspective writes, which run the same D16 transaction.
     """
 
     try:
@@ -190,11 +192,13 @@ async def _link_transaction(
         )
 
 
-def _failure(result: TransactionResult) -> GatewayError | None:
+def terminal_failure(result: TransactionResult) -> GatewayError | None:
     """The error a caller must see for every terminal state but a satisfied one.
 
     The transaction id and the terminal state are named in the message so the caller can
     follow the transaction it produced; the code is the D30 §7 one the state maps to.
+    Shared with the Phase 5 Perspective writes, so every D16 Tool surfaces the same
+    states the same way.
     """
 
     if result.state in SATISFIED_STATES:

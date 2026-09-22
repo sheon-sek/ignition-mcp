@@ -264,6 +264,29 @@ object, requires a `root` object whose `type` is a string, and applies the D10 b
 Unknown component types are accepted, and a passing validation does not promise that an
 Ignition import accepts the document.
 
+**Perspective writes** (D15/D16, Phase 5) replace one Local resource per call and run the
+same D16 Project transaction as `project_import`: `perspective_view_upsert` and
+`perspective_view_delete` change one View at a Logical resource path, and
+`perspective_page_config_update` and `perspective_session_props_update` replace the
+Project's Page configuration and Session properties documents. Each write builds its
+candidate by copying the baseline export and patching exactly one entry, so every other
+entry reaches the Gateway byte-identical, and each takes `expectedFingerprint`, the
+`pcf1` Project fingerprint the matching get Tool reported. A stale token is `conflict`;
+a satisfied transaction is `COMMITTED` or `NO_CHANGE`; every other D16 terminal state is
+a Tool error with the D30 §7 code, and a Gateway rejection is final. A delete of a View
+the Project does not define locally is `not_found`.
+
+Three rules decide what a write may touch. Before the transaction starts, the server
+reads the Project's own export to see whether the target is Local, and only when it is
+not does it walk the ancestor chain (bounded at 16 Projects, refused rather than truncated
+if it is deeper or loops), exporting each ancestor and refusing with `invalid_argument`
+and reason `inherited_resource` if one defines the target. That walk is why a write never
+creates a silent local override (D15). A document that carries the exact value
+`<redacted>`, which is what a read returns in place of a secret-named field, is refused
+with `invalid_argument` and reason `redacted_value` before anything is exported. All four
+are CONFIG Mutations: the Target allowlist, the class gate, the `project_import`
+capability and the audit chain apply exactly as they do to `project_import`.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

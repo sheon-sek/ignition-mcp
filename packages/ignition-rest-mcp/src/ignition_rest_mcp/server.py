@@ -53,6 +53,8 @@ from ignition_rest_mcp.models import (
     PerspectiveViewGetResult,
     PerspectiveViewListResult,
     PerspectiveViewValidateResult,
+    PerspectiveViewWriteResult,
+    PerspectiveWriteResult,
     ProjectListResult,
     ProjectExportResult,
     ProjectImportResult,
@@ -100,6 +102,12 @@ from ignition_rest_mcp.services.perspective import (
     perspective_view_get as perspective_view_get_service,
     perspective_view_list as perspective_view_list_service,
     perspective_view_validate as perspective_view_validate_service,
+)
+from ignition_rest_mcp.services.perspective_write import (
+    perspective_page_config_update as perspective_page_config_update_service,
+    perspective_session_props_update as perspective_session_props_update_service,
+    perspective_view_delete as perspective_view_delete_service,
+    perspective_view_upsert as perspective_view_upsert_service,
 )
 from ignition_rest_mcp.services.tag_config_import import (
     tag_config_import as tag_config_import_service,
@@ -827,6 +835,121 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="perspective_view_upsert",
+        description=(
+            "Replace one Local Perspective View document in a Project, creating it when the "
+            "Project has none, through the D16 Project transaction and preconditioned on the "
+            "fingerprint perspective_view_get reported (deployment-gated; refuses a View an "
+            "ancestor defines)."
+        ),
+        output_schema=PerspectiveViewWriteResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:project_import"},
+    )
+    async def perspective_view_upsert(
+        projectName: str, path: str, view: dict[str, Any], expectedFingerprint: str,
+    ) -> PerspectiveViewWriteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> PerspectiveViewWriteResult:
+            return await perspective_view_upsert_service(
+                state.require_client(), state.require_transactions(), state.require_artifacts(),
+                state.require_registry(), settings, state.require_records(), context,
+                principal=principal, project_name=projectName, path=path, view=view,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "perspective_view_upsert", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="perspective_view_delete",
+        description=(
+            "Remove one Local Perspective View from a Project through the D16 Project "
+            "transaction, preconditioned on the fingerprint perspective_view_get reported "
+            "(deployment-gated; destructive, one View never a folder)."
+        ),
+        output_schema=PerspectiveViewWriteResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.config", "capability:project_import",
+        },
+    )
+    async def perspective_view_delete(
+        projectName: str, path: str, expectedFingerprint: str,
+    ) -> PerspectiveViewWriteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> PerspectiveViewWriteResult:
+            return await perspective_view_delete_service(
+                state.require_client(), state.require_transactions(), state.require_artifacts(),
+                state.require_registry(), settings, state.require_records(), context,
+                principal=principal, project_name=projectName, path=path,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "perspective_view_delete", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="perspective_page_config_update",
+        description=(
+            "Replace a Project's Local Perspective Page configuration document, creating it "
+            "when the Project has none, through the D16 Project transaction and preconditioned "
+            "on the fingerprint perspective_page_config_get reported (deployment-gated)."
+        ),
+        output_schema=PerspectiveWriteResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:project_import"},
+    )
+    async def perspective_page_config_update(
+        projectName: str, config: dict[str, Any], expectedFingerprint: str,
+    ) -> PerspectiveWriteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> PerspectiveWriteResult:
+            return await perspective_page_config_update_service(
+                state.require_client(), state.require_transactions(), state.require_artifacts(),
+                state.require_registry(), settings, state.require_records(), context,
+                principal=principal, project_name=projectName, config=config,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "perspective_page_config_update", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="perspective_session_props_update",
+        description=(
+            "Replace a Project's Local Perspective Session properties document, creating it "
+            "when the Project has none, through the D16 Project transaction and preconditioned "
+            "on the fingerprint perspective_session_props_get reported (deployment-gated)."
+        ),
+        output_schema=PerspectiveWriteResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:project_import"},
+    )
+    async def perspective_session_props_update(
+        projectName: str, props: dict[str, Any], expectedFingerprint: str,
+    ) -> PerspectiveWriteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> PerspectiveWriteResult:
+            return await perspective_session_props_update_service(
+                state.require_client(), state.require_transactions(), state.require_artifacts(),
+                state.require_registry(), settings, state.require_records(), context,
+                principal=principal, project_name=projectName, props=props,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "perspective_session_props_update", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
         name="artifact_list",
         description="List READY artifact metadata visible to the calling principal (bounded, paginated).",
         output_schema=ArtifactListResult.model_json_schema(),
@@ -1115,6 +1238,10 @@ DEPLOYMENT_GATED_TOOLS = {
     "config_resource_delete": "config_mutation_enabled",
     "config_resource_rename": "config_mutation_enabled",
     "project_import": "config_mutation_enabled",
+    "perspective_view_upsert": "config_mutation_enabled",
+    "perspective_view_delete": "config_mutation_enabled",
+    "perspective_page_config_update": "config_mutation_enabled",
+    "perspective_session_props_update": "config_mutation_enabled",
     "tag_config_import": "config_mutation_enabled",
     "artifact_delete": "config_mutation_enabled",
     "alarm_pipeline_cancel": "control_mutation_enabled",
@@ -1153,6 +1280,10 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "perspective_view_validate": "project_export",
         "perspective_page_config_get": "project_export",
         "perspective_session_props_get": "project_export",
+        "perspective_view_upsert": "project_import",
+        "perspective_view_delete": "project_import",
+        "perspective_page_config_update": "project_import",
+        "perspective_session_props_update": "project_import",
         "artifact_delete": None,
     }
     usable = snapshot.state in {"READY", "STALE"}
