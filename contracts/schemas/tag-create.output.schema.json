@@ -63,6 +63,35 @@
               "path",
               "status"
             ]
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "One item whose dispatch raced a competing writer: Preflight found the create target absent (or the copy destination free), collisionPolicy=Abort left whatever appeared in the window alone, and the bounded post-failure existence check found it present. That is D11's and D30 2's collision case, reported as a conflict rather than a successful create or copy, with the provider's own Native outcome still attached.",
+            "properties": {
+              "reason": {
+                "enum": [
+                  "targetExists",
+                  "destinationExists"
+                ]
+              },
+              "status": {
+                "const": "conflict"
+              },
+              "nativeOutcome": {
+                "$ref": "#/$defs/quality"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 3
+              }
+            },
+            "required": [
+              "path",
+              "status",
+              "reason",
+              "nativeOutcome"
+            ]
           }
         ]
       }

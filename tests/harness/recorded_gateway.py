@@ -83,7 +83,7 @@ _OPENAPI_OPERATIONS = (
     # Phase 4 ticket #36: the same provider type through the generic config Mutations.
     # D30 owner ruling 4 refuses the resource named `IgnitionMCPPolicy` by name, and
     # the cases that prove the *rest* of the type stays manageable need its update,
-    # delete and rename routes to exist — a type without them has no such Tool at all
+    # delete and rename routes to exist - a type without them has no such Tool at all
     # (the capability snapshot withholds it), so the refusal being asserted could
     # never be reached.
     ("put", "/data/api/v1/resources/ignition/tag-provider"),
