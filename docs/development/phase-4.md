@@ -1539,10 +1539,25 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   run, and it is a step of the workflow as well.
 - **Live.** Workflow `Phase 4 Live Gateway apply`
   (`.github/workflows/phase4-live-apply.yml`), its own Gateway row for milestone 4d so
-  the 4a/4b Mutation evidence keeps its own Gateways: run <RUN_ID>, both rows green on
-  8.3.8 `2026071409` (required) and 8.3.9 `2026082511` (candidate), with the stage
-  evidence in `phase4-apply-<version>-<run>/setup-native-apply.json`.
-- **Frozen gates** green on the same head: CI and the Phase 0/1/2/3 rows.
+  the 4a/4b Mutation evidence keeps its own Gateways: run
+  [35708881821](https://github.com/sheon-sek/ignition-mcp/actions/runs/35708881821) on
+  `ffda72d`, with the stage evidence in
+  `phase4-apply-<version>-<run-id>/setup-native-apply.json` (the plan lines, every write
+  with its read-back, the embedded verify report, and the second `plan`/`apply` pair that
+  must write nothing).
+- **The first head of this row was red, and both causes are fixed.** Run
+  [35706182326](https://github.com/sheon-sek/ignition-mcp/actions/runs/35706182326) on
+  `906d55e` failed the stage step on *both* rows before any evidence was written: the
+  stage's bounded verify retry calls `verify`, and `verify` still required `--mcp-url`
+  even though `apply` derives the endpoint from the Server Config it wrote. `ffda72d`
+  makes `doctor`/`verify` accept `--server-config-name` in place of `--mcp-url` (the
+  stage names the URL explicitly as well) and adds a case that pins it. The same run's
+  artifact also showed the stage's `0600` token file inside the uploaded evidence
+  directory; it now lives in a `0700` directory outside the evidence tree, the G3
+  driver's rule. That token was run-scoped and only ever valid on the disposable Gateway
+  the job destroys, and the artifact belongs to that finished run.
+- **Frozen gates** green on the same head: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
+  mutation row (run set `35708881777`–`35708881874`).
 
 - **Ticket #21 — the harness's test-only policy provisioning is not replaced yet.**
   The 4a/4b driver stages still call `install_policy`/`install_tag_*_policy` (the
