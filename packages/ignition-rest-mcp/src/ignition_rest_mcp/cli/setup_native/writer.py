@@ -42,7 +42,9 @@ from ignition_rest_mcp.cli.setup_native.gateway import (
     _snippet,
 )
 from ignition_rest_mcp.cli.setup_native.inputs import (
+    API_TOKEN_TYPE,
     CONFIG_COLLECTION,
+    SECURITY_LEVELS_TYPE,
     SERVER_CONFIG_TYPE,
     NAME_TOKEN,
     Endpoint,
@@ -53,6 +55,9 @@ PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 RESOURCE_COLLECTION_PATH = "/data/api/v1/resources/{resource_type}"
 TAG_IMPORT_PATH = "/data/api/v1/tags/import"
+#: The Gateway's own key/hash generator for a new API token (ticket #22). It persists
+#: nothing: the pair it answers with is what the token create below stores.
+API_TOKEN_GENERATE_PATH = "/data/api/v1/api-token/generate"
 
 MAX_WRITE_RESPONSE_BYTES = 1_048_576
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
@@ -301,6 +306,102 @@ class GatewayWriter:
             "enabled": bool(enabled),
             "description": "",
             "config": config,
+        }
+
+    # ------------------------------------------------------- security planes
+
+    async def update_security_levels(
+        self, tree: list[dict[str, Any]], *, signature: str, collection: str
+    ) -> dict[str, Any]:
+        """Modify the Security Levels singleton, carrying the Resource signature (D20).
+
+        The change item carries only what this CLI owns — the security tree — so the
+        singleton's own description and enabled flag travel untouched, and D20's
+        optimistic precondition is the signature read moments earlier.
+        """
+
+        if not isinstance(signature, str) or not signature.strip():
+            raise WriteError("the security-levels singleton read back no signature; refusing to modify it blind")
+        if not isinstance(tree, list) or not tree:
+            raise WriteError("the desired security tree must be a non-empty list of levels")
+        item = {
+            "collection": guard_name(collection, "collection"),
+            "signature": signature,
+            "config": {"securityLevels": tree},
+        }
+        action = "modify security levels"
+        return _as_object(await self._write(
+            "PUT",
+            RESOURCE_COLLECTION_PATH.format(resource_type=SECURITY_LEVELS_TYPE),
+            body=json.dumps([item], separators=(",", ":")).encode("utf-8"),
+            content_type="application/json",
+            action=action,
+        ), action)
+
+    async def generate_api_token(self) -> dict[str, Any]:
+        """One Gateway-generated ``{key, hash}`` pair; the key never leaves this process."""
+
+        action = "generate API token key"
+        return _as_object(await self._write(
+            "POST",
+            API_TOKEN_GENERATE_PATH,
+            body=b"",
+            content_type="application/json",
+            action=action,
+        ), action)
+
+    async def create_api_token(
+        self, name: str, config: dict[str, Any], *, description: str
+    ) -> dict[str, Any]:
+        """Create the Runtime API token resource (a create can never overwrite one)."""
+
+        item = self._api_token_change(name, config, description)
+        action = "create API token"
+        return _as_object(await self._write(
+            "POST",
+            RESOURCE_COLLECTION_PATH.format(resource_type=API_TOKEN_TYPE),
+            body=json.dumps([item], separators=(",", ":")).encode("utf-8"),
+            content_type="application/json",
+            action=action,
+        ), action)
+
+    def _api_token_change(
+        self, name: str, config: dict[str, Any], description: str
+    ) -> dict[str, Any]:
+        """The one API-token create item this CLI is willing to send.
+
+        Every field is checked rather than passed through: one ``basic-token`` profile,
+        an explicit non-empty granted-levels tree, and the credential hash the Gateway
+        itself produced.
+        """
+
+        target = guard_name(name, "API token name")
+        if not isinstance(config, dict):
+            raise WriteError("the desired API token config must be an object")
+        profile = config.get("profile")
+        if not isinstance(profile, dict) or profile.get("type") != "basic-token":
+            raise WriteError(f"API token {target!r} must carry a basic-token profile")
+        if not isinstance(profile.get("secureChannelRequired"), bool):
+            raise WriteError(f"API token {target!r} must state secureChannelRequired as a boolean")
+        grant = profile.get("securityLevels")
+        if not isinstance(grant, list) or not grant:
+            raise WriteError(f"API token {target!r} must be granted an explicit security level")
+        for node in grant:
+            if not isinstance(node, dict) or not isinstance(node.get("name"), str) or not node["name"]:
+                raise WriteError(f"API token {target!r} carries an unusable security level grant")
+        if not isinstance(profile.get("timestamp"), int):
+            raise WriteError(f"API token {target!r} must carry the creation timestamp as a number")
+        settings = config.get("settings")
+        if not isinstance(settings, dict) or not isinstance(settings.get("tokenHash"), str):
+            raise WriteError(f"API token {target!r} must carry the tokenHash the Gateway generated")
+        if not settings["tokenHash"]:
+            raise WriteError(f"API token {target!r} carries an empty tokenHash")
+        return {
+            "name": target,
+            "collection": guard_name(config.get("collection", CONFIG_COLLECTION), "collection"),
+            "enabled": True,
+            "description": str(description),
+            "config": {"profile": profile, "settings": settings},
         }
 
     # -------------------------------------------------------------- policy Tags

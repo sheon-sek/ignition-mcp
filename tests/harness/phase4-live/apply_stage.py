@@ -29,6 +29,19 @@ had created live with no primitives at all (``capabilities=[-]``,
 ``tools/list -> -32600``) while the imported Project had been in place for seconds.
 The stage never re-runs a *write*.
 
+Ticket #22 adds the two opt-in writes to the same run: the stage passes
+``--provision-security-levels`` and ``--create-runtime-token``, so the run also
+creates the dedicated Runtime Security Level for its profile and a Runtime API token
+granted exactly that level, and the credential file lands in the same private ``0700``
+directory as the operator token. The stage reads both back over Native REST with its
+own admin token, judges that the token carries exactly the secret the CLI wrote (its
+stored hash), and asserts that the secret appears in no command output and nowhere in
+the evidence — which is redacted rather than uploaded if it ever does. The created
+credential's *authorization* is recorded as a probe but not judged: the Server Config
+this stage creates names the CI security level (D09: the Server Config's permissions
+decide who enters the profile), so a token granted only this run's dedicated level is
+expected to be refused.
+
 Evidence is written to ``--evidence-dir/setup-native-apply.json``.
 """
 
@@ -36,10 +49,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import contextlib
+import hashlib
 import io
 import json
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -111,6 +127,15 @@ def build_argv(args: argparse.Namespace) -> list[str]:
         "--server-config-name", args.server_config,
         "--policy-file", str(args.policy_file),
         "--server-config-permissions-file", str(args.permissions_file),
+        # Ticket #22: D20's two opt-in writes. The dedicated Security Level and the
+        # Runtime API token are created for this run's own profile, and the secret lands
+        # in the stage's private 0700 directory. `--runtime-token-insecure-channel` is
+        # the disposable compose Gateway's own fact (it serves plain HTTP); a production
+        # deployment must not pass it.
+        "--provision-security-levels",
+        "--create-runtime-token",
+        "--runtime-token-file", str(args.runtime_token_file),
+        "--runtime-token-insecure-channel",
         # The endpoint apply writes and verifies through; named explicitly so the
         # read-only verify retries below need no derivation.
         "--mcp-url", f"{args.base_url.rstrip('/')}/data/mcp/{args.server_config}",
@@ -129,6 +154,10 @@ async def run_stage(args: argparse.Namespace) -> int:
     token_file.write_text(args.api_token + "\n", encoding="utf-8")
     os.chmod(token_file, 0o600)
     args.token_file = token_file
+    # Ticket #22: the credential the opt-in flags create. It lives in the same private
+    # 0700 directory as the operator token: the Gateway returns the key once, and the
+    # stage must never let it reach the uploaded evidence.
+    args.runtime_token_file = private / "runtime.token"
     policy_file = args.evidence_dir / "runtime-target-policy.json"
     policy_file.write_text(json.dumps(policy_document.POLICY, indent=2, sort_keys=True), encoding="utf-8")
     args.policy_file = policy_file
@@ -140,8 +169,11 @@ async def run_stage(args: argparse.Namespace) -> int:
     argv = build_argv(args)
     evidence: dict[str, Any] = {
         "schemaVersion": 1,
-        "ticket": 21,
-        "title": "setup-native apply: bundle project, Server Config and Runtime Target Policy",
+        "ticket": 22,
+        "title": (
+            "setup-native apply: bundle project, Server Config, Runtime Target Policy, "
+            "opt-in Security Level and Runtime API token (ticket #21 + #22)"
+        ),
         "baseUrl": args.base_url,
         "project": args.project,
         "serverConfig": args.server_config,
@@ -161,6 +193,13 @@ async def run_stage(args: argparse.Namespace) -> int:
     if plan_code != 0:
         _fail(evidence, args, f"plan exited {plan_code} before any write")
         return 1
+    # Ticket #22: the opt-in writes must be planned before anything is written.
+    planned = {
+        action.get("kind"): action.get("action") for action in (plan_report.get("actions") or [])
+    }
+    if (planned.get("security-level"), planned.get("runtime-token")) != ("CREATE", "CREATE"):
+        _fail(evidence, args, f"the first plan did not propose both opt-in writes: {planned}")
+        return 1
 
     apply_code, apply_text, apply_report = await run_command("apply", argv)
     evidence["steps"]["apply"] = {"exitCode": apply_code, "report": apply_report, "output": apply_text}
@@ -169,6 +208,29 @@ async def run_stage(args: argparse.Namespace) -> int:
     if failed_writes:
         _fail(evidence, args, f"apply failed to write: {json.dumps(failed_writes)[:600]}")
         return 1
+
+    # Ticket #22: what the opt-in flags actually wrote, read back with the deployment's
+    # own admin token, and the credential file's mode. The secret itself is never
+    # recorded, here or in any step output (asserted below).
+    provisioning = _provisioning_report(args)
+    evidence["provisioning"] = provisioning
+    secret = _secret_line(args.runtime_token_file)
+    evidence["provisioning"]["secretFileMode"] = _file_mode(args.runtime_token_file)
+    if not provisioning["securityLevelPresent"]:
+        _fail(evidence, args, f"the dedicated Security Level was not readable after apply: {provisioning}")
+        return 1
+    if not provisioning["tokenHashMatchesSecret"]:
+        _fail(evidence, args, f"the created API token does not carry the secret apply wrote: {provisioning}")
+        return 1
+    if provisioning["secretFileMode"] != "0o600":
+        _fail(evidence, args, f"the credential file is not 0600: {provisioning['secretFileMode']}")
+        return 1
+    # Not judged, recorded for the operator: whether a token holding only this run's
+    # dedicated Security Level may enter the MCP endpoint. The Server Config this stage
+    # creates names the CI level, so a refusal is the expected answer (D09: the Server
+    # Config's permissions decide who enters the profile).
+    evidence["provisioning"]["createdTokenMcpProbe"] = _mcp_probe(args, secret)
+    evidence["provisioning"]["createdTokenMcpProbeJudged"] = False
 
     verify_attempts = 1
     if apply_code != 0 and not _verify_ok(apply_report.get("verify")):
@@ -184,6 +246,7 @@ async def run_stage(args: argparse.Namespace) -> int:
     evidence["steps"]["secondPlan"] = {
         "exitCode": second_plan_code, "report": second_plan_report, "output": second_plan_text,
     }
+    secret_digest = hashlib.sha256(Path(args.runtime_token_file).read_bytes()).hexdigest()
     second_apply_code, second_apply_text, second_apply_report = await run_command("apply", argv)
     evidence["steps"]["secondApply"] = {
         "exitCode": second_apply_code, "report": second_apply_report, "output": second_apply_text,
@@ -191,19 +254,32 @@ async def run_stage(args: argparse.Namespace) -> int:
 
     writes = apply_report.get("writes") or []
     written = [write for write in writes if write.get("action") in ("CREATE", "UPDATE")]
-    if {write.get("kind") for write in written} != {"bundle-project", "server-config", "runtime-policy"}:
-        _fail(evidence, args, f"apply did not write all three intentions: {writes}")
+    if {write.get("kind") for write in written} != {
+        "security-level", "runtime-token", "bundle-project", "server-config", "runtime-policy",
+    }:
+        _fail(evidence, args, f"apply did not write all five intentions: {writes}")
         return 1
     if second_plan_code != 0 or any(
         action.get("action") != "NO CHANGE"
         for action in (second_plan_report.get("actions") or [])
-        if action.get("kind") in ("bundle-project", "server-config", "runtime-policy")
+        if action.get("kind") in (
+            "security-level", "runtime-token", "bundle-project", "server-config", "runtime-policy",
+        )
     ):
         _fail(evidence, args, "the second plan is not a NO CHANGE run")
         return 1
     second_actions = [write.get("action") for write in (second_apply_report.get("writes") or [])]
     if second_apply_code != 0 or any(action in ("CREATE", "UPDATE") for action in second_actions):
         _fail(evidence, args, f"the second apply wrote something: {second_actions}")
+        return 1
+    # D20's idempotency rule for the credential: the secret file is untouched.
+    if hashlib.sha256(Path(args.runtime_token_file).read_bytes()).hexdigest() != secret_digest:
+        _fail(evidence, args, "the second run rewrote the credential file")
+        return 1
+    # Ticket #22's reporting rule, judged over everything this run produced (the step
+    # outputs, both reports and this stage's own fields).
+    if secret and secret in json.dumps(evidence):
+        _fail(evidence, args, "the credential reached a command output or the evidence")
         return 1
     evidence["ok"] = True
     _write(evidence, args)
@@ -212,6 +288,7 @@ async def run_stage(args: argparse.Namespace) -> int:
         "ok": True,
         "wrote": [f"{write['kind']}:{write['action']}" for write in written],
         "verifyAttempts": verify_attempts,
+        "provisioning": provisioning,
         "secondApply": [write.get("action") for write in (second_apply_report.get("writes") or [])],
     }, sort_keys=True))
     return 0
@@ -219,6 +296,140 @@ async def run_stage(args: argparse.Namespace) -> int:
 
 def _verify_ok(report: Any) -> bool:
     return isinstance(report, dict) and report.get("verified") is True
+
+
+# ------------------------------------------------------------------ ticket #22 probes
+
+
+def _level_name(profile: str) -> str:
+    """The dedicated Runtime Security Level's name, exactly as the CLI derives it."""
+
+    return f"IgnitionMcpRuntime{profile.capitalize()}"
+
+
+def _secret_line(path: Path) -> str:
+    """The one-line credential the CLI wrote, or ``""`` when there is none (never logged)."""
+
+    try:
+        lines = [line.strip() for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    except OSError:
+        return ""
+    return lines[0] if len(lines) == 1 else ""
+
+
+def _file_mode(path: Path) -> str:
+    try:
+        return oct(stat.S_IMODE(path.stat().st_mode))
+    except OSError as error:
+        return f"unreadable ({type(error).__name__})"
+
+
+def _token_hash_of(secret: str) -> str:
+    """The hash the Gateway stores for a ``name:key`` credential, from the key itself."""
+
+    _, _, key = secret.partition(":")
+    padded = key + "=" * (-len(key) % 4)
+    try:
+        raw = base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+    except (ValueError, UnicodeEncodeError):
+        return ""
+    return base64.urlsafe_b64encode(hashlib.sha256(raw).digest()).rstrip(b"=").decode("ascii")
+
+
+def _rest_json(base_url: str, token: str, path: str) -> tuple[int, Any]:
+    """One authenticated Native REST read; the status is returned even when it refuses."""
+
+    request = urllib.request.Request(
+        base_url.rstrip("/") + path,
+        headers={"X-Ignition-API-Token": token, "Accept": "application/json"},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:  # noqa: S310 - the compose origin
+            return int(response.status), json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return int(error.code), None
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return 0, {"transportError": type(error).__name__}
+
+
+def _provisioning_report(args: argparse.Namespace) -> dict[str, Any]:
+    """Read back the level and the token the opt-in flags created, never the secret."""
+
+    status, levels = _rest_json(
+        args.base_url, args.api_token, "/data/api/v1/resources/singleton/ignition/security-levels",
+    )
+    token_status, token = _rest_json(
+        args.base_url, args.api_token, f"/data/api/v1/resources/find/ignition/api-token/{args.server_config}",
+    )
+    tree = ((levels or {}).get("config") or {}).get("securityLevels") if isinstance(levels, dict) else None
+    name = _level_name(args.profile)
+    config = (token or {}).get("config") if isinstance(token, dict) else None
+    profile = (config or {}).get("profile") if isinstance(config, dict) else None
+    stored = ((config or {}).get("settings") or {}).get("tokenHash") if isinstance(config, dict) else None
+    secret = _secret_line(args.runtime_token_file)
+    return {
+        "securityLevelsHttpStatus": status,
+        "securityLevelPath": f"Authenticated/{name}",
+        "securityLevelPresent": bool(tree) and any(
+            isinstance(node, dict) and node.get("name") == "Authenticated"
+            and any(
+                isinstance(child, dict) and child.get("name") == name
+                for child in (node.get("children") or [])
+            )
+            for node in tree
+        ),
+        "tokenHttpStatus": token_status,
+        "tokenName": args.server_config,
+        "tokenEnabled": (token or {}).get("enabled") if isinstance(token, dict) else None,
+        "tokenGrantedLevels": [
+            child.get("name")
+            for node in ((profile or {}).get("securityLevels") or [])
+            if isinstance(node, dict)
+            for child in (node.get("children") or [])
+            if isinstance(child, dict)
+        ],
+        "tokenSecureChannelRequired": (profile or {}).get("secureChannelRequired"),
+        "tokenHashMatchesSecret": bool(stored) and stored == _token_hash_of(secret),
+    }
+
+
+def _mcp_probe(args: argparse.Namespace, token: str) -> dict[str, Any]:
+    """One MCP ``initialize`` with the created credential; recorded, never judged.
+
+    The Server Config this stage writes names the CI security level, so a token granted
+    only this run's dedicated level is *expected* to be refused (D09: the Server Config
+    permissions decide who enters the profile). The probe records the answer the pinned
+    Module gives, which is live knowledge the local fixtures cannot produce.
+    """
+
+    if not token:
+        return {"status": 0, "note": "no credential was written"}
+    payload = json.dumps({
+        "jsonrpc": "2.0", "id": 1, "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "phase4-apply-stage", "version": "1"},
+        },
+    }).encode("utf-8")
+    request = urllib.request.Request(
+        f"{args.base_url.rstrip('/')}/data/mcp/{args.server_config}",
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/event-stream",
+            "X-Ignition-API-Token": token,
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:  # noqa: S310 - the compose origin
+            body = response.read(400).decode("utf-8", "replace")
+            return {"status": int(response.status), "body": " ".join(body.split())}
+    except urllib.error.HTTPError as error:
+        body = error.read(400).decode("utf-8", "replace")
+        return {"status": int(error.code), "body": " ".join(body.split())}
+    except (urllib.error.URLError, OSError, ValueError) as error:
+        return {"status": 0, "error": type(error).__name__}
 
 
 def _fail(evidence: dict[str, Any], args: argparse.Namespace, reason: str) -> None:
@@ -231,7 +442,15 @@ def _fail(evidence: dict[str, Any], args: argparse.Namespace, reason: str) -> No
 def _write(evidence: dict[str, Any], args: argparse.Namespace) -> None:
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
     path = args.evidence_dir / "setup-native-apply.json"
-    path.write_text(json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    blob = json.dumps(evidence, indent=2, sort_keys=True) + "\n"
+    secret = _secret_line(args.runtime_token_file)
+    if secret and secret in blob:
+        # A credential must never reach an uploaded artifact. Redact it, say so loudly,
+        # and leave the judgement to the stage's own leak check.
+        evidence["secretLeakRedacted"] = True
+        blob = json.dumps(evidence, indent=2, sort_keys=True).replace(secret, "[redacted]") + "\n"
+        print("setup-native apply stage: a credential reached the evidence; redacted it", file=sys.stderr)
+    path.write_text(blob, encoding="utf-8")
     print(f"evidence: {path}")
 
 

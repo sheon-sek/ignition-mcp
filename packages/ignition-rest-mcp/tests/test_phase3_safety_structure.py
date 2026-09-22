@@ -226,6 +226,8 @@ def test_cli_write_routes_are_the_curated_set_of_ticket_21() -> None:
         "PROJECT_EXPORT_PATH": "/data/api/v1/projects/export/{name}",
         "RESOURCE_COLLECTION_PATH": "/data/api/v1/resources/{resource_type}",
         "TAG_IMPORT_PATH": "/data/api/v1/tags/import",
+        # Ticket #22's opt-in credential: the Gateway's own key/hash generator.
+        "API_TOKEN_GENERATE_PATH": "/data/api/v1/api-token/generate",
     }, sorted(routes)
 
     chokepoints = {"_write": {"POST", "PUT"}, "_archive": {"GET"}}
