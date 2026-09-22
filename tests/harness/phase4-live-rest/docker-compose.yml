@@ -16,5 +16,28 @@ services:
       -n ignition-mcp-phase4-rest-ci
       -m 1536
 
+  # The D23 fault-injecting proxy (ticket #20): one hop between the host-run
+  # `ignition-rest` and the Gateway, moved over its control port.
+  #
+  # `network_mode: host` is deliberate. The `NOT_SENT` cases need a *refused* connect
+  # on the port the server has been using, and a published port would put Docker's
+  # userland proxy in front of the listener: it accepts the connection and then fails
+  # to reach the container, which the server classifies as an ambiguous boundary
+  # (possibly dispatched) rather than a known non-attempt. On the host network the
+  # proxy's data port is a real socket on loopback, closing it is a genuine
+  # ECONNREFUSED, and the same code path is exercised by the Docker-free rehearsal.
+  # The upstream is the Gateway's own published port; the proxy binds loopback only.
+  fault-proxy:
+    image: ${PROXY_IMAGE:?PROXY_IMAGE must be pulled by the workflow first}
+    pull_policy: never
+    network_mode: host
+    volumes:
+      - ./fault_proxy.py:/harness/fault_proxy.py:ro
+    command: >
+      python /harness/fault_proxy.py
+      --listen-host 127.0.0.1 --listen-port 8090
+      --control-host 127.0.0.1 --control-port 8091
+      --upstream-host 127.0.0.1 --upstream-port 8088
+
 volumes:
   phase4-rest-gateway-data:

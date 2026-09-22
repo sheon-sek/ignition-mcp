@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 import json
@@ -34,11 +35,59 @@ SAFE_AUDIT_FIELDS: dict[str, frozenset[str]] = {
     "project_import": frozenset({"projectName"}),
     "tag_config_import": frozenset({"provider", "path"}),
     "alarm_pipeline_cancel": frozenset({"path", "alarmEventId"}),
+    #: Phase 4 ticket #19: the destructiveness of an artifact removal is only auditable
+    #: if the row says what was destroyed. The identifier is the row's target_id, and
+    #: the owning principal is the row's actor — neither is repeated here.
+    "artifact_delete": frozenset({"kind", "sensitivity", "retentionClass"}),
 }
 
 
 class AuditWriteError(RuntimeError):
     """The durable audit write failed; audited operations must fail closed."""
+
+
+#: How long a result row may take to become durable when the coroutine writing it is
+#: already being cancelled. The write is awaited to completion under this bound instead of
+#: being left to a shielded task, so a cancellation can never be the reason an audited
+#: attempt has no result row.
+CANCELLED_RESULT_DEADLINE_SECONDS = 5.0
+
+
+async def result_under_cancellation(
+    auditor: "Auditor", outcome: str, *, error_code: str | None = None, **kw: Any,
+) -> bool:
+    """Record one result row even though this coroutine is being cancelled.
+
+    ``asyncio.shield`` alone is not enough: it lets the caller's cancellation through
+    immediately, and the write it protects can be dropped with the task — which is how a
+    dispatch that died mid-flight used to lose the ``outcome_unknown`` row that is the whole
+    point of recording it. This awaits the write to completion, absorbing a second
+    cancellation because the caller re-raises the original one right after. Returns whether
+    the row landed; failing to write is not fatal (the sink logs it and the operation record
+    keeps the ``auditResultMissing`` marker), but it is never silent.
+    """
+
+    write = asyncio.ensure_future(auditor.result(outcome, error_code=error_code, **kw))
+    try:
+        async with asyncio.timeout(CANCELLED_RESULT_DEADLINE_SECONDS):
+            while True:
+                try:
+                    await asyncio.shield(write)
+                    return True
+                except asyncio.CancelledError:
+                    if write.done():
+                        raise
+                    # The caller's cancellation, not the write's: keep waiting for it.
+                    continue
+                except Exception:  # pragma: no cover - the sink already logged it
+                    return False
+    except (TimeoutError, asyncio.CancelledError):
+        LOGGER.error(
+            "A cancelled operation's result row could not be committed; the "
+            "operation record keeps the gap",
+            extra={"event": "cancelled_audit_result_lost", "outcome": "error"},
+        )
+        return False
 
 
 @dataclass(frozen=True, slots=True)
