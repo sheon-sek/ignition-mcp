@@ -52,6 +52,46 @@ D30_RUNTIME_FIXTURE_ONLY = ("timeout", "ambiguous outcome", "cancellation")
 #: honest last entry — nothing at all on that plane. ``NONE`` must be named in
 #: ``unsatisfiedAcceptance`` and is what makes a gate result less than verified.
 L5_EVIDENCE_CLASSES = ("LIVE", "SYSTEMATIC", "FIXTURE", "NONE")
+#: D26's Phase 5 amendment (G5) splits the milestone's cases in two, and this is the
+#: split verbatim: the cases the live stage must run against Perspective resources, each
+#: with the driver case ids that are its evidence, and the cases that test the generic
+#: transaction instead and are cited from the existing G3/G4 evidence.
+G5_LIVE_CASES: dict[str, tuple[str, ...]] = {
+    "normal edit": (
+        "perspective-view-upsert-commits",
+        "perspective-view-upsert-verifies-its-own-candidate",
+        "perspective-view-upsert-is-observed-by-a-fresh-read",
+        # The same case covers the create: D15's upsert creates the resource when the
+        # Project has none at the path, and the list and the read are what show it landed.
+        "perspective-view-upsert-creates-a-view-the-project-lacks",
+    ),
+    "no-op": (
+        "perspective-view-upsert-of-the-current-document-is-no-change",
+        "perspective-view-upsert-no-change-dispatches-nothing",
+    ),
+    "unrelated-resource preservation": ("perspective-view-upsert-preserves-every-other-entry",),
+    "refusal of a Mutation that would override an Inherited resource": (
+        "perspective-view-upsert-of-an-inherited-view-is-invalid-argument",
+        "perspective-view-upsert-of-an-inherited-view-names-the-reason",
+        "perspective-view-upsert-of-an-inherited-view-changes-nothing",
+    ),
+    "concurrent external change abort": (
+        "perspective-view-upsert-after-an-external-change-is-conflict",
+        "perspective-view-upsert-after-an-external-change-imports-nothing",
+    ),
+}
+#: The cases the amendment leaves with the generic transaction: G5 cites the committed
+#: G3/G4 evidence for them *only* while the Perspective writes call the unchanged
+#: `ProjectTransactionService` and ZIP safety, which the row has to record.
+G5_CITED_CASES = (
+    "backup failure abort-before-import",
+    "ambiguous import outcome reconciliation",
+    "invalid ZIP, path traversal, duplicate, symlink and bomb rejection",
+    "post-import verification failure and the recovery-required path",
+)
+#: How the amendment's cited cases are proven: a committed G3/G4 row that already holds
+#: them, or a live G5 run that took them back. Anything else is not admissible.
+G5_CITED_CLASSES = ("CITED", "LIVE")
 G4_GATE_RESULTS = ("VERIFIED", "VERIFIED_WITH_LIMITATION", "UNVERIFIED_LIMITATION", "UNTESTED")
 G4_PLANES = ("rest", "runtime")
 G4_PROFILES = ("readonly", "operator", "configurator", "full")
@@ -59,7 +99,7 @@ BINDING_STATUSES = (
     "NATIVE_BINDING_PENDING", "VERIFIED", "VERIFIED_WITH_LIMITATION", "FAILED",
     "FAILED_NATIVE_BINDING", "UNVERIFIED_LIMITATION", "UNVERIFIED",
 )
-GATES = ("G0", "G1", "G2", "G3", "G4")
+GATES = ("G0", "G1", "G2", "G3", "G4", "G5")
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _BUILD = re.compile(r"^[0-9]{10}$")
@@ -187,6 +227,8 @@ def parse_row(directory: Path, doc: dict[str, Any]) -> EvidenceRow:
         _apply_g3_rules(row, doc, where)
     if gate == "G4":
         _apply_g4_rules(row, doc, where)
+    if gate == "G5":
+        _apply_g5_rules(row, doc, where, directory.parent)
     return row
 
 
@@ -379,6 +421,105 @@ def _g4_incomplete(doc: dict[str, Any]) -> bool:
         for case in D26_L5_CASES
         for plane in G4_PLANES
     )
+
+
+def _g5_entry(entry: Any, case: str, where: str, *, verdicts: tuple[str, ...]) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise EvidenceError(f"{where}: G5 case {case!r} must be an object")
+    verdict = entry.get("verdict")
+    if verdict not in verdicts:
+        raise EvidenceError(f"{where}: G5 case {case!r} must have a verdict in {verdicts}")
+    source = entry.get("source")
+    if not isinstance(source, str) or not source:
+        raise EvidenceError(f"{where}: G5 case {case!r} must name its evidence source")
+    if verdict == "LIVE":
+        run_ids = entry.get("runIds")
+        if not isinstance(run_ids, list) or not run_ids or not all(
+            isinstance(item, str) and item for item in run_ids
+        ):
+            raise EvidenceError(f"{where}: G5 case {case!r} claims LIVE without naming a run id")
+    return entry
+
+
+def _apply_g5_rules(row: EvidenceRow, doc: dict[str, Any], where: str, root: Path) -> None:
+    """G5 rules (D26's Phase 5 amendment).
+
+    The amendment splits the milestone: five cases run live against Perspective
+    resources, and the transaction cases that G3/G4 already proved live are *cited* from
+    those committed rows instead of being run again. A row may therefore not claim the
+    transaction cases as its own work, must name the committed row each citation rests
+    on, that row has to be in this evidence tree, and the row must record that the
+    delegation is still allowed, which is exactly the "the writes call the unchanged
+    transaction service and ZIP safety" condition the amendment states.
+    """
+
+    deviations = doc.get("ownerAcceptedDeviations")
+    if not isinstance(deviations, list) or "phase4-live-environment-protection" not in deviations:
+        raise EvidenceError(
+            f"{where}: G5 evidence must record the owner-accepted phase4-live environment "
+            "deviation (phase4-live-environment-protection)"
+        )
+    g5 = doc.get("g5")
+    if not isinstance(g5, dict):
+        raise EvidenceError(f"{where}: G5 rows must record the g5 case split")
+    live = g5.get("livePerspective")
+    if not isinstance(live, dict) or set(live) != set(G5_LIVE_CASES):
+        raise EvidenceError(
+            f"{where}: g5.livePerspective must account for exactly the amendment's live cases "
+            f"{sorted(G5_LIVE_CASES)}"
+        )
+    run_ids = {entry.get("runId") for entry in doc.get("runs", []) if isinstance(entry, dict)}
+    for case in G5_LIVE_CASES:
+        entry = _g5_entry(live[case], case, where, verdicts=("LIVE",))
+        for run_id in entry["runIds"]:
+            if run_id not in run_ids:
+                raise EvidenceError(
+                    f"{where}: G5 case {case!r} cites run {run_id!r}, which runs[] does not hold"
+                )
+    cited = g5.get("citedTransaction")
+    if not isinstance(cited, dict) or set(cited) != set(G5_CITED_CASES):
+        raise EvidenceError(
+            f"{where}: g5.citedTransaction must account for exactly {sorted(G5_CITED_CASES)}"
+        )
+    if doc.get("transactionServiceUnchanged") is not True:
+        # The amendment's condition: the citation is admissible only while the writes
+        # still call the unchanged transaction service. A change to it returns the
+        # affected cases to the live stage.
+        raise EvidenceError(
+            f"{where}: G5 rows must record transactionServiceUnchanged=true, the amendment's "
+            "condition for citing the G3/G4 transaction cases"
+        )
+    for case in G5_CITED_CASES:
+        entry = _g5_entry(cited[case], case, where, verdicts=G5_CITED_CLASSES)
+        if entry["verdict"] == "CITED":
+            evidence = entry.get("evidence")
+            if not isinstance(evidence, str) or not evidence:
+                raise EvidenceError(f"{where}: cited G5 case {case!r} must name the row it cites")
+            manifest = root / evidence / "evidence.json"
+            if not manifest.is_file():
+                raise EvidenceError(
+                    f"{where}: cited G5 case {case!r} names {evidence!r}, which is not in this "
+                    "evidence tree; the cited cases must rest on committed rows"
+                )
+            try:
+                cited_doc = json.loads(manifest.read_text(encoding="utf-8"))
+            except ValueError as error:
+                raise EvidenceError(f"{where}: {manifest.name} is unreadable: {error}") from error
+            cited_gate = cited_doc.get("gate") if isinstance(cited_doc, dict) else None
+            if cited_gate not in {"G3", "G4"}:
+                raise EvidenceError(
+                    f"{where}: cited G5 case {case!r} cites {evidence!r}, not a G3/G4 row"
+                )
+    gate_result = doc.get("gateResult")
+    if gate_result not in G4_GATE_RESULTS:
+        raise EvidenceError(f"{where}: gateResult must be one of {G4_GATE_RESULTS}")
+    if gate_result != "VERIFIED":
+        limitations = doc.get("limitations")
+        if not isinstance(limitations, list) or not limitations:
+            raise EvidenceError(f"{where}: a G5 row that is not fully verified must record its limitations")
+    unsatisfied = doc.get("unsatisfiedAcceptance")
+    if not isinstance(unsatisfied, list) or not all(isinstance(item, str) for item in unsatisfied):
+        raise EvidenceError(f"{where}: unsatisfiedAcceptance must be a list of strings")
 
 
 def load_evidence(evidence_dir: str | Path, *, reject_supported: bool = True) -> list[EvidenceRow]:

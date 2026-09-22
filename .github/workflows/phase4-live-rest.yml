@@ -17,6 +17,14 @@ name: Phase 4 Live Gateway REST mutation
 # (or D16's reconciliation), that a cancelled one is never replayed, and that each
 # leaves D18's decision/attempt/result triple complete.
 #
+# Phase 5 (ticket P5-3) adds the G5 stage to the same run: the deployment's Mutation
+# policy also enables the four Perspective CONFIG writes for one run-unique child
+# Project, `provision.py` imports the parent/child Perspective fixture through the
+# Gateway's own project route, and the class-enabled driver pass runs the Perspective
+# cases beside the Phase 4 ones (nine Tools, the `pcf1` Precondition token, the D15
+# inherited-resource refusal, the whole-document edit with its preservation check, and
+# the concurrent-change abort). No second workflow or job is added.
+#
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment. That environment
 # exists WITHOUT protection rules — the same owner-accepted deviation as
@@ -25,6 +33,7 @@ name: Phase 4 Live Gateway REST mutation
 # environment secrets in this job, loopback/compose-only Gateway and MCP
 # endpoints, run-unique CI-only credentials, and expectation checks on the live
 # data in the driver.
+
 on:
   pull_request:
 
@@ -106,6 +115,14 @@ jobs:
       ALARM_EVENT_ID: "00000000-0000-4000-8000-000000000000"
       # The D16 writer identity: one stable operator-chosen ID per Gateway.
       GATEWAY_ID: phase4-rest-${{ matrix.gateway_version }}-${{ github.run_id }}
+      # Phase 5 (P5-3): the Perspective fixture, a parent Project and the allowlisted
+      # child Project the write cases address. Both are run-unique and imported by
+      # `provision.py` itself, so no fixture directory has to be installed into the
+      # Gateway; the parent is the Project whose View the child inherits, which is what
+      # makes one of the cases a D15 inherited-resource refusal rather than a permission
+      # denial (only the child is a Target).
+      PERSPECTIVE_PARENT_PROJECT: mcp_p5_parent_${{ github.run_id }}_${{ github.run_attempt }}
+      PERSPECTIVE_CHILD_PROJECT: mcp_p5_child_${{ github.run_id }}_${{ github.run_attempt }}
       # D23 ticket #20: the fault-injecting proxy the compose stack runs on the host
       # network, and the budgets its own ignition-rest instance is configured with. The
       # delayed-response cases hold an answer past *these* deadlines, so a case costs
@@ -291,7 +308,7 @@ jobs:
           # Ticket #36: the Tag-provider resources are deliberately part of the config
           # Target allowlists — including the reserved one the Tools must refuse — so a
           # `permission_denied` in those cases is the name rule and not the allowlist.
-          echo "IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete" >> "$GITHUB_ENV"
+          echo "IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete,perspective_view_upsert,perspective_view_delete,perspective_page_config_update,perspective_session_props_update" >> "$GITHUB_ENV"
           jq -nc \
             --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
             --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
@@ -305,6 +322,7 @@ jobs:
             --arg reserved_provider "$PROVIDER_TYPE/$RESERVED_PROVIDER" \
             --arg other_provider "$PROVIDER_TYPE/$OTHER_PROVIDER" \
             --arg lookalike_provider "$PROVIDER_TYPE/$LOOKALIKE_PROVIDER" \
+            --arg perspective_child "$PERSPECTIVE_CHILD_PROJECT" \
             '{config_resource_update: [$allowlisted, $singleton, $reserved_provider, $other_provider, $lookalike_provider],
               config_resource_create: [$created, $rename_source, $rename_source_2, $reserved_provider, $other_provider, $lookalike_provider],
               config_resource_delete: [$allowlisted, $created, $reserved_provider, $other_provider],
@@ -312,7 +330,11 @@ jobs:
               project_import: [$project],
               tag_config_import: [$tag_target],
               alarm_pipeline_cancel: [$pipeline],
-              artifact_delete: ["*"]}' \
+              artifact_delete: ["*"],
+              perspective_view_upsert: [$perspective_child],
+              perspective_view_delete: [$perspective_child],
+              perspective_page_config_update: [$perspective_child],
+              perspective_session_props_update: [$perspective_child]}' \
             | sed 's/^/IGNITION_MCP_MUTATION_TARGETS=/' >> "$GITHUB_ENV"
 
       - name: Provision the Phase 4 REST fixtures
@@ -325,6 +347,8 @@ jobs:
             --control-project "$IMPORT_CONTROL_PROJECT" \
             --tag-provider "$TAG_PROVIDER" \
             --tag-source-path "$TAG_SOURCE_PATH" \
+            --perspective-parent "$PERSPECTIVE_PARENT_PROJECT" \
+            --perspective-child "$PERSPECTIVE_CHILD_PROJECT" \
             --evidence "$EVIDENCE_DIR/provision.json"
 
       - name: Start ignition-rest with both mutation classes enabled
@@ -394,6 +418,8 @@ jobs:
             --pipeline "$PIPELINE" \
             --control-pipeline "$CONTROL_PIPELINE" \
             --alarm-event-id "$ALARM_EVENT_ID" \
+            --parent-project "$PERSPECTIVE_PARENT_PROJECT" \
+            --child-project "$PERSPECTIVE_CHILD_PROJECT" \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \
             > "$EVIDENCE_DIR/driver-gate-on.log" 2>&1

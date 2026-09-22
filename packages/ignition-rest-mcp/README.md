@@ -241,6 +241,59 @@ Common rules for all four: a Target outside the allowlist is `permission_denied`
 class gate is enforced in discovery and again at call time, and an explicit Gateway rejection is
 final — no read-back may turn it into a success.
 
+**Perspective reads** (D15, Phase 5) return a Project's Local resources and change nothing.
+`perspective_view_list` lists the Local View paths of one Project (bounded, paginated by
+`limit`/`offset`), `perspective_view_get` returns one View document, and
+`perspective_page_config_get` and `perspective_session_props_get` return the Project's Page
+configuration and Session properties documents, answering `not_found` when the Project has
+none locally. The three document reads also return the `pcf1` Project fingerprint of the
+export they were read from, which is the Precondition token a later write presents. Views are
+addressed by Logical resource path (`Pages/Overview`), never by an archive path: a leading
+`/`, a backslash, an empty, `.` or `..` segment, a control character, or a character Ignition
+refuses in a resource name is `invalid_argument` before anything is exported. All four are
+gated on the `project_export` capability, and each exports the Project through the same
+bounded capture `project_export` and the D16 transaction use, reads the document from the
+private staging copy, and then deletes that copy. A read therefore publishes no artifact,
+never returns the archive, and leaves every other entry untouched. Reads return Local
+resources only: a View the Project inherits from an ancestor is not in the export and answers
+`not_found` rather than being resolved through the inheritance chain.
+
+`perspective_view_validate` (D15) dispatches nothing. It takes the View document as a JSON
+object, requires a `root` object whose `type` is a string, and applies the D10 budgets: at most
+1 MiB, measured on the document's compact re-serialization, and at most 64 JSON levels.
+Unknown component types are accepted, and a passing validation does not promise that an
+Ignition import accepts the document.
+
+Every document a Perspective read returns passes through the same `redact()` the
+`config_resource_*` reads use, so a field named `password`, `apiKey`, `accessToken`,
+`clientSecret`, `privateKey` or the like, and an embedded protected credential blob, is
+reported as `<redacted>` rather than echoed.
+
+**Perspective writes** (D15/D16, Phase 5) replace one Local resource per call and run the
+same D16 Project transaction as `project_import`: `perspective_view_upsert` and
+`perspective_view_delete` change one View at a Logical resource path, and
+`perspective_page_config_update` and `perspective_session_props_update` replace the
+Project's Page configuration and Session properties documents. Each write builds its
+candidate by copying the baseline export and patching one resource: the target entry,
+plus, when the Project does not hold that resource yet, the sibling `resource.json` an
+import needs to keep it. Every other entry reaches the Gateway byte-identical, and each
+write takes `expectedFingerprint`, the `pcf1` Project fingerprint the matching get Tool
+reported. A stale token is `conflict`; a satisfied transaction is `COMMITTED` or
+`NO_CHANGE`; every other D16 terminal state is a Tool error with the D30 §7 code, and a
+Gateway rejection is final. A delete of a View the Project does not define locally is
+`not_found`.
+
+Three rules decide what a write may touch. Before the transaction starts, the server
+reads the Project's own export to see whether the target is Local, and only when it is
+not does it walk the ancestor chain (bounded at 16 Projects, refused rather than truncated
+if it is deeper or loops), exporting each ancestor and refusing with `invalid_argument`
+and reason `inherited_resource` if one defines the target. That walk is why a write never
+creates a silent local override (D15). A document that carries the exact value
+`<redacted>`, which is what a read returns in place of a secret-named field, is refused
+with `invalid_argument` and reason `redacted_value` before anything is exported. All four
+are CONFIG Mutations: the Target allowlist, the class gate, the `project_import`
+capability and the audit chain apply exactly as they do to `project_import`.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

@@ -1,0 +1,154 @@
+{
+  "schemaVersion": 1,
+  "name": "perspective_session_props_update",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "ARTIFACT",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "projectName": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 256,
+      "note": "an existing Project, matched exactly and case-sensitively; anything else is not_found"
+    },
+    "props": {
+      "type": "object",
+      "required": true,
+      "maxBytes": 1048576,
+      "note": "the whole replacement Session properties document"
+    },
+    "expectedFingerprint": {
+      "type": "string",
+      "required": true,
+      "pattern": "^pcf1:[0-9a-f]{64}$",
+      "source": "perspective_session_props_get.fingerprint"
+    }
+  },
+  "inputBounds": {
+    "documentParameter": "props",
+    "documentMaxBytes": 1048576,
+    "documentMaxDepth": 64,
+    "documentRule": "a JSON object; this server does not interpret its content, so it requires no structure beyond being an object",
+    "documentSerialization": "compact JSON, separators (\",\", \":\"), ensure_ascii=false, NaN and Infinity refused; the byte ceiling is measured on this serialization",
+    "overBudgetCode": "limit_exceeded"
+  },
+  "outputSchema": "contracts/schemas/perspective-session-props-update.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/projects/list",
+    "GET /data/api/v1/projects/export/{name}",
+    "POST /data/api/v1/projects/import/{name}"
+  ],
+  "capabilityId": "project_import",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "candidateBuilder": "the D15 typed adapter: the baseline archive is copied and exactly one entry, com.inductiveautomation.perspective/session-props/props.json, is replaced or added. Every other entry is copied byte-identically",
+  "redaction": {
+    "refusal": "a props that carries the exact value <redacted> anywhere, as a value or as a key, fails with invalid_argument before the inheritance walk and before any transaction",
+    "reason": "redacted_value",
+    "why": "the document reads return that string in place of a secret-named or embedded-secret field, so a write built from a read would store the placeholder as the value"
+  },
+  "inheritance": {
+    "rule": "D15: a write never creates a silent local override of an Inherited resource. The Project's own export decides whether it has the document locally; when it does not, each ancestor is exported and the write is refused if one defines it",
+    "lookup": "the Project's own export decides whether the target is Local; only when it is not does the server walk the ancestor chain, read from the 'parent' of each Project's entry in a bounded project_list read, export each ancestor server-side, and refuse when one defines the target",
+    "localTarget": "replaced",
+    "inheritedTarget": "invalid_argument",
+    "reason": "inherited_resource",
+    "depthBound": 16,
+    "unverifiableChain": "a chain deeper than the bound, or one that loops, fails with limit_exceeded rather than being truncated into 'no ancestor defines this'",
+    "runsBefore": "the transaction: no writer lock is taken, nothing is staged and no transaction row is created for a refused target",
+    "staleToken": "conflict",
+    "unreadableChain": "upstream_error",
+    "unreadableChainRule": "upstream_error when a name the walk needs is missing from the Gateway's Project listing. The chain above a missing parent cannot be read, so the write cannot be shown to avoid an Inherited resource and is refused rather than performed",
+    "staleTokenRule": "the Precondition token is compared with the fingerprint of the export this check already takes, before the not_found and inherited_resource refusals below, so a stale token is conflict whatever the target turns out to be (D30 §2)"
+  },
+  "preconditionToken": {
+    "kind": "project_fingerprint",
+    "parameter": "expectedFingerprint",
+    "source": "perspective_session_props_get.fingerprint",
+    "enforcedBy": "server_read_compare",
+    "enforcedInside": "the D16 transaction: baseline A is exported and compared with the token before a candidate is staged, anything is backed up or anything is dispatched",
+    "mismatch": "conflict",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 §2/D16: the comparison cannot be atomic with the import, so a writer that changes the Project between the token comparison and the import lands inside the window. D16's mandatory pre-import re-export narrows it, a change found there ends the transaction CONFLICTED with importAttempted=false, and D16's explicit limitation is not claimed to be closed."
+  },
+  "targetId": {
+    "form": "<projectName>: the existing Project whose Local Session properties document this call replaces",
+    "resolution": "an exact, case-sensitive match against a bounded project listing; a Project that does not exist fails with not_found, and the allowlist is evaluated first so a Project the deployment does not name is refused without being exported",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7"
+  },
+  "fixedKnobs": {
+    "overwrite": "true"
+  },
+  "fixedKnobsNote": "D16's canonical protocol imports with overwrite. The caller cannot choose it, so a write can never create or merge a Project the Target allowlist did not name.",
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit Gateway rejection is final for this Tool, which covers a 4xx mapped by D30 §7 (409 to `conflict`) and a 2xx carrying a refusal (`conflict`, and the Gateway's own problem text never reaches the caller). The attempt ends there, and no read-back may turn it into a success, because a Project that happens to show the candidate may have been imported by another writer. A stale Precondition token is a `conflict` too.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (2xx with no refusal)",
+      "the dispatch was genuinely ambiguous (possibly sent with no response, or 5xx) and the post-import export C equals the staged candidate B"
+    ],
+    "ambiguousAttribution": "D16 reconcile: an ambiguous dispatch is reconciled by re-exporting the Project. C equal to the candidate B is a recovered success, C equal to baseline A is not_applied, and anything else is outcome_unknown unless the Gateway claimed success, which is recovery_required.",
+    "recoveredSuccess": "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+  },
+  "transaction": {
+    "decision": "D16",
+    "machinery": "the Phase 3 ProjectTransactionService, unchanged; the candidate comes from the D15 Perspective builder instead of a caller archive",
+    "expectedFingerprintGate": "the token must equal baseline A; a mismatch ends the transaction CONFLICTED (concurrent modification, importAttempted=false) with the D30 §2 `conflict` code, before a candidate is staged",
+    "terminalStateSurface": {
+      "COMMITTED": "result",
+      "NO_CHANGE": "result",
+      "CONFLICTED": "error: conflict",
+      "FAILED_PRE_IMPORT": "error: the failing step's code (invalid_argument for an unsafe candidate archive, conflict for a denied Designer session, upstream_error/internal_error for a failed backup or capture)",
+      "NOT_APPLIED": "error: the Gateway's or transport's code (conflict for a Gateway rejection, gateway_unavailable for a known non-attempt)",
+      "OUTCOME_UNKNOWN": "error: outcome_unknown",
+      "RECOVERY_REQUIRED": "error: outcome_unknown"
+    },
+    "stateSurfaceRule": "D06 routes an execution failure through Tool error semantics rather than a successful result, so only a satisfied outcome (COMMITTED, or NO_CHANGE when the candidate was semantically equal to the baseline) is returned as data. The terminal state is named in the error message and the transactionId is linked to the caller's operation record (D19), so operation_diagnose follows a refused or unresolved write back to its transaction.",
+    "importDispatched": "True when this call dispatched an import request: the request left the server and the Gateway may have applied it, which covers a commit confirmed by the response and a commit recovered from an ambiguous dispatch. False only when nothing was sent, which is NO_CHANGE or a refusal or non-attempt that ended the transaction before any byte left the process. It is never False when the Project may already hold the candidate.",
+    "dispatchBoundary": {
+      "column": "project_transactions.dispatch_boundary: the durable dispatch classification, written before the row can be reconciled",
+      "durable": true,
+      "writtenBy": "the guarded executor classifies every answer the moment it exists and the transaction persists it before any verification or read-back; the pre-dispatch value is written with IMPORT_SENT, so a row whose process died mid-dispatch records that no answer was written down",
+      "values": [
+        "not_sent",
+        "refused",
+        "claimed",
+        "attributable",
+        "unattributable"
+      ],
+      "meaning": {
+        "not_sent": "no byte reached the Gateway: a known non-attempt",
+        "refused": "the Gateway answered and refused, and this Tool makes that answer final (D30 §2)",
+        "claimed": "the Gateway answered without refusing: a claim only a matching re-export confirms",
+        "attributable": "no definite answer (partial send, no response, 5xx), or a refusal this operation does not make final: D16's attribution applies, so a re-export equal to the candidate B is a recovered success",
+        "unattributable": "possibly dispatched while a refusal would be final and no answer was recorded: D30 §2 wins over D16's recovered success, so no re-export may be attributed"
+      },
+      "restartRule": "restart reconciliation acts on the recorded class and never replays an import: `not_sent` and `refused` end the transaction NOT_APPLIED with no read-back at all, `claimed` requires a re-export equal to the candidate B and is RECOVERY_REQUIRED otherwise, `unattributable` is NOT_APPLIED only when the Project still equals baseline A and is OUTCOME_UNKNOWN otherwise (never COMMITTED), and `attributable` follows D16's comparison: C == B is a recovered COMMITTED, C == A is NOT_APPLIED, anything else is OUTCOME_UNKNOWN or RECOVERY_REQUIRED."
+    },
+    "recoveryLocks": "the release set and hold set are D16's: a COMMITTED, NO_CHANGE, NOT_APPLIED, CONFLICTED or FAILED_PRE_IMPORT transaction releases the recovery snapshot; OUTCOME_UNKNOWN and RECOVERY_REQUIRED keep it locked and preserve the candidate and the re-export for diagnosis",
+    "automaticRetry": "never: no import is replayed, automatically or otherwise (D16, D30)"
+  },
+  "verification": "D16 post-import re-export C, compared by logical Project fingerprint: C == B commits, C == A is not_applied, and a claimed success that matches neither is recovery_required. The candidate the transaction stages and fingerprints is the archive it dispatches, so the verified bytes are the sent bytes.",
+  "absence": "a Project that does not define the target locally and has no ancestor that defines it gains it, together with the sibling resource.json the import needs to keep it (D15, confirmed live)",
+  "createdResourceMetadata": {
+    "rule": "a resource this Tool creates is written with the sibling resource.json Ignition needs to keep it: an import drops a resource directory that holds only its document, so a create would report COMMITTED and publish nothing (confirmed on a live 8.3.8 Gateway, and by the G5 run on 8.3.8 and 8.3.9)",
+    "sibling": "resource.json",
+    "shape": "json.dumps({\"scope\":\"G\",\"version\":1,\"restricted\":false,\"overridable\":true,\"files\":[<document>],\"attributes\":{}}, indent=2) in that key order with no trailing newline, which is the form the Gateway rewrites a new resource's metadata into on import; the D16 verification compares the re-export with the candidate byte-exactly, so any other serialization ends the transaction RECOVERY_REQUIRED even though the write landed (recorded byte-identical on 8.3.8 and 8.3.9)",
+    "existingResource": "a resource the baseline already holds keeps its own resource.json byte-identically; this Tool never rewrites metadata it did not create",
+    "files": [
+      "props.json"
+    ]
+  }
+}

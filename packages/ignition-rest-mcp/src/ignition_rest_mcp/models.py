@@ -208,6 +208,81 @@ class ProjectImportResult(StrictModel):
     designerWarning: bool
 
 
+class PerspectiveViewListResult(StrictModel):
+    """D15: the Local Views of one Project, one bounded page per call."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    #: Logical resource paths, each one acceptable as the `path` of a View Tool.
+    items: list[str] = Field(max_length=500)
+    page: PageMetadata
+
+
+class PerspectiveViewGetResult(StrictModel):
+    """D15: one View document plus the Project fingerprint of the export it came from."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    path: str = Field(min_length=1, max_length=512)
+    view: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
+class PerspectiveViewValidateResult(StrictModel):
+    """D15 offline validation: no Gateway call, and no claim that an import accepts it."""
+
+    correlationId: str
+    valid: bool
+    #: Serialized document size, measured against the byte ceiling.
+    bytes: int = Field(ge=0)
+    #: Container nesting levels, measured against the depth ceiling.
+    depth: int = Field(ge=0)
+
+
+class PerspectivePageConfigGetResult(StrictModel):
+    """D15: the Project's Page configuration document and the Project fingerprint."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    config: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
+class PerspectiveSessionPropsGetResult(StrictModel):
+    """D15: the Project's Session properties document and the Project fingerprint."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    props: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
+class PerspectiveWriteResult(StrictModel):
+    """D16: the terminal transaction state of one Perspective write, as data.
+
+    The fields are exactly the ``project_import`` result's, because the same D16
+    transaction produces them: only a satisfied outcome is a result (``COMMITTED``,
+    or ``NO_CHANGE`` when the candidate was semantically equal to the baseline), and
+    every other D16 terminal state is a Tool error carrying the D30 §7 code.
+    """
+
+    correlationId: str
+    projectName: str
+    transactionId: str
+    state: str = Field(pattern="^(COMMITTED|NO_CHANGE)$")
+    baselineFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    candidateFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    resultFingerprint: str | None = Field(default=None, pattern="^pcf1:[0-9a-f]{64}$")
+    importDispatched: bool
+    designerWarning: bool
+
+
+class PerspectiveViewWriteResult(PerspectiveWriteResult):
+    """A View write's result: the transaction state plus the path it changed."""
+
+    path: str = Field(min_length=1, max_length=512)
+
+
 class AuditRecord(StrictModel):
     action: str
     actionTarget: str

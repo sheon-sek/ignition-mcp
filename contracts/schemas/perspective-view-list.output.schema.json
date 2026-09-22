@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:perspective-view-list:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "projectName": {"type": "string", "minLength": 1, "maxLength": 256},
+    "items": {
+      "description": "Logical resource paths of the Project's Local Views, one bounded page.",
+      "type": "array",
+      "maxItems": 500,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "total": {"type": "integer", "minimum": 0},
+        "matching": {"type": "integer", "minimum": 0},
+        "limit": {"type": "integer", "minimum": 0, "maximum": 500},
+        "offset": {"type": "integer", "minimum": 0}
+      },
+      "required": ["total", "matching", "limit", "offset"]
+    }
+  },
+  "required": ["correlationId", "projectName", "items", "page"]
+}

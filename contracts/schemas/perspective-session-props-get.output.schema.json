@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:perspective-session-props-get:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {"type": "string", "minLength": 1},
+    "projectName": {"type": "string", "minLength": 1, "maxLength": 256},
+    "props": {
+      "description": "The Project's Session properties document (session-props/props.json), as exported.",
+      "type": "object",
+      "additionalProperties": true
+    },
+    "fingerprint": {
+      "description": "The D16 pcf1 Project fingerprint of the export this document was read from.",
+      "type": "string",
+      "pattern": "^pcf1:[0-9a-f]{64}$"
+    }
+  },
+  "required": ["correlationId", "projectName", "props", "fingerprint"]
+}

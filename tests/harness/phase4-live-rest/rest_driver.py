@@ -52,6 +52,14 @@ Live cases (tickets #14, #15, #16, #17, #18 and #19):
   the Gateway nothing at all. Beside them, an ordinary Tag provider and a name that only
   *begins* with the reserved one stay manageable: it is a refusal of one name inside an
   allowed type, not of the type.
+- the Phase 5 Perspective surface (P5-3, `perspective_cases`): the five reads serve the
+  fixture's View, Page configuration and Session properties, or ``not_found``; an upsert
+  commits, a fresh read shows the document it published, the same document again is a
+  ``NO_CHANGE``, and every entry outside the Target's own directory survives the edit
+  byte-for-byte; a write to a View the child inherits from its parent is
+  ``invalid_argument`` naming ``inherited_resource`` and changes nothing; a token read
+  before an external change is a ``conflict`` that imports nothing; and the delete, Page
+  configuration and Session properties writes each commit once.
 
 The Project cases need the D16 writer enabled (``IGNITION_MCP_PROJECT_WRITER_ENABLED``,
 ``IGNITION_MCP_GATEWAY_ID``), artifact upload and the sensitive exports this driver
@@ -87,9 +95,21 @@ import zipfile
 import httpx
 
 HARNESS = Path(__file__).resolve().parent
+sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HARNESS.parent / "phase3-live"))
 
 from harness_common import McpHttp, ProbeError, error_envelope  # noqa: E402
+#: The Perspective fixture's own documents and Logical paths. The reads are compared
+#: against these, so the fixture ``provision.py`` imports and the expectation are the same
+#: constants rather than two copies that could drift apart.
+from provision import (  # noqa: E402
+    CHILD_PAGE_CONFIG_DOCUMENT,
+    CHILD_SESSION_PROPS_DOCUMENT,
+    CHILD_VIEW_DOCUMENT,
+    INHERITED_VIEW,
+    LOCAL_VIEW,
+    UNRELATED_QUERY,
+)
 
 UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
@@ -180,6 +200,94 @@ DEFAULT_PROVIDER_RESOURCE_TYPE = "ignition/tag-provider"
 DEFAULT_OTHER_PROVIDER = "MCP_CI_TAG_CONFIG"
 DEFAULT_LOOKALIKE_PROVIDER = "IgnitionMCPPolicyStaging"
 
+# ----------------------------------------------------------------- Phase 5 (P5-3)
+#: The nine D15 Perspective Tools. P5-1 added the five reads to the read inventory and
+#: P5-3 adds the four writes to the class-enabled one: they are CONFIG writes, so a
+#: deployment with the CONFIG mutation class enabled discovers them exactly as it
+#: discovers the other CONFIG Mutations.
+PERSPECTIVE_VIEW_LIST_TOOL = "perspective_view_list"
+PERSPECTIVE_VIEW_GET_TOOL = "perspective_view_get"
+PERSPECTIVE_VIEW_VALIDATE_TOOL = "perspective_view_validate"
+PERSPECTIVE_PAGE_CONFIG_GET_TOOL = "perspective_page_config_get"
+PERSPECTIVE_SESSION_PROPS_GET_TOOL = "perspective_session_props_get"
+PERSPECTIVE_VIEW_UPSERT_TOOL = "perspective_view_upsert"
+PERSPECTIVE_VIEW_DELETE_TOOL = "perspective_view_delete"
+PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL = "perspective_page_config_update"
+PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL = "perspective_session_props_update"
+PERSPECTIVE_WRITE_TOOLS = (
+    PERSPECTIVE_VIEW_UPSERT_TOOL,
+    PERSPECTIVE_VIEW_DELETE_TOOL,
+    PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL,
+    PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL,
+)
+#: The fixture ``provision.py`` imports: a parent Project and an allowlisted child. The
+#: names default to fixed ones so the harness runs without extra arguments; the workflow
+#: passes run-unique ones.
+DEFAULT_PERSPECTIVE_PARENT = "MCP_CI_P5_PARENT"
+DEFAULT_PERSPECTIVE_CHILD = "MCP_CI_P5_CHILD"
+#: The Logical View paths and the unrelated resource of the fixture, named here as the
+#: driver's own defaults. They are ``provision.py``'s constants, which is what keeps the
+#: fixture and the read expectations one definition.
+DEFAULT_INHERITED_VIEW = INHERITED_VIEW
+DEFAULT_LOCAL_VIEW = LOCAL_VIEW
+#: A Logical path no Project defines, so the ``not_found`` read is deterministic.
+MISSING_VIEW = "Dashboard/Absent"
+DEFAULT_UNRELATED_QUERY = UNRELATED_QUERY
+#: The Perspective module directory inside a Project export. The write Tools patch the
+#: entry below it, and the preservation case is what proves nothing else moved.
+PERSPECTIVE_MODULE = "com.inductiveautomation.perspective"
+PERSPECTIVE_VIEW_DOCUMENT = "view.json"
+#: The D15 refusal reason: the Target is defined by an ancestor and not locally, so a
+#: write would silently create an override. The envelope names it; the code alone would
+#: not tell this refusal from any other invalid input.
+INHERITED_REASON = "inherited_resource"
+#: The View document the upsert cases publish. It is a small, well-formed document whose
+#: marker (``custom.mcp``) is what proves the fresh read serves *this* revision.
+UPSERT_VIEW_DOCUMENT: dict[str, Any] = {
+    "root": {
+        "type": "ia.container.flex",
+        "props": {"style": {"overflow": "auto"}},
+        "children": [
+            {
+                "type": "ia.display.label",
+                "meta": {"name": "Marker"},
+                "position": {"basis": "auto"},
+                "props": {"text": "p5-live"},
+            },
+        ],
+    },
+    "custom": {"mcp": "p5-live"},
+}
+#: The Page configuration and Session properties documents the update cases publish.
+UPSERT_PAGE_CONFIG: dict[str, Any] = {
+    "pages": {"Pages/Overview": {"title": "Overview", "url": "overview"}},
+    "docks": {},
+}
+UPSERT_SESSION_PROPS: dict[str, Any] = {"props": {"auth": {"enabled": False}}}
+#: The external change the conflict case makes *between* its read and its write. A second
+#: Perspective document is the smallest change that moves the Precondition token.
+EXTERNAL_SESSION_PROPS: dict[str, Any] = {"props": {"auth": {"enabled": True}}}
+#: The Logical path the create case addresses: no ancestor defines it either, so the write
+#: creates the resource instead of overriding an inherited one. D15's upsert creates when
+#: the Project has no resource at the path, and the document it publishes is its own
+#: marker, so the list and the read below cannot be confused with the edit's document.
+CREATED_VIEW_PATH = "Dashboard/Created"
+CREATED_VIEW_DOCUMENT: dict[str, Any] = {
+    "root": {
+        "type": "ia.container.flex",
+        "props": {"style": {"overflow": "auto"}},
+        "children": [
+            {
+                "type": "ia.display.label",
+                "meta": {"name": "Created"},
+                "position": {"basis": "auto"},
+                "props": {"text": "p5-created"},
+            },
+        ],
+    },
+    "custom": {"mcp": "p5-created"},
+}
+
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
 #: with ``project_export``), and with the class disabled the two sensitive exports and
@@ -201,8 +309,13 @@ READ_INVENTORY = frozenset({
     "operation_diagnose",
     "project_export",
     "tag_config_export",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 })
-GATE_ON_INVENTORY = READ_INVENTORY | set(CONFIG_MUTATION_TOOLS)
+GATE_ON_INVENTORY = READ_INVENTORY | set(CONFIG_MUTATION_TOOLS) | set(PERSPECTIVE_WRITE_TOOLS)
 #: The CONTROL credential's inventory: the cancel Tool appears for it and none of the
 #: CONFIG-class Tools do (D07: discovery follows the credential's scopes).
 OPERATOR_INVENTORY = READ_INVENTORY | set(CONTROL_MUTATION_TOOLS)
@@ -979,6 +1092,411 @@ async def _delete_route_status(rest_url: str, token: str, path: str) -> Any:
     return response.status_code
 
 
+def _nested(document: Any, *keys: str) -> Any:
+    """The value at one path of nested mappings, or ``None`` for anything else."""
+
+    node = document
+    for key in keys:
+        if not isinstance(node, dict):
+            return None
+        node = node.get(key)
+    return node
+
+
+def _read_result(result: dict[str, Any]) -> Any:
+    """The structured body of a successful read, or the refusal it was refused with.
+
+    A section must report a refusal as the observation that failed the case rather than
+    raise out of the driver, so everything a case compares against is either the body or
+    the refusal envelope.
+    """
+
+    if result.get("isError"):
+        return _refusal_code(result)
+    body = result.get("structuredContent")
+    return body if isinstance(body, dict) else {}
+
+
+def _refusal_mentions(result: dict[str, Any], needle: str) -> bool:
+    """Whether a refusal's envelope names ``needle``, the reason a rule reports.
+
+    D15's inherited-resource refusal is ``invalid_argument`` like any other bad input, so
+    the *reason* is what tells the rules apart, and a reason is reported in whichever
+    field the envelope carries it in.
+    """
+
+    if not result.get("isError"):
+        return False
+    try:
+        envelope = error_envelope(result)
+    except ProbeError:
+        return False
+    return needle in json.dumps(envelope, sort_keys=True)
+
+
+def changed_entries(
+    before: dict[str, bytes], after: dict[str, bytes], *, skip_prefix: str,
+) -> list[str]:
+    """Entries outside ``skip_prefix`` whose bytes differ, appeared or vanished.
+
+    The preservation half of a Project edit: the Target resource's own directory is the
+    one place a write may legitimately touch, so every other entry has to round-trip
+    unchanged: the Project's other resources, its unrelated content and its manifest.
+    """
+
+    names = {
+        name for name in set(before) | set(after) if not name.startswith(skip_prefix)
+    }
+    return sorted(name for name in names if before.get(name) != after.get(name))
+
+
+async def _project_export(
+    agent: "Session", artifacts: "Artifacts", token: str, project: str,
+) -> tuple[dict[str, Any], bytes]:
+    """One Project export through the Tools: its structured result and the archive."""
+
+    exported = structured(await agent.call("project_export", {"projectName": project}))
+    archive = await artifacts.download(str(exported["artifact"]["download"]["path"]), token)
+    return exported, archive
+
+
+async def _project_fingerprint(session: "Session", project: str) -> Any:
+    """The Project fingerprint a fresh read reports, the token a write presents.
+
+    Read through the Page configuration rather than a View, because that document exists
+    for the whole run: after the delete case the child has no local View left to read.
+    """
+
+    body = _read_result(
+        await session.call(PERSPECTIVE_PAGE_CONFIG_GET_TOOL, {"projectName": project}),
+    )
+    return _nested(body, "fingerprint")
+
+
+async def perspective_cases(
+    *,
+    agent: "Session",
+    rest_url: str,
+    agent_token: str,
+    parent_project: str,
+    child_project: str,
+    raw_dir: Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """The Phase 5 Perspective cases (P5-3, milestone 5).
+
+    The fixture ``provision.py`` imported defines one View in a parent Project that the
+    child does not define locally, and one View of the child's own, so one run holds both
+    a write the child may make and one D15 refuses because it would create a local
+    override of an inherited resource. Every Gateway read is a Tool read, and the archive
+    comparisons use ``project_export`` plus the artifact data plane, which is what an
+    agent has.
+    """
+
+    view_path = DEFAULT_LOCAL_VIEW
+    cases: list[dict[str, Any]] = []
+    observations: dict[str, Any] = {
+        "parentProject": parent_project, "childProject": child_project,
+        "viewPath": view_path, "inheritedViewPath": DEFAULT_INHERITED_VIEW,
+    }
+    target_directory = f"{PERSPECTIVE_MODULE}/views/{view_path}/"
+    artifacts = Artifacts(rest_url)
+    try:
+        # ------------------------------------------------------------- the five reads
+        listed = _read_result(await agent.call(PERSPECTIVE_VIEW_LIST_TOOL, {
+            "projectName": child_project, "limit": 100, "offset": 0,
+        }))
+        observations["viewList"] = listed
+        _check(
+            cases, "perspective-view-list-is-local-only",
+            [view_path], _nested(listed, "items") if isinstance(listed, dict) else listed,
+        )
+
+        got = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": view_path,
+        }))
+        observations["viewGet"] = got
+        _check(
+            cases, "perspective-view-get-returns-the-provisioned-view",
+            {"path": view_path, "view": CHILD_VIEW_DOCUMENT},
+            {"path": _nested(got, "path"), "view": _nested(got, "view")},
+        )
+
+        exported, before_archive = await _project_export(
+            agent, artifacts, agent_token, child_project,
+        )
+        entries_before = _entries(before_archive)
+        independent = _fingerprint(before_archive, raw_dir, "perspective-before.zip")
+        observations["exportFingerprint"] = independent
+        _check(
+            cases, "perspective-export-fingerprint-is-independent",
+            independent, exported.get("fingerprint"),
+        )
+        _check(
+            cases, "perspective-view-get-reports-the-project-fingerprint",
+            independent, _nested(got, "fingerprint"),
+        )
+
+        absent = await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": MISSING_VIEW,
+        })
+        _check(
+            cases, "perspective-view-get-missing-view-is-not-found",
+            "not_found", _refusal_code(absent),
+        )
+
+        document = _nested(got, "view")
+        validated = _read_result(await agent.call(PERSPECTIVE_VIEW_VALIDATE_TOOL, {
+            "view": document if isinstance(document, dict) else UPSERT_VIEW_DOCUMENT,
+        }))
+        observations["viewValidate"] = validated
+        _check(
+            cases, "perspective-view-validate-accepts-the-provisioned-view",
+            True, _nested(validated, "valid"),
+        )
+        refused_document = await agent.call(PERSPECTIVE_VIEW_VALIDATE_TOOL, {
+            "view": {"root": "not-an-object"},
+        })
+        _check(
+            cases, "perspective-view-validate-refuses-a-non-view",
+            "invalid_argument", _refusal_code(refused_document),
+        )
+
+        page_config = _read_result(await agent.call(
+            PERSPECTIVE_PAGE_CONFIG_GET_TOOL, {"projectName": child_project},
+        ))
+        observations["pageConfigGet"] = page_config
+        _check(
+            cases, "perspective-page-config-get-returns-the-document",
+            CHILD_PAGE_CONFIG_DOCUMENT, _nested(page_config, "config"),
+        )
+        session_props = _read_result(await agent.call(
+            PERSPECTIVE_SESSION_PROPS_GET_TOOL, {"projectName": child_project},
+        ))
+        observations["sessionPropsGet"] = session_props
+        _check(
+            cases, "perspective-session-props-get-returns-the-document",
+            CHILD_SESSION_PROPS_DOCUMENT, _nested(session_props, "props"),
+        )
+
+        # ------------------------------------------------------------ the write Tools
+        # The Phase 5 writes are P5-2's, so this section has to say plainly when the
+        # deployment under test does not serve them instead of failing obscurely later.
+        available = await agent.tools()
+        missing = sorted(name for name in PERSPECTIVE_WRITE_TOOLS if name not in available)
+        observations["perspectiveWritesMissing"] = missing
+        _check(cases, "perspective-write-tools-are-available", [], missing)
+        if missing:
+            observations["perspectiveWritesAborted"] = (
+                "the Perspective write Tools are not registered on this server: "
+                + ", ".join(missing)
+            )
+            return cases, observations
+
+        # --------------------------------------------------------- the normal edit
+        upserted = _read_result(await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": view_path, "view": UPSERT_VIEW_DOCUMENT,
+            "expectedFingerprint": _nested(got, "fingerprint"),
+        }))
+        observations["viewUpsert"] = upserted
+        _check(cases, "perspective-view-upsert-commits", "COMMITTED", _nested(upserted, "state"))
+        _check(
+            cases, "perspective-view-upsert-dispatches-the-import",
+            True, _nested(upserted, "importDispatched"),
+        )
+        _check(
+            cases, "perspective-view-upsert-reports-the-path", view_path, _nested(upserted, "path"),
+        )
+        _exported_after, after_archive = await _project_export(
+            agent, artifacts, agent_token, child_project,
+        )
+        entries_after = _entries(after_archive)
+        committed = _fingerprint(after_archive, raw_dir, "perspective-after-upsert.zip")
+        _check(
+            cases, "perspective-view-upsert-verifies-its-own-candidate",
+            committed, _nested(upserted, "resultFingerprint"),
+        )
+        fresh = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": view_path,
+        }))
+        _check(
+            cases, "perspective-view-upsert-is-observed-by-a-fresh-read",
+            UPSERT_VIEW_DOCUMENT, _nested(fresh, "view"),
+        )
+
+        # ------------------------------------------------------------- the no-op
+        unchanged = _read_result(await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": view_path, "view": UPSERT_VIEW_DOCUMENT,
+            "expectedFingerprint": _nested(fresh, "fingerprint"),
+        }))
+        observations["viewUpsertNoChange"] = unchanged
+        _check(
+            cases, "perspective-view-upsert-of-the-current-document-is-no-change",
+            "NO_CHANGE", _nested(unchanged, "state"),
+        )
+        _check(
+            cases, "perspective-view-upsert-no-change-dispatches-nothing",
+            False, _nested(unchanged, "importDispatched"),
+        )
+
+        # ------------------------------------- unrelated-resource preservation
+        outside = changed_entries(entries_before, entries_after, skip_prefix=target_directory)
+        observations["preservation"] = {
+            "skipPrefix": target_directory,
+            "entriesBefore": len(entries_before),
+            "entriesAfter": len(entries_after),
+            "changedOutsideTarget": outside,
+        }
+        _check(cases, "perspective-view-upsert-preserves-every-other-entry", [], outside)
+
+        # -------------------------------------------------- the create that is absent
+        # D15: an upsert creates the resource when the Project has none at the path. The
+        # two independent reads are what show the Gateway published it, and the path is one
+        # no ancestor defines either, so this is creation rather than an override.
+        created = _read_result(await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": CREATED_VIEW_PATH,
+            "view": CREATED_VIEW_DOCUMENT,
+            "expectedFingerprint": await _project_fingerprint(agent, child_project),
+        }))
+        observations["viewCreate"] = created
+        listed_after_create = _read_result(await agent.call(PERSPECTIVE_VIEW_LIST_TOOL, {
+            "projectName": child_project, "limit": 100, "offset": 0,
+        }))
+        created_read = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": CREATED_VIEW_PATH,
+        }))
+        _check(
+            cases, "perspective-view-upsert-creates-a-view-the-project-lacks",
+            {"state": "COMMITTED", "listed": True, "view": CREATED_VIEW_DOCUMENT},
+            {
+                "state": _nested(created, "state"),
+                "listed": CREATED_VIEW_PATH in (_nested(listed_after_create, "items") or []),
+                "view": _nested(created_read, "view"),
+            },
+        )
+
+        # ------------------------------------------------- the inherited refusal
+        inherited_token = await _project_fingerprint(agent, child_project)
+        inherited = await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": DEFAULT_INHERITED_VIEW,
+            "view": UPSERT_VIEW_DOCUMENT, "expectedFingerprint": inherited_token,
+        })
+        observations["inheritedRefusal"] = (
+            _read_result(inherited) if not inherited.get("isError") else _refusal_code(inherited)
+        )
+        _check(
+            cases, "perspective-view-upsert-of-an-inherited-view-is-invalid-argument",
+            "invalid_argument", _refusal_code(inherited),
+        )
+        _check(
+            cases, "perspective-view-upsert-of-an-inherited-view-names-the-reason",
+            True, _refusal_mentions(inherited, INHERITED_REASON),
+        )
+        still_there = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": view_path,
+        }))
+        _check(
+            cases, "perspective-view-upsert-of-an-inherited-view-changes-nothing",
+            {"fingerprint": inherited_token, "view": UPSERT_VIEW_DOCUMENT},
+            {
+                "fingerprint": _nested(still_there, "fingerprint"),
+                "view": _nested(still_there, "view"),
+            },
+        )
+
+        # ------------------------------------------- the concurrent external change
+        # The token is read, the Project changes through another Tool, and only then does
+        # the write present the token it read: the candidate is refused before any import.
+        stale_token = _nested(still_there, "fingerprint")
+        external = _read_result(await agent.call(PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL, {
+            "projectName": child_project, "props": EXTERNAL_SESSION_PROPS,
+            "expectedFingerprint": stale_token,
+        }))
+        observations["externalChange"] = external
+        _check(
+            cases, "perspective-external-change-commits", "COMMITTED", _nested(external, "state"),
+        )
+        conflicted = await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": view_path,
+            "view": {**UPSERT_VIEW_DOCUMENT, "custom": {"mcp": "p5-conflict"}},
+            "expectedFingerprint": stale_token,
+        })
+        observations["concurrentRefusal"] = (
+            _read_result(conflicted) if not conflicted.get("isError") else _refusal_code(conflicted)
+        )
+        _check(
+            cases, "perspective-view-upsert-after-an-external-change-is-conflict",
+            "conflict", _refusal_code(conflicted),
+        )
+        after_conflict = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": view_path,
+        }))
+        _check(
+            cases, "perspective-view-upsert-after-an-external-change-imports-nothing",
+            {
+                "fingerprint": _nested(external, "resultFingerprint"),
+                "view": UPSERT_VIEW_DOCUMENT,
+            },
+            {
+                "fingerprint": _nested(after_conflict, "fingerprint"),
+                "view": _nested(after_conflict, "view"),
+            },
+        )
+
+        # ------------------------------------------------------------- the delete
+        deleted = _read_result(await agent.call(PERSPECTIVE_VIEW_DELETE_TOOL, {
+            "projectName": child_project, "path": view_path,
+            "expectedFingerprint": await _project_fingerprint(agent, child_project),
+        }))
+        observations["viewDelete"] = deleted
+        _check(cases, "perspective-view-delete-commits", "COMMITTED", _nested(deleted, "state"))
+        gone = await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": view_path,
+        })
+        _check(
+            cases, "perspective-view-delete-is-observed-by-a-fresh-read",
+            "not_found", _refusal_code(gone),
+        )
+
+        # -------------------------------------------------- the Page configuration
+        updated_config = _read_result(await agent.call(PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL, {
+            "projectName": child_project, "config": UPSERT_PAGE_CONFIG,
+            "expectedFingerprint": await _project_fingerprint(agent, child_project),
+        }))
+        observations["pageConfigUpdate"] = updated_config
+        _check(
+            cases, "perspective-page-config-update-commits",
+            "COMMITTED", _nested(updated_config, "state"),
+        )
+        read_config = _read_result(await agent.call(
+            PERSPECTIVE_PAGE_CONFIG_GET_TOOL, {"projectName": child_project},
+        ))
+        _check(
+            cases, "perspective-page-config-update-is-observed-by-a-fresh-read",
+            UPSERT_PAGE_CONFIG, _nested(read_config, "config"),
+        )
+
+        # --------------------------------------------------- the Session properties
+        updated_props = _read_result(await agent.call(PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL, {
+            "projectName": child_project, "props": UPSERT_SESSION_PROPS,
+            "expectedFingerprint": _nested(read_config, "fingerprint"),
+        }))
+        observations["sessionPropsUpdate"] = updated_props
+        _check(
+            cases, "perspective-session-props-update-commits",
+            "COMMITTED", _nested(updated_props, "state"),
+        )
+        read_props = _read_result(await agent.call(
+            PERSPECTIVE_SESSION_PROPS_GET_TOOL, {"projectName": child_project},
+        ))
+        _check(
+            cases, "perspective-session-props-update-is-observed-by-a-fresh-read",
+            UPSERT_SESSION_PROPS, _nested(read_props, "props"),
+        )
+    finally:
+        await artifacts.aclose()
+    return cases, observations
+
+
 async def run_gate_on(
     *,
     rest_url: str,
@@ -1003,6 +1521,8 @@ async def run_gate_on(
     pipeline: str = DEFAULT_PIPELINE,
     control_pipeline: str = DEFAULT_CONTROL_PIPELINE,
     alarm_event_id: str = DEFAULT_ALARM_EVENT_ID,
+    parent_project: str = DEFAULT_PERSPECTIVE_PARENT,
+    child_project: str = DEFAULT_PERSPECTIVE_CHILD,
     raw_dir: Path,
 ) -> dict[str, Any]:
     """The live cases that need a mutation class enabled.
@@ -1399,6 +1919,21 @@ async def run_gate_on(
             artifact_observations = {}
         cases.extend(artifact_cases)
         observations.update(artifact_observations)
+
+        # ------------------------------------------------------ Perspective (P5-3)
+        try:
+            perspective_section, perspective_observations = await perspective_cases(
+                agent=agent, rest_url=rest_url, agent_token=agent_token,
+                parent_project=parent_project, child_project=child_project, raw_dir=raw_dir,
+            )
+        except (DriverError, ProbeError) as error:
+            perspective_section = [{
+                "case": "perspective-section", "expected": "no driver error",
+                "observed": str(error), "ok": False,
+            }]
+            perspective_observations = {}
+        cases.extend(perspective_section)
+        observations.update(perspective_observations)
     finally:
         await reader.aclose()
         await agent.aclose()
@@ -2542,6 +3077,7 @@ async def _run(args: argparse.Namespace) -> int:
             tag_target_path=args.tag_target_path, tag_control_path=args.tag_control_path,
             pipeline=args.pipeline, control_pipeline=args.control_pipeline,
             alarm_event_id=args.alarm_event_id,
+            parent_project=args.parent_project, child_project=args.child_project,
             raw_dir=args.raw_dir,
         )
     elif args.mode == "fault":
@@ -2602,6 +3138,10 @@ def main() -> int:
     parser.add_argument("--pipeline", default=DEFAULT_PIPELINE)
     parser.add_argument("--control-pipeline", default=DEFAULT_CONTROL_PIPELINE)
     parser.add_argument("--alarm-event-id", default=DEFAULT_ALARM_EVENT_ID)
+    #: Phase 5 (P5-3): the parent and child Projects the Perspective cases address, both
+    #: run-unique and imported by ``provision.py``.
+    parser.add_argument("--parent-project", default=DEFAULT_PERSPECTIVE_PARENT)
+    parser.add_argument("--child-project", default=DEFAULT_PERSPECTIVE_CHILD)
     #: The fault mode (#20): the proxy it arms and the server's own data directory, which
     #: holds the D18 audit log and the D16 transaction rows the cases read back.
     parser.add_argument("--proxy-control-url", default="")

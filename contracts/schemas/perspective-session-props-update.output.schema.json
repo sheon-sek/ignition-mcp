@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:perspective-session-props-update:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "projectName": {
+      "type": "string",
+      "minLength": 1
+    },
+    "transactionId": {
+      "description": "The D16 Project transaction this call ran; operation_diagnose reports it for the same correlationId.",
+      "type": "string",
+      "minLength": 1
+    },
+    "state": {
+      "description": "The terminal transaction state, as data, for a satisfied outcome: COMMITTED (the import landed and the post-import re-export C equals the candidate) or NO_CHANGE (the candidate was semantically equal to the baseline, so nothing was backed up or imported). Every other D16 terminal state is a Tool error carrying the D30 §7 code, with the state named in the message.",
+      "enum": [
+        "COMMITTED",
+        "NO_CHANGE"
+      ]
+    },
+    "baselineFingerprint": {
+      "description": "Baseline A: the Project's content fingerprint when the transaction started.",
+      "type": "string",
+      "pattern": "^pcf1:[0-9a-f]{64}$"
+    },
+    "candidateFingerprint": {
+      "description": "Candidate B: the fingerprint of the archive this call staged and dispatched, which holds the replacement Session properties document.",
+      "type": "string",
+      "pattern": "^pcf1:[0-9a-f]{64}$"
+    },
+    "resultFingerprint": {
+      "description": "Re-export C after the import, equal to the candidate on a commit. Absent on NO_CHANGE, where nothing was imported.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^pcf1:[0-9a-f]{64}$"
+    },
+    "importDispatched": {
+      "description": "True when this call dispatched an import request: the request left the server and the Gateway may have applied it. That covers a commit confirmed by the Gateway's response and a commit recovered from an ambiguous dispatch, where the import really happened. False only when nothing was sent: NO_CHANGE, or a refusal or non-attempt that ended the transaction before any byte left the process. It is never false when the Project may already hold the candidate.",
+      "type": "boolean"
+    },
+    "designerWarning": {
+      "description": "True when the designer-session policy is `warn` and a Designer session was open on the Project.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "correlationId",
+    "projectName",
+    "transactionId",
+    "state",
+    "baselineFingerprint",
+    "candidateFingerprint",
+    "importDispatched",
+    "designerWarning"
+  ]
+}
