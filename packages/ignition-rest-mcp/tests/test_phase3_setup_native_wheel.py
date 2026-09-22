@@ -195,9 +195,14 @@ def test_installed_help_documents_exit_codes_and_absent_commands(sandbox: Path) 
     assert "0  command completed with no FAIL" in run.stdout
     assert "3  plan reports at least one BLOCKED action" in run.stdout
 
-    refused = execute(sandbox, ["apply", "--bundle-manifest", "unused.json"], "http://127.0.0.1:1")
+    # `apply` exists (Phase 4); `install-module` is Phase 6 and still refused.
+    group = execute(sandbox, ["--help"], "http://127.0.0.1:1")
+    assert group.returncode == 0, group.stderr
+    assert "{doctor,plan,verify,apply}" in group.stdout
+
+    refused = execute(sandbox, ["install-module", "--bundle-manifest", "unused.json"], "http://127.0.0.1:1")
     assert refused.returncode == 2
-    assert "not implemented" in refused.stderr
+    assert "not implemented" in refused.stderr and "Phase 6" in refused.stderr
 
 
 def test_installed_doctor_uses_only_the_environment_and_the_manifest(sandbox: Path,

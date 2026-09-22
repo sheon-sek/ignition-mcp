@@ -176,7 +176,10 @@ class ShellSyntaxTest(unittest.TestCase):
 
     def test_repository_workflows_have_no_shell_syntax_errors(self) -> None:
         workflows = sorted((REPO / ".github/workflows").glob("*.yml"))
-        self.assertEqual(len(workflows), 8)
+        # The count is the inventory pin: a new workflow has to be added here (and to
+        # the pre-push command's expectations) deliberately, so a file cannot be
+        # dropped in without its `run:` blocks being linted by the suite.
+        self.assertEqual(len(workflows), 9)
         for workflow in workflows:
             self.assertEqual(shell_syntax_findings(workflow), [], workflow.name)
 

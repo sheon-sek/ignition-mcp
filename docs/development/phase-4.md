@@ -1967,6 +1967,133 @@ are real gaps the reviewer named and they are **not** fixed in this round:
     rows** (attempt 2, same run id, artifacts re-read). Recorded rather than hidden; nothing
     in this ticket touches the Project-import path.
 
+### Ticket #21 — `setup-native apply`: bundle project, Server Config and Runtime Target Policy (milestone 4d)
+
+- **The command exists and is plan-driven.** `ignition-mcp setup-native apply` observes
+  the Gateway exactly as `plan` does, refuses to write while any line is `BLOCKED`, and
+  then executes the printed intentions in order: the bundle Project (`CREATE`, or
+  `UPDATE` of a MANAGED project), the MCP Server Config for the selected profile, the
+  Runtime Target Policy in the reserved provider. It ends by running the D20 `verify`
+  sequence and embeds that report in its own (`--json`), so one run yields one document.
+- **The write path is curated and separate from `config_resource_*`.** `writer.py` holds
+  one method per documented route — `POST /projects/import/{name}`,
+  `GET /projects/export/{name}`, the `com.inductiveautomation.mcp/server-config`
+  collection routes, `POST /resources/ignition/tag-provider` and
+  `POST /tags/import` — with every path built from a module constant. Guards run before
+  dispatch: a name must match the CLI's name grammar, a Tool list must be explicit
+  (never `*`), the reserved provider name is a constant, and a Server Config is never
+  written without a permissions tree. Every response is size-bounded and every error
+  message is scrubbed of the API token.
+- **The policy is the operator's document, capped and read back.** `--policy-file` is
+  validated against `contracts/shared/runtime-target-policy.schema.json`, canonicalized
+  (sorted keys, compact separators) and refused above the product-enforced 32 KiB cap,
+  before anything is written. The write is the policy Tag plus its declared-length
+  companion; the import keeps D30 owner ruling 1's shape — `Abort` on a fresh provider,
+  retries idempotent with `MergeOverwrite` under a bounded deadline (ticket #6 recorded a
+  freshly created provider answering the first import with `Bad 776`), and the served
+  document is confirmed by a `/tags/export` read-back, repaired once if it disagrees.
+- **The Server Config carries the profile's explicit Tool list.** A `CREATE` writes the
+  config disabled, reads it back, then enables it with the signature the read-back
+  returned (D20's recommended order); an `UPDATE` reconciles the Tool list in one write
+  and preserves the observed `enabled` and every other operator-held field. The
+  permissions tree is either the operator's `--server-config-permissions-file` or the
+  deployed one, and a create without either is a `BLOCKED` line — this CLI never opens
+  an unauthenticated MCP endpoint (Security Level provisioning stays issue #22).
+- **Fixture-first coverage.** `tests/harness/recorded_gateway.py` now models the Server
+  Config collection routes and find from resource state, and serves the policy provider's
+  Tags from the last import, so a read-back sees what was written; `bundle_info` reports
+  the bundle version of the *imported* Project. 14 cases in
+  `packages/ignition-rest-mcp/tests/test_phase4_setup_native_apply.py` drive the command
+  end to end against that fake: plan CREATEs, apply writes all three and verifies, a
+  second plan is `NO CHANGE` and a second apply writes nothing, a `BLOCKED` line stops
+  apply before any write, a create without permissions is refused, a `*` Tool list can
+  never be written, a drifted config is reconciled with the operator's fields preserved,
+  a Gateway refusal stops the sequence and still verifies, the cap and the policy schema
+  are enforced before any write, a MAJOR change needs `--acknowledge-upgrade`, and the
+  token never reaches the output. The Phase 3 pins that asserted `apply` was absent were
+  updated (deliberately), and the CLI structural scan gained a pin for the curated route
+  set and the single write chokepoint.
+- **Local rehearsal.** `tests/harness/phase4-live/rehearse_apply.py` builds the release
+  into a temporary directory, starts the recorded Gateway fake and runs the live stage
+  against it: `plan` → `apply` (three CREATES) → `verify`, then a second `plan`/`apply`
+  pair that is `NO CHANGE` on all three lines and writes nothing. Green before the live
+  run, and it is a step of the workflow as well.
+- **Live.** Workflow `Phase 4 Live Gateway apply`
+  (`.github/workflows/phase4-live-apply.yml`), its own Gateway row for milestone 4d so
+  the 4a/4b Mutation evidence keeps its own Gateways. Three heads ran it, and the run is
+  the row's own evidence:
+  - [35706182326](https://github.com/sheon-sek/ignition-mcp/actions/runs/35706182326)
+    (`906d55e`): both rows red before any evidence was written — the stage's bounded
+    verify retry calls `verify`, which still required `--mcp-url` even though `apply`
+    derives the endpoint from the Server Config it wrote. `ffda72d` makes
+    `doctor`/`verify` accept `--server-config-name` in place of `--mcp-url` (the stage
+    names the URL explicitly too), with a case that pins it. The same run's artifact also
+    showed the stage's `0600` token file inside the uploaded evidence directory; it now
+    lives in a `0700` directory outside the evidence tree (the G3 driver's rule). That
+    token was run-scoped and only ever valid on the disposable Gateway the job destroys.
+  - [35708881821](https://github.com/sheon-sek/ignition-mcp/actions/runs/35708881821)
+    (`ffda72d`): both rows reached the writes and found **two live defects**, both fixed
+    locally (this head is not pushed — the coordinator folds the branch into the final
+    integration run, so the fixes await its row):
+    - *The write level.* The bundle Project was imported and read back managed
+      (`CREATE 295022 bytes; read back managed bundle 0.6.0`) and the Server Config was
+      created with the profile's 13 Tools, but the policy write failed:
+      `the reserved policy provider did not become readable within 60s (20 attempt(s);
+      resource=absent, export=readable)`. The create had in fact succeeded — the Gateway
+      log shows `Tag provider 'IgnitionMCPPolicy' is initialized` — while
+      `GET /resources/find/ignition/tag-provider/IgnitionMCPPolicy` answered 404 for the
+      whole 60 s: `resource_document` percent-escaped the `/` inside the resource *type*,
+      so the find addressed a type named `ignition%2Ftag-provider`. Fixed (`safe="/"`,
+      only the name is escaped) with a regression pin that fails on any `%2F` in a request
+      path; the recorded fake unquotes like the Gateway does, which is why the rehearsal
+      could not see it.
+    - *The verify level.* The endpoint `apply` created *was* served —
+      `mcp-initialize` passed with `server={"name": "phase4-apply-runtime", "version":
+      "0.6.0"}` — but it advertised no primitives at all (`capabilities=[-]`,
+      `tools/list -> -32600`, `tools/call -> -32600`), through seven read-only verify
+      attempts over ~70 s. The 4a/4b rows never judge an endpoint the Gateway started
+      without: they install the Project and the Server Config by file copy and restart
+      before any case runs. The stage now reloads the disposable Gateway once
+      (`--compose-file`, recorded in the evidence as `gatewayReload`) after its read-only
+      retries are exhausted and re-runs verify, which is the harness's own discipline
+      rather than a product claim; no *write* is ever re-run. Recorded as an open
+      question for the owner (whether the pinned Module is expected to serve a Server
+      Config created live, over a Project imported live, without a reload).
+  - The frozen gates are green on `906d55e`: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
+    mutation row (run set `35708881777`–`35708881874`). CI is green on `ffda72d` as well
+    (run `35708881794`).
+
+- **Ticket #21 — the harness's test-only policy provisioning is not replaced yet.**
+  The 4a/4b driver stages still call `install_policy`/`install_tag_*_policy` (the
+  ticket #6 sanctioned test-only path), because moving them onto `apply` would mean
+  re-driving the milestone 4a/4b Mutation stages through the CLI inside the same
+  Gateway row they already ran on, and that risks the frozen G4a/G4b evidence for no
+  new fact. The live proof of the apply write path is the dedicated milestone-4d row
+  (`.github/workflows/phase4-live-apply.yml`), which writes the same provider and
+  document through `apply` and reads it back. **Follow-up:** once the apply row has
+  proven stable, switch the 4a/4b `*-setup` stages to `apply` so there is exactly one
+  provisioning path. Recorded here per the ticket's "replace it where practical" clause.
+- **Ticket #21 — `apply` confirms the policy write with a REST read-back, not a
+  handler-scope read.** The CLI has no Runtime Tool to read the policy through, so it
+  compares the exported Tag value and declared length with the document it wrote, and
+  repairs once by re-importing. The handler-scope read of the same provider is what the
+  ticket #7/#8/#10 live stages exercise, and the module serves the same bytes. A
+  `setup-native` handler-scope confirmation would need either a shipped read Tool or a
+  probe Tool, and neither belongs to the product. **For the owner:** accept the REST
+  read-back as apply's confirmation, or name the Tool that should confirm it.
+- **Ticket #21 — the create path disables and then enables the Server Config, the
+  update path does not touch enablement.** D20's recommended order is "create disabled
+  → validate → enable", which is what a `CREATE` does here (four bounded calls,
+  read-back included); an `UPDATE` reconciles the Tool list in one write and preserves
+  the observed `enabled`, because re-enabling a config an operator deliberately disabled
+  would be a change `plan` never showed. **For the owner:** confirm that reading, or ask
+  for an update to end enabled as well.
+- **Ticket #21 — apply keeps no local backup unless asked.** D20's transaction model
+  lists a snapshot before a replace; the CLI does it with `--backup-dir`, which exports
+  the deployed Project before an overwrite and fails the run if the export or the write
+  fails. Without the flag there is no local copy and no rollback (the ticket's rule),
+  and the Gateway's own configuration backup remains the operator's safety net.
+  **For the owner:** confirm the opt-in shape, or make the backup mandatory.
 ### Ticket #36 — refuse the `IgnitionMCPPolicy` Tag-provider config resource by name (milestone 4c)
 
 - **Rule (D30 §5 and owner ruling 4, `reserved_provider_config_resource`).** The
@@ -2094,6 +2221,30 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   instance runs a deliberately small tool budget and the `#20` cases are timing-sensitive
   (issue #39). Every Target the cases address is provisioned by `provision.py`, so the
   reserved provider they refuse really exists and "changed nothing" is observable.
+
+- **Ticket #21 — a Server Config created live is served without primitives until the
+  Gateway reloads.** The ticket #21 row's evidence: `apply` created a Server Config (13
+  explicit Tools, enabled, read back) for a Project it had just imported, and the Module
+  served the endpoint — `initialize` answered with the config's own name and version —
+  while advertising no capabilities at all (`capabilities=[-]`, `tools/list -> -32600`)
+  for the whole 70 s of read-only verify attempts. Every 4a/4b row judges an endpoint the
+  Gateway started with, because the harness installs the Project and the Server Config by
+  file copy before startup. The apply stage therefore reloads the disposable Gateway once
+  before it judges the endpoint, and records the reload; the CLI's own inline verify still
+  reports what it observed. **For the owner:** say whether the pinned Module is expected to
+  serve a Server Config created through Native REST, over a Project imported through Native
+  REST, without a Gateway reload. If it is, this is a Module defect to raise upstream and the
+  reload can be dropped from the stage; if it is not, `apply`'s "ends by running verify"
+  (D20) is only true for a deployment whose Project was already present, and the row should
+  say so.
+- **Ticket #21 — a percent-escaped resource type in a find path is a 404, and only the live
+  row could see it.** `resource_document` had escaped the `/` inside `ignition/tag-provider`;
+  the recorded fake unquotes the path before routing (as the Gateway does), so the
+  rehearsal, the unit tests and the fake all passed while the live Gateway answered 404 for
+  60 s and the policy write failed. Fixed, with a pin that fails on any `%2F` in a recorded
+  request path. **For the owner:** note the fixture's tolerance as the reason it was
+  invisible — a fixture that routed on the raw, still-escaped path would have caught it —
+  and consider whether the shared fake should stop unquoting before it routes.
 
 ## Open questions
 

@@ -1,20 +1,33 @@
 """``setup-native plan``: declarative intentions, never an installer (D20, D21).
 
 The plan is derived from the same read-only observations ``doctor`` makes (Gateway
-identity, module presence, project ownership marker, server-config presence) and
-printed as ``<ACTION> <kind> <name>: <reason>`` lines.  Provisioning belongs to
-``apply`` (Phase 4) and module installation to Phase 6; neither exists here, so
-every run ends with the literal line ``No changes have been applied.``
+identity, module presence, project ownership marker, server-config document, the
+reserved policy provider's served policy) and printed as ``<ACTION> <kind>
+<name>: <reason>`` lines.  ``apply`` consumes the very same list, refuses to write
+while any line is ``BLOCKED``, and executes the rest in the order printed here; a
+standalone ``plan`` run ends with the literal line ``No changes have been
+applied.``
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any, Sequence
 
 import httpx
 
+from ignition_rest_mcp.cli.setup_native import documents as docs
 from ignition_rest_mcp.cli.setup_native import gateway as gw
+from ignition_rest_mcp.cli.setup_native.action import (
+    ACKNOWLEDGEMENT,
+    BLOCKED,
+    CREATE,
+    NO_CHANGE,
+    SKIPPED,
+    UPDATE,
+    Action,
+    needs_acknowledgement,
+    upgrade_class,
+)
 from ignition_rest_mcp.cli.setup_native.doctor import (
     GatewayObservation,
     emit,
@@ -23,65 +36,10 @@ from ignition_rest_mcp.cli.setup_native.doctor import (
 )
 from ignition_rest_mcp.cli.setup_native.inputs import Inputs
 
-CREATE = "CREATE"
-UPDATE = "UPDATE"
-NO_CHANGE = "NO CHANGE"
-BLOCKED = "BLOCKED"
-#: Detect-only lines carry no intention; ``SKIP`` marks them as out of scope here.
-SKIPPED = "SKIP"
-
 PLAN_SENTINEL = "No changes have been applied."
 
-ACKNOWLEDGEMENT = "requires explicit acknowledgement in apply"
-
-
-@dataclass(frozen=True, slots=True)
-class Action:
-    """One planned intention."""
-
-    action: str
-    kind: str
-    name: str
-    reason: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {"action": self.action, "kind": self.kind, "name": self.name, "reason": self.reason}
-
-    def as_line(self) -> str:
-        return f"{self.action} {self.kind} {self.name}: {self.reason}"
-
-
-def parse_semver(value: str | None) -> tuple[int, int, int] | None:
-    """Strict ``MAJOR.MINOR.PATCH`` parse; anything else is unparseable (``None``)."""
-
-    if not isinstance(value, str):
-        return None
-    parts = value.strip().split(".")
-    if len(parts) != 3 or not all(part.isdigit() for part in parts):
-        return None
-    if any(len(part) > 1 and part.startswith("0") for part in parts):
-        return None
-    return int(parts[0]), int(parts[1]), int(parts[2])
-
-
-def upgrade_class(installed: str | None, target: str) -> str:
-    """D21 change class: ``patch``, ``minor``, ``major`` or ``downgrade``."""
-
-    current = parse_semver(installed)
-    wanted = parse_semver(target)
-    if current is None or wanted is None:
-        return "major"
-    if wanted < current:
-        return "downgrade"
-    if wanted[0] > current[0]:
-        return "major"
-    if wanted[1] > current[1]:
-        return "minor"
-    return "patch"
-
-
-def needs_acknowledgement(change_class: str) -> bool:
-    return change_class in ("major", "downgrade")
+#: How many drifting Tool names one line names before it says "+N more".
+DRIFT_NAMES = 5
 
 
 def project_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
@@ -190,7 +148,11 @@ def module_actions(inputs: Inputs, observation: GatewayObservation) -> list[Acti
     ]
 
 
-def server_config_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
+def server_config_actions(
+    inputs: Inputs, observation: GatewayObservation, documents: docs.Documents
+) -> list[Action]:
+    """The Server Config intention for the selected profile (D09's explicit lists)."""
+
     kind = "server-config"
     if not observation.capability("server-config"):
         return [
@@ -211,32 +173,123 @@ def server_config_actions(inputs: Inputs, observation: GatewayObservation) -> li
                 "no --server-config-name supplied; presence not probed",
             )
         ]
+    name = inputs.server_config_name
     if observation.server_config_error:
         return [
             Action(
                 BLOCKED,
                 kind,
-                inputs.server_config_name,
+                name,
                 f"server-config presence unknown ({observation.server_config_error})",
             )
         ]
-    if observation.server_config_exists is True:
+    desired = inputs.profile_inventory("tools")
+    summary = f"explicit Tool inventory (never *), profile {inputs.profile}, {len(desired)} Tools"
+    document = observation.server_config
+    if document is None:
+        if documents.permissions is None:
+            return [
+                Action(
+                    BLOCKED,
+                    kind,
+                    name,
+                    "refusing to create an unauthenticated MCP Server Config: pass "
+                    "--server-config-permissions-file (Security Level provisioning is issue #22)",
+                )
+            ]
+        return [Action(CREATE, kind, name, summary)]
+    observed, note = docs.observed_tools(document, inputs.bundle_project)
+    if observed is not None and sorted(observed) == sorted(desired):
+        return [Action(NO_CHANGE, kind, name, "explicit Tool inventory managed by apply")]
+    held = document.get("config")
+    if documents.permissions is None and not (
+        isinstance(held, dict) and isinstance(held.get("permissions"), dict)
+    ):
+        return [
+            Action(
+                BLOCKED,
+                kind,
+                name,
+                "the deployed Server Config carries no permissions tree to preserve: pass "
+                "--server-config-permissions-file (Security Level provisioning is issue #22)",
+            )
+        ]
+    drift = note or _tool_drift(observed, desired)
+    return [Action(UPDATE, kind, name, f"{summary}; current state: {drift}")]
+
+
+def _tool_drift(observed: Sequence[str] | None, desired: Sequence[str]) -> str:
+    """A bounded description of how an existing Tool list differs from the profile."""
+
+    current = set(observed or ())
+    wanted = set(desired)
+    adds = sorted(wanted - current)
+    removes = sorted(current - wanted)
+    parts = []
+    if adds:
+        parts.append(f"adds {_names(adds)}")
+    if removes:
+        parts.append(f"removes {_names(removes)}")
+    return ", ".join(parts) or "no name-level difference"
+
+
+def _names(values: Sequence[str], limit: int = DRIFT_NAMES) -> str:
+    listed = list(values)
+    shown = ", ".join(listed[:limit])
+    return "[" + shown + (f", +{len(listed) - limit} more" if len(listed) > limit else "") + "]"
+
+
+def policy_actions(
+    inputs: Inputs,
+    observation: GatewayObservation,
+    documents: docs.Documents,
+    policy: docs.PolicyObservation | None,
+) -> list[Action]:
+    """The Runtime Target Policy intention (D30 §1, owner ruling 1)."""
+
+    kind = "runtime-policy"
+    name = docs.POLICY_PATH
+    if documents.policy_text is None:
+        return [
+            Action(
+                SKIPPED,
+                kind,
+                name,
+                "no --policy-file supplied; the Runtime Target Policy is neither written nor diffed",
+            )
+        ]
+    if policy is None:
+        return [Action(BLOCKED, kind, name, "the reserved policy provider was not observed")]
+    if policy.error:
+        return [Action(BLOCKED, kind, name, f"reserved provider state unknown ({policy.error})")]
+    size = docs.byte_length(documents.policy_text)
+    digest = docs.sha256_text(documents.policy_text)[:16]
+    if not policy.provider_present:
+        return [
+            Action(
+                CREATE,
+                kind,
+                name,
+                f"create provider {docs.PROVIDER} and write {size} bytes (sha256 {digest}...), "
+                f"declared-length cap {docs.MAX_BYTES} bytes",
+            )
+        ]
+    if policy.matches(documents.policy_text):
         return [
             Action(
                 NO_CHANGE,
                 kind,
-                inputs.server_config_name,
-                "explicit Tool inventory managed by apply",
+                name,
+                f"deployment policy already matches {size} bytes (sha256 {digest}...)",
             )
         ]
-    return [
-        Action(
-            CREATE,
-            kind,
-            inputs.server_config_name,
-            "explicit Tool inventory (never *)",
-        )
-    ]
+    if policy.policy_text is None:
+        detail = "the provider serves no policy Tag"
+    elif policy.declared_length != size:
+        detail = f"declared length {policy.declared_length} != {size}"
+    else:
+        detail = f"sha256 {docs.sha256_text(policy.policy_text)[:16]}... -> {digest}..."
+    return [Action(UPDATE, kind, name, f"replace the served policy ({size} bytes; {detail})")]
 
 
 def detect_only_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
@@ -259,10 +312,19 @@ def detect_only_actions(inputs: Inputs, observation: GatewayObservation) -> list
     return actions
 
 
-def build_actions(inputs: Inputs, observation: GatewayObservation) -> list[Action]:
+def build_actions(
+    inputs: Inputs,
+    observation: GatewayObservation,
+    documents: docs.Documents | None = None,
+    policy: docs.PolicyObservation | None = None,
+) -> list[Action]:
+    """Every intention, in the order ``apply`` executes them."""
+
+    wanted = documents if documents is not None else docs.Documents()
     actions = module_actions(inputs, observation)
     actions.extend(project_actions(inputs, observation))
-    actions.extend(server_config_actions(inputs, observation))
+    actions.extend(server_config_actions(inputs, observation, wanted))
+    actions.extend(policy_actions(inputs, observation, wanted, policy))
     actions.extend(detect_only_actions(inputs, observation))
     return actions
 
@@ -287,10 +349,14 @@ async def run(
 ) -> int:
     """Observe the Gateway subset, print the intentions, and promise nothing was applied."""
 
+    documents = docs.load(inputs)
+    policy: docs.PolicyObservation | None = None
     async with make_gateway(inputs, gateway_transport) as client:
         _, observation = await probe_gateway(client, inputs)
+        if observation.reachable and documents.policy_text is not None:
+            policy = await docs.observe_policy(client)
     error = None if observation.reachable else (observation.error or "Gateway unreachable")
-    actions = [] if error else build_actions(inputs, observation)
+    actions = [] if error else build_actions(inputs, observation, documents, policy)
     return _emit(inputs, actions, error=error)
 
 

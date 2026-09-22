@@ -1,0 +1,253 @@
+name: Phase 4 Live Gateway apply
+
+# Milestone 4d (ticket #21): `ignition-mcp setup-native apply` against a disposable
+# Gateway — the bundle Project, the MCP Server Config for the selected profile and the
+# Runtime Target Policy in the reserved provider, then the D20 verify sequence.
+#
+# A dedicated row, because the stage writes deployment state: it must not share a
+# Gateway with the milestone 4a/4b Mutation evidence. The stage uses run-unique names,
+# so the first `apply` is a CREATE of the Project and of the Server Config (the paths
+# this ticket adds) and the second `plan`/`apply` pair must be a NO CHANGE run that
+# writes nothing. The `phase4-live` environment is the same one G4a/G4b use and exists
+# WITHOUT protection rules, reusing the owner-accepted deviation recorded for
+# `phase3-live`; the compensating controls are the trusted-repo guard, no repository or
+# environment secrets in the job, localhost/compose-only Gateway endpoints, run-unique
+# Project and Server Config names, and the stage's exact-origin check, which refuses
+# any Gateway but the compose one before it sends a request.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/phase4-live-apply.yml"
+      - "tests/harness/phase4-live/**"
+      - "tests/harness/recorded_gateway.py"
+      - "tests/harness/runtime-binding/prepare_ci_security.py"
+      - "tests/fixtures/modules/**"
+      - "tooling/native/**"
+      - "tooling/compat/**"
+      - "docs/research/**"
+      - "contracts/**"
+      - "packages/ignition-rest-mcp/**"
+      - "packages/ignition-runtime-bundle/**"
+      - "tests/compatibility/evidence/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase4-apply-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-gateway-apply:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: phase4-live
+    timeout-minutes: 60
+    continue-on-error: ${{ !matrix.required }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gateway_version: "8.3.8"
+            gateway_image: inductiveautomation/ignition:8.3.8
+            expected_build: "2026071409"
+            required: true
+          - gateway_version: "8.3.9"
+            gateway_image: inductiveautomation/ignition:8.3.9
+            expected_build: ""
+            required: false
+    env:
+      COMPOSE_FILE: tests/harness/phase4-live/docker-compose.yml
+      GATEWAY_IMAGE: ${{ matrix.gateway_image }}
+      GATEWAY_VERSION: ${{ matrix.gateway_version }}
+      EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
+      P4_BASE_URL: http://127.0.0.1:8093
+      P4_ORIGIN: 127.0.0.1:8093
+      MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
+      RELEASE_DIR: dist/release
+      APPLY_PROJECT: ignition_runtime_apply_${{ github.run_id }}
+      APPLY_SERVER_CONFIG: phase4-apply-runtime
+      EVIDENCE_DIR: artifacts/apply-${{ matrix.gateway_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.17"
+          enable-cache: true
+
+      - name: Verify pinned inputs, unit suite and build the exact release
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock --check
+          echo "$MCP_MODULE_SHA256  $MODULE_FILE" | sha256sum -c -
+          uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+          uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+          uv run --no-sync python -m tooling.compat validate --evidence-dir tests/compatibility/evidence
+          uv run --no-sync python -m tooling.native.cli release \
+            --project-dir packages/ignition-runtime-bundle/project \
+            --out-dir "$RELEASE_DIR" --source-revision "$(git rev-parse HEAD)" \
+            --evidence-dir tests/compatibility/evidence
+          mkdir -p "$EVIDENCE_DIR"
+          cp "$RELEASE_DIR"/* "$EVIDENCE_DIR/"
+          (cd "$RELEASE_DIR" && sha256sum ignition-runtime-bundle-*.zip > "$OLDPWD/$EVIDENCE_DIR/deployed.sha256")
+          cat "$EVIDENCE_DIR/deployed.sha256"
+          echo "SOURCE_REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Rehearse the apply stage against the recorded Gateway
+        shell: bash
+        run: |
+          # The stage drives the shipped CLI, so it is rehearsed against the recorded
+          # Gateway (which models the Project import, the Server Config routes and the
+          # reserved policy provider) before a live Gateway is spent on it.
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/rehearse_apply.py \
+            | tee "$EVIDENCE_DIR/apply-rehearsal.log"
+
+      - name: Pull the exact Gateway image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$GATEWAY_IMAGE"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Start a fresh Gateway
+        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+
+      - name: Wait for initial Gateway commissioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 480))
+          while (( SECONDS < deadline )); do
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
+            fi
+            if grep -Eq "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
+              && curl --fail --silent --max-time 3 "$P4_BASE_URL/StatusPing" >/dev/null; then
+              GATEWAY_BUILD="$(grep -Eo "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" | tail -1 | sed -E 's/.*\(b([0-9]+)\)/\1/')"
+              [[ "$GATEWAY_BUILD" =~ ^[0-9]+$ ]]
+              if [[ -n "$EXPECTED_GATEWAY_BUILD" && "$GATEWAY_BUILD" != "$EXPECTED_GATEWAY_BUILD" ]]; then
+                echo "Unexpected Gateway build: $GATEWAY_BUILD != $EXPECTED_GATEWAY_BUILD" >&2
+                exit 1
+              fi
+              echo "GATEWAY_BUILD=$GATEWAY_BUILD" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Gateway commissioning deadline exceeded" >&2
+          tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+          exit 1
+
+      - name: Prepare CI security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          uv run --no-sync python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install the CI security level and API token
+        shell: bash
+        run: |
+          # The Server Config the stage creates names the CI security level, so the
+          # level and the token's assignment to it are provisioned exactly as the
+          # milestone 4a/4b rows do. Nothing else is installed: this stage writes the
+          # bundle Project and the Server Config itself.
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker run --rm --volumes-from "$cid" --entrypoint /bin/sh --user 0:0 "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+          docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Wait for the authenticated Native REST plane
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 300))
+          while (( SECONDS < deadline )); do
+            code="$(curl --silent --output /dev/null --write-out '%{http_code}' --max-time 5 \
+              -H "X-Ignition-API-Token: $CI_API_TOKEN" \
+              "$P4_BASE_URL/data/api/v1/gateway-info" || true)"
+            if [[ "$code" == "200" ]]; then
+              echo "authenticated Native REST is ready"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "the authenticated Native REST plane never became ready" >&2
+          docker compose -f "$COMPOSE_FILE" logs --no-color gateway | tail -n 200 >&2
+          exit 1
+
+      - name: Plan, apply and verify with setup-native (ticket #21)
+        shell: bash
+        run: |
+          set -euo pipefail
+          release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
+          release_zip="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.zip' -print -quit)"
+          test -n "$release_manifest" && test -n "$release_zip"
+          uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
+            --base-url "$P4_BASE_URL" \
+            --expected-origin "$P4_ORIGIN" \
+            --compose-file "$COMPOSE_FILE" \
+            --api-token "$CI_API_TOKEN" \
+            --bundle-manifest "$release_manifest" \
+            --bundle-zip "$release_zip" \
+            --evidence-dir "$EVIDENCE_DIR" \
+            --source-revision "$SOURCE_REVISION" \
+            --project "$APPLY_PROJECT" \
+            --server-config "$APPLY_SERVER_CONFIG" \
+            --profile readonly \
+            2>&1 | tee "$EVIDENCE_DIR/setup-native-apply.log"
+
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+          docker image inspect "$GATEWAY_IMAGE" > "$EVIDENCE_DIR/gateway-image-inspect.json" 2>&1 || true
+          sha256sum "$MODULE_FILE" > "$EVIDENCE_DIR/mcp-module.sha256" 2>&1 || true
+
+      - name: Upload apply evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase4-apply-${{ matrix.gateway_version }}-${{ github.run_id }}
+          path: artifacts/apply-${{ matrix.gateway_version }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Destroy the disposable Gateway
+        if: always()
+        shell: bash
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
