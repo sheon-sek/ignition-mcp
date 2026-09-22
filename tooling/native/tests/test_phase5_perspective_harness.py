@@ -48,14 +48,9 @@ CHILD = "MCP_CI_P5_CHILD"
 
 
 def _child_archive() -> bytes:
-    return provision.perspective_project_archive(
-        title="child",
-        parent=PARENT,
-        views={driver.DEFAULT_LOCAL_VIEW: provision.view_document("child")},
-        page_config={"pages": {}, "docks": {}},
-        session_props={"props": {}},
-        entries={driver.DEFAULT_UNRELATED_QUERY: b"SELECT 1\n"},
-    )
+    """The fixture's own child Project, so the stub serves what a live run imports."""
+
+    return provision.child_project_archive("child", PARENT)
 
 
 # ------------------------------------------------------------------ pure helpers
@@ -69,12 +64,21 @@ def test_the_perspective_archive_uses_the_confirmed_layout() -> None:
         f"{PERSPECTIVE}/views/{driver.DEFAULT_LOCAL_VIEW}/resource.json",
         f"{PERSPECTIVE}/views/{driver.DEFAULT_LOCAL_VIEW}/view.json",
         driver.DEFAULT_UNRELATED_QUERY,
+        f"{driver.DEFAULT_UNRELATED_QUERY.rsplit('/', 1)[0]}/resource.json",
         "project.json",
     ]
     # The metadata file beside every data file is what makes the Gateway keep the
     # resource through a project import: a bare data file is dropped.
     manifest = json.loads(entries["project.json"])
     assert manifest["parent"] == PARENT and manifest["enabled"] is True
+    # The fixture's documents are ``provision.py``'s constants, the same ones the driver
+    # compares the reads against, so the fixture and the expectation cannot drift apart.
+    view = json.loads(entries[f"{PERSPECTIVE}/views/{driver.DEFAULT_LOCAL_VIEW}/view.json"])
+    assert view == provision.CHILD_VIEW_DOCUMENT
+    config = json.loads(entries[f"{PERSPECTIVE}/page-config/config.json"])
+    assert config == provision.CHILD_PAGE_CONFIG_DOCUMENT
+    props = json.loads(entries[f"{PERSPECTIVE}/session-props/props.json"])
+    assert props == provision.CHILD_SESSION_PROPS_DOCUMENT
 
 
 def test_view_paths_reads_the_logical_paths_of_one_export() -> None:
@@ -393,3 +397,42 @@ def test_the_create_case_checks_the_listing_and_not_only_the_write(
     assert [case["case"] for case in cases if not case["ok"]] == [
         "perspective-view-upsert-creates-a-view-the-project-lacks"
     ]
+
+
+class _PlausibleReadSession(_StubSession):
+    """A stub that answers a plausible document instead of the provisioned one.
+
+    These are the responses review round 1 named: a View read that returns the requested
+    path and a real component type while replacing that View's props and children, and a
+    Page configuration or Session properties read that answers an empty object instead of
+    the document the fixture imported.
+    """
+
+    async def call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = await super().call(tool, arguments)
+        if result.get("isError"):
+            return result
+        if tool == driver.PERSPECTIVE_VIEW_GET_TOOL:
+            view = result["structuredContent"]["view"]
+            view["root"] = {"type": view["root"]["type"], "props": {}, "children": []}
+        if tool == driver.PERSPECTIVE_PAGE_CONFIG_GET_TOOL:
+            result["structuredContent"]["config"] = {}
+        if tool == driver.PERSPECTIVE_SESSION_PROPS_GET_TOOL:
+            result["structuredContent"]["props"] = {}
+        return result
+
+
+def test_a_plausible_but_different_document_fails_its_read_case(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _PlausibleReadSession(_project(tmp_path))
+    cases, _ = _run_cases(tmp_path, session, monkeypatch)
+    failed = {case["case"] for case in cases if not case["ok"]}
+    # A read that only gets the path and the component type right is not the provisioned
+    # document, so each of the three document reads has to fail. The cases that compare a
+    # document through a later read fail with them, which is what the set records.
+    assert {
+        "perspective-view-get-returns-the-provisioned-view",
+        "perspective-page-config-get-returns-the-document",
+        "perspective-session-props-get-returns-the-document",
+    } <= failed

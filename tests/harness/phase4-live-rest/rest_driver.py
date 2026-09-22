@@ -95,9 +95,21 @@ import zipfile
 import httpx
 
 HARNESS = Path(__file__).resolve().parent
+sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HARNESS.parent / "phase3-live"))
 
 from harness_common import McpHttp, ProbeError, error_envelope  # noqa: E402
+#: The Perspective fixture's own documents and Logical paths. The reads are compared
+#: against these, so the fixture ``provision.py`` imports and the expectation are the same
+#: constants rather than two copies that could drift apart.
+from provision import (  # noqa: E402
+    CHILD_PAGE_CONFIG_DOCUMENT,
+    CHILD_SESSION_PROPS_DOCUMENT,
+    CHILD_VIEW_DOCUMENT,
+    INHERITED_VIEW,
+    LOCAL_VIEW,
+    UNRELATED_QUERY,
+)
 
 UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
@@ -213,15 +225,14 @@ PERSPECTIVE_WRITE_TOOLS = (
 #: passes run-unique ones.
 DEFAULT_PERSPECTIVE_PARENT = "MCP_CI_P5_PARENT"
 DEFAULT_PERSPECTIVE_CHILD = "MCP_CI_P5_CHILD"
-#: The Logical View paths and the unrelated resource of the fixture. ``INHERITED_VIEW``
-#: is defined by the parent only, so a write to it in the child is what the D15
-#: inherited-resource rule refuses; ``LOCAL_VIEW`` is the child's own View, which the
-#: edit, no-op, preservation and delete cases address.
-DEFAULT_INHERITED_VIEW = "Pages/Inherited"
-DEFAULT_LOCAL_VIEW = "Dashboard/Overview"
+#: The Logical View paths and the unrelated resource of the fixture, named here as the
+#: driver's own defaults. They are ``provision.py``'s constants, which is what keeps the
+#: fixture and the read expectations one definition.
+DEFAULT_INHERITED_VIEW = INHERITED_VIEW
+DEFAULT_LOCAL_VIEW = LOCAL_VIEW
 #: A Logical path no Project defines, so the ``not_found`` read is deterministic.
 MISSING_VIEW = "Dashboard/Absent"
-DEFAULT_UNRELATED_QUERY = "ignition/named-query/mcp_p5_probe/query.sql"
+DEFAULT_UNRELATED_QUERY = UNRELATED_QUERY
 #: The Perspective module directory inside a Project export. The write Tools patch the
 #: entry below it, and the preservation case is what proves nothing else moved.
 PERSPECTIVE_MODULE = "com.inductiveautomation.perspective"
@@ -1170,7 +1181,6 @@ async def perspective_cases(
     parent_project: str,
     child_project: str,
     raw_dir: Path,
-    view_path: str = DEFAULT_LOCAL_VIEW,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """The Phase 5 Perspective cases (P5-3, milestone 5).
 
@@ -1182,6 +1192,7 @@ async def perspective_cases(
     agent has.
     """
 
+    view_path = DEFAULT_LOCAL_VIEW
     cases: list[dict[str, Any]] = []
     observations: dict[str, Any] = {
         "parentProject": parent_project, "childProject": child_project,
@@ -1206,8 +1217,8 @@ async def perspective_cases(
         observations["viewGet"] = got
         _check(
             cases, "perspective-view-get-returns-the-provisioned-view",
-            {"path": view_path, "rootType": "ia.container.flex"},
-            {"path": _nested(got, "path"), "rootType": _nested(got, "view", "root", "type")},
+            {"path": view_path, "view": CHILD_VIEW_DOCUMENT},
+            {"path": _nested(got, "path"), "view": _nested(got, "view")},
         )
 
         exported, before_archive = await _project_export(
@@ -1256,7 +1267,7 @@ async def perspective_cases(
         observations["pageConfigGet"] = page_config
         _check(
             cases, "perspective-page-config-get-returns-the-document",
-            True, isinstance(_nested(page_config, "config"), dict),
+            CHILD_PAGE_CONFIG_DOCUMENT, _nested(page_config, "config"),
         )
         session_props = _read_result(await agent.call(
             PERSPECTIVE_SESSION_PROPS_GET_TOOL, {"projectName": child_project},
@@ -1264,7 +1275,7 @@ async def perspective_cases(
         observations["sessionPropsGet"] = session_props
         _check(
             cases, "perspective-session-props-get-returns-the-document",
-            True, isinstance(_nested(session_props, "props"), dict),
+            CHILD_SESSION_PROPS_DOCUMENT, _nested(session_props, "props"),
         )
 
         # ------------------------------------------------------------ the write Tools

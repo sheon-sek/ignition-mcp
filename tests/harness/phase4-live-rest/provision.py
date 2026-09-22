@@ -678,6 +678,14 @@ def view_document(name: str) -> dict[str, Any]:
     }
 
 
+#: The documents the fixture imports, one per resource. The driver compares what the
+#: Perspective reads serve against exactly these, so a read that answers a plausible but
+#: different document fails its case instead of passing on a path and a component type.
+CHILD_VIEW_DOCUMENT: dict[str, Any] = view_document(f"{LOCAL_VIEW} (child)")
+PARENT_VIEW_DOCUMENT: dict[str, Any] = view_document(f"{INHERITED_VIEW} (parent)")
+CHILD_PAGE_CONFIG_DOCUMENT: dict[str, Any] = {"pages": {}, "docks": {}}
+CHILD_SESSION_PROPS_DOCUMENT: dict[str, Any] = {"props": {}}
+
 def named_query_metadata() -> bytes:
     """The metadata one named-query resource carries beside its ``query.sql``.
 
@@ -780,6 +788,29 @@ def view_paths(entries: dict[str, bytes]) -> list[str]:
     )
 
 
+def parent_project_archive(title: str) -> bytes:
+    """The parent Project: the one View only it defines.
+
+    The driver compares what the Perspective reads serve against these documents, so the
+    fixture and the expectation cannot drift apart: both sides name the same constants.
+    """
+
+    return perspective_project_archive(
+        title=title, views={INHERITED_VIEW: PARENT_VIEW_DOCUMENT},
+    )
+
+
+def child_project_archive(title: str, parent: str) -> bytes:
+    """The child Project: its own View, Page configuration, Session properties, and one
+    unrelated named query, with ``parent`` as the Project it inherits from."""
+
+    return perspective_project_archive(
+        title=title, parent=parent, views={LOCAL_VIEW: CHILD_VIEW_DOCUMENT},
+        page_config=CHILD_PAGE_CONFIG_DOCUMENT, session_props=CHILD_SESSION_PROPS_DOCUMENT,
+        named_query=(UNRELATED_QUERY, b"SELECT 1\n"),
+    )
+
+
 def provision_perspective(base_url: str, token: str, *, parent: str, child: str) -> dict[str, Any]:
     """Import the parent and child Perspective Projects, then read them back.
 
@@ -793,22 +824,12 @@ def provision_perspective(base_url: str, token: str, *, parent: str, child: str)
 
     parent_status, _ = _request_bytes(
         base_url, token, "POST", PROJECT_IMPORT_PATH.format(name=parent) + PROJECT_IMPORT_OVERWRITE,
-        body=perspective_project_archive(
-            title=f"Phase 5 CI parent {parent}",
-            views={INHERITED_VIEW: view_document(f"{INHERITED_VIEW} (parent)")},
-        ),
+        body=parent_project_archive(f"Phase 5 CI parent {parent}"),
         content_type="application/zip",
     )
     child_status, _ = _request_bytes(
         base_url, token, "POST", PROJECT_IMPORT_PATH.format(name=child) + PROJECT_IMPORT_OVERWRITE,
-        body=perspective_project_archive(
-            title=f"Phase 5 CI child {child}",
-            parent=parent,
-            views={LOCAL_VIEW: view_document(f"{LOCAL_VIEW} (child)")},
-            page_config={"pages": {}, "docks": {}},
-            session_props={"props": {}},
-            named_query=(UNRELATED_QUERY, b"SELECT 1\n"),
-        ),
+        body=child_project_archive(f"Phase 5 CI child {child}", parent),
         content_type="application/zip",
     )
     statuses = {"parent": parent_status, "child": child_status}

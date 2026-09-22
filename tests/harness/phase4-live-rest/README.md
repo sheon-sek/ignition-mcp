@@ -124,14 +124,14 @@ observe:
 | `artifact-delete-malformed-identifier-is-invalid-argument` | …and a traversal-shaped identifier is refused as input |
 | `artifact-delete-data-plane-route-is-absent` | D30: `DELETE /artifacts/{id}` is HTTP 405 — the Tool is the only delete path |
 | `perspective-view-list-is-local-only` | the child Project's View list holds its own View and not the one it inherits from its parent (D15: reads are Local-only) |
-| `perspective-view-get-returns-the-provisioned-view` | the View document is served at its Logical path, rooted in a real component type |
+| `perspective-view-get-returns-the-provisioned-view` | the View document the fixture was imported with is served at its Logical path, document for document |
 | `perspective-export-fingerprint-is-independent` | the fingerprint `project_export` reports equals this harness's own `pcf1` computation |
 | `perspective-view-get-reports-the-project-fingerprint` | the document read reports that same Project fingerprint, the Precondition token a write presents |
 | `perspective-view-get-missing-view-is-not-found` | a Logical path no Project defines is `not_found`, never an inherited resolution |
 | `perspective-view-validate-accepts-the-provisioned-view` | the document the Gateway serves passes the offline D15 validation |
 | `perspective-view-validate-refuses-a-non-view` | …and a document whose `root` is not an object is `invalid_argument` |
-| `perspective-page-config-get-returns-the-document` | the Page configuration document is served, with the Project fingerprint |
-| `perspective-session-props-get-returns-the-document` | the Session properties document is served, with the Project fingerprint |
+| `perspective-page-config-get-returns-the-document` | the Page configuration document the fixture was imported with is served, document for document, with the Project fingerprint |
+| `perspective-session-props-get-returns-the-document` | the Session properties document the fixture was imported with is served, document for document, with the Project fingerprint |
 | `perspective-write-tools-are-available` | the four Perspective write Tools this stage drives are registered (a deployment without them fails here, with their names) |
 | `perspective-view-upsert-commits` | a whole-document upsert of the child's own View ends `COMMITTED` |
 | `perspective-view-upsert-dispatches-the-import` | …and the result says an import request left the server |

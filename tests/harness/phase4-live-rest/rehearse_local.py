@@ -37,13 +37,11 @@ sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 from fault_proxy import FaultProxy  # noqa: E402
-from provision import perspective_project_archive, view_document  # noqa: E402
+from provision import child_project_archive, parent_project_archive  # noqa: E402
 from rest_driver import (  # noqa: E402
     ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
     DEFAULT_ALARM_EVENT_ID,
-    DEFAULT_INHERITED_VIEW,
-    DEFAULT_LOCAL_VIEW,
     DEFAULT_LOOKALIKE_PROVIDER,
     DEFAULT_OTHER_PROVIDER,
     DEFAULT_PERSPECTIVE_CHILD,
@@ -58,7 +56,6 @@ from rest_driver import (  # noqa: E402
     DEFAULT_TAG_PROVIDER,
     DEFAULT_TAG_SOURCE_PATH,
     DEFAULT_TAG_TARGET_PATH,
-    DEFAULT_UNRELATED_QUERY,
     PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL,
     PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL,
     PERSPECTIVE_VIEW_DELETE_TOOL,
@@ -312,22 +309,14 @@ def _perspective_archives() -> dict[str, bytes]:
 
     The parent defines the View the child does not define locally (so the child inherits
     it), and the child defines its own View, a Page configuration, Session properties and
-    one unrelated resource. It is the same fixture ``provision.py`` imports live, built by the
-    provisioning module's own archive builder so the two cannot drift apart.
+    one unrelated resource. These are ``provision.py``'s own archive builders, so the
+    rehearsal seeds byte-for-byte the fixture a live run imports.
     """
 
     return {
-        PERSPECTIVE_PARENT: perspective_project_archive(
-            title="Phase 5 REST rehearsal parent",
-            views={DEFAULT_INHERITED_VIEW: view_document("inherited")},
-        ),
-        PERSPECTIVE_CHILD: perspective_project_archive(
-            title="Phase 5 REST rehearsal child",
-            parent=PERSPECTIVE_PARENT,
-            views={DEFAULT_LOCAL_VIEW: view_document("local")},
-            page_config={"pages": {}, "docks": {}},
-            session_props={"props": {}},
-            named_query=(DEFAULT_UNRELATED_QUERY, b"SELECT 1\n"),
+        PERSPECTIVE_PARENT: parent_project_archive("Phase 5 REST rehearsal parent"),
+        PERSPECTIVE_CHILD: child_project_archive(
+            "Phase 5 REST rehearsal child", PERSPECTIVE_PARENT,
         ),
     }
 
