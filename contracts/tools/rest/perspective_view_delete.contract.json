@@ -59,7 +59,11 @@
     "reason": "inherited_resource",
     "depthBound": 16,
     "unverifiableChain": "a chain deeper than the bound, or one that loops, fails with limit_exceeded rather than being truncated into 'no ancestor defines this'",
-    "runsBefore": "the transaction: no writer lock is taken, nothing is staged and no transaction row is created for a refused target"
+    "runsBefore": "the transaction: no writer lock is taken, nothing is staged and no transaction row is created for a refused target",
+    "staleToken": "conflict",
+    "unreadableChain": "upstream_error",
+    "unreadableChainRule": "upstream_error when a name the walk needs is missing from the Gateway's Project listing. The chain above a missing parent cannot be read, so the write cannot be shown to avoid an Inherited resource and is refused rather than performed",
+    "staleTokenRule": "the Precondition token is compared with the fingerprint of the export this check already takes, before the not_found and inherited_resource refusals below, so a stale token is conflict whatever the target turns out to be (D30 §2)"
   },
   "preconditionToken": {
     "kind": "project_fingerprint",

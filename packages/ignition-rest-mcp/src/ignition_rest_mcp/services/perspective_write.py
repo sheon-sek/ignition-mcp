@@ -15,10 +15,16 @@ Where each rule lands:
   leaving a transaction row.
 - **D15 inheritance.** A write never creates a silent local override. After the
   D08 chain, the Project's own export is read to decide whether the target is
-  Local; only when it is not does the server walk the ancestor chain, bounded by
+  Local. That export is also the D30 §2 comparison, and a token that does not match
+  it is ``conflict`` before either refusal below, so a caller that planned from a
+  moved Project never gets a verdict about the old one. Only when the target is not
+  Local does the server walk the ancestor chain, bounded by
   :data:`MAX_INHERITANCE_DEPTH`, exporting each ancestor and refusing with
   ``invalid_argument`` and reason ``inherited_resource`` if one defines the target.
-  A target no Project in the chain defines is a create, which D15 allows.
+  A parent the listing names but does not contain fails closed with
+  ``upstream_error``: the chain above it cannot be read, so this write cannot be
+  shown to avoid an Inherited resource. A target no Project in the chain defines is
+  a create, which D15 allows.
 - **D15/D17 redaction.** A document that carries the redaction placeholder is
   refused before the transaction starts: it is what a read of a secret-named field
   returns, and writing it back would store the placeholder as the value.
@@ -309,7 +315,8 @@ async def _write(
     )
     deadline = settings.budget_deadline_seconds("ARTIFACT")
     local = await _defines_locally(
-        client, store, context, project_name=project_name, patch=patch, deadline_seconds=deadline,
+        client, store, context, project_name=project_name, patch=patch,
+        expected_fingerprint=fingerprint, deadline_seconds=deadline,
     )
     if not local and require_local:
         raise GatewayError(
@@ -334,6 +341,7 @@ async def _defines_locally(
     *,
     project_name: str,
     patch: ResourcePatch,
+    expected_fingerprint: str,
     deadline_seconds: float,
 ) -> bool:
     """Whether the Project defines the target, refusing an Inherited one (D15).
@@ -342,13 +350,20 @@ async def _defines_locally(
     "Local". Only when it does not define the target does the ancestor chain get read:
     if an ancestor defines it, this Project gets the resource by inheritance, and a
     write would create the local override D15 forbids.
+
+    The export this takes for the local answer is also the D30 §2 comparison, and it is
+    checked before either refusal below. A caller that planned from a Project state
+    another writer has since moved gets ``conflict``, never a ``not_found`` or an
+    ``inherited_resource`` about a state that is no longer current.
     """
 
-    if await _defines(
+    defines, observed = await _staged_defines(
         client, store, context, project_name=project_name, patch=patch,
         deadline_seconds=deadline_seconds,
-    ):
+    )
+    if defines:
         return True
+    _require_current_fingerprint(project_name, observed, expected_fingerprint)
     for ancestor in await _ancestors(client, context, project_name):
         if await _defines(
             client, store, context, project_name=ancestor, patch=patch,
@@ -364,6 +379,17 @@ async def _defines_locally(
     return False
 
 
+def _require_current_fingerprint(project_name: str, observed: str, expected: str) -> None:
+    """The D30 §2 Precondition token, against the export the local answer came from."""
+
+    if observed != expected:
+        raise GatewayError(
+            "conflict",
+            f"project {project_name!r} is at {observed}, not the fingerprint the caller read "
+            f"({expected}); the project changed after that read and nothing was written",
+        )
+
+
 async def _defines(
     client: GatewayClient,
     store: LocalArtifactStore,
@@ -375,10 +401,29 @@ async def _defines(
 ) -> bool:
     """One bounded export, read for the single entry the patch targets."""
 
+    defines, _ = await _staged_defines(
+        client, store, context, project_name=project_name, patch=patch,
+        deadline_seconds=deadline_seconds,
+    )
+    return defines
+
+
+async def _staged_defines(
+    client: GatewayClient,
+    store: LocalArtifactStore,
+    context: OperationContext,
+    *,
+    project_name: str,
+    patch: ResourcePatch,
+    deadline_seconds: float,
+) -> tuple[bool, str]:
+    """One bounded export, read for the entry the patch targets, with its fingerprint."""
+
     async with staged_project(
         client, store, context, project_name=project_name, deadline_seconds=deadline_seconds,
     ) as staged:
-        return await asyncio.to_thread(perspective.defines_target, staged.path, patch)
+        defines = await asyncio.to_thread(perspective.defines_target, staged.path, patch)
+        return defines, staged.fingerprint
 
 
 async def _ancestors(client: GatewayClient, context: OperationContext, project_name: str) -> list[str]:
@@ -388,6 +433,10 @@ async def _ancestors(client: GatewayClient, context: OperationContext, project_n
     listing. A chain deeper than :data:`MAX_INHERITANCE_DEPTH`, or one that loops, is
     refused rather than truncated: the walk must never end early and be read as "no
     ancestor defines this".
+
+    A name the listing does not contain is refused for the same reason. A parent the
+    listing names but does not hold could itself inherit the target from above, so
+    stopping there would let this write create the silent override D15 forbids.
     """
 
     parents = await _project_parents(client, context)
@@ -407,6 +456,13 @@ async def _ancestors(client: GatewayClient, context: OperationContext, project_n
                 f"the Project inheritance chain above {project_name!r} is deeper than "
                 f"{MAX_INHERITANCE_DEPTH} Projects; the ancestor check cannot be completed",
             )
+        if current not in parents:
+            raise GatewayError(
+                "upstream_error",
+                f"Project {project_name!r} names {current!r} as the Project it inherits from, and the "
+                "Gateway's Project listing does not contain it; the ancestor chain cannot be read, so "
+                "this write cannot be shown to avoid an Inherited resource",
+            )
         seen.add(current)
         chain.append(current)
         current = parents.get(current, "")
@@ -417,8 +473,9 @@ async def _project_parents(client: GatewayClient, context: OperationContext) -> 
     """Every Project's parent, from a bounded read of the Project listing.
 
     The listing carries the inheritance ``parent`` per Project, so one bounded read
-    answers the whole chain. A Project with no parent, or one whose parent has no
-    entry of its own, ends its chain.
+    answers the whole chain. A Project with no parent has an empty string; a name the
+    listing does not contain at all is absent, which :func:`_ancestors` refuses rather
+    than reading as "no parent".
     """
 
     parents: dict[str, str] = {}

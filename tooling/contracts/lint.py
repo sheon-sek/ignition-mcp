@@ -1063,6 +1063,19 @@ def lint_contracts(root: str | Path) -> None:
                         f"{tool_name}: the inheritance check must state where it runs relative "
                         "to the transaction (D15)"
                     )
+                # The two round-1 review findings: a stale token is a conflict before either
+                # refusal, and a chain the listing cannot account for fails closed rather than
+                # being read as "no ancestor defines this".
+                if inheritance.get("staleToken") != "conflict":
+                    raise ContractError(
+                        f"{tool_name}: a stale token must be a conflict before the not_found and "
+                        "inherited_resource refusals (D30 §2)"
+                    )
+                if inheritance.get("unreadableChain") != "upstream_error":
+                    raise ContractError(
+                        f"{tool_name}: an ancestor chain the listing cannot account for must fail "
+                        "closed with upstream_error (D15)"
+                    )
             # D30 §6/D17: the archive this Tool consumes is as much a contract as the
             # Target is, so the declaration is required and checked. A Tool of the Phase 5
             # Perspective family authors its own candidate from a typed patch and consumes

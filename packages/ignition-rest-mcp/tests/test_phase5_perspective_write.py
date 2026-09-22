@@ -50,6 +50,7 @@ from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
 PROJECT = "mcp-p5-writes"
 PARENT = "mcp-p5-writes-parent"
+GRANDPARENT = "mcp-p5-writes-grandparent"
 CONTROL_PROJECT = "mcp-p5-writes-control"
 
 VIEW_PATH = "Pages/Overview"
@@ -142,11 +143,14 @@ def _seed_gateway() -> RecordedGateway:
     })
 
 
-def _serves_parents(monkeypatch: pytest.MonkeyPatch, *, parent: str, names: list[str]) -> None:
+def _serves_parents(
+    monkeypatch: pytest.MonkeyPatch, *, parents: dict[str, str], names: list[str],
+) -> None:
     """Answer the Project listing with the inheritance ``parent`` the Gateway reports.
 
     The recorded Gateway models no inheritance, so the one field the D15 ancestor walk
-    reads comes from here; every other ``get_json`` call goes to the recorded routes.
+    reads comes from here; every other ``get_json`` call goes to the recorded routes. A
+    name in ``parents`` that is not in ``names`` is a parent the listing does not hold.
     """
 
     original = GatewayClient.get_json
@@ -156,7 +160,7 @@ def _serves_parents(monkeypatch: pytest.MonkeyPatch, *, parent: str, names: list
     ) -> dict[str, Any]:
         if path != "/data/api/v1/projects/list":
             return await original(self, path, params=params, context=context)
-        items = [{"name": name, "parent": parent if name == PROJECT else ""} for name in names]
+        items = [{"name": name, "parent": parents.get(name, "")} for name in names]
         return {
             "items": items,
             "metadata": {
@@ -501,7 +505,9 @@ def test_an_inherited_view_is_refused_before_the_transaction(
     transaction is created, because the check runs before the transaction starts."""
 
     with _seed_gateway() as gateway:
-        _serves_parents(monkeypatch, parent=PARENT, names=[PROJECT, PARENT, CONTROL_PROJECT])
+        _serves_parents(
+            monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, PARENT, CONTROL_PROJECT],
+        )
         settings = _settings(tmp_path, gateway)
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
@@ -531,7 +537,7 @@ def test_an_inherited_page_config_is_refused(tmp_path: Path, monkeypatch: pytest
         PROJECT: _project_archive(views={VIEW_PATH: _view_document()}),
         PARENT: parent_archive,
     }) as gateway:
-        _serves_parents(monkeypatch, parent=PARENT, names=[PROJECT, PARENT])
+        _serves_parents(monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, PARENT])
         settings = _settings(tmp_path, gateway)
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
@@ -558,7 +564,7 @@ def test_a_local_view_wins_over_an_ancestor_that_also_defines_it(
         PROJECT: _project_archive(views={VIEW_PATH: _view_document("local")}),
         PARENT: parent_archive,
     }) as gateway:
-        _serves_parents(monkeypatch, parent=PARENT, names=[PROJECT, PARENT])
+        _serves_parents(monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, PARENT])
         settings = _settings(tmp_path, gateway)
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
@@ -579,7 +585,9 @@ def test_delete_of_an_inherited_view_is_refused_rather_than_reported_missing(
     inherited from above gets the real reason: the Project does not own it."""
 
     with _seed_gateway() as gateway:
-        _serves_parents(monkeypatch, parent=PARENT, names=[PROJECT, PARENT, CONTROL_PROJECT])
+        _serves_parents(
+            monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, PARENT, CONTROL_PROJECT],
+        )
         settings = _settings(tmp_path, gateway)
         with TestClient(server_module.create_server(settings).http_app()) as http:
             agent = _Session(http, CONFIG_CREDENTIAL)
@@ -654,6 +662,85 @@ def test_the_placeholder_a_read_emits_is_the_value_a_write_refuses(tmp_path: Pat
     refusal = envelope(result)
     assert refusal["code"] == "invalid_argument"
     assert "redacted_value" in refusal["message"]
+    assert _import_requests(gateway) == []
+    assert _transactions(tmp_path) == []
+
+
+def test_a_parent_the_listing_names_but_does_not_hold_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The chain may not end on a name the listing cannot account for.
+
+    Child inherits from Parent, the listing names Parent but holds no entry for it, and
+    Grandparent defines the View. Parent exists and is exportable, so reading the missing
+    listing entry as "no parent" would end the walk at Parent, never reach Grandparent,
+    and let this write create the silent override D15 forbids. The write fails closed
+    instead, and nothing above the unknown name is exported at all.
+    """
+
+    with RecordedGateway(projects={
+        PROJECT: _project_archive(views={VIEW_PATH: _view_document()}),
+        PARENT: _project_archive(views={VIEW_PATH: _view_document("parent local")}),
+        GRANDPARENT: _project_archive(views={INHERITED_PATH: _view_document("inherited from above")}),
+    }) as gateway:
+        _serves_parents(monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, GRANDPARENT])
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            before = _entries(gateway.project(PROJECT))
+            result = _upsert(
+                agent, path=INHERITED_PATH, view=_view_document("override"),
+                fingerprint=_fingerprint(agent),
+            )
+
+    refusal = envelope(result)
+    assert refusal["code"] == "upstream_error"
+    assert PARENT in refusal["message"]
+    # Only the Project itself was exported (by the caller's read and by the local check);
+    # no ancestor was read, because the chain is computed before the first ancestor export.
+    assert set(_export_paths(gateway)) == {f"/data/api/v1/projects/export/{PROJECT}"}
+    assert _import_requests(gateway) == []
+    assert _transactions(tmp_path) == []
+    # Nothing was written, so the View Grandparent defines is untouched and still inherited.
+    assert _entries(gateway.project(PROJECT)) == before
+
+
+@pytest.mark.parametrize(("tool", "arguments", "missing"), [
+    (VIEW_DELETE_TOOL, {"path": "Pages/Absent"}, "not_found"),
+    (VIEW_UPSERT_TOOL, {"path": INHERITED_PATH}, "inherited_resource"),
+])
+def test_a_stale_fingerprint_is_a_conflict_before_either_refusal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str, arguments: dict[str, Any],
+    missing: str,
+) -> None:
+    """D30 §2 wins over the checks that follow it.
+
+    The stale token is compared with the export the local check already took, so a
+    caller that planned from a moved Project gets `conflict` rather than a `not_found`
+    or an `inherited_resource` about a state that is no longer current.
+    """
+
+    with _seed_gateway() as gateway:
+        _serves_parents(
+            monkeypatch, parents={PROJECT: PARENT}, names=[PROJECT, PARENT, CONTROL_PROJECT],
+        )
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            agent = _Session(http, CONFIG_CREDENTIAL)
+            stale = _fingerprint(agent)
+            gateway.change_project_out_of_band(
+                PROJECT, _entries(_project_archive(views={VIEW_PATH: _view_document("foreign")})),
+            )
+            call: dict[str, Any] = {
+                "projectName": PROJECT, "expectedFingerprint": stale, **arguments,
+            }
+            if tool == VIEW_UPSERT_TOOL:
+                call["view"] = _view_document("planned")
+            result = agent.call(tool, call)
+
+    refusal = envelope(result)
+    assert refusal["code"] == "conflict"
+    assert missing not in refusal["message"]
     assert _import_requests(gateway) == []
     assert _transactions(tmp_path) == []
 
