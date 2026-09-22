@@ -23,6 +23,7 @@ import logging
 from typing import Any, AsyncIterator, Awaitable, Callable
 
 from ignition_rest_mcp.auth import VerifiedPrincipal, is_verified_principal
+from ignition_rest_mcp.audit.sink import result_under_cancellation
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import (
     DispatchOutcome,
@@ -305,10 +306,14 @@ async def execute_mutation(
             if phase["response_started"] or phase["body_complete"]
             else DispatchOutcome.SENT_PARTIAL
         )
-        try:
-            await asyncio.shield(auditor.result("cancelled", error_code="outcome_unknown"))
-        except Exception:  # pragma: no cover - cancellation hygiene must not mask the result
-            pass
+        # The row this attempt owes must become durable even though the task is being
+        # cancelled right now: it is awaited to completion rather than shielded-and-
+        # forgotten, because the boundary it carries (``outcome_unknown``) is what D30 §7
+        # wants on the record and a shielded write can be dropped with the task.
+        await result_under_cancellation(
+            auditor, "cancelled", error_code="outcome_unknown", target_type=target_type,
+            target_id=request.target_id,
+        )
         # The boundary is never a replay licence: it is logged for diagnostics and
         # the persisted transaction state (slice 7) drives reconciliation.
         LOGGER.error(
