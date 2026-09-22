@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from tooling.contracts.lint import EXPECTED_PROFILE_TOOLS
+
 SCHEMA_VERSION = 1
 
 D27_TUPLE = {
@@ -29,11 +31,35 @@ D27_TUPLE = {
 }
 
 COMPATIBILITY_STATUSES = ("SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UNKNOWN")
+#: D26's G4 acceptance list, verbatim. A G4 row must account for every one of these
+#: on both Planes, and every entry that is not `LIVE` carries a recorded limitation.
+D26_L5_CASES = (
+    "partial failure",
+    "timeout",
+    "ambiguous outcome",
+    "permission denied",
+    "oversize",
+    "concurrent modification",
+    "audit failure",
+    "cancellation",
+)
+#: D30's Consequences: on the Runtime plane these three are proven with recorded
+#: fixtures only by decision (blocking Jython calls cannot be interrupted), so a G4
+#: row may not claim them live there. The opposite claim is refused below.
+D30_RUNTIME_FIXTURE_ONLY = ("timeout", "ambiguous outcome", "cancellation")
+#: How a G4 L5 case is proven: a live Gateway run, the systematic replay of the exact
+#: live case set against the recorded Gateway, a recorded fixture/unit test, or — the
+#: honest last entry — nothing at all on that plane. ``NONE`` must be named in
+#: ``unsatisfiedAcceptance`` and is what makes a gate result less than verified.
+L5_EVIDENCE_CLASSES = ("LIVE", "SYSTEMATIC", "FIXTURE", "NONE")
+G4_GATE_RESULTS = ("VERIFIED", "VERIFIED_WITH_LIMITATION", "UNVERIFIED_LIMITATION", "UNTESTED")
+G4_PLANES = ("rest", "runtime")
+G4_PROFILES = ("readonly", "operator", "configurator", "full")
 BINDING_STATUSES = (
     "NATIVE_BINDING_PENDING", "VERIFIED", "VERIFIED_WITH_LIMITATION", "FAILED",
     "FAILED_NATIVE_BINDING", "UNVERIFIED_LIMITATION", "UNVERIFIED",
 )
-GATES = ("G0", "G1", "G2", "G3")
+GATES = ("G0", "G1", "G2", "G3", "G4")
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _BUILD = re.compile(r"^[0-9]{10}$")
@@ -159,6 +185,8 @@ def parse_row(directory: Path, doc: dict[str, Any]) -> EvidenceRow:
     _apply_d27_rules(row, where)
     if gate == "G3":
         _apply_g3_rules(row, doc, where)
+    if gate == "G4":
+        _apply_g4_rules(row, doc, where)
     return row
 
 
@@ -207,6 +235,150 @@ def _apply_g3_rules(row: EvidenceRow, doc: dict[str, Any], where: str) -> None:
     deployed_sha = doc.get("deployedBundleSha256")
     if not isinstance(deployed_sha, str) or _SHA.fullmatch(deployed_sha) is None:
         raise EvidenceError(f"{where}: G3 rows must record the SHA-256 of the exact deployed release ZIP")
+
+
+def _g4_entry(entry: Any, case: str, plane: str, where: str) -> dict[str, Any]:
+    if not isinstance(entry, dict):
+        raise EvidenceError(f"{where}: L5 case {case!r} on the {plane} plane must be an object")
+    verdict = entry.get("verdict")
+    if verdict not in L5_EVIDENCE_CLASSES:
+        raise EvidenceError(
+            f"{where}: L5 case {case!r} on the {plane} plane must have a verdict in {L5_EVIDENCE_CLASSES}"
+        )
+    source = entry.get("source")
+    if not isinstance(source, str) or not source:
+        raise EvidenceError(f"{where}: L5 case {case!r} on the {plane} plane must name its evidence source")
+    if verdict == "LIVE":
+        run_ids = entry.get("runIds")
+        if not isinstance(run_ids, list) or not run_ids or not all(
+            isinstance(item, str) and item for item in run_ids
+        ):
+            raise EvidenceError(
+                f"{where}: L5 case {case!r} claims LIVE on the {plane} plane without naming a run id"
+            )
+    else:
+        limitation = entry.get("limitation")
+        if not isinstance(limitation, str) or not limitation:
+            raise EvidenceError(
+                f"{where}: L5 case {case!r} is not LIVE on the {plane} plane and must record a limitation"
+            )
+    return entry
+
+
+def _apply_g4_rules(row: EvidenceRow, doc: dict[str, Any], where: str) -> None:
+    """G4 close-out rules (ticket #23).
+
+    A G4 row is composed out of band from several live runs, so the rules below
+    are what keeps it honest: every D26 case is accounted for on both Planes, a
+    non-live claim carries its limitation, D30's Runtime fixture-only decision
+    cannot be contradicted, and every cited run is a green one.
+    """
+    deviations = doc.get("ownerAcceptedDeviations")
+    if not isinstance(deviations, list) or "phase4-live-environment-protection" not in deviations:
+        raise EvidenceError(
+            f"{where}: G4 evidence must record the owner-accepted phase4-live environment deviation"
+        )
+    deployed_sha = doc.get("deployedBundleSha256")
+    if not isinstance(deployed_sha, str) or _SHA.fullmatch(deployed_sha) is None:
+        raise EvidenceError(f"{where}: G4 rows must record the SHA-256 of the exact deployed release ZIP")
+
+    runs = doc.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise EvidenceError(f"{where}: G4 rows must list the live runs the row is composed from")
+    for entry in runs:
+        if not isinstance(entry, dict):
+            raise EvidenceError(f"{where}: every run entry must be an object")
+        for key in ("runId", "workflow", "head", "conclusion"):
+            value = entry.get(key)
+            if not isinstance(value, str) or not value:
+                raise EvidenceError(f"{where}: run entry is missing {key}")
+        if entry["conclusion"] != "success":
+            raise EvidenceError(
+                f"{where}: run {entry['runId']} is recorded as {entry['conclusion']!r}; "
+                "a green run is the only admissible live evidence"
+            )
+
+    l5 = doc.get("l5")
+    if not isinstance(l5, dict) or set(l5) != set(D26_L5_CASES):
+        raise EvidenceError(f"{where}: l5 must account for exactly the D26 G4 cases {D26_L5_CASES}")
+    for case in D26_L5_CASES:
+        planes = l5[case]
+        if not isinstance(planes, dict) or set(planes) != set(G4_PLANES):
+            raise EvidenceError(f"{where}: L5 case {case!r} must be recorded on both Planes {G4_PLANES}")
+        for plane in G4_PLANES:
+            entry = _g4_entry(planes[plane], case, plane, where)
+            if plane == "runtime" and case in D30_RUNTIME_FIXTURE_ONLY and entry["verdict"] == "LIVE":
+                raise EvidenceError(
+                    f"{where}: D30 makes the Runtime {case!r} case fixture-only; a live claim contradicts it"
+                )
+
+    gate_result = doc.get("gateResult")
+    if gate_result not in G4_GATE_RESULTS:
+        raise EvidenceError(f"{where}: gateResult must be one of {G4_GATE_RESULTS}")
+    if gate_result == "VERIFIED" and _g4_incomplete(doc):
+        raise EvidenceError(
+            f"{where}: gateResult VERIFIED while an L5 case is not live; record the limitation instead"
+        )
+    if gate_result != "VERIFIED":
+        limitations = doc.get("limitations")
+        if not isinstance(limitations, list) or not limitations:
+            raise EvidenceError(f"{where}: a G4 row that is not fully live must record its limitations")
+    unsatisfied = doc.get("unsatisfiedAcceptance")
+    if not isinstance(unsatisfied, list) or not all(isinstance(item, str) for item in unsatisfied):
+        raise EvidenceError(f"{where}: unsatisfiedAcceptance must be a list of strings")
+    for case in D26_L5_CASES:
+        for plane in G4_PLANES:
+            entry = l5[case][plane]
+            if entry.get("verdict") == "NONE" and f"{case} on the {plane} plane" not in unsatisfied:
+                raise EvidenceError(
+                    f"{where}: L5 case {case!r} has no evidence at all on the {plane} plane and must "
+                    "be named in unsatisfiedAcceptance"
+                )
+            if entry.get("verdict") != "NONE" and f"{case} on the {plane} plane" in unsatisfied:
+                raise EvidenceError(
+                    f"{where}: {case!r} on the {plane} plane has evidence but is declared unsatisfied"
+                )
+
+    for key in ("mutationsDisabledByDefault", "unsafeAutomaticRetryAbsent"):
+        if doc.get(key) is not True:
+            raise EvidenceError(f"{where}: G4 rows must record {key}=true")
+
+    inventories = doc.get("inventories")
+    if not isinstance(inventories, dict):
+        raise EvidenceError(f"{where}: G4 rows must record the exact profile inventories")
+    runtime = inventories.get("runtime")
+    if not isinstance(runtime, dict) or set(runtime) != set(G4_PROFILES):
+        raise EvidenceError(f"{where}: inventories.runtime must cover {G4_PROFILES}")
+    for profile in G4_PROFILES:
+        entry = runtime[profile]
+        tools = entry.get("tools") if isinstance(entry, dict) else None
+        if not isinstance(tools, list) or not tools or not all(isinstance(item, str) for item in tools):
+            raise EvidenceError(f"{where}: the {profile} Runtime inventory must be an explicit Tool list")
+        if len(tools) != len(set(tools)):
+            raise EvidenceError(f"{where}: the {profile} Runtime inventory has a duplicate Tool")
+        if not isinstance(entry.get("verifiedBy"), str) or not entry["verifiedBy"]:
+            raise EvidenceError(f"{where}: the {profile} Runtime inventory must name what verified it")
+        expected = EXPECTED_PROFILE_TOOLS[profile]
+        if tools != expected:
+            raise EvidenceError(
+                f"{where}: the {profile} Runtime inventory does not match tooling/contracts/lint.py "
+                f"(it must equal the profile's contract list, in its order): "
+                f"expected {expected}, got {tools}"
+            )
+    rest_inventory = inventories.get("rest")
+    if not isinstance(rest_inventory, dict) or "classEnabled" not in rest_inventory:
+        raise EvidenceError(f"{where}: inventories.rest must record the class-enabled and class-disabled lists")
+
+
+def _g4_incomplete(doc: dict[str, Any]) -> bool:
+    """True when any D26 case is not live on both Planes."""
+
+    l5 = doc["l5"]
+    return any(
+        l5[case][plane].get("verdict") != "LIVE"
+        for case in D26_L5_CASES
+        for plane in G4_PLANES
+    )
 
 
 def load_evidence(evidence_dir: str | Path, *, reject_supported: bool = True) -> list[EvidenceRow]:
