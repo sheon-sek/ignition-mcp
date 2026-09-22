@@ -1,0 +1,1555 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_create",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/Many0",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many1",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many2",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many3",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many4",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many5",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many6",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many7",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many8",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many9",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many10",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many11",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many12",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many13",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many14",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many15",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many16",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many17",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many18",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many19",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Many20",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 195
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_create\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\",\"tagCreateMaxItems\":25}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many0"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many1"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many2"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many3"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many4"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many5"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many6"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many7"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many8"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many9"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many10"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many11"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many12"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many13"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many14"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many15"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many16"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many17"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many18"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many19"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/Many20"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_create",
+        "actionTarget": "[default]IgnitionMCP_CI/Many0,[default]IgnitionMCP_CI/Many1,[default]IgnitionMCP_CI/Many2,[default]IgnitionMCP_CI/Many3,[default]IgnitionMCP_CI/Many4,[default]IgnitionMCP_CI/Many5,[default]IgnitionMCP_CI/Many6,[default]IgnitionMCP_CI/Many7,[default]IgnitionMCP_CI/Many8,[default]IgnitionMCP_CI/Many9,[default]IgnitionMCP_CI/Many10,[default]IgnitionMCP_CI/Many11,[default]IgnitionMCP_CI/Many12,[default]IgnitionMCP_CI/Many13,[default]IgnitionMCP_CI/Many14,[default]IgnitionMCP_CI/Many15,[default]IgnitionMCP_CI/Ma...",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many0"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many1"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many2"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many3"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many4"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many5"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many6"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many7"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many8"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many9"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many10"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many11"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many12"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many13"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many14"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many15"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many16"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many17"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many18"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many19"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "Many20"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_create",
+        "actionTarget": "[default]IgnitionMCP_CI/Many0,[default]IgnitionMCP_CI/Many1,[default]IgnitionMCP_CI/Many2,[default]IgnitionMCP_CI/Many3,[default]IgnitionMCP_CI/Many4,[default]IgnitionMCP_CI/Many5,[default]IgnitionMCP_CI/Many6,[default]IgnitionMCP_CI/Many7,[default]IgnitionMCP_CI/Many8,[default]IgnitionMCP_CI/Many9,[default]IgnitionMCP_CI/Many10,[default]IgnitionMCP_CI/Many11,[default]IgnitionMCP_CI/Many12,[default]IgnitionMCP_CI/Many13,[default]IgnitionMCP_CI/Many14,[default]IgnitionMCP_CI/Many15,[default]IgnitionMCP_CI/Ma...",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many0",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many0",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many0",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many1",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many1",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many1",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many2",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many2",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many2",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many3",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many3",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many3",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many4",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many4",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many4",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many5",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many5",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many5",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many6",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many6",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many6",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many7",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many7",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many7",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many8",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many8",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many8",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many9",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many9",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many9",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many10",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many10",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many10",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many11",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many11",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many11",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many12",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many12",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many12",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many13",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many13",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many13",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many14",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many14",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many14",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many15",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many15",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many15",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many16",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many16",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many16",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many17",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many17",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many17",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many18",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many18",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many18",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many19",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many19",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many19",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/Many20",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "Many20",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/Many20",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    }
+  ]
+}

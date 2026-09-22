@@ -359,6 +359,151 @@ def tag_update_tag_document_bytes(**overrides: Any) -> bytes:
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
 
+# --------------------------------------------------------------------------- #
+# Ticket #11 (`tag_create` and `tag_copy`) live fixtures
+#
+# Both Tools are Tag CONFIG Mutations on the `configurator` profile, so they run on
+# the same probe project's `tag_fixture_probe` seeding as ticket #10 and install
+# their own document over the same reserved provider. Each document carries only its
+# own allowlist key: the shipped reader validates a key per Tool, and an absent key
+# means no target for that Tool, so a stage proves its own gate by installing its
+# own document.
+# --------------------------------------------------------------------------- #
+
+#: The paths `tag_create` runs against. `CreateTarget` and `CreateBatchTarget` are
+#: deliberately paths the probe project never seeds: an absent target is the only
+#: target a create may execute at, and the one a refused Preflight has to leave
+#: absent.
+TAG_CREATE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_CREATE_TYPES_ALLOWLIST = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}",
+)
+TAG_CREATE_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/CreateTarget"
+#: The allowed item of the whole-batch refusal: it passes every Preflight rule, so
+#: only the refusal of its sibling can keep it from being created.
+TAG_CREATE_BATCH_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/CreateBatchTarget"
+#: An already-seeded path: the collision a create must refuse instead of overwriting,
+#: which is also what proves nothing was merged into the node that is there.
+TAG_CREATE_EXISTING_TARGET = TAG_FIXTURE_PATH
+TAG_CREATE_SIBLING_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_SIBLING_ROOT}/CreateTarget"
+TAG_CREATE_RESERVED_TARGET = WRITE_PROBE_PATH
+TAG_CREATE_UDT_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/CreateProbe"
+#: A configuration a create can write: `dataType` and `documentation` are CONFIG
+#: properties, and neither is the `value` a CONTROL write owns (D30's class split).
+TAG_CREATE_CONFIG = {"dataType": "Int4", "defaultValue": 0, "documentation": "phase4-created"}
+#: The path ceiling a live call can cross: a Tag name of 2 100 bytes is a legal path
+#: for the Gateway and an over-budget one for D10, and only the handler's own bound
+#: tells those apart. The refusal quotes the bounded prefix, exactly as the handler
+#: bounds every free-text value it echoes.
+OVERLONG_PATH_LEAF = "L" * 2_100
+
+#: `tag_copy` carries a node from a source to a destination whose last segment is
+#: the source's own, because one `system.tag.copy` call lands each source under its
+#: own name. Every copy path below therefore shares one leaf, and the leaf rule is
+#: what makes a mismatched destination an input refusal rather than a rename.
+TAG_COPY_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_COPY_TYPES_ALLOWLIST = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}",
+)
+TAG_COPY_LEAF = TAG_FIXTURE_PATH.rsplit("/", 1)[-1]
+TAG_COPY_SOURCE = TAG_FIXTURE_PATH
+#: A folder the probe project already creates, so the copy's native destination is
+#: there before the call and the case says nothing about folder creation.
+TAG_COPY_FOLDER = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/Nested"
+TAG_COPY_DESTINATION = f"{TAG_COPY_FOLDER}/{TAG_COPY_LEAF}"
+#: The same Tag one segment outside the allowed prefix: the source half of the proof
+#: that a copy measures only its destination against the Target allowlist.
+TAG_COPY_SIBLING_SOURCE = TAG_FIXTURE_SIBLING_PATH
+TAG_COPY_SIBLING_DESTINATION = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_SIBLING_ROOT}/Nested/{TAG_COPY_LEAF}"
+)
+#: One segment of its own inside the definition namespace: a refused copy never
+#: creates it, so its absence from the provider export is what says so.
+TAG_COPY_PROBE_FOLDER = "McpCiCopyProbe"
+TAG_COPY_UDT_DESTINATION = (
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/{TAG_COPY_PROBE_FOLDER}/{TAG_COPY_LEAF}"
+)
+#: Both ends of a reserved-provider refusal carry the provider's own leaf, so the
+#: refusal that reaches the caller is the provider rule and not the leaf rule.
+TAG_COPY_RESERVED_DESTINATION = f"[{POLICY_PROVIDER}]{TAG_COPY_PROBE_FOLDER}/{TAG_COPY_LEAF}"
+TAG_COPY_RESERVED_SOURCE_LEAF = "ReservedSource"
+TAG_COPY_RESERVED_SOURCE = f"[{POLICY_PROVIDER}]{TAG_COPY_RESERVED_SOURCE_LEAF}"
+TAG_COPY_RESERVED_SOURCE_DESTINATION = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/{TAG_COPY_RESERVED_SOURCE_LEAF}"
+)
+#: A source that is not there: the copy is refused for the source, which the Target
+#: allowlist never measures (D30 6 bounds the destination only).
+TAG_COPY_MISSING_SOURCE_LEAF = "MissingSource"
+TAG_COPY_MISSING_SOURCE = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/{TAG_COPY_MISSING_SOURCE_LEAF}"
+TAG_COPY_MISSING_SOURCE_DESTINATION = (
+    f"{TAG_COPY_FOLDER}/{TAG_COPY_MISSING_SOURCE_LEAF}"
+)
+
+
+def tag_create_policy(
+    *, allowlist: tuple[str, ...] = TAG_CREATE_ALLOWLIST, audit_mode: str = "best_effort",
+    max_items: int | None = None,
+) -> dict[str, Any]:
+    """The policy the `tag_create` live cases run against.
+
+    `max_items` is the D10 deployment ceiling field: absent means the 20-target
+    project default, so a refusal that quotes 1 proves the document governs and not
+    a constant the handler happens to share with its siblings.
+    """
+    document = json.loads(json.dumps(POLICY))
+    document["allowlists"]["tag_create"] = list(allowlist)
+    document["auditMode"] = audit_mode
+    document["auditProfile"] = AUDIT_PROFILE_NAME
+    if max_items is not None:
+        document["tagCreateMaxItems"] = max_items
+    return document
+
+
+def tag_create_policy_json(**overrides: Any) -> str:
+    return json.dumps(tag_create_policy(**overrides), sort_keys=True, separators=(",", ":"))
+
+
+def tag_create_policy_sha256(**overrides: Any) -> str:
+    return hashlib.sha256(tag_create_policy_json(**overrides).encode("utf-8")).hexdigest()
+
+
+def tag_create_tag_document_bytes(**overrides: Any) -> bytes:
+    """Tag import document that updates the policy and its length companion."""
+    document = {"tags": policy_tags(tag_create_policy_json(**overrides))}
+    return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
+def tag_copy_policy(
+    *, allowlist: tuple[str, ...] = TAG_COPY_ALLOWLIST, audit_mode: str = "best_effort",
+    max_items: int | None = None,
+) -> dict[str, Any]:
+    """The policy the `tag_copy` live cases run against; `tag_copy` allowlists its
+    destination, never its source."""
+    document = json.loads(json.dumps(POLICY))
+    document["allowlists"]["tag_copy"] = list(allowlist)
+    document["auditMode"] = audit_mode
+    document["auditProfile"] = AUDIT_PROFILE_NAME
+    if max_items is not None:
+        document["tagCopyMaxItems"] = max_items
+    return document
+
+
+def tag_copy_policy_json(**overrides: Any) -> str:
+    return json.dumps(tag_copy_policy(**overrides), sort_keys=True, separators=(",", ":"))
+
+
+def tag_copy_policy_sha256(**overrides: Any) -> str:
+    return hashlib.sha256(tag_copy_policy_json(**overrides).encode("utf-8")).hexdigest()
+
+
+def tag_copy_tag_document_bytes(**overrides: Any) -> bytes:
+    """Tag import document that updates the policy and its length companion."""
+    document = {"tags": policy_tags(tag_copy_policy_json(**overrides))}
+    return json.dumps(document, separators=(",", ":")).encode("utf-8")
+
+
 def alarm_policy_byte_length(**overrides: Any) -> int:
     return len(alarm_policy_json(**overrides).encode("utf-8"))
 

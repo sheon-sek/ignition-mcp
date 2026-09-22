@@ -15,6 +15,12 @@ Mutation):
 * ``tag-update-no-policy`` / ``tag-update-setup`` / ``tag-update`` (milestone 4b)
   exercise the Tag config fingerprint and `tag_update` against the recorded Tag
   configuration the fake serves.
+* ``tag-create`` / ``tag-copy`` (milestone 4b, ticket #11) exercise the two Runtime Tag
+  CONFIG Mutations that write a node: the create/copy result, its collision, the leaf
+  rule, the allowlist and reserved-provider refusals and the D10 ceilings, against the
+  Tag state the fake models. They need no setup stage of their own because
+  ``tag-update-setup`` already seeds the fixture Tags, the audit profile and the policy
+  provider they run against, and each installs its own policy document.
 * ``summarize`` exercises the drift check and verdict.
 
 The rehearsal runs against ``tests/fixtures/recorded/gateway-8.3/phase4``. Those
@@ -70,6 +76,8 @@ MILESTONES = {
         (["policy-provision"], "policy-provision"),
         (["tag-update-setup"], "tag-update-setup"),
         (["tag-update"], "tag-update"),
+        (["tag-create"], "tag-create"),
+        (["tag-copy"], "tag-copy"),
     ],
 }
 FIXTURE_DIR = ROOT / "tests/fixtures/recorded/gateway-8.3/phase4"
@@ -177,6 +185,8 @@ def main(argv: list[str] | None = None) -> int:
             port=driver.EXPECTED_ORIGIN_PORT,
             alarm_root=ALARM_ROOT,
             tag_update_paths=tag_update_paths(),
+            tag_create_paths=driver.tag_create_paths(),
+            tag_copy_paths=driver.tag_copy_paths(),
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH

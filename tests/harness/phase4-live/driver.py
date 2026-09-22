@@ -28,6 +28,11 @@ Stages:
                        tag_update policy the ticket #10 cases run against.
     tag-update         Runtime MCP: verify the Tag config fingerprint and
                        `tag_update` on the configurator profile.
+    tag-create         Runtime MCP: verify `tag_create` on the configurator profile:
+                       the created node, its collision, its refusals and its ceilings.
+    tag-copy           Runtime MCP: verify `tag_copy`: the copied node, its occupied
+                       destination, the leaf rule, the source half and both ends of the
+                       reserved provider.
     summarize          Merge the stage records of one milestone, compare against
                        that milestone's expectations, and write `evidence.json`.
 
@@ -113,6 +118,7 @@ STAGE_SETS = {
     ),
     MILESTONE_4B: (
         "tag-update-no-policy", "tag-update-setup", "tag-update",
+        "tag-create", "tag-copy",
     ),
 }
 #: An optional stage record: the milestone's verdict does not need it, but it is
@@ -1749,6 +1755,840 @@ def stage_tag_update(config: Config) -> dict[str, Any]:
         "raw": raw,
     }
 
+# --------------------------------------------------------------------------- #
+# Stages: ticket #11 (`tag_create` and `tag_copy`)
+#
+# No `tag-create-setup`/`tag-copy-setup`: the probe project's `tag_fixture_probe`
+# Tool — which `tag-update-setup` already runs — seeds the `IgnitionMCP_CI` root and
+# its `IgnitionMCP_CI2` sibling, and every ticket #11 target is either a fresh path
+# under that root or one of those seeded Tags. The only state these two stages add
+# is the Runtime Target Policy document, and each installs its own through the same
+# `install_policy` primitive, so a second setup stage would provision nothing.
+# --------------------------------------------------------------------------- #
+
+#: The two D10 ceilings a create batch can cross with no native call at all. They
+#: belong to the shipped handler, and the stage quotes them back so a change to the
+#: documented budget shows up as drift rather than as a case that silently stopped
+#: testing anything.
+HARD_ITEM_CEILING = 100
+PATH_CEILING_BYTES = 2048
+
+
+def tag_create_paths() -> dict[str, str]:
+    """The `tag_create` targets of this run, keyed as the recorded bodies template them."""
+    return {
+        "createTarget": policy_document.TAG_CREATE_TARGET,
+        "batchTarget": policy_document.TAG_CREATE_BATCH_TARGET,
+        "existingTarget": policy_document.TAG_CREATE_EXISTING_TARGET,
+        "siblingTarget": policy_document.TAG_CREATE_SIBLING_TARGET,
+        "writeProbe": policy_document.WRITE_PROBE_PATH,
+        "udtTarget": policy_document.TAG_CREATE_UDT_TARGET,
+    }
+
+
+def tag_copy_paths() -> dict[str, str]:
+    """The `tag_copy` endpoint pairs of this run, keyed as the recorded bodies do."""
+    return {
+        "source": policy_document.TAG_COPY_SOURCE,
+        "destination": policy_document.TAG_COPY_DESTINATION,
+        "siblingSource": policy_document.TAG_COPY_SIBLING_SOURCE,
+        "siblingDestination": policy_document.TAG_COPY_SIBLING_DESTINATION,
+        "udtDestination": policy_document.TAG_COPY_UDT_DESTINATION,
+        "reservedSource": policy_document.TAG_COPY_RESERVED_SOURCE,
+        "reservedSourceDestination": policy_document.TAG_COPY_RESERVED_SOURCE_DESTINATION,
+        "reservedDestination": policy_document.TAG_COPY_RESERVED_DESTINATION,
+        "missingSource": policy_document.TAG_COPY_MISSING_SOURCE,
+        "missingSourceDestination": policy_document.TAG_COPY_MISSING_SOURCE_DESTINATION,
+    }
+
+
+def install_tag_create_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    audit_mode: str = "best_effort", max_items: int | None = None, deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    """Install the ticket #11 `tag_create` policy over the same reserved provider."""
+    return install_policy(
+        config, client,
+        document=policy_document.tag_create_tag_document_bytes(
+            allowlist=allowlist, audit_mode=audit_mode, max_items=max_items,
+        ),
+        expected_sha256=policy_document.tag_create_policy_sha256(
+            allowlist=allowlist, audit_mode=audit_mode, max_items=max_items,
+        ),
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def install_tag_copy_policy(
+    config: Config, client: mcp_client.McpClient, *, allowlist: tuple[str, ...],
+    audit_mode: str = "best_effort", max_items: int | None = None, deadline_seconds: float = 150.0,
+) -> dict[str, Any]:
+    """Install the ticket #11 `tag_copy` policy over the same reserved provider."""
+    return install_policy(
+        config, client,
+        document=policy_document.tag_copy_tag_document_bytes(
+            allowlist=allowlist, audit_mode=audit_mode, max_items=max_items,
+        ),
+        expected_sha256=policy_document.tag_copy_policy_sha256(
+            allowlist=allowlist, audit_mode=audit_mode, max_items=max_items,
+        ),
+        deadline_seconds=deadline_seconds,
+    )
+
+
+def install_and_require(
+    config: Config, client: mcp_client.McpClient, facts: dict[str, Any], tool: str,
+    key: str, *, allowlist: tuple[str, ...], raw: dict[str, Any],
+    max_items: int | None = None,
+) -> None:
+    """Install one policy state or fail closed: a refusal measured against a Policy
+    that never became served proves nothing about the rule it refuses for.
+    """
+    installers = {"create": install_tag_create_policy, "copy": install_tag_copy_policy}
+    installed = installers[tool](config, client, allowlist=allowlist, max_items=max_items)
+    raw[f"install{key}Policy"] = bounded(installed, 20_000)
+    facts[f"tag{key}PolicyInstalled"] = installed["ok"]
+    if not installed["ok"]:
+        raise StageFailure(
+            f"the running provider never served the tag_{tool} policy ({key}): "
+            f"{json.dumps(installed['attempts'][-1], sort_keys=True)[:800]}"
+        )
+
+
+def provider_export(config: Config) -> Any:
+    """The `default` provider's own export document."""
+    status, payload = gateway_rest.export_tags(config.base_url, config.api_token, "default")
+    return gateway_rest.decode(payload) if status == 200 else None
+
+
+def exported_node(config: Config, name: str) -> dict[str, Any] | None:
+    """One node of that export: the independent presence check.
+
+    A configuration read cannot answer "is this path there" — a Gateway answers a path
+    that is not there with a synthesized node (ticket #10 evidence) — so a create's
+    landing, and a refused Preflight's not landing, are both measured on the export.
+    """
+    return policy_document.find_tag(provider_export(config), name)
+
+
+def audited_rows(
+    config: Config, correlation: str, action: str,
+) -> tuple[int, list[dict[str, Any]]]:
+    """The Runtime audit rows one dispatched Mutation wrote, read back through REST."""
+    status, rows = gateway_rest.audit_rows(
+        config.base_url, config.api_token, config.audit_profile, action=action,
+    )
+    return status, [row for row in rows if correlation and correlation in str(row.get("actionValue", ""))]
+
+
+def stage_tag_create(config: Config) -> dict[str, Any]:
+    """The ticket #11 `tag_create` live cases: the create, the collision, the refusals."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_create_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+
+    # Case 0: the CONFIG Mutations of ticket #11 belong to the `configurator` profile,
+    # whose deployed inventory equals its contract exactly, and to no other profile.
+    inventory = sorted(client.tools_list())
+    expected_inventory = sorted(profile_tools("configurator"))
+    facts["tagCreateConfiguratorInventory"] = inventory
+    facts["tagCreateConfiguratorProfile"] = expected_inventory
+    facts["tagCreateConfiguratorInventoryMatchesProfile"] = inventory == expected_inventory
+    facts["tagCreateConfiguratorCarriesBothTools"] = (
+        "tag_create" in inventory and "tag_copy" in inventory
+    )
+    if not facts["tagCreateConfiguratorInventoryMatchesProfile"]:
+        raise StageFailure(
+            "the deployed configurator inventory does not equal contracts/profiles/configurator.yaml: "
+            f"{inventory} != {expected_inventory}"
+        )
+    operator = mcp_client.McpClient(config.operator_url, config.api_token)
+    raw["operatorInitialize"] = bounded(operator.initialize())
+    operator_inventory = sorted(operator.tools_list())
+    facts["tagCreateOperatorInventory"] = operator_inventory
+    facts["tagCreateOperatorInventoryExcludesBothTools"] = (
+        "tag_create" not in operator_inventory and "tag_copy" not in operator_inventory
+        and operator_inventory == sorted(profile_tools("operator"))
+    )
+    if not facts["tagCreateOperatorInventoryExcludesBothTools"]:
+        raise StageFailure(
+            f"the CONTROL profile must not serve a CONFIG Mutation: {operator_inventory}"
+        )
+
+    # Case 0b: the D10 input ceilings are measured over the request, so an over-budget
+    # batch is refused with its own reason even while a policy that would allow it (or
+    # refuse it) is the one being served.
+    overlong = expect_tool_error(client, "tag_create", {
+        "items": [{
+            "path": (
+                f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+                + policy_document.OVERLONG_PATH_LEAF
+            ),
+            "config": dict(policy_document.TAG_CREATE_CONFIG),
+        }],
+    })
+    raw["pathOverCeiling"] = bounded(overlong, 4_000)
+    overlong_details = overlong.get("details") or {}
+    facts["tagCreatePathOverCeilingCode"] = str(overlong.get("code", ""))
+    facts["tagCreatePathOverCeilingReason"] = str(overlong_details.get("reason", ""))
+    facts["tagCreatePathOverCeilingNamesTheCeiling"] = (
+        overlong_details.get("limit") == PATH_CEILING_BYTES
+        and int(overlong_details.get("requested") or 0) > PATH_CEILING_BYTES
+    )
+    if not facts["tagCreatePathOverCeilingNamesTheCeiling"]:
+        raise StageFailure(f"an over-budget path must name its ceiling: {json.dumps(overlong)[:600]}")
+    hard_batch = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["createTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}
+        ] * (HARD_ITEM_CEILING + 1),
+    })
+    raw["itemsOverHardCeiling"] = bounded(hard_batch, 4_000)
+    hard_details = hard_batch.get("details") or {}
+    facts["tagCreateHardItemCeilingCode"] = str(hard_batch.get("code", ""))
+    facts["tagCreateHardItemCeilingReason"] = str(hard_details.get("reason", ""))
+    facts["tagCreateHardItemCeilingIsRefused"] = (
+        facts["tagCreateHardItemCeilingCode"] == "limit_exceeded"
+        and facts["tagCreateHardItemCeilingReason"] == "itemsOverHardLimit"
+        and hard_details.get("limit") == HARD_ITEM_CEILING
+    )
+    if not facts["tagCreateHardItemCeilingIsRefused"]:
+        raise StageFailure(f"the item hard ceiling must be refused: {json.dumps(hard_batch)[:600]}")
+
+    install_and_require(
+        config, client, facts, "create", "Create",
+        allowlist=policy_document.TAG_CREATE_ALLOWLIST, raw=raw,
+    )
+
+    # Case 1: an allowlisted create. The node the Tool promises is the node an
+    # independent `tag_get_config` read and the provider's own export both show, and
+    # the Observed fingerprint is exactly that read's — the token the caller's next
+    # tag_update or tag_delete is meant to carry.
+    structured = expect_structured(client, "tag_create", {
+        "items": [{"path": paths["createTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["allowlistedCreate"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    observed = structured.get("observed") or [{}]
+    summary = structured.get("summary") or {}
+    facts["tagCreateStatus"] = str(items[0].get("status", ""))
+    facts["tagCreateNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagCreateSucceeded"] = summary.get("succeeded")
+    facts["tagCreateAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagCreateAuditRecorded"] = summary.get("auditRecorded")
+    after = tag_config(client, paths["createTarget"])
+    raw["tagGetConfigCreated"] = bounded(after, 20_000)
+    node = after["configuration"][0] if after["configuration"] else {}
+    facts["tagCreateIndependentReadShowsTheNode"] = (
+        node.get("documentation") == policy_document.TAG_CREATE_CONFIG["documentation"]
+        and node.get("dataType") == policy_document.TAG_CREATE_CONFIG["dataType"]
+        and node.get("name") == paths["createTarget"].rsplit("/", 1)[-1]
+    )
+    facts["tagCreateObservedFingerprintIsIndependentRead"] = bool(observed) and (
+        observed[0].get("fingerprint") == after["fingerprint"]
+    )
+    facts["tagCreateObservedFingerprintIsDerivable"] = bool(observed) and derived_fingerprint(
+        observed[0].get("configuration")
+    ) == observed[0].get("fingerprint")
+    facts["tagCreateIndependentReadIsDerivable"] = (
+        derived_fingerprint(after["configuration"]) == after["fingerprint"]
+    )
+    created = exported_node(config, "CreateTarget")
+    raw["createdExport"] = bounded(created, 2_000)
+    facts["tagCreateNodeVisibleInExport"] = created is not None
+    if not (
+        facts["tagCreateStatus"] == "executed"
+        and facts["tagCreateNativeOutcome"].startswith("Good")
+        and facts["tagCreateIndependentReadShowsTheNode"]
+        and facts["tagCreateNodeVisibleInExport"]
+    ):
+        raise StageFailure(f"the allowlisted create did not land: {json.dumps(structured)[:800]}")
+
+    # D18: the dispatched Mutation writes an attempt row and a result row, under the
+    # Service identity the Policy names — not the connection's user.
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = audited_rows(config, correlation, "ignition-mcp.tag_create")
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(rows, 20_000)}
+    facts["tagCreateAuditCorrelationIdPresent"] = bool(correlation)
+    facts["tagCreateAuditRowsForCorrelation"] = len(rows)
+    facts["tagCreateAuditAttemptAndResultRecorded"] = len(rows) >= 2
+    facts["tagCreateAuditActorIsServiceIdentity"] = bool(rows) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in rows
+    )
+    if not facts["tagCreateAuditAttemptAndResultRecorded"]:
+        raise StageFailure(f"the create wrote no audit pair for {correlation}: {audit_status}")
+
+    # Case 2: an existing target is conflict, and because every item is checked before
+    # any item executes, a batch that pairs it with a target that would have succeeded
+    # creates neither.
+    existing_before = tag_config(client, paths["existingTarget"])
+    collision = expect_tool_error(client, "tag_create", {
+        "items": [{"path": paths["existingTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["collision"] = bounded(collision)
+    collision_items = (collision.get("details") or {}).get("items") or [{}]
+    facts["tagCreateCollisionCode"] = str(collision.get("code", ""))
+    facts["tagCreateCollisionReason"] = str(collision_items[0].get("reason", ""))
+    facts["tagCreateCollisionIsConflict"] = (
+        facts["tagCreateCollisionCode"] == "conflict"
+        and facts["tagCreateCollisionReason"] == "targetExists"
+    )
+    facts["tagCreateCollisionAuditRecorded"] = (collision.get("details") or {}).get("auditRecorded")
+    unchanged = tag_config(client, paths["existingTarget"])
+    facts["tagCreateCollisionChangedNothing"] = (
+        unchanged["fingerprint"] == existing_before["fingerprint"]
+        and unchanged["configuration"] == existing_before["configuration"]
+    )
+    if not facts["tagCreateCollisionIsConflict"]:
+        raise StageFailure(f"an existing create target must be conflict: {json.dumps(collision)[:600]}")
+    if not facts["tagCreateCollisionChangedNothing"]:
+        raise StageFailure("a refused create collision changed the Tag that was already there")
+    collision_batch = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["batchTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+            {"path": paths["existingTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+        ],
+    })
+    raw["collisionBatch"] = bounded(collision_batch)
+    facts["tagCreateCollisionBatchListsOnlyTheCollision"] = (
+        (collision_batch.get("details") or {}).get("reason") == "preflightPreconditionFailed"
+        and len((collision_batch.get("details") or {}).get("items") or []) == 1
+    )
+    facts["tagCreateBatchTargetAbsentFromExport"] = exported_node(config, "CreateBatchTarget") is None
+    if not facts["tagCreateCollisionBatchListsOnlyTheCollision"]:
+        raise StageFailure(
+            f"a refused create batch is not a partial batch: {json.dumps(collision_batch)[:600]}"
+        )
+
+    # Case 3: the segment-boundary sibling is refused, and the refusal is audited as a
+    # denied Mutation before anything dispatches.
+    sibling = expect_tool_error(client, "tag_create", {
+        "items": [{"path": paths["siblingTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["siblingDenial"] = bounded(sibling)
+    sibling_items = (sibling.get("details") or {}).get("items") or [{}]
+    facts["tagCreateSiblingDenialCode"] = str(sibling.get("code", ""))
+    facts["tagCreateSiblingDenialReason"] = str(sibling_items[0].get("reason", ""))
+    facts["tagCreateSiblingDenialIsSegmentBoundary"] = (
+        facts["tagCreateSiblingDenialCode"] == "permission_denied"
+        and facts["tagCreateSiblingDenialReason"] == "targetNotAllowlisted"
+    )
+    facts["tagCreateSiblingDenialAuditRecorded"] = (sibling.get("details") or {}).get("auditRecorded")
+    if not facts["tagCreateSiblingDenialIsSegmentBoundary"]:
+        raise StageFailure(f"the segment-boundary sibling was not refused: {json.dumps(sibling)[:600]}")
+
+    # Case 3b: one refused item refuses the whole batch, so the allowed item keeps its
+    # absence — the no-rollback half of D30 3, measured on a create.
+    batch = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["batchTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+            {"path": paths["siblingTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+        ],
+    })
+    raw["preflightRefusal"] = bounded(batch)
+    batch_details = batch.get("details") or {}
+    batch_items = batch_details.get("items") or []
+    facts["tagCreatePreflightRefusalCode"] = str(batch.get("code", ""))
+    facts["tagCreatePreflightRefusalReason"] = str(batch_details.get("reason", ""))
+    facts["tagCreatePreflightRefusalItems"] = len(batch_items)
+    facts["tagCreatePreflightRefusalNamesOnlyTheRefusedEnd"] = bool(batch_items) and (
+        str(batch_items[0].get("path", "")) == paths["siblingTarget"]
+    )
+    # The batch's allowed item is the proof: a Preflight that executed part of the
+    # batch would have created it.
+    facts["tagCreatePreflightExecutedNothing"] = exported_node(config, "CreateBatchTarget") is None
+    if not facts["tagCreatePreflightExecutedNothing"]:
+        raise StageFailure("a refused create Preflight executed part of its batch")
+
+    # Case 4: D30 6. A definition target needs an entry that itself names `_types_`,
+    # so a plain Tag prefix does not reach it even though the path shares the prefix's
+    # provider, and a bare `*` does not reach it either.
+    udt = expect_tool_error(client, "tag_create", {
+        "items": [{"path": paths["udtTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["udtUnderPlainPrefix"] = bounded(udt)
+    udt_items = (udt.get("details") or {}).get("items") or [{}]
+    facts["tagCreateUdtDenialCode"] = str(udt.get("code", ""))
+    facts["tagCreateUdtDenialReason"] = str(udt_items[0].get("reason", ""))
+    facts["tagCreateUdtNeedsExplicitTypesEntry"] = (
+        facts["tagCreateUdtDenialCode"] == "permission_denied"
+        and facts["tagCreateUdtDenialReason"] == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagCreateUdtNeedsExplicitTypesEntry"]:
+        raise StageFailure(f"a UDT definition needs an explicit _types_ entry: {json.dumps(udt)[:600]}")
+
+    # Case 5: the D10 ceiling a deployment owns. Two items are inside the 20-target
+    # project default, so a batch of two is refused only once the document says one.
+    over = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["createTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}
+        ] * 21,
+    })
+    raw["overPolicyLimit"] = bounded(over)
+    over_details = over.get("details") or {}
+    facts["tagCreateOverPolicyLimitCode"] = str(over.get("code", ""))
+    facts["tagCreateOverPolicyLimitReason"] = str(over_details.get("reason", ""))
+    facts["tagCreateOverPolicyLimitIsRefused"] = (
+        facts["tagCreateOverPolicyLimitCode"] == "limit_exceeded"
+        and facts["tagCreateOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+    )
+    if not facts["tagCreateOverPolicyLimitIsRefused"]:
+        raise StageFailure(f"an over-budget batch must be refused: {json.dumps(over)[:600]}")
+    install_and_require(
+        config, client, facts, "create", "CreateCeiling",
+        allowlist=policy_document.TAG_CREATE_ALLOWLIST, raw=raw, max_items=1,
+    )
+    lowered = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["createTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+            {"path": paths["batchTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+        ],
+    })
+    raw["overPolicyCeiling"] = bounded(lowered)
+    lowered_details = lowered.get("details") or {}
+    facts["tagCreatePolicyCeilingIsHonoured"] = (
+        str(lowered.get("code", "")) == "limit_exceeded"
+        and str(lowered_details.get("reason", "")) == "itemsOverPolicyLimit"
+        and lowered_details.get("limit") == 1
+        and lowered_details.get("requested") == 2
+    )
+    if not facts["tagCreatePolicyCeilingIsHonoured"]:
+        raise StageFailure(
+            f"the deployment's item ceiling never reached the refusal: {json.dumps(lowered)[:600]}"
+        )
+
+    # Case 6: with an explicit `*` the reserved provider is still refused, and neither
+    # the probe Tag nor the policy document moves: the refusal is by provider, before
+    # the allowlist is consulted at all.
+    install_and_require(
+        config, client, facts, "create", "CreateWildcard",
+        allowlist=policy_document.WILDCARD_ALLOWLIST, raw=raw,
+    )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    reserved = expect_tool_error(client, "tag_create", {
+        "items": [{"path": paths["writeProbe"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["reservedProviderRefusal"] = bounded(reserved)
+    reserved_items = (reserved.get("details") or {}).get("items") or [{}]
+    facts["tagCreateReservedProviderCode"] = str(reserved.get("code", ""))
+    facts["tagCreateReservedProviderReason"] = str(reserved_items[0].get("reason", ""))
+    facts["tagCreateReservedProviderRefusedUnderWildcard"] = (
+        facts["tagCreateReservedProviderCode"] == "permission_denied"
+        and facts["tagCreateReservedProviderReason"] == "reservedProvider"
+    )
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagCreateReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagCreatePolicyDocumentUnclobbered"] = policy_before == policy_after
+    if not facts["tagCreateReservedProviderRefusedUnderWildcard"]:
+        raise StageFailure(f"the reserved provider was not refused: {json.dumps(reserved)[:600]}")
+    wildcard_udt = expect_tool_error(client, "tag_create", {
+        "items": [{"path": paths["udtTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)}],
+    })
+    raw["udtUnderWildcard"] = bounded(wildcard_udt)
+    wildcard_items = (wildcard_udt.get("details") or {}).get("items") or [{}]
+    facts["tagCreateBareWildcardDoesNotCoverUdt"] = (
+        str(wildcard_udt.get("code", "")) == "permission_denied"
+        and str(wildcard_items[0].get("reason", "")) == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagCreateBareWildcardDoesNotCoverUdt"]:
+        raise StageFailure(f"a bare * must not cover a UDT definition: {json.dumps(wildcard_udt)[:600]}")
+
+    # Case 7: the explicit `_types_` entry is honoured. A definition target that passes
+    # the allowlist stage would then have to be written for the entry to mean anything,
+    # so the case measures the allowlist decision alone and never creates one: a batch
+    # whose first item is that target and whose second is the segment-boundary sibling
+    # refuses wholly and lists only the sibling, where the same target alone was refused
+    # as a definition under a plain prefix (Case 4). What changed is the entry.
+    install_and_require(
+        config, client, facts, "create", "CreateTypes",
+        allowlist=policy_document.TAG_CREATE_TYPES_ALLOWLIST, raw=raw,
+    )
+    honoured = expect_tool_error(client, "tag_create", {
+        "items": [
+            {"path": paths["udtTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+            {"path": paths["siblingTarget"], "config": dict(policy_document.TAG_CREATE_CONFIG)},
+        ],
+    })
+    raw["udtUnderTypesEntry"] = bounded(honoured)
+    honoured_items = (honoured.get("details") or {}).get("items") or []
+    facts["tagCreateTypesEntryIsHonoured"] = (
+        str((honoured.get("details") or {}).get("reason", "")) == "preflightTargetRefused"
+        and len(honoured_items) == 1
+        and honoured_items[0].get("index") == 1
+        and str(honoured_items[0].get("reason", "")) == "targetNotAllowlisted"
+    )
+    if not facts["tagCreateTypesEntryIsHonoured"]:
+        raise StageFailure(
+            f"the explicit _types_ entry was not honoured: {json.dumps(honoured)[:600]}"
+        )
+    facts["tagCreateTypesPreflightExecutedNothing"] = (
+        exported_node(config, "CreateProbe") is None
+        and exported_node(config, "CreateBatchTarget") is None
+    )
+    if not facts["tagCreateTypesPreflightExecutedNothing"]:
+        raise StageFailure("a refused create Preflight executed part of its batch")
+    return {
+        "stage": "tag-create",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
+
+def stage_tag_copy(config: Config) -> dict[str, Any]:
+    """The ticket #11 `tag_copy` live cases: the copy, the refusals, both ends."""
+    raw: dict[str, Any] = {}
+    facts: dict[str, Any] = {}
+    paths = tag_copy_paths()
+    client = mcp_client.McpClient(config.configurator_url, config.api_token)
+    raw["initialize"] = bounded(client.initialize())
+
+    def item(source: str = "", destination: str = "") -> dict[str, str]:
+        return {
+            "sourcePath": source or paths["source"],
+            "destinationPath": destination or paths["destination"],
+        }
+
+    # Case 0: one `system.tag.copy` call lands each source under its own name, so a
+    # destination whose leaf differs would not be where the caller named it. That makes
+    # the leaf rule an input rule: it is refused with `preflightInputFailed` before the
+    # Policy is read, and a copy that renames is tag_rename's.
+    leaf = expect_tool_error(client, "tag_copy", {"items": [item(destination=f"{paths['destination']}Renamed")]})
+    raw["leafMismatch"] = bounded(leaf)
+    leaf_details = leaf.get("details") or {}
+    leaf_items = leaf_details.get("items") or [{}]
+    facts["tagCopyLeafMismatchCode"] = str(leaf.get("code", ""))
+    facts["tagCopyLeafMismatchDetailsReason"] = str(leaf_details.get("reason", ""))
+    facts["tagCopyLeafMismatchReason"] = str(leaf_items[0].get("reason", ""))
+    facts["tagCopyLeafMismatchNamesTheDestination"] = str(leaf_items[0].get("path", "")) == (
+        f"{paths['destination']}Renamed"
+    )
+    facts["tagCopyLeafRuleIsRefusedBeforeAnyRead"] = (
+        facts["tagCopyLeafMismatchCode"] == "invalid_argument"
+        and facts["tagCopyLeafMismatchDetailsReason"] == "preflightInputFailed"
+        and facts["tagCopyLeafMismatchReason"] == "destinationLeafDiffersFromSource"
+    )
+    if not facts["tagCopyLeafRuleIsRefusedBeforeAnyRead"]:
+        raise StageFailure(f"the destination leaf rule must be an input refusal: {json.dumps(leaf)[:600]}")
+    hard_batch = expect_tool_error(client, "tag_copy", {"items": [item()] * (HARD_ITEM_CEILING + 1)})
+    raw["itemsOverHardCeiling"] = bounded(hard_batch, 4_000)
+    hard_details = hard_batch.get("details") or {}
+    facts["tagCopyHardItemCeilingCode"] = str(hard_batch.get("code", ""))
+    facts["tagCopyHardItemCeilingReason"] = str(hard_details.get("reason", ""))
+    facts["tagCopyHardItemCeilingIsRefused"] = (
+        facts["tagCopyHardItemCeilingCode"] == "limit_exceeded"
+        and facts["tagCopyHardItemCeilingReason"] == "itemsOverHardLimit"
+        and hard_details.get("limit") == HARD_ITEM_CEILING
+        and hard_details.get("requested") == HARD_ITEM_CEILING + 1
+    )
+    if not facts["tagCopyHardItemCeilingIsRefused"]:
+        raise StageFailure(f"the copy item hard ceiling must be refused: {json.dumps(hard_batch)[:600]}")
+    # ...and the same ceiling on the other end: a copy bounds both its source path and
+    # its destination path, and the refusal quotes the end that crossed it.
+    overlong = expect_tool_error(client, "tag_copy", {
+        "items": [{
+            "sourcePath": paths["source"],
+            "destinationPath": (
+                f"[{policy_document.TAG_FIXTURE_PROVIDER}]{policy_document.TAG_FIXTURE_ROOT}/"
+                + policy_document.OVERLONG_PATH_LEAF
+            ),
+        }],
+    })
+    raw["pathOverCeiling"] = bounded(overlong, 4_000)
+    overlong_details = overlong.get("details") or {}
+    facts["tagCopyPathOverCeilingCode"] = str(overlong.get("code", ""))
+    facts["tagCopyPathOverCeilingReason"] = str(overlong_details.get("reason", ""))
+    facts["tagCopyPathOverCeilingNamesTheCeiling"] = (
+        overlong_details.get("limit") == PATH_CEILING_BYTES
+        and int(overlong_details.get("requested") or 0) > PATH_CEILING_BYTES
+    )
+    if not facts["tagCopyPathOverCeilingNamesTheCeiling"]:
+        raise StageFailure(f"an over-budget copy path must name its ceiling: {json.dumps(overlong)[:600]}")
+
+    install_and_require(
+        config, client, facts, "copy", "Copy", allowlist=policy_document.TAG_COPY_ALLOWLIST, raw=raw,
+    )
+
+    # Case 1: the positive copy. Both ends are read independently afterwards: the
+    # destination because it is the node this call created and the Observed state
+    # reports, and the source because a copy is not a move.
+
+    source_before = tag_config(client, paths["source"])
+    structured = expect_structured(client, "tag_copy", {"items": [item()]})
+    raw["allowlistedCopy"] = bounded(structured, 40_000)
+    items = structured.get("items") or [{}]
+    observed = structured.get("observed") or [{}]
+    summary = structured.get("summary") or {}
+    facts["tagCopyStatus"] = str(items[0].get("status", ""))
+    facts["tagCopyNativeOutcome"] = str((items[0].get("nativeOutcome") or {}).get("name", ""))
+    facts["tagCopySucceeded"] = summary.get("succeeded")
+    facts["tagCopyAuditMode"] = str(summary.get("auditMode", ""))
+    facts["tagCopyAuditRecorded"] = summary.get("auditRecorded")
+    facts["tagCopyItemCarriesBothEnds"] = (
+        items[0].get("sourcePath") == paths["source"]
+        and items[0].get("destinationPath") == paths["destination"]
+    )
+    after = tag_config(client, paths["destination"])
+    raw["tagGetConfigDestination"] = bounded(after, 20_000)
+    copied = after["configuration"][0] if after["configuration"] else {}
+    original = source_before["configuration"][0] if source_before["configuration"] else {}
+    facts["tagCopyIndependentReadShowsTheCopy"] = (
+        copied.get("name") == paths["destination"].rsplit("/", 1)[-1]
+        and copied.get("dataType") == original.get("dataType")
+        and copied.get("documentation") == original.get("documentation")
+    )
+    facts["tagCopyObservedFingerprintIsIndependentRead"] = bool(observed) and (
+        observed[0].get("fingerprint") == after["fingerprint"]
+    )
+    facts["tagCopyObservedFingerprintIsDerivable"] = bool(observed) and derived_fingerprint(
+        observed[0].get("configuration")
+    ) == observed[0].get("fingerprint")
+    source_after = tag_config(client, paths["source"])
+    facts["tagCopySourceUnchanged"] = (
+        source_after["fingerprint"] == source_before["fingerprint"]
+        and source_after["configuration"] == source_before["configuration"]
+    )
+    if not (
+        facts["tagCopyStatus"] == "executed"
+        and facts["tagCopyNativeOutcome"].startswith("Good")
+        and facts["tagCopyIndependentReadShowsTheCopy"]
+        and facts["tagCopySourceUnchanged"]
+    ):
+        raise StageFailure(f"the allowlisted copy did not land: {json.dumps(structured)[:800]}")
+
+    # D18: the dispatched copy writes its audit pair under its own action name.
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    audit_status, rows = audited_rows(config, correlation, "ignition-mcp.tag_copy")
+    raw["auditQuery"] = {"status": audit_status, "rows": bounded(rows, 20_000)}
+    facts["tagCopyAuditCorrelationIdPresent"] = bool(correlation)
+    facts["tagCopyAuditRowsForCorrelation"] = len(rows)
+    facts["tagCopyAuditAttemptAndResultRecorded"] = len(rows) >= 2
+    facts["tagCopyAuditActorIsServiceIdentity"] = bool(rows) and all(
+        str(row.get("actor", "")) == policy_document.SERVICE_IDENTITY for row in rows
+    )
+    if not facts["tagCopyAuditAttemptAndResultRecorded"]:
+        raise StageFailure(f"the copy wrote no audit pair for {correlation}: {audit_status}")
+
+    # Case 2: the destination the first copy built is now occupied, so the same call is
+    # conflict and leaves it exactly as it was. D30 2 gives a copy no Precondition
+    # token, so this occupancy pair is its concurrency rule.
+    occupied = expect_tool_error(client, "tag_copy", {"items": [item()]})
+    raw["occupiedDestination"] = bounded(occupied)
+    occupied_items = (occupied.get("details") or {}).get("items") or [{}]
+    facts["tagCopyOccupiedDestinationCode"] = str(occupied.get("code", ""))
+    facts["tagCopyOccupiedDestinationReason"] = str(occupied_items[0].get("reason", ""))
+    facts["tagCopyOccupiedDestinationNamesTheDestination"] = (
+        str(occupied_items[0].get("path", "")) == paths["destination"]
+    )
+    facts["tagCopyOccupiedDestinationIsConflict"] = (
+        facts["tagCopyOccupiedDestinationCode"] == "conflict"
+        and facts["tagCopyOccupiedDestinationReason"] == "destinationExists"
+    )
+    facts["tagCopyOccupiedDestinationAuditRecorded"] = (occupied.get("details") or {}).get("auditRecorded")
+    if not facts["tagCopyOccupiedDestinationIsConflict"]:
+        raise StageFailure(f"an occupied destination must be conflict: {json.dumps(occupied)[:600]}")
+    untouched = tag_config(client, paths["destination"])
+    facts["tagCopyOccupiedDestinationChangedNothing"] = (
+        untouched["fingerprint"] == after["fingerprint"]
+        and untouched["configuration"] == after["configuration"]
+    )
+    if not facts["tagCopyOccupiedDestinationChangedNothing"]:
+        raise StageFailure("a refused copy overwrote the destination")
+
+    # Case 3: the source half. A source that is not there is `not_found`, and the
+    # refusal names the source end; the destination it would have created stays absent.
+    missing = expect_tool_error(client, "tag_copy", {
+        "items": [item(paths["missingSource"], paths["missingSourceDestination"])],
+    })
+    raw["sourceMissing"] = bounded(missing)
+    missing_items = (missing.get("details") or {}).get("items") or [{}]
+    facts["tagCopySourceMissingCode"] = str(missing.get("code", ""))
+    facts["tagCopySourceMissingReason"] = str(missing_items[0].get("reason", ""))
+    facts["tagCopySourceMissingNamesTheSource"] = str(missing_items[0].get("path", "")) == paths["missingSource"]
+    facts["tagCopySourceMissingIsNotFound"] = (
+        facts["tagCopySourceMissingCode"] == "not_found"
+        and facts["tagCopySourceMissingReason"] == "sourceMissing"
+    )
+    if not facts["tagCopySourceMissingIsNotFound"]:
+        raise StageFailure(f"a missing source must be not_found: {json.dumps(missing)[:600]}")
+
+    # Case 4: the destination alone is measured against the Target allowlist. The
+    # segment-boundary sibling destination is refused and stays absent, while the same
+    # Tag as a *source* is answered by the endpoint stage instead of the allowlist one.
+    sibling = expect_tool_error(client, "tag_copy", {"items": [item(destination=paths["siblingDestination"])]})
+    raw["siblingDenial"] = bounded(sibling)
+    sibling_items = (sibling.get("details") or {}).get("items") or [{}]
+    facts["tagCopySiblingDenialCode"] = str(sibling.get("code", ""))
+    facts["tagCopySiblingDenialReason"] = str(sibling_items[0].get("reason", ""))
+    facts["tagCopySiblingDenialNamesTheDestination"] = (
+        str(sibling_items[0].get("path", "")) == paths["siblingDestination"]
+    )
+    facts["tagCopySiblingDenialIsSegmentBoundary"] = (
+        facts["tagCopySiblingDenialCode"] == "permission_denied"
+        and facts["tagCopySiblingDenialReason"] == "targetNotAllowlisted"
+    )
+    facts["tagCopySiblingDenialAuditRecorded"] = (sibling.get("details") or {}).get("auditRecorded")
+    if not facts["tagCopySiblingDenialIsSegmentBoundary"]:
+        raise StageFailure(f"the destination segment boundary was not refused: {json.dumps(sibling)[:600]}")
+    exempt = expect_tool_error(client, "tag_copy", {"items": [item(paths["siblingSource"], paths["destination"])]})
+    raw["sourceExemption"] = bounded(exempt)
+    exempt_items = (exempt.get("details") or {}).get("items") or [{}]
+    facts["tagCopySourceIsExemptFromAllowlist"] = (
+        str(exempt.get("code", "")) == "conflict"
+        and str(exempt_items[0].get("reason", "")) == "destinationExists"
+    )
+    if not facts["tagCopySourceIsExemptFromAllowlist"]:
+        raise StageFailure(f"the source must not be measured by the allowlist: {json.dumps(exempt)[:600]}")
+
+    # Case 5: D30 6 on the destination, under a plain Tag prefix and under a bare `*`.
+    udt = expect_tool_error(client, "tag_copy", {"items": [item(destination=paths["udtDestination"])]})
+    raw["udtUnderPlainPrefix"] = bounded(udt)
+    udt_items = (udt.get("details") or {}).get("items") or [{}]
+    facts["tagCopyUdtDenialCode"] = str(udt.get("code", ""))
+    facts["tagCopyUdtDenialReason"] = str(udt_items[0].get("reason", ""))
+    facts["tagCopyUdtNeedsExplicitTypesEntry"] = (
+        facts["tagCopyUdtDenialCode"] == "permission_denied"
+        and facts["tagCopyUdtDenialReason"] == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagCopyUdtNeedsExplicitTypesEntry"]:
+        raise StageFailure(f"a UDT destination needs an explicit _types_ entry: {json.dumps(udt)[:600]}")
+
+    # Case 6: D10's item ceiling, twice: the project default that refuses twenty-one
+    # items, and the deployment's own number, which refuses two.
+    over = expect_tool_error(client, "tag_copy", {"items": [item()] * 21})
+    raw["overPolicyLimit"] = bounded(over)
+    over_details = over.get("details") or {}
+    facts["tagCopyOverPolicyLimitCode"] = str(over.get("code", ""))
+    facts["tagCopyOverPolicyLimitReason"] = str(over_details.get("reason", ""))
+    facts["tagCopyOverPolicyLimitIsRefused"] = (
+        facts["tagCopyOverPolicyLimitCode"] == "limit_exceeded"
+        and facts["tagCopyOverPolicyLimitReason"] == "itemsOverPolicyLimit"
+        and over_details.get("limit") == 20
+    )
+    if not facts["tagCopyOverPolicyLimitIsRefused"]:
+        raise StageFailure(f"an over-budget copy batch must be refused: {json.dumps(over)[:600]}")
+    install_and_require(
+        config, client, facts, "copy", "CopyCeiling",
+        allowlist=policy_document.TAG_COPY_ALLOWLIST, raw=raw, max_items=1,
+    )
+    lowered = expect_tool_error(client, "tag_copy", {"items": [item(), item()]})
+    raw["overPolicyCeiling"] = bounded(lowered)
+    lowered_details = lowered.get("details") or {}
+    facts["tagCopyPolicyCeilingIsHonoured"] = (
+        str(lowered.get("code", "")) == "limit_exceeded"
+        and str(lowered_details.get("reason", "")) == "itemsOverPolicyLimit"
+        and lowered_details.get("limit") == 1
+        and lowered_details.get("requested") == 2
+    )
+    if not facts["tagCopyPolicyCeilingIsHonoured"]:
+        raise StageFailure(
+            f"the deployment's copy ceiling never reached the refusal: {json.dumps(lowered)[:600]}"
+        )
+
+    # Case 7: the reserved provider bounds both ends under an explicit `*`, before any
+    # read — so a source that is not there still answers with the provider reason,
+    # which is what makes it a provider rule rather than an access rule. The policy
+    # document and the probe Tag do not move.
+    install_and_require(
+        config, client, facts, "copy", "CopyWildcard",
+        allowlist=policy_document.WILDCARD_ALLOWLIST, raw=raw,
+    )
+    probe_before = read_tag_value(client, config.write_probe_path).get("value")
+    policy_before = read_tag_value(client, config.policy_path).get("value")
+    reserved_source = expect_tool_error(client, "tag_copy", {
+        "items": [item(paths["reservedSource"], paths["reservedSourceDestination"])],
+    })
+    raw["reservedSourceRefusal"] = bounded(reserved_source)
+    source_refused = (reserved_source.get("details") or {}).get("items") or [{}]
+    facts["tagCopyReservedSourceCode"] = str(reserved_source.get("code", ""))
+    facts["tagCopyReservedSourceReason"] = str(source_refused[0].get("reason", ""))
+    facts["tagCopyReservedSourceRefusedUnderWildcard"] = (
+        facts["tagCopyReservedSourceCode"] == "permission_denied"
+        and facts["tagCopyReservedSourceReason"] == "reservedProvider"
+        and str(source_refused[0].get("path", "")) == paths["reservedSource"]
+    )
+    reserved_destination = expect_tool_error(client, "tag_copy", {
+        "items": [item(destination=paths["reservedDestination"])],
+    })
+    raw["reservedDestinationRefusal"] = bounded(reserved_destination)
+    destination_refused = (reserved_destination.get("details") or {}).get("items") or [{}]
+    facts["tagCopyReservedDestinationCode"] = str(reserved_destination.get("code", ""))
+    facts["tagCopyReservedDestinationReason"] = str(destination_refused[0].get("reason", ""))
+    facts["tagCopyReservedDestinationRefusedUnderWildcard"] = (
+        facts["tagCopyReservedDestinationCode"] == "permission_denied"
+        and facts["tagCopyReservedDestinationReason"] == "reservedProvider"
+        and str(destination_refused[0].get("path", "")) == paths["reservedDestination"]
+    )
+    probe_after = read_tag_value(client, config.write_probe_path).get("value")
+    policy_after = read_tag_value(client, config.policy_path).get("value")
+    facts["tagCopyReservedProviderValueUnchanged"] = probe_before == probe_after
+    facts["tagCopyPolicyDocumentUnclobbered"] = policy_before == policy_after
+    if not (
+        facts["tagCopyReservedSourceRefusedUnderWildcard"]
+        and facts["tagCopyReservedDestinationRefusedUnderWildcard"]
+    ):
+        raise StageFailure(
+            f"the reserved provider was not refused at one end: {json.dumps(reserved_source)[:300]} "
+            f"{json.dumps(reserved_destination)[:300]}"
+        )
+    wildcard_udt = expect_tool_error(client, "tag_copy", {"items": [item(destination=paths["udtDestination"])]})
+    raw["udtUnderWildcard"] = bounded(wildcard_udt)
+    wildcard_items = (wildcard_udt.get("details") or {}).get("items") or [{}]
+    facts["tagCopyBareWildcardDoesNotCoverUdt"] = (
+        str(wildcard_udt.get("code", "")) == "permission_denied"
+        and str(wildcard_items[0].get("reason", "")) == "udtDefinitionNotAllowlisted"
+    )
+    if not facts["tagCopyBareWildcardDoesNotCoverUdt"]:
+        raise StageFailure(f"a bare * must not cover a UDT destination: {json.dumps(wildcard_udt)[:600]}")
+
+    # Case 8: the explicit `_types_` entry is honoured. A destination inside the
+    # definition namespace would now have to be written for the entry to mean anything,
+    # and a copy never writes a definition folder on a disposable Gateway, so the case
+    # measures the allowlist stage alone: a batch whose first item is that destination
+    # and whose second is the segment-boundary sibling refuses wholly and lists only
+    # the sibling. Under a plain prefix the same batch lists both ends (Case 5 asked
+    # the first one alone), so the entry is what changed.
+    install_and_require(
+        config, client, facts, "copy", "CopyTypes",
+        allowlist=policy_document.TAG_COPY_TYPES_ALLOWLIST, raw=raw,
+    )
+    honoured = expect_tool_error(client, "tag_copy", {
+        "items": [item(destination=paths["udtDestination"]), item(destination=paths["siblingDestination"])],
+    })
+    raw["udtUnderTypesEntry"] = bounded(honoured)
+    honoured_items = (honoured.get("details") or {}).get("items") or []
+    facts["tagCopyTypesEntryIsHonoured"] = (
+        str((honoured.get("details") or {}).get("reason", "")) == "preflightTargetRefused"
+        and len(honoured_items) == 1
+        and honoured_items[0].get("index") == 1
+        and str(honoured_items[0].get("reason", "")) == "targetNotAllowlisted"
+    )
+    if not facts["tagCopyTypesEntryIsHonoured"]:
+        raise StageFailure(f"the explicit _types_ entry was not honoured: {json.dumps(honoured)[:600]}")
+    # Nothing dispatched, so neither the definition probe folder nor the missing
+    # source's destination exists anywhere the provider can show.
+    exported = provider_export(config)
+    facts["tagCopyPreflightExecutedNothing"] = (
+        policy_document.find_tag(exported, policy_document.TAG_COPY_PROBE_FOLDER) is None
+        and policy_document.find_tag(exported, "MissingSource") is None
+        and policy_document.find_tag(exported, "ReservedSource") is None
+    )
+    if not facts["tagCopyPreflightExecutedNothing"]:
+        raise StageFailure("a refused copy Preflight executed part of its batch")
+    return {
+        "stage": "tag-copy",
+        "ok": True,
+        "identity": identity(config),
+        "guard": config.guard,
+        "facts": facts,
+        "raw": raw,
+    }
+
 
 # --------------------------------------------------------------------------- #
 # Stages: ticket #8 (`alarm_shelve` and `alarm_unshelve`)
@@ -1997,7 +2837,6 @@ def load_milestone_stages(config: Config) -> list[dict[str, Any]]:
                 raise
     return stages
 
-
 def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
     """The milestone's own verdict shape over the merged facts."""
     if config.stages == MILESTONE_4B:
@@ -2065,6 +2904,139 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
                 "noPolicy": {
                     "code": facts.get("tagUpdateNoPolicyErrorCode"),
                     "reason": facts.get("tagUpdateNoPolicyReason"),
+                },
+            },
+            # Ticket #11: the two CONFIG Mutations that write a node rather than merge
+            # into one. Each reports its own dispatch, collision, allowlist, ceiling and
+            # reserved-provider answers, because the rules they fix are different: a
+            # create has no Precondition token and an occupied target is its collision,
+            # and a copy measures only its destination against the allowlist while the
+            # reserved provider bounds both of its ends.
+            "runtimeTagConfigMutations": {
+                "tagCreate": {
+                    "configuratorCarriesBothTools": facts.get(
+                        "tagCreateConfiguratorCarriesBothTools"
+                    ),
+                    "operatorExcludesBothTools": facts.get(
+                        "tagCreateOperatorInventoryExcludesBothTools"
+                    ),
+                    "allowlisted": {
+                        "status": facts.get("tagCreateStatus"),
+                        "nativeOutcome": facts.get("tagCreateNativeOutcome"),
+                        "independentReadShowsTheNode": facts.get(
+                            "tagCreateIndependentReadShowsTheNode"
+                        ),
+                        "observedIsIndependentRead": facts.get(
+                            "tagCreateObservedFingerprintIsIndependentRead"
+                        ),
+                        "visibleInExport": facts.get("tagCreateNodeVisibleInExport"),
+                    },
+                    "existingTarget": {
+                        "code": facts.get("tagCreateCollisionCode"),
+                        "reason": facts.get("tagCreateCollisionReason"),
+                        "changedNothing": facts.get("tagCreateCollisionChangedNothing"),
+                        "auditRecorded": facts.get("tagCreateCollisionAuditRecorded"),
+                    },
+                    "targetAllowlist": {
+                        "siblingRefusedAtSegmentBoundary": facts.get(
+                            "tagCreateSiblingDenialIsSegmentBoundary"
+                        ),
+                        "preflightRefusalCode": facts.get("tagCreatePreflightRefusalCode"),
+                        "preflightExecutedNothing": facts.get("tagCreatePreflightExecutedNothing"),
+                    },
+                    "udtDefinitions": {
+                        "refusedUnderPlainPrefix": facts.get("tagCreateUdtNeedsExplicitTypesEntry"),
+                        "refusedUnderBareWildcard": facts.get("tagCreateBareWildcardDoesNotCoverUdt"),
+                        "explicitTypesEntryHonoured": facts.get("tagCreateTypesEntryIsHonoured"),
+                        "preflightExecutedNothing": facts.get(
+                            "tagCreateTypesPreflightExecutedNothing"
+                        ),
+                    },
+                    "reservedProvider": {
+                        "refusedUnderExplicitWildcard": facts.get(
+                            "tagCreateReservedProviderRefusedUnderWildcard"
+                        ),
+                        "targetValueUnchanged": facts.get("tagCreateReservedProviderValueUnchanged"),
+                        "policyDocumentUnclobbered": facts.get(
+                            "tagCreatePolicyDocumentUnclobbered"
+                        ),
+                    },
+                    "inputBounds": {
+                        "pathOverCeiling": facts.get("tagCreatePathOverCeilingReason"),
+                        "hardItemCeiling": facts.get("tagCreateHardItemCeilingReason"),
+                        "overPolicyLimit": facts.get("tagCreateOverPolicyLimitReason"),
+                        "deploymentCeilingHonoured": facts.get(
+                            "tagCreatePolicyCeilingIsHonoured"
+                        ),
+                    },
+                    "audit": {
+                        "mode": facts.get("tagCreateAuditMode"),
+                        "recorded": facts.get("tagCreateAuditRecorded"),
+                        "rowsForCorrelation": facts.get("tagCreateAuditRowsForCorrelation"),
+                        "actorIsServiceIdentity": facts.get("tagCreateAuditActorIsServiceIdentity"),
+                    },
+                },
+                "tagCopy": {
+                    "allowlisted": {
+                        "status": facts.get("tagCopyStatus"),
+                        "nativeOutcome": facts.get("tagCopyNativeOutcome"),
+                        "independentReadShowsTheCopy": facts.get(
+                            "tagCopyIndependentReadShowsTheCopy"
+                        ),
+                        "observedIsIndependentRead": facts.get(
+                            "tagCopyObservedFingerprintIsIndependentRead"
+                        ),
+                        "sourceUnchanged": facts.get("tagCopySourceUnchanged"),
+                    },
+                    "occupiedDestination": {
+                        "code": facts.get("tagCopyOccupiedDestinationCode"),
+                        "reason": facts.get("tagCopyOccupiedDestinationReason"),
+                        "changedNothing": facts.get("tagCopyOccupiedDestinationChangedNothing"),
+                        "auditRecorded": facts.get("tagCopyOccupiedDestinationAuditRecorded"),
+                    },
+                    "destinationLeafRule": {
+                        "code": facts.get("tagCopyLeafMismatchCode"),
+                        "reason": facts.get("tagCopyLeafMismatchReason"),
+                    },
+                    "source": {
+                        "missingCode": facts.get("tagCopySourceMissingCode"),
+                        "missingReason": facts.get("tagCopySourceMissingReason"),
+                        "exemptFromAllowlist": facts.get("tagCopySourceIsExemptFromAllowlist"),
+                    },
+                    "targetAllowlist": {
+                        "siblingRefusedAtSegmentBoundary": facts.get(
+                            "tagCopySiblingDenialIsSegmentBoundary"
+                        ),
+                        "preflightExecutedNothing": facts.get("tagCopyPreflightExecutedNothing"),
+                    },
+                    "udtDefinitions": {
+                        "refusedUnderPlainPrefix": facts.get("tagCopyUdtNeedsExplicitTypesEntry"),
+                        "refusedUnderBareWildcard": facts.get("tagCopyBareWildcardDoesNotCoverUdt"),
+                        "explicitTypesEntryHonoured": facts.get("tagCopyTypesEntryIsHonoured"),
+                    },
+                    "reservedProvider": {
+                        "sourceRefusedUnderExplicitWildcard": facts.get(
+                            "tagCopyReservedSourceRefusedUnderWildcard"
+                        ),
+                        "destinationRefusedUnderExplicitWildcard": facts.get(
+                            "tagCopyReservedDestinationRefusedUnderWildcard"
+                        ),
+                        "targetValueUnchanged": facts.get("tagCopyReservedProviderValueUnchanged"),
+                        "policyDocumentUnclobbered": facts.get(
+                            "tagCopyPolicyDocumentUnclobbered"
+                        ),
+                    },
+                    "inputBounds": {
+                        "hardItemCeiling": facts.get("tagCopyHardItemCeilingReason"),
+                        "overPolicyLimit": facts.get("tagCopyOverPolicyLimitReason"),
+                        "deploymentCeilingHonoured": facts.get("tagCopyPolicyCeilingIsHonoured"),
+                    },
+                    "audit": {
+                        "mode": facts.get("tagCopyAuditMode"),
+                        "recorded": facts.get("tagCopyAuditRecorded"),
+                        "rowsForCorrelation": facts.get("tagCopyAuditRowsForCorrelation"),
+                        "actorIsServiceIdentity": facts.get("tagCopyAuditActorIsServiceIdentity"),
+                    },
                 },
             },
         }
@@ -2167,13 +3139,16 @@ def summarize_verdict(config: Config, facts: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-EVIDENCE_TICKETS = {MILESTONE_4A: ["#6", "#7", "#8"], MILESTONE_4B: ["#10"]}
+EVIDENCE_TICKETS = {MILESTONE_4A: ["#6", "#7", "#8"], MILESTONE_4B: ["#10", "#11"]}
 EVIDENCE_TITLES = {
     MILESTONE_4A: (
         "Characterize the Runtime Target Policy and the exact-path alarm query bound, "
         "and verify tag_write, alarm_shelve and alarm_unshelve live"
     ),
-    MILESTONE_4B: "Verify the Tag config fingerprint and tag_update (milestone 4b) live",
+    MILESTONE_4B: (
+        "Verify the Tag config fingerprint, tag_update, tag_create and tag_copy "
+        "(milestone 4b) live"
+    ),
 }
 
 
@@ -2226,7 +3201,8 @@ def build_config(argv: list[str]) -> Config:
         choices=[
             "tag-write-no-policy", "policy-provision", "policy-read", "alarm",
             "tag-write-setup", "tag-write", "alarm-no-policy", "alarm-shelve",
-            "tag-update-no-policy", "tag-update-setup", "tag-update", "summarize",
+            "tag-update-no-policy", "tag-update-setup", "tag-update",
+            "tag-create", "tag-copy", "summarize",
         ],
     )
     parser.add_argument("--base-url", default=os.environ.get("P4_BASE_URL", "http://127.0.0.1:8093"))
@@ -2351,6 +3327,14 @@ def main(argv: list[str] | None = None) -> int:
         elif stage == "tag-update":
             record = stage_tag_update(config)
             write_stage(config, "tag-update", record)
+            code = EXIT_OK
+        elif stage == "tag-create":
+            record = stage_tag_create(config)
+            write_stage(config, "tag-create", record)
+            code = EXIT_OK
+        elif stage == "tag-copy":
+            record = stage_tag_copy(config)
+            write_stage(config, "tag-copy", record)
             code = EXIT_OK
         else:
             record, code = stage_summarize(config)

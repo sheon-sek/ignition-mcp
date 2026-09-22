@@ -545,6 +545,72 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
+### Ticket #11 — Runtime `tag_create` and `tag_copy` (milestone 4b)
+
+- **Neither Tool takes a Precondition token, so D11's collision rule is their concurrency rule.**
+  D30 §2 gives a create and a copy nothing for the caller to hand back: a create's target must not
+  exist, and neither must a copy's destination. Each Preflight therefore proves absence with
+  `system.tag.exists` and refuses an occupied target as `conflict` — `details.items[].reason` is
+  `targetExists` for `tag_create` and `destinationExists` for `tag_copy` — before any item
+  executes, and the handler fixes `collisionPolicy=Abort` (D11's rule for both) so a target that
+  appears in the race window aborts that item instead of being replaced. `tag_create` has no
+  `neverCreatesTarget` rule the way `tag_update` has one; its rule is that it never overwrites.
+- **`tag_copy` checks its destination only, plus the reserved provider at both ends.** D30 §6
+  measures the destination against the `tag_copy` allowlist, including D30 §6's explicit
+  `_types_` rule; the source is exempt from the allowlist but must exist (`not_found`,
+  `sourceMissing`) and be readable (`system.tag.getConfiguration`, `upstream_error` with
+  `sourceReadFailed` or `sourceConfigurationUnavailable`). Owner ruling 1 covers both ends: a
+  source or a destination inside `IgnitionMCPPolicy` is refused with `permission_denied`
+  (`reservedProvider`) before any read, under an explicit `*` as well as under a prefix, because a
+  copy into the provider would create a node there and a copy out of it would publish the policy
+  document elsewhere.
+- **A copy destination must keep the source's leaf name.** `system.tag.copy(paths, destination,
+  collisionPolicy)` copies a path list into one destination folder, under each source's own name
+  (the 8.3 scripting reference — "All specified tags will be copied to the same destination" — and
+  the behavior the live row records), so a destination whose leaf differs would not land where the
+  caller named it. That is `invalid_argument` (`destinationLeafDiffersFromSource`) before any
+  native call. The handler sends the destination's *parent* folder as the native destination with
+  the source as a one-element path list, one call per item, so the copy lands exactly on the path
+  the caller named and its single QualityCode is that item's outcome. A copy that renames stays
+  `tag_rename`'s, which checks the new path against its own Target.
+- **`tag_create` refuses the configuration keys `tag_update` refuses**, for the same class
+  reasons: `value` (a Tag value write is `tag_write`'s CONTROL operation), `tags` (a child is its
+  own target and is created as its own item) and a `name` that is not the target path's own leaf
+  (a new name is `tag_rename`'s). Each is `invalid_argument` with its own `details.items[].reason`,
+  reported with every other item-shape refusal in one batch.
+- **Fixture-first coverage.** 98 recorded-Jython fixtures and 102 tests —
+  `tooling/native/jython_runner/tests/test_tag_create.py` (48 fixtures) and `test_tag_copy.py` (50
+  fixtures) — covering, for both Tools: the ordered call sequence (the negative half of every rule
+  is asserted from the recording, so "nothing dispatched" is proven rather than described); the
+  absence check answering true/false/raising/answering a non-boolean; the policy gate (missing,
+  oversize, length mismatch, malformed `auditMode`, explicit-null `auditProfile`, a broken own-key
+  entry, a document that names the Tool no allowlist at all, and an item ceiling outside D10's
+  hard cap); the Target allowlist at a segment boundary and the whole-batch Preflight refusal; the
+  reserved provider under an explicit `*`; the D30 §6 `_types_` rule in all three shapes; the
+  `best_effort`/`required`/`off` audit modes with decision rows for denials, including a
+  `required` mode that refuses the call when its row cannot be written; a dispatch that raises
+  (the item is `outcome_unknown` and later items are `not_executed`) and one that answers an
+  unattributable QualityCode; a failed, empty or over-budget Observed read; and every D10 ceiling
+  (item default and hard maximum, path bytes, per-configuration string/array/depth/byte budgets,
+  the aggregate request budget). `tag_copy` adds the occupied destination, the missing source, a
+  source that cannot be read, the leaf rule and the reserved provider at the source end; the
+  `jython_launcher.py` gained the `system.tag.copy` recording, so the copy call's arguments
+  (source list, destination folder, `Abort`) are asserted exactly.
+- **Contracts, schemas, profiles and inventories.** `contracts/tools/runtime/tag_create.contract.json`
+  and `tag_copy.contract.json` (CONFIG, not destructive, FAST, 1..100 targets, `preconditionToken.kind
+  = "none"` with the D11 collision rule, the fixed `Abort` collision policy, the reserved-provider
+  rule, the `_types_` rule, the source's readability rule, the input bounds and the Observed-state
+  rule), `contracts/schemas/tag-create.output.schema.json` and `tag-copy.output.schema.json` (the
+  copy's items name `sourcePath` and `destinationPath`), `tagCreateMaxItems` and
+  `tagCopyMaxItems` added to `contracts/shared/runtime-target-policy.schema.json`, both Tools in
+  the `configurator` and `full` profiles (`readonly` and `operator` unchanged), and
+  `tooling/contracts/lint.py`'s CONFIG inventory extended with a per-Tool `targetKind` so the
+  linter checks a no-token contract for what D30 §2 requires instead of for a fingerprint: no
+  `items[].expectedFingerprint`, an explained absent token, the D11 collision rule, and — for a
+  copy — no configuration at all and a declared source rule. `BUNDLE_VERSION` goes 0.5.0 → 0.6.0
+  (D21 MINOR), and both Phase 4 Server Configs carry the new version.
+- **Live.** PENDING — recorded after the lane's push (workflow `Phase 4 Live Gateway G4b`).
+
 ### Ticket #16 — REST `project_import` (milestone 4c)
 
 - Fixture-first coverage: the recorded Gateway now models the Project import the way it
@@ -1156,6 +1222,47 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
+  `tag_copy` no name of its own and D30 §6 checks only the destination, but the native call
+  (`system.tag.copy(paths, destination, collisionPolicy)`) copies a path list into one destination
+  *folder* under each source's own name, so the Tool cannot express a copy that renames in one
+  call. Handing the caller a destination whose leaf differs would either refuse nothing and land
+  the copy somewhere the caller did not name, or need a second native mutation
+  (copy-then-rename) whose intermediate state sits at a path the caller never asked for. The
+  shipped rule is the fail-closed one: the destination's leaf must equal the source's
+  (`invalid_argument`, `destinationLeafDiffersFromSource`), and a renaming copy is `tag_copy`
+  followed by `tag_rename`, which checks its new path against its own Target. **For the owner:**
+  confirm, or amend D11 to give `tag_copy` an explicit new-name parameter.
+- **Ticket #11 — `tag_create` refuses three configuration keys beyond D30's text.** D30 §6 says
+  nothing about which properties a Tag CONFIG Mutation may write, so a create refuses, with
+  `invalid_argument`, the three keys that would leave its class or its target: `value` (a Tag
+  value write is `tag_write`'s CONTROL operation, and a CONFIG Tool must not be able to do what a
+  CONTROL Tool does), `tags` (a child is its own target, created as its own item, so nested
+  creation stays `tag_config_import`'s bulk path) and a `name` that differs from the target's own
+  leaf (a new name is `tag_rename`'s). This is the same rule set the ticket #10 question above
+  records for `tag_update`. **For the owner:** confirm both, or name the keys a CONFIG create
+  should allow.
+- **Ticket #11 — the copy's native destination is a folder, and that is the one fact the live row
+  checks rather than proves from a decision.** The Ignition 8.3 scripting reference describes
+  `system.tag.copy(tags, destination, [collisionPolicy])` as copying "from one folder to another"
+  with "all specified tags … copied to the same destination", i.e. the destination is the target
+  folder and each source keeps its own name; no local Gateway is reachable from the workstation to
+  observe it, and the destination's leaf rule above makes the two readings agree for every request
+  the Tool accepts. The live stage therefore places the copy and re-reads the destination it named
+  — that read is what would fail if the Gateway treated the destination as the new full path. The
+  handler also sends the collision policy as the enum name `Abort`, which is D30 §4's vocabulary
+  and the spelling ticket #10's live run proved for `system.tag.configure`; the copy reference
+  documents the short form `a`, so the live row is what confirms the same function family accepts
+  the enum name (a rejection is a Bad QualityCode, never an overwrite, because the policy is what
+  forbids one).
+  **For the owner:** nothing to decide; recorded because the reference's move example reads as if
+  the destination renames the item, and this repo's evidence is the first live observation.
+- **Ticket #11 — the copy input budget counts both of an item's paths.** D10's aggregate request
+  budget for `tag_copy` sums each item's source and destination (2048 bytes per path, 65536 bytes
+  for the batch), because both are caller input and the source is the longer of the two in
+  practice. The per-item `pathOverLength` detail names whichever of the two paths crossed the
+  ceiling. **For the owner:** note; the ceiling itself is D10's, only the accounting is this
+  Tool's.
 - **Ticket #10 — milestone 4b gets its own live workflow, reusing the `phase4-live` environment.**
   `.github/workflows/phase4-live-g4b.yml` verifies `tag_get_config`/`tag_update` on both Gateway rows
   and reuses the `phase4-live` GitHub environment unchanged, so it inherits the already-recorded

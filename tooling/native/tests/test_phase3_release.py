@@ -158,7 +158,7 @@ class ReleaseTest(unittest.TestCase):
         # the stamped project.json/BUNDLE_VERSION siblings must exist for validation
         shutil.copy(PROJECT.parent / "BUNDLE_VERSION", unpacked.parent / "BUNDLE_VERSION")
         validate_project(unpacked)
-        self.assertEqual(len(files), 41)
+        self.assertEqual(len(files), 45)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,17 @@ name: Phase 4 Live Gateway G4b
 # refused with `conflict` and changing nothing, a missing target refused with
 # `not_found` and never created, the segment-boundary and UDT-definition refusals,
 # the reserved policy provider under an explicit `*`, and the Runtime audit rows.
-# Tickets #11 and #12 extend this workflow.
+#
+# Ticket #11 extends it with the two Mutations that write a node instead of merging
+# into one: `tag_create` (the created node an independent read and the provider export
+# both show, its Observed fingerprint the token that read publishes, an existing target
+# refused with `conflict` and changed by nothing, the whole-batch Preflight that executes
+# nothing, D30 §6's `_types_` refusals and the entry that lifts them, the reserved
+# provider, D10's item and path ceilings with the deployment's own ceiling honoured, and
+# the audit pair) and `tag_copy` (the copied destination with its source left in place,
+# an occupied destination, the destination-leaf input rule, a missing source, the
+# destination-only allowlist measurement, both ends of the reserved provider and the
+# `_types_` rule). Ticket #12 extends it further.
 #
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment, the same environment
@@ -276,6 +286,20 @@ jobs:
           set -euo pipefail
           uv run --no-sync python tests/harness/phase4-live/driver.py tag-update \
             | tee "$EVIDENCE_DIR/driver-tag-update.log"
+
+      - name: Verify tag_create live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-create \
+            | tee "$EVIDENCE_DIR/driver-tag-create.log"
+
+      - name: Verify tag_copy live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-copy \
+            | tee "$EVIDENCE_DIR/driver-tag-copy.log"
 
       - name: Summarize the milestone
         id: summarize

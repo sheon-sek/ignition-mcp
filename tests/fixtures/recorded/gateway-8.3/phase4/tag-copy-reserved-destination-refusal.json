@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"permission_denied\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_copy\", \"auditRecorded\": true, \"items\": [{\"code\": \"permission_denied\", \"destinationPath\": \"__RESERVED_DESTINATION__\", \"index\": 0, \"path\": \"__RESERVED_DESTINATION__\", \"reason\": \"reservedProvider\", \"sourcePath\": \"__SOURCE__\"}], \"reason\": \"preflightTargetRefused\"}, \"message\": \"Every destination must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry), and neither end may be inside the reserved policy provider; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

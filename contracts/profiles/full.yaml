@@ -23,6 +23,8 @@
     "tag_write",
     "alarm_shelve",
     "alarm_unshelve",
-    "tag_update"
+    "tag_update",
+    "tag_create",
+    "tag_copy"
   ]
 }
