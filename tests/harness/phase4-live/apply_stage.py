@@ -32,6 +32,7 @@ import io
 import json
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -97,6 +98,9 @@ def build_argv(args: argparse.Namespace) -> list[str]:
         "--server-config-name", args.server_config,
         "--policy-file", str(args.policy_file),
         "--server-config-permissions-file", str(args.permissions_file),
+        # The endpoint apply writes and verifies through; named explicitly so the
+        # read-only verify retries below need no derivation.
+        "--mcp-url", f"{args.base_url.rstrip('/')}/data/mcp/{args.server_config}",
         "--json",
     ]
     return base
@@ -104,7 +108,11 @@ def build_argv(args: argparse.Namespace) -> list[str]:
 
 async def run_stage(args: argparse.Namespace) -> int:
     args.evidence_dir.mkdir(parents=True, exist_ok=True)
-    token_file = args.evidence_dir / "setup-native.token"
+    # The token file lives in a 0700 directory outside the evidence tree, exactly as
+    # the G3 driver keeps it: a credential must never reach an uploaded artifact.
+    private = Path(tempfile.mkdtemp(prefix="setup-native-private-"))
+    os.chmod(private, 0o700)
+    token_file = private / "gateway.token"
     token_file.write_text(args.api_token + "\n", encoding="utf-8")
     os.chmod(token_file, 0o600)
     args.token_file = token_file

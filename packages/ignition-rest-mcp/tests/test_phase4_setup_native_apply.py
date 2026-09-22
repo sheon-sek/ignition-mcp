@@ -467,6 +467,20 @@ def test_a_major_change_needs_the_explicit_acknowledgement(
     assert "bundle=0.6.0" in backup["description"]
 
 
+def test_verify_derives_its_endpoint_from_the_server_config(
+    gateway: RecordedGateway, workdir: Workdir
+) -> None:
+    """Apply verifies through the Server Config it just wrote, so verify accepts it too."""
+
+    code, out, err = run_cli(workdir.argv("verify", gateway.base_url, server_config=SERVER_CONFIG))
+    assert code == 0, out + err
+    assert "endpoint-reachable" in out and "inventory-tools: exact" in out
+
+    code, _, err = run_cli(workdir.argv("verify", gateway.base_url, server_config=None))
+    assert code == 2
+    assert "an MCP endpoint is required for verify" in err and "--server-config-name" in err
+
+
 def test_apply_never_reports_the_gateway_token(workdir: Workdir) -> None:
     secret = "GWSENTINEL" + "z" * 30
     workdir.token.write_text(secret + "\n", encoding="utf-8")

@@ -222,7 +222,9 @@ def build_base_parser() -> UsageParser:
     flags.add_argument("--bundle-zip", metavar="PATH", help="bundle ZIP; its SHA-256 must match the manifest")
     flags.add_argument("--profile", default="readonly", choices=PROFILE_NAMES, help="profile inventory (readonly)")
     flags.add_argument("--gateway-url", metavar="URL", help=f"Gateway base URL (or ${ENV_GATEWAY_URL})")
-    flags.add_argument("--mcp-url", metavar="URL", help=f"Runtime MCP endpoint URL (or ${ENV_MCP_URL})")
+    flags.add_argument("--mcp-url", metavar="URL",
+                       help=f"Runtime MCP endpoint URL (or ${ENV_MCP_URL}; doctor/verify derive it "
+                            "from --server-config-name when this is absent)")
     flags.add_argument("--gateway-token-file", metavar="PATH",
                        help=f"0600 file with the Ignition API token (or ${ENV_GATEWAY_TOKEN})")
     flags.add_argument("--mcp-token-file", metavar="PATH",
@@ -306,10 +308,21 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if not gateway_raw:
         raise UsageError(f"--gateway-url (or ${ENV_GATEWAY_URL}) is required")
     gateway_url = _endpoint(gateway_raw, "--gateway-url")
+    server_config_name = (
+        None
+        if namespace.server_config_name is None
+        else _require_name(_text(namespace.server_config_name, "--server-config-name"), "--server-config-name")
+    )
     mcp_raw = _text_or_none(namespace.mcp_url) or os.environ.get(ENV_MCP_URL)
-    if command in ("doctor", "verify") and not mcp_raw:
-        raise UsageError(f"--mcp-url (or ${ENV_MCP_URL}) is required for {command}")
     mcp_url = None if mcp_raw is None else _endpoint(mcp_raw, "--mcp-url")
+    # `doctor` and `verify` need an endpoint to talk to: either the URL or the Server
+    # Config whose documented path it is (`/data/mcp/<name>`), which is what `apply`
+    # has just written and what it verifies through.
+    if command in ("doctor", "verify") and mcp_url is None and server_config_name is None:
+        raise UsageError(
+            f"an MCP endpoint is required for {command}: --mcp-url (or ${ENV_MCP_URL}), "
+            "or --server-config-name to derive it"
+        )
 
     gateway_token = _resolve_token(
         _text_or_none(namespace.gateway_token_file),
@@ -330,11 +343,6 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if not 0.0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise UsageError(f"--timeout-seconds must be in (0, {MAX_TIMEOUT_SECONDS:g}]")
 
-    server_config_name = (
-        None
-        if namespace.server_config_name is None
-        else _require_name(_text(namespace.server_config_name, "--server-config-name"), "--server-config-name")
-    )
     policy_file = _optional_path(_text_or_none(namespace.policy_file), "--policy-file")
     permissions_file = _optional_path(
         _text_or_none(namespace.server_config_permissions_file), "--server-config-permissions-file",
