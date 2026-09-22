@@ -26,6 +26,7 @@ from test_config import _settings
 READ = "ignition.read"
 CONFIG = "ignition.config"
 CONTROL = "ignition.control"
+ADMIN = "ignition.admin"
 
 #: An allowed non-singleton resource type, and the names the cases give its resources.
 PROFILE = "ignition/audit-profile"
@@ -48,11 +49,16 @@ TAG_IMPORT_TOOL = "tag_config_import"
 #: D26 milestone 4c's CONTROL Mutation Tool (ticket #18): its Target is an exact
 #: Alarm Notification Pipeline path, and it is gated by the CONTROL class.
 ALARM_CANCEL_TOOL = "alarm_pipeline_cancel"
+#: D26 ticket #19: the artifact removal is a CONFIG-class REST Mutation too, but it
+#: has no Gateway route at all (D30 drops the artifact HTTP route), so its discovery
+#: follows the class gate alone.
+ARTIFACT_DELETE_TOOL = "artifact_delete"
 #: Every Phase 4 *CONFIG*-class REST Mutation Tool, in the order the milestone
 #: introduced them. The class decides discovery and scope, so the modules that pin an
 #: inventory use the lane they actually enable.
 CONFIG_MUTATION_TOOLS = (
     UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL,
+    ARTIFACT_DELETE_TOOL,
 )
 CONTROL_MUTATION_TOOLS = (ALARM_CANCEL_TOOL,)
 MUTATION_TOOLS = CONFIG_MUTATION_TOOLS + CONTROL_MUTATION_TOOLS
@@ -99,6 +105,11 @@ def mutation_settings(
     operation effect: ``reader-secret`` (read only), ``cfg-secret`` (read + config) and
     ``op-secret`` (read + control). A CONTROL Mutation is therefore unreachable with
     the config credential and vice versa, whatever the class gates say.
+
+    A fourth, ``adm-secret`` (read + config + ``ignition.admin``), is configured for the
+    artifacts D30 §6 lets an administrator remove: scope membership is the only rule
+    (D07), so an admin credential that also holds the operation's own scope is what
+    reaches those Tools.
     """
 
     enabled = operations or CONFIG_MUTATION_TOOLS
@@ -114,6 +125,7 @@ def mutation_settings(
             StaticToken(name="reader", token="reader-secret", scopes=(READ,)),
             StaticToken(name="config-agent", token="cfg-secret", scopes=(READ, CONFIG)),
             StaticToken(name="operator-agent", token="op-secret", scopes=(READ, CONTROL)),
+            StaticToken(name="admin-agent", token="adm-secret", scopes=(READ, CONFIG, ADMIN)),
         ),
         "config_mutation_enabled": True,
         "mutation_operations": tuple(enabled),

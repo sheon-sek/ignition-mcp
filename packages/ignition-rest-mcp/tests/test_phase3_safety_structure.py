@@ -245,8 +245,38 @@ def test_destructive_registrations_match_the_tool_contracts() -> None:
     }
     assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
     assert [name for name, declared in registered.items() if declared] == [
-        "config_resource_delete", "project_import", "alarm_pipeline_cancel",
+        "config_resource_delete", "project_import", "alarm_pipeline_cancel", "artifact_delete",
     ]
+
+
+def test_only_the_local_artifact_mutation_declares_itself_not_gateway_backed() -> None:
+    """D08's capability layer must keep asking the D04 registry for every Gateway
+    write. Exactly one production operation may turn that layer into a local
+    subsystem: `artifact_delete`, whose HTTP route D30 drops, so it has no route to
+    check and dispatches nothing (the write boundary scan above keeps that true).
+    """
+
+    local_operations: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        for node in ast.walk(_parse(path)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "MutationOperation"
+            ):
+                continue
+            declared = [
+                keyword.value.value for keyword in node.keywords
+                if keyword.arg == "gateway_backed" and isinstance(keyword.value, ast.Constant)
+            ]
+            if declared == [False]:
+                local_operations.append(f"{rel}:{node.lineno}")
+
+    assert [site.split(":")[0] for site in local_operations] == ["services/artifact_delete.py"], (
+        f"only the D30 routeless artifact Mutation may skip the Gateway capability layer: "
+        f"{local_operations}"
+    )
 
 
 # ------------------------------------------------------------------ 5. zero-mutation inventory

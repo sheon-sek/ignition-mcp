@@ -341,6 +341,24 @@ class ArtifactInfoResult(StrictModel):
     artifact: ArtifactRefModel
 
 
+class ArtifactDeleteResult(StrictModel):
+    """D17/D30: removing an artifact is verified by its absence from the store.
+
+    A delete leaves nothing to describe, so the bounded read-back reports exactly what
+    it found — no READY artifact at the identifier — and the kind of the artifact that
+    was removed names what went away. Only a satisfied outcome is returned as data:
+    a refusal (a retention-locked artifact, a Target the deployment does not name) or
+    an unestablished state is a Tool error (D06).
+    """
+
+    correlationId: str
+    artifactId: str = Field(min_length=1, max_length=128)
+    #: The kind of the artifact the pre-state read resolved (D17 kinds).
+    kind: str = Field(pattern="^(project_archive|project_export|tag_config_export)$")
+    #: False on success: the bounded read-back found no READY artifact at the Target.
+    present: bool
+
+
 class OperationPhase(StrictModel):
     name: str = Field(min_length=1, max_length=64)
     at: str = Field(min_length=1)

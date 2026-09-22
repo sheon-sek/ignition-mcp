@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable, NoReturn, TypeVar
 from fastmcp.exceptions import ToolError
 from pydantic import BaseModel, ValidationError
 
-from ignition_rest_mcp.audit.sink import Auditor
+from ignition_rest_mcp.audit.sink import Auditor, result_under_cancellation
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.operation import OperationContext
 from ignition_rest_mcp.storage.database import StorageUnavailable
@@ -101,11 +101,13 @@ async def _fail(
 ) -> NoReturn:
     if _is_cancelled(error):
         # Exactly one cancellation log line (G1 guarantee preserved); the record is
-        # finalized as 'cancelled' before propagation.
+        # finalized as 'cancelled' before propagation, and the row is written under the
+        # cancellation rather than best-effort: a hard cancellation is no reason for an
+        # audited attempt to end without its result row.
         metrics.record_tool(context.tool, "cancelled")
         log_tool(context, "cancelled", "cancelled")
         if context.auditor is not None and context.auditor.attempt_recorded:
-            await context.auditor.result("cancelled")
+            await result_under_cancellation(context.auditor, "cancelled")
         await _finish_best_effort(records, context, "cancelled", None, metrics)
         raise error
     safe = await _map_error(error, context, metrics, state)

@@ -940,7 +940,219 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   assuming `CONFIG`, so a CONTROL Tool can no longer be declared with a CONFIG surface.
 - Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **82/82 cases**
   against the recorded Gateway, both deployment gates and all three credentials.
-- Live: pending — recorded below once the runs are in.
+- Live ([run 35665840461](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840461)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **82/82 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — with three
+  credentials whose inventories are exact: the read-only one sees the read Tools, the
+  config one sees those plus the six CONFIG Tools, and the CONTROL one sees the read
+  Tools plus `alarm_pipeline_cancel` and none of the config Tools. The pipeline cases
+  prove the decision surface live: the cancel refused with `permission_denied` for the
+  config credential (D07 scope by operation effect), for a pipeline the Target allowlist
+  does not name, and for a path under the Target and the Target's own parent (D30 §6:
+  exact paths, never prefixes); both inputs `limit_exceeded` past their bounds and an
+  empty component `invalid_argument`; and, for an alarm event no run holds, `not_found`
+  with the bounded status read of the same path unchanged before and after
+  (`observations.json`: `pipelineStateBefore`/`pipelineStateAfter` both `not_found`, and
+  the path is the run-unique `project:<Project>:/pipeline:MCP_CI_Notify`). With both
+  classes disabled the gate-off row shows the read inventory and nothing else.
+- Frozen gates, green on the code head (`603e0f6`): CI
+  [35665840454](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840454), Phase 3
+  Live Gateway G3
+  [35665840469](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840469) and
+  Phase 4 Live Gateway G4a
+  [35665840467](https://github.com/sheon-sek/ignition-mcp/actions/runs/35665840467).
+- Frozen gates, green on the documentation head (`82e34c1`): CI
+  [35666368247](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368247), Phase 3
+  Live Gateway G3
+  [35666368318](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368318) and
+  Phase 4 Live Gateway G4a
+  [35666368252](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368252); the
+  REST workflow re-ran on that head too
+  ([35666368372](https://github.com/sheon-sek/ignition-mcp/actions/runs/35666368372),
+  **82/82 cases in both rows** again). The head this section was last touched on re-runs the
+  same four workflows; its run IDs are in the ticket report.
+
+### Ticket #19 — REST `artifact_delete` (milestone 4c)
+
+- Fixture-first coverage: the new module
+  `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py` (19 cases) drives the
+  real server through MCP and the artifact data plane against
+  `tests/harness/recorded_gateway.py`; it fails before the change (the Tool, its
+  operation and its service module do not exist — the module cannot even import
+  `ARTIFACT_DELETE`), and the full `AGENTS.md` command block is green (887 pytest
+  cases).
+- **This Tool dispatches nothing at all.** D30 dropped the artifact HTTP route and made
+  the Tool the only delete path, so D08's capability layer had no route to check. The
+  operation therefore declares `gateway_backed=False` and its capability is the local
+  `artifact_store`; `preflight_mutation` only consults the D04 registry for a
+  Gateway-backed operation (and refuses a Gateway-backed one that names a local
+  capability, and the reverse), `tooling/contracts/lint.py` requires a routeless REST
+  Mutation to declare `localCapability` instead of a `capabilityId` that could not
+  exist, and a structural scan pins that exactly one operation in the whole server may
+  declare it.
+- **Discovery for a routeless Tool is the class gate alone.**
+  `_apply_visibility` treats a `None` capability as "no Gateway route to check", so the
+  deployment's `IGNITION_MCP_CONFIG_MUTATION_ENABLED` decides whether the Tool is
+  listed — an unreachable Gateway must not hide the one path a deployment has for
+  collecting its own artifacts, and a case pins that the Tool stays discoverable while
+  the capability-gated Tools disappear.
+- **The D08 chain runs for a local effect too.** `safety/executor.py` gains
+  `execute_local_mutation`: same order (scope → class → operation allowlist → Target
+  allowlist → capability → Precondition), same `decision` → `attempt` → `result` rows,
+  one effect exactly once, then the bounded verification. A refusal the operation
+  recognises (the D17 retention lock) is its own result and a read-back can only confirm
+  or contradict it — never upgrade it to a success, and never `recovered_success`, which
+  the contract declares unreachable: TTL cleanup, the D16 transaction and any
+  `ignition.admin` remove artifacts too, so absence is never attributable to this call.
+- **D30 §6 visibility is the Precondition hook.** The Target allowlist is checked
+  against the caller's identifier before the store is read, then the artifact is
+  resolved (READY only) and visibility is enforced: the owning principal, or any holder
+  of `ignition.admin`. An artifact the caller cannot see answers exactly as an unknown
+  identifier does (`not_found`, with the denial audited), so the Tool is never an
+  existence oracle. `artifact_delete` is a CONFIG effect, so D07's scope is required as
+  well: ownership is not authorization, and a case pins that a read-only owner still
+  cannot remove its own artifact.
+- **D17 retention and crash safety.** Behind `store.delete_internal`: the lock check and
+  the `DELETING` transition are one transaction (a locked RECOVERY artifact is
+  `conflict` and nothing is unlinked), then the object is unlinked and its directory
+  fsynced, then the row is removed — and the `DELETING` split point is now a
+  `_fail_hook` point like the create path's, so a case crashes the removal there and
+  proves both halves: the artifact is already invisible to every read (`not_found`,
+  absent from `artifact_list`, state `DELETING`, object still on disk), and one
+  `reconcile` pass finishes it (`finished_delete: 1`, no row, no object).
+- **The Target of this Tool is the artifact's own storage identifier.** D30 §6 says
+  nothing about its Target form and D08 requires an allowlist, so the Tool uses the
+  identity every other Phase 4 Tool uses — the exact thing being changed — matched
+  exactly, deny-by-default, with the explicit `*` a deployment needs for identifiers
+  that are generated at removal time. The denial is `permission_denied` (D30 §7) and is
+  evaluated before the artifact is read.
+- Wiring (D07/D30 §7): registered as a CONFIG-scope, destructive, audited Tool gated by
+  `IGNITION_MCP_CONFIG_MUTATION_ENABLED`, budget class ARTIFACT (the runbook's
+  artifact-involving class), with `artifactId` bounded to the store's own 128-character
+  identifier rule (D10) and `artifact_delete` added to the D18 safe-field allowlist
+  (`kind`, `sensitivity`, `retentionClass`) so an audit row says what was destroyed.
+  Contract, output schema, lint inventory, the shared test fixtures, the structural
+  scans and the live harness moved together.
+- Local rehearsal: `tests/harness/phase4-live-rest/rehearse_local.py` — **98/98 cases**
+  against the recorded Gateway, both deployment gates and all three credentials.
+- Live ([run 35668808837](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808837)):
+  workflow `Phase 4 Live Gateway REST mutation`, both rows green — **98/98 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — with the exact
+  inventories unchanged in shape and `artifact_delete` now part of the config lane: the
+  config credential sees the read Tools plus the seven CONFIG Tools, the read-only and
+  CONTROL credentials see neither. The artifact cases need no Gateway at all (the Tool has
+  no route), so what the rows add is the end-to-end removal on the real server — a
+  `project_export` artifact removed with `present: false`, `kind: project_export` and the
+  identifier it removed (`observations.json`: `artifactDeleteResult`) — plus an independent
+  `artifact_info` (`not_found`) and `artifact_list` (no longer served), a second removal
+  answering `not_found`, the D30 §6 ownership rule in both directions (another principal's
+  export is `not_found` and still served to its owner; the owning credential's own export
+  is removed), the CONFIG scope for the read-only credential with the artifact it could not
+  remove still present, both D10 input bounds (`invalid_argument`), the dropped
+  `DELETE /artifacts/{id}` route (405), and the class gate at discovery and at call time
+  (`disabled-class-artifact-delete-is-refused`). No Target-allowlist denial is asserted
+  live: this deployment must write the explicit `*` for a Tool whose identifiers are
+  generated at removal time, which the open questions record.
+- Frozen gates, green on the code head (`51b25b2`): CI
+  [35668808852](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808852), Phase 3
+  Live Gateway G3
+  [35668808791](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808791) and
+  Phase 4 Live Gateway G4a
+  [35668808776](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668808776). The
+  head this section was last touched on re-runs the same four workflows; its run IDs are in
+  the ticket report.
+
+### Ticket #20 — REST fault-injecting proxy and the live timeout, ambiguous-outcome and cancellation cases (milestone 4c)
+
+- **The proxy** (`tests/harness/phase4-live-rest/fault_proxy.py`) is a stdlib-only TCP/HTTP
+  hop with a data listener and a control listener (`GET /state`, `POST /fault`,
+  `POST /reset`). It can refuse a connect (by closing its listener), drop a connection while
+  the body is being written, relay the whole request and then drop the answer, and hold an
+  answer back past a deadline. It answers **one request per connection** and says so on the
+  wire (`Connection: close`, rewritten on the answer head as well), which is what makes the
+  refused-connect cases deterministic: without it a pooled client sends its next request into
+  a socket the proxy already closed, and the server correctly classifies that as an ambiguous
+  boundary rather than a known non-attempt. It runs as the `fault-proxy` compose service and,
+  for the Docker-free rehearsal, in-process in `rehearse_local.py`.
+- **What the cases prove, on `config_resource_update` and `project_import`**, each against
+  three independent records (the caller's result, the hop's account of every request, the
+  server's own D18 audit rows and D16 transaction row):
+  - a refused connect on the dispatch is a **known non-attempt**: the caller gets
+    `gateway_unavailable`, the audit result row is `not_sent`, the D16 row records
+    `importDispatched: false` and the `not_sent` boundary, and nothing changed;
+  - a connection dropped **mid-body** never reaches the Gateway (the hop reports
+    `forwarded: false`), the read-back shows the pre-state, and the call is
+    `conflict`/`not_applied` — an ambiguous boundary the evidence can still attribute to
+    "nothing landed";
+  - a connection dropped **after the full body** leaves the change in place
+    (independently re-read) while the caller gets `outcome_unknown`: a read-back alone may
+    not claim this call's success (D30 §2). For `project_import` the same fault is D16's
+    reconciliation instead — the transaction's post-import export equals its staged
+    candidate, so the call reports `COMMITTED` with `importDispatched: true`;
+  - a response held back **past the deadline** ends the call with the deployment's
+    `timeout`, and the audit holds exactly one result row — `cancelled` with
+    `outcome_unknown` and the Target — even though the write may well have applied (the
+    hop forwarded the complete body before it held the answer back, and the case proves the
+    change is in place);
+  - a **cancellation** (`notifications/cancelled`) is answered with JSON-RPC `-32800`, and
+    leaves the same single cancelled result row; for `project_import` the interrupted row is
+    ended by the reconcile loop as `OUTCOME_UNKNOWN`, never as a success.
+  - **No replay** is asserted twice, independently: exactly one `attempt` row in the audit,
+    and exactly one write per case in the hop's per-method counter. The audit is asserted
+    row by row (`decision, attempt, result, result` with the exact outcomes per case): the
+    executor's result row carries the dispatch boundary and the Target, and the lifecycle's
+    carries the code the caller saw.
+- **One server-side gap this ticket closed.** A dispatch that died mid-flight is supposed
+  to leave the executor's own result row — `cancelled` with `outcome_unknown`, the row that
+  says the write *may* have applied — and the live cases showed it could be **lost**:
+  `asyncio.shield` let the cancellation through immediately while the write it protected
+  was still pending, so the lifecycle's row (the invocation's final word) landed instead
+  and the boundary was never recorded. The executor now awaits that write to completion
+  (bounded by `CANCELLED_AUDIT_DEADLINE_SECONDS`, absorbing the second cancellation it is
+  itself under) and the row carries the Target like every other row, so it is as complete
+  as the rest of the log. `packages/ignition-rest-mcp/tests/test_phase4_mutation_cancelled_audit.py`
+  pins it: `[decision, attempt, result, result]` with
+  `[allowed, attempted, cancelled, failed]` for the deadline case and
+  `[allowed, attempted, cancelled, cancelled]` for a client cancellation, the boundary row
+  carrying `outcome_unknown` and the Target, and the last row carrying the code the caller
+  saw. Both cases fail on the pre-change code (the boundary row's absence/error code) and
+  pass after it. The two result rows per invocation are the frozen D18 shape the Phase 3/4
+  suite pins (`_outcomes()[-1]` is the caller's D06 code); this ticket did not change it.
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **182/182 cases**
+  against the recorded Gateway through the real proxy, covering all three driver modes
+  (gate-on, gate-off, fault).
+- **Live** ([run 35672781303](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781303),
+  workflow `Phase 4 Live Gateway REST mutation`): both rows green, **182/182 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — 80 of them
+  fault cases. What the rows recorded:
+  - the proxy reached by a second `ignition-rest` instance saw 78 requests and applied
+    every fault once per case (`dropped_before_upstream: 2`, `dropped_after_full_body: 2`,
+    `delayed_responses: 3`, two whole-hop refusals), with `listeners_closed: 2` — the two
+    `refuse_after_forward` aims, reopened by the driver afterwards;
+  - the deadline case fired at **8.008 s** against `IGNITION_MCP_TOOL_TIMEOUT_SECONDS=8`
+    and left the change in place (the caller's `timeout` and the audit's `cancelled` row
+    disagree by design: the write did apply);
+  - the D16 rows say exactly what the faults did: a refused dispatch is
+    `FAILED_PRE_IMPORT`/`import_dispatched: false`/`import_outcome: not_sent`; a dropped
+    mid-body write is `NOT_APPLIED` on the read-back (both Gateway versions classified
+    that boundary as `sent_complete_no_response` — a small body is already in the socket
+    when the RST lands — which is why the case asserts the read-back rather than the
+    class); a dropped answer is `COMMITTED` with `resultFingerprint == candidateFingerprint`;
+    a cancelled dispatch is left for the reconcile loop, which ends it `OUTCOME_UNKNOWN`
+    with the candidate preserved;
+  - the not-sent import finalizes `FAILED_PRE_IMPORT` on both rows (see Open questions for
+    the state-name reading), and the unreachable-hop case starts **no** transaction row at
+    all;
+  - the `fault-proxy` image digest and the Gateway image digest are in each row's
+    `identity.json`.
+
+- **Frozen gates, green on the pushed head (`f486d30`, plus the tightened assertion in the
+  commit that follows it): CI
+  [35672781330](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781330),
+  Phase 3 Live Gateway G3
+  [35672781253](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781253), and the
+  Phase 4 Live Gateway REST mutation run above.** The first push after the outage (see Open
+  questions) produced all three.
 
 ## Open questions
 
@@ -1062,6 +1274,57 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   refusal (a bundle has no shared modules), and the shared contract text is
   `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
   a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
+- **Ticket #19 — GitHub Actions delivered no runs for the documentation-only head.** The
+  code head `51b25b2` has all four workflows green (CI, Phase 3 G3, Phase 4 G4a, Phase 4
+  Live Gateway REST mutation with 98/98 cases in both rows), and the two commits after it
+  change `docs/development/phase-4.md` alone. Their pushes produced **no** workflow runs:
+  `GET /repos/…/actions/runs` shows nothing created repo-wide after `2026-09-21T23:49:41Z`
+  (the runtime lane's push), the PR's head is the docs commit, and its only check suite is
+  another app's. Nothing in this ticket changed a workflow, and the full `AGENTS.md`
+  command block was re-run on that exact head locally — ruff, `uv lock --check`,
+  `tooling.contracts.lint` and **887 pytest cases** green. **For the owner/coordinator:**
+  re-check the runs after the next push (a lane merge or any code commit re-triggers them);
+  if the gap persists it is a repository-level Actions problem, not a lane one.
+
+- **Ticket #19 — the Target of an artifact removal is the artifact's own identifier.**
+  D30 §6 fixes this Tool's class, its ownership rule and its retention rule but says
+  nothing about its Target form, and D08 requires a Target allowlist. What is
+  implemented is the identity every other Phase 4 Tool uses — the exact thing the call
+  changes, here the `artifactId` the caller read — so a deployment can pin a long-lived
+  artifact by name, and one that lets an agent collect its own artifacts writes the
+  explicit `*` (D30 §3 forbids anything implicit), with D30 §6 ownership as the bound
+  that makes `*` defensible. The alternative reading — the
+  artifact's *kind*, a deployment-meaningful class the allowlist could name precisely —
+  would put the allowlist check after the artifact read, because the kind is only known
+  once the artifact is resolved, which inverts D08's order (policy before precondition).
+  **For the owner:** confirm the identifier reading, or amend D08/D30 to allow a
+  class-valued Target for artifacts.
+- **Ticket #19 — a live Target-allowlist denial is not provable in this harness.** The
+  live deployment must write `*` for `artifact_delete` (identifiers are generated at
+  removal time, so no fixed entry can name the artifact a case removes), which leaves no
+  identifier outside the allowlist to refuse. The denial is pinned by the unit fixture
+  (`test_a_target_outside_the_allowlist_is_permission_denied`, with the audited
+  `denied:target-allowlist:target-not-allowlisted` row) and the live rows prove the
+  visible, ownership, scope, bounds and route-asymmetry cases instead. **For the owner:**
+  confirm, or ask for a harness that restarts the server with a per-run allowlist once
+  the artifact identifiers are known.
+- **Ticket #19 — a live retention-lock `conflict` is not provable in this harness
+  either.** A locked RECOVERY artifact exists only while a D16 transaction is
+  `OUTCOME_UNKNOWN` or `RECOVERY_REQUIRED`, and no case in this harness can land a
+  transaction in those states on a live Gateway (#16's ambiguity cases are fixture-only
+  by the same rule). The `conflict` is pinned by the unit fixture
+  (`test_a_retention_locked_recovery_artifact_is_a_conflict_and_survives`, including the
+  lock still being held and the object still on disk) plus its release counterpart, and
+  the store's lock rule itself is Phase 3 evidence. **For the owner:** confirm, or ask
+  for a live case driven through #20's fault-injecting proxy, which can hold an import
+  request open and leave a transaction unresolved.
+- **Ticket #19 — the crash-safe `DELETING` recovery is fixture-proven, not live.** A live
+  case would have to kill the server between the `DELETING` commit and the unlink, which
+  the harness cannot do deterministically (the window is a local unlink inside one
+  call). The unit fixture fails the removal at that split point through the store's own
+  `_fail_hook`, asserts the partial state, and then finishes it with a `reconcile` pass
+  in a fresh store over the same data directory. **For the owner:** confirm the fixture
+  as the G4 evidence for this split point.
 - **Ticket #18 — a live cancel of a *running* pipeline is not provisioned by this
   harness.** A fresh CI Gateway serves no Alarm Notification Pipeline runs (the Phase 2
   live probe recorded that), and producing one needs an Alarm Event notifying through a
@@ -1330,3 +1593,40 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Ticket #8: a duration above the deployment cap is `invalid_argument`.** D12's Phase 4 amendment says a deployment "may lower the maximum in the Runtime Target Policy but not raise it", and D30 §7 maps a stale Precondition token to `conflict`, an unallowlisted target to `permission_denied` and a missing policy to `operation_disabled`, but has no mapping for the lowered cap. The shipped behavior treats the cap as an argument range, exactly as `tag_write` treats its timeout range: `invalid_argument` with `details = {reason: "durationOverPolicyCap", requested, cap, hardMaximum}`. `limit_exceeded` (D10's over-budget code) stays with request cardinality rather than a value range. **For the owner:** confirm the code, or name a different one for a duration the deployment refuses.
 - **Ticket #8: Observed state does not decide success for the Alarm Mutations.** Shelving a literal pattern that matches nothing is not an error (ticket #6: a pattern without `*` matches only the spelling it names), so an item whose `alarm_shelved_list` entry is absent is still `executed`, with `observed[].shelved = false` reported as data. Making the shelf view the success decision would fail a legal shelve of a pattern whose Alarm is currently clear, and `alarm_unshelve` has the same case in reverse. Every item's outcome comes from its own dispatch, and `outcome_unknown` is reserved for an item whose own dispatch did not report back. **For the owner:** confirm that the shelf view stays Observed state rather than a success criterion for these two Tools.
 
+
+- **Ticket #20 — GitHub Actions created no runs after `2026-09-21T23:49:41Z`; recovered.**
+  The live rows for this ticket were produced once runs resumed: the first push after the
+  gap (`f486d30`) created all three workflows, and the Phase 4 REST row ran 182/182 live
+  cases on both Gateway versions. CI and Phase 3 G3 are green on the same head. Nothing was
+  claimed while the gap was open; the ticket was marked `LIVE EVIDENCE PENDING (Actions
+  outage)` in the body above only for the interval in which no run existed. **For the
+  coordinator:** the run IDs are in the Results section and the ticket report.
+
+- **Ticket #20 — a refused-connect import that also fails its drift re-export ends
+  `FAILED_PRE_IMPORT`, not `NOT_APPLIED`.** D16 finalizes a dispatched-and-unchanged import as
+  `NOT_APPLIED` after a diagnostic re-export; when the same fault keeps the hop down for the
+  whole call, that re-export fails too, the transaction raises, and its `except GatewayError`
+  handler finalizes the row as `FAILED_PRE_IMPORT` — the state it uses for "a row still in
+  `IMPORT_SENT` after a raise". Both are release-set states (no recovery lock, no replay), and
+  the row still carries `importDispatched: false`, the `not_sent` boundary and the transport
+  error, which is what the case asserts. The live rows observed `FAILED_PRE_IMPORT` on 8.3.8
+  and 8.3.9, so the case now asserts that exact state. Naming the failure *phase* accurately
+  in that corner would need a tri-state `externalDrift` column and a change to a reviewed D16
+  module, which this ticket did not take on. **For the owner:** accept the state name as
+  characterized and live-proven, or amend D16 to finalize `NOT_APPLIED` with an explicit
+  "drift unknown" marker when the diagnostic re-export fails.
+- **Ticket #20 — the fault proxy runs on the host network inside the compose stack.** The
+  issue asks for the proxy "in the `phase4-live` compose network". It is a compose service
+  (`fault-proxy`) in that stack, but with `network_mode: host`, because a *published* data
+  port would put Docker's userland proxy in front of the listener: it accepts the connection
+  and then fails to reach the container, so the server sees an ambiguous boundary
+  (`SENT_COMPLETE_NO_RESPONSE`) where the case means a refused connect (`NOT_SENT`). On the
+  host network the listener is a real loopback socket, closing it is a genuine
+  `ECONNREFUSED`, and the Docker-free rehearsal exercises exactly the same code path. The
+  proxy binds loopback only and reaches the Gateway through its own published port.
+- **Ticket #20 — the fault proxy's image is a mutable tag.** The compose service uses
+  `python:3.12-slim`, which the workflow pulls and records the digest of in `identity.json`;
+  the job fails closed if `EXPECTED_PROXY_DIGEST` is set and does not match. It is a rolling
+  tag (the same shape `phase2-live` uses for `mariadb:11.4.13-noble`), so a certification that
+  wants a pinned proxy must supply the digest. **For the owner:** confirm the tag, or name the
+  digest to pin in `.github/workflows/phase4-live-rest.yml`.

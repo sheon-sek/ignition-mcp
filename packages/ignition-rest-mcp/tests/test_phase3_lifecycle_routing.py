@@ -57,7 +57,7 @@ def test_every_registered_tool_routes_through_the_single_invoke() -> None:
     # (slice 8) + the Phase 4 REST Mutation Tools (milestone 4c, both classes), whose
     # operation-record paths are pinned in the test_phase4_* modules because a
     # scope-carrying credential is needed to reach them.
-    assert len(tools) == 23, "registered REST Tool functions drifted from the routed inventory"
+    assert len(tools) == 24, "registered REST Tool functions drifted from the routed inventory"
     for node in tools:
         calls = {
             call.func.id
