@@ -1,0 +1,15 @@
+# The Module-install stage's compose override (ticket #56).
+#
+# The docker-compose.yml of this harness mounts the pinned .modl into the
+# Gateway's user-lib, which is how the G4a/G4b workflows deploy it. This stage
+# must instead start a Gateway with NO MCP Module and put it there through
+# `setup-native install-module`, so this override replaces the volume list with
+# the data volume alone (compose `!override` tag, docker compose v2.24+):
+# the .modl mount of the shared base file is gone and nothing else changes.
+#
+# Only the phase4-live-apply workflow lists this file on COMPOSE_FILE; G4a/G4b
+# keep the base file alone.
+services:
+  gateway:
+    volumes: !override
+      - phase4-gateway-data:/usr/local/bin/ignition/data

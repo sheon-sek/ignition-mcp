@@ -16,8 +16,8 @@ from typing import Any, Sequence
 import httpx
 
 from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native.inputs import Inputs
-from ignition_rest_mcp.cli.setup_native.inputs import UsageError
+from ignition_rest_mcp.cli.setup_native.inputs import Inputs, SetupInputs, UsageError
+from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter
 from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
 
 PASS = "PASS"
@@ -102,8 +102,24 @@ class McpObservation:
     bundle: dict[str, Any] | None = None
 
 
-def make_gateway(inputs: Inputs, transport: httpx.AsyncBaseTransport | None = None) -> gw.GatewayRest:
+def make_gateway(inputs: SetupInputs, transport: httpx.AsyncBaseTransport | None = None) -> gw.GatewayRest:
     """Build the Gateway probe, refusing to carry a token over untls plain HTTP broadly."""
+
+    refuse_untls_token(inputs)
+    return gw.GatewayRest(inputs.gateway_url, inputs.gateway_token, timeout_seconds=inputs.timeout_seconds,
+                          transport=transport)
+
+
+def make_writer(inputs: SetupInputs, transport: httpx.AsyncBaseTransport | None = None) -> GatewayWriter:
+    """Build ``install-module``'s writer under the same token-carrying rule (D20)."""
+
+    refuse_untls_token(inputs)
+    return GatewayWriter(inputs.gateway_url, inputs.gateway_token, timeout_seconds=inputs.timeout_seconds,
+                         transport=transport)
+
+
+def refuse_untls_token(inputs: SetupInputs) -> None:
+    """Refuse to send the Gateway API token in the clear beyond the loopback (D07/D20)."""
 
     endpoint = inputs.gateway_url
     if endpoint.scheme == "http" and not inputs.allow_insecure_authorize and not _is_loopback(endpoint.host):
@@ -111,7 +127,6 @@ def make_gateway(inputs: Inputs, transport: httpx.AsyncBaseTransport | None = No
             f"refusing to send the Gateway API token over plain HTTP to {endpoint.authority}: "
             "use https, or pass --allow-insecure-authorize for a trusted lab network"
         )
-    return gw.GatewayRest(endpoint, inputs.gateway_token, timeout_seconds=inputs.timeout_seconds, transport=transport)
 
 
 def make_mcp(inputs: Inputs, transport: httpx.AsyncBaseTransport | None = None) -> McpHttpClient:
@@ -529,7 +544,7 @@ def doctor_report(inputs: Inputs, checks: Sequence[Check], exit_code: int) -> di
     }
 
 
-def emit(inputs: Inputs, payload: dict[str, Any], lines: Sequence[str]) -> None:
+def emit(inputs: SetupInputs, payload: dict[str, Any], lines: Sequence[str]) -> None:
     """Single output funnel: JSON report on stdout, or the plain text lines."""
 
     if inputs.as_json:

@@ -27,6 +27,19 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 
 
+def _expected_tuples() -> list[tuple[str, str, str, str]]:
+    """One exact tuple per Gateway row per committed gate (D21)."""
+
+    return sorted([
+        ("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+        ("G5", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+        ("G6", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G6", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+    ], key=lambda item: (item[0], item[1]))
+
+
 def _copy_project(target_parent: Path) -> Path:
     target_parent.mkdir(parents=True, exist_ok=True)
     shutil.copy(PROJECT.parent / "BUNDLE_VERSION", target_parent / "BUNDLE_VERSION")
@@ -63,16 +76,14 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        # The G4 and G5 close-out rows certify this bundle, so the release carries
-        # one exact tuple per Gateway row for each gate, per D21. The status stays
-        # UNTESTED because an evidence row never promotes a deployment.
+        # The G4 and G5 close-out rows certify this bundle, and the G6 rows join them
+        # the moment their evidence directories land (ticket #56). One exact tuple per
+        # Gateway row per gate, per D21. The status stays UNTESTED because an evidence
+        # row never promotes a deployment.
         self.assertEqual(
             [(item["gate"], item["gatewayVersion"], item["compatibilityStatus"],
               item["nativeResponseBinding"]) for item in manifest["testedTuples"]],
-            [("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
-             ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
-             ("G5", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
-             ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION")],
+            _expected_tuples(),
         )
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)

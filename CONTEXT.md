@@ -18,6 +18,18 @@ _Avoid_: milestone (when binding is meant)
 A non-binding checkpoint inside a phase that produces its own live evidence but does not open or close a Gate.
 _Avoid_: sub-gate, G4a
 
+**Module install**:
+Putting a trusted local MCP Module file on a Gateway through `setup-native install-module`. The operator names the file's hash and accepts its certificate and EULA explicitly.
+_Avoid_: module deploy, module upgrade (when a first install is meant)
+
+**Module upgrade**:
+A Module install that replaces an installed MCP Module with a higher build. It needs explicit acknowledgement, and a lower build is always refused.
+_Avoid_: update, reinstall
+
+**Bundle upgrade**:
+An `apply` that replaces a managed Runtime Bundle Project with a newer bundle version. It needs explicit acknowledgement. The v1 "upgrade path" means this, not a Module upgrade.
+_Avoid_: redeploy, bundle update
+
 ### Mutation safety
 
 **Mutation**:

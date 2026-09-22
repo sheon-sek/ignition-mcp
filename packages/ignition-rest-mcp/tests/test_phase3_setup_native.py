@@ -1259,29 +1259,32 @@ def test_console_script_help_documents_the_exit_codes() -> None:
     assert code == 0 and err == ""
     assert "exit codes:" in out
     assert "0  command completed with no FAIL" in out
-    assert "3  plan reports at least one BLOCKED action" in out
+    assert "3  wrote nothing because an explicit operator acknowledgement is missing" in out
     assert "--bundle-manifest" in out and "--server-config-name" in out
     assert "IGNITION_MCP_SETUP_GATEWAY_TOKEN" in out
 
 
-def test_group_help_offers_exactly_four_subcommands() -> None:
+def test_group_help_offers_exactly_five_subcommands() -> None:
     code, out, _ = run_main(["setup-native", "--help"])
     assert code == 0
-    assert "{doctor,plan,verify,apply}" in out
-    assert "install-module" in out and "(Phase 6)" in out
+    assert "{doctor,plan,verify,apply,install-module}" in out
+    assert "(Phase 6)" not in out and "not implemented" not in out
 
 
 def test_bare_invocation_and_unknown_group_are_usage_errors() -> None:
     code, _, err = run_main([])
     assert code == 2 and "a command is required" in err
     code, _, err = run_main(["other-group", "--bundle-manifest", "x"])
-    assert code == 2 and "unknown command group" in err and "deliberately absent" in err
+    assert code == 2 and "unknown command group" in err
 
 
-def test_install_module_is_absent_with_an_explained_refusal() -> None:
+def test_install_module_is_implemented_with_its_own_inputs() -> None:
+    """``install-module`` is a real command now, and it asks for a ``.modl``, not a manifest."""
+
     code, _, err = run_main(["setup-native", "install-module", "--bundle-manifest", "x"])
     assert code == 2
-    assert "not implemented" in err and "Phase 6" in err
+    assert "not implemented" not in err
+    assert "the following arguments are required: --file, --sha256" in err
 
 
 def test_unknown_subcommand_is_a_usage_error(tmp_path: Path) -> None:
@@ -1499,7 +1502,8 @@ def test_keyboard_interrupt_exits_two(tmp_path: Path, monkeypatch: pytest.Monkey
 ALLOWED_IMPORT_ROOTS = frozenset(
     {
         "__future__", "argparse", "asyncio", "base64", "collections", "dataclasses", "hashlib", "httpx",
-        "ipaddress", "json", "os", "pathlib", "re", "stat", "sys", "time", "typing", "urllib",
+        "io", "ipaddress", "json", "os", "pathlib", "re", "stat", "sys", "time", "typing", "urllib",
+        "xml", "zipfile",
     }
 )
 

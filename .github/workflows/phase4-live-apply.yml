@@ -4,6 +4,13 @@ name: Phase 4 Live Gateway apply
 # Gateway — the bundle Project, the MCP Server Config for the selected profile and the
 # Runtime Target Policy in the reserved provider, then the D20 verify sequence.
 #
+# Ticket #56 (Phase 6, G6): this workflow now starts its Gateway with NO MCP Module
+# (the docker-compose-install.yml override drops the .modl mount the shared base file
+# carries for the G4a/G4b workflows) and installs the pinned Module through
+# `setup-native install-module` first, then runs the same apply/verify sequence, then
+# proves the Bundle upgrade: a lowered real release first, then the exact release the
+# run built with --acknowledge-upgrade. The composed evidence rows are g6-*.
+#
 # A dedicated row, because the stage writes deployment state: it must not share a
 # Gateway with the milestone 4a/4b Mutation evidence. The stage uses run-unique names,
 # so the first `apply` is a CREATE of the Project and of the Server Config (the paths
@@ -57,7 +64,7 @@ jobs:
             expected_build: ""
             required: false
     env:
-      COMPOSE_FILE: tests/harness/phase4-live/docker-compose.yml
+      COMPOSE_FILE: tests/harness/phase4-live/docker-compose.yml:tests/harness/phase4-live/docker-compose-install.yml
       GATEWAY_IMAGE: ${{ matrix.gateway_image }}
       GATEWAY_VERSION: ${{ matrix.gateway_version }}
       EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
@@ -65,7 +72,13 @@ jobs:
       P4_ORIGIN: 127.0.0.1:8093
       MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
       MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
       RELEASE_DIR: dist/release
+      # Ticket #56: this workflow runs the module-install stage; G4a/G4b, which share
+      # the compose file, keep the mount and never set this.
+      MODULE_INSTALL: "1"
       APPLY_PROJECT: ignition_runtime_apply_${{ github.run_id }}
       APPLY_SERVER_CONFIG: phase4-apply-runtime
       EVIDENCE_DIR: artifacts/apply-${{ matrix.gateway_version }}
@@ -119,7 +132,7 @@ jobs:
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
 
       - name: Start a fresh Gateway
-        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+        run: docker compose up -d --no-build
 
       - name: Wait for initial Gateway commissioning
         shell: bash
@@ -127,7 +140,7 @@ jobs:
           set -euo pipefail
           deadline=$((SECONDS + 480))
           while (( SECONDS < deadline )); do
-            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            docker compose logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
             if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
               tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
               exit 1
@@ -154,7 +167,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          cid="$(docker compose ps -q gateway)"
           rm -rf artifacts/security-bootstrap
           mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
           docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
@@ -172,10 +185,10 @@ jobs:
           # milestone 4a/4b rows do. Nothing else is installed: this stage writes the
           # bundle Project and the Server Config itself.
           set -euo pipefail
-          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          cid="$(docker compose ps -q gateway)"
           data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
           docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
-          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+          docker compose stop -t 30 gateway
 
           docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
           docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
@@ -186,7 +199,7 @@ jobs:
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
               /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
               /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
-          docker compose -f "$COMPOSE_FILE" start gateway
+          docker compose start gateway
 
       - name: Wait for the authenticated Native REST plane
         shell: bash
@@ -204,8 +217,41 @@ jobs:
             sleep 3
           done
           echo "the authenticated Native REST plane never became ready" >&2
-          docker compose -f "$COMPOSE_FILE" logs --no-color gateway | tail -n 200 >&2
+          docker compose logs --no-color gateway | tail -n 200 >&2
           exit 1
+
+      - name: Install the MCP Module with setup-native (ticket #56)
+        if: env.MODULE_INSTALL == '1'
+        shell: bash
+        run: |
+          # The Gateway this workflow started carries no Module (the compose override
+          # dropped the mount). The stage installs the pinned .modl through the shipped
+          # CLI: hash check, certificate and EULA acceptance under their own flags,
+          # install, restart, and a read-back that proves the served build.
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
+            --base-url "$P4_BASE_URL" \
+            --expected-origin "$P4_ORIGIN" \
+            --api-token "$CI_API_TOKEN" \
+            --module-file "$MODULE_FILE" \
+            --module-sha256 "$MCP_MODULE_SHA256" \
+            --install-only \
+            --evidence-dir "$EVIDENCE_DIR" \
+            2>&1 | tee "$EVIDENCE_DIR/install-module.log"
+
+      - name: Prepare the lowered bundle source (ticket #56)
+        if: env.MODULE_INSTALL == '1'
+        shell: bash
+        run: |
+          # The Bundle upgrade case needs a validated copy of the release project the
+          # stage can re-version: one BUNDLE_VERSION + project/ pair outside the
+          # checked-out tree, which apply_stage lowers and rebuilds.
+          set -euo pipefail
+          rm -rf artifacts/bundle-source
+          mkdir -p artifacts/bundle-source
+          cp packages/ignition-runtime-bundle/BUNDLE_VERSION artifacts/bundle-source/BUNDLE_VERSION
+          cp packages/ignition-runtime-bundle/RESOURCE_SCHEMA_VERSION artifacts/bundle-source/RESOURCE_SCHEMA_VERSION
+          cp -r packages/ignition-runtime-bundle/project artifacts/bundle-source/project
 
       - name: Plan, apply and verify with setup-native (ticket #21)
         shell: bash
@@ -214,6 +260,10 @@ jobs:
           release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
           release_zip="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.zip' -print -quit)"
           test -n "$release_manifest" && test -n "$release_zip"
+          install_flags=()
+          if [[ "$MODULE_INSTALL" == "1" ]]; then
+            install_flags=(--module-file "$MODULE_FILE" --module-sha256 "$MCP_MODULE_SHA256" --bundle-source artifacts/bundle-source)
+          fi
           uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
             --base-url "$P4_BASE_URL" \
             --expected-origin "$P4_ORIGIN" \
@@ -226,15 +276,52 @@ jobs:
             --project "$APPLY_PROJECT" \
             --server-config "$APPLY_SERVER_CONFIG" \
             --profile readonly \
+            "${install_flags[@]}" \
             2>&1 | tee "$EVIDENCE_DIR/setup-native-apply.log"
+
+      - name: Record the run identity for the G6 row (ticket #56)
+        shell: bash
+        run: |
+          # The row `python -m tooling.compat g6` composes after the run is green is
+          # built from the downloaded artifacts alone: the stage's evidence document
+          # and this identity. Everything is machine-readable here; the binding facts
+          # the D27 rules judge are derived by the composer from the release
+          # manifest's own binding status and the pinned tuple.
+          set -euo pipefail
+          release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
+          test -n "$release_manifest"
+          jq -n \
+            --arg gatewayVersion "$GATEWAY_VERSION" \
+            --arg gatewayBuild "$GATEWAY_BUILD" \
+            --arg gatewayImage "$GATEWAY_IMAGE" \
+            --arg gatewayImageDigest "$IMAGE_DIGEST" \
+            --arg sourceRevision "$SOURCE_REVISION" \
+            --arg runId "$GITHUB_RUN_ID" \
+            --arg moduleVersion "$MCP_MODULE_VERSION" \
+            --arg moduleArtifactVersion "$MCP_MODULE_ARTIFACT_VERSION" \
+            --arg moduleBuild "$MCP_MODULE_BUILD" \
+            --arg moduleSha256 "$MCP_MODULE_SHA256" \
+            --slurpfile manifest "$release_manifest" \
+            '{schemaVersion: 1,
+              runId: $runId, sourceRevision: $sourceRevision,
+              gatewayVersion: $gatewayVersion, gatewayBuild: $gatewayBuild,
+              gatewayImage: $gatewayImage, gatewayImageDigest: $gatewayImageDigest,
+              mcpModuleVersion: $moduleVersion, mcpModuleArtifactVersion: $moduleArtifactVersion,
+              mcpModuleBuild: $moduleBuild, mcpModuleSha256: $moduleSha256,
+              bundleVersion: $manifest[0].bundleVersion,
+              bundleSha256: $manifest[0].artifact.sha256,
+              nativeResponseBindingStatus: $manifest[0].nativeResponseBindingStatus,
+              note: "identity for python -m tooling.compat g6; the row is composed after the run is green"}' \
+            > "$EVIDENCE_DIR/identity.json"
+          cat "$EVIDENCE_DIR/identity.json"
 
       - name: Refresh diagnostics
         if: always()
         shell: bash
         run: |
           mkdir -p "$EVIDENCE_DIR"
-          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
-          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+          docker compose ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
           docker image inspect "$GATEWAY_IMAGE" > "$EVIDENCE_DIR/gateway-image-inspect.json" 2>&1 || true
           sha256sum "$MODULE_FILE" > "$EVIDENCE_DIR/mcp-module.sha256" 2>&1 || true
 
@@ -250,4 +337,4 @@ jobs:
       - name: Destroy the disposable Gateway
         if: always()
         shell: bash
-        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+        run: docker compose down -v --remove-orphans || true

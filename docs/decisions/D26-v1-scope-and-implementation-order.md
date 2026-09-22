@@ -669,3 +669,22 @@ The owner also fixed these Phase 5 behaviours:
 - Before a write, the server checks the ancestor chain. A write that would create a local override of an Inherited resource fails with `invalid_argument` and reason `inherited_resource`.
 - `perspective_view_validate` checks JSON, a `root` object with a string `type`, and the D10 size and depth budgets. It accepts unknown component types.
 - `perspective_view_delete` removes one View per call and never a folder.
+
+## Phase 6 amendment: v1 operations scope (owner ruling, 2026-09-23)
+
+Phase 6 delivers three things: the `setup-native install-module` command, one live stage that proves a fresh Module install and a Bundle upgrade against a real Gateway, and the v1 operations runbook at `docs/operations/runbook.md`. `setup-native verify` already performs the exact Tool, Resource and Prompt inventory check, and `tooling.native.cli release` already produces the release evidence, so Phase 6 builds neither again.
+
+These items leave v1. Issue #57 tracks them:
+
+- the compatibility semantic diff;
+- the full failure suite beyond the G4 and G5 cases;
+- scheduled soak and leak checks;
+- the nightly canary.
+
+`alarm_status`, `alarm_journal` and `alarm_acknowledge` stay parked, and their absence is a known v1 limitation. The two query Tools are parked under the D12 Phase 2 bounded-execution amendment, and their handlers are held in `packages/ignition-runtime-bundle/deferred/`. `alarm_acknowledge` is parked by the ticket #9 outcome under the D12 Phase 4 amendment for the same reason: the recorded exact-path `queryStatus` evidence in `docs/development/phase-4.md` shows one Alarm path returning 1, then 2, then 3 items across three unacknowledged activate and clear cycles, with no native limit or continuation, so the handler has no bounded source for its Observed state. G6 item 1 is assessed against every other Tool in the D26 v1 inventory.
+
+G6 never records `SUPPORTED`. The 8.3.8 tuple closes as `VERIFIED_WITH_LIMITATION` under D27. The 8.3.9 tuple carries `FAILED_NATIVE_BINDING`, the binding status recorded at G3, G4 and G5. The Runtime Bundle stays 0.x, and D21 plus D23 evidence, not the v1 name, decides any 1.0.0 claim.
+
+For v1, the phrase "upgrade path" in this Decision's Phase 6 list means a Bundle upgrade as `CONTEXT.md` defines it: an `apply` that replaces the managed Runtime Bundle Project with a newer bundle version. A Module upgrade, meaning a higher Module build replacing an installed one, is covered by `install-module`'s refusal logic and its unit tests, because the repository holds one Module build.
+
+Issues #39, #41 and #51 stay deferred and do not block G6.
