@@ -321,7 +321,13 @@ Commands: `doctor` runs the ordered read-only checks (`gateway-info`, `openapi-s
 D20's order (Security Level, credential, Project, Server Config, Runtime Target Policy), each
 confirmed by a read-back, and ends by running the `verify` sequence, and `verify` runs that
 acceptance sequence on its own (reachable → `initialize` → exact inventories → `resources/read`
-and `prompts/get` smokes → `bundle_info`). Compatibility is mapped deterministically from
+and `prompts/get` smokes → `bundle_info`). A Server Config this run announced must end up
+serving the profile's Tools: the Module resolves a Server Config's Tool list from its provider
+registry when the resource is written and registers a Project's provider on the Project's own
+thread, so an endpoint it built before that registration lands answers `initialize` with no
+capability at all. When that happens, `apply` re-announces the same document (bounded, at most
+three times, and it reports each `refreshes[]` entry) and only then judges `verify`; that is
+still a `NO CHANGE` deployment afterwards. Compatibility is mapped deterministically from
 `testedTuples` and is never upgraded: an incomplete identity or an unmatched tuple yields
 `UNKNOWN`/`UNTESTED`.
 

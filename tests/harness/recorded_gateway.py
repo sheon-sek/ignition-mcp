@@ -11,6 +11,7 @@ import io
 import json
 from pathlib import Path
 import threading
+import time
 from typing import Any
 import urllib.parse
 import re
@@ -1843,6 +1844,34 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return
             payload = json.loads(body)
             method = payload.get("method")
+            name = path.rsplit("/", 1)[-1]
+            if server.server_config_is_stale(name):
+                # The Module's server for this Server Config was built before the
+                # Project's provider registered: it answers ``initialize`` with no
+                # capability at all, and every primitive method is Invalid Request.
+                if method == "initialize":
+                    config = (server.server_config_named(name) or {}).get("config") or {}
+                    self._json(200, {
+                        "jsonrpc": "2.0",
+                        "id": payload.get("id"),
+                        "result": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "serverInfo": {
+                                "name": name,
+                                "title": str(config.get("title") or name),
+                                "version": str(config.get("version") or ""),
+                            },
+                        },
+                    })
+                    return
+                if method == "notifications/initialized":
+                    self._send(202)
+                    return
+                response = _fixture("mcp/prompts-list-invalid-request.json")
+                response["id"] = payload.get("id")
+                self._json(200, response)
+                return
             if method == "initialize":
                 response = _fixture("mcp/initialize.json")
                 response["id"] = payload.get("id")
@@ -2251,11 +2280,23 @@ class _Server(http.server.ThreadingHTTPServer):
         tag_delete_paths: dict[str, str] | None = None,
         tag_move_paths: dict[str, str] | None = None,
         tag_rename_paths: dict[str, str] | None = None,
+        primitive_pickup_delay: float = 0.0,
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
         self.projects = {name: _gateway_export(project) for name, project in projects.items()}
         self.imports: list[str] = []
+        # Ticket #21's live-reload hazard, modelled: the Module resolves a Server
+        # Config's Tool list against its provider registry at the moment the resource
+        # is written, and a Project's provider is registered by the Project
+        # collection's own notification thread. ``primitive_pickup_delay`` is that
+        # thread's turn: a Project imported now has its primitives available that many
+        # seconds later, and a Server Config written before then serves *no* primitives
+        # (``capabilities={}``, every list ``-32600``) until the resource is written
+        # again. ``0.0`` (the default) means a deployment the fake was started with.
+        self.primitive_pickup_delay = primitive_pickup_delay
+        self.project_imported_at: float | None = None
+        self.server_config_stale: set[str] = set()
         self.openapi_missing_responses = openapi_missing_responses
         self.quarantined_modules = set(quarantined_modules)
         self.certificate_accepted = False
@@ -2524,7 +2565,44 @@ class _Server(http.server.ThreadingHTTPServer):
             return 200, _refused(problem)
         self.projects[name] = _gateway_import(self.projects.get(name), body)
         self.imports.append(name)
+        # The Project's provider now has to be registered by the Module's own thread
+        # before a Server Config can resolve any of its primitives.
+        self.project_imported_at = time.monotonic()
         return 200, {"message": f"Project {name} imported"}
+
+    # ---------------------------------------------------- Module primitive pickup
+
+    def primitives_ready(self) -> bool:
+        """Whether the Module has registered the Project's provider yet."""
+
+        if self.project_imported_at is None:
+            return True
+        return time.monotonic() - self.project_imported_at >= self.primitive_pickup_delay
+
+    def note_server_config_write(self, name: str) -> None:
+        """Record what one Server Config write left the Module's server built from.
+
+        The Module resolves a Server Config's Tool list from its provider registry at
+        the moment the resource is written, so a write that lands before the Project's
+        provider is registered leaves an endpoint that serves nothing at all. A write
+        after that point rebuilds the server and it serves the profile's inventory.
+        """
+
+        if self.primitives_ready():
+            self.server_config_stale.discard(name)
+        else:
+            self.server_config_stale.add(name)
+
+    def server_config_is_stale(self, name: str) -> bool:
+        """Whether the Module's server for ``name`` was built before the pickup landed."""
+
+        return name in self.server_config_stale
+
+    def server_config_named(self, name: str) -> dict[str, Any] | None:
+        for (held, _collection), document in (self.resources.get(SERVER_CONFIG_TYPE) or {}).items():
+            if held == name:
+                return document
+        return None
 
     # ---------------------------------------------------------------- tags
 
@@ -2838,6 +2916,8 @@ class _Server(http.server.ThreadingHTTPServer):
                 if key in change:
                     current[key] = change[key]
             current["signature"] = self.next_signature()
+            if resource_type == SERVER_CONFIG_TYPE:
+                self.note_server_config_write(str(current.get("name") or ""))
             applied.append(self._change_notice(resource_type, current))
         return 200, {"success": True, "changes": applied}
 
@@ -2877,6 +2957,8 @@ class _Server(http.server.ThreadingHTTPServer):
         for change, name, collection in targets:
             document = self._document(resource_type, name, collection, change)
             entries[(name, collection)] = document
+            if resource_type == SERVER_CONFIG_TYPE:
+                self.note_server_config_write(name)
             applied.append(self._change_notice(resource_type, document))
         return 200, {"success": True, "changes": applied}
 
@@ -3270,6 +3352,7 @@ class RecordedGateway:
         tag_delete_paths: dict[str, str] | None = None,
         tag_move_paths: dict[str, str] | None = None,
         tag_rename_paths: dict[str, str] | None = None,
+        primitive_pickup_delay: float = 0.0,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -3289,6 +3372,7 @@ class RecordedGateway:
             tag_delete_paths,
             tag_move_paths,
             tag_rename_paths,
+            primitive_pickup_delay,
         )
         self._server.policy_provider_unready_reads = policy_provider_unready_reads
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
