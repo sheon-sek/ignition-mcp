@@ -19,8 +19,25 @@ from pathlib import Path
 from typing import Any, NoReturn, Sequence
 from urllib.parse import urlsplit
 
-COMMANDS = ("doctor", "plan", "verify")
+COMMANDS = ("doctor", "plan", "verify", "apply")
 PROFILE_NAMES = ("readonly", "operator", "configurator", "full")
+
+#: The Resource type and collection ``apply`` writes the MCP Server Config through
+#: (D20: Native REST only, never the filesystem). D30 §5 refuses that type to the
+#: generic config Mutations, which is why ``apply`` has its own curated writer.
+SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
+CONFIG_COLLECTION = "core"
+
+#: The two Resource types of D20's opt-in provisioning (ticket #22). D30 §5 refuses
+#: both to the generic config Mutations for the same reason it refuses ``server-config``:
+#: they administer the Gateway's own security, so only this curated CLI may write them.
+SECURITY_LEVELS_TYPE = "ignition/security-levels"
+API_TOKEN_TYPE = "ignition/api-token"
+
+#: D09: dedicated Runtime Security Levels, named per privilege profile, placed as a
+#: child of the Gateway's ``Authenticated`` level (the live tree the G0 run recorded).
+SECURITY_LEVEL_PARENT = "Authenticated"
+SECURITY_LEVEL_PREFIX = "IgnitionMcpRuntime"
 
 ENV_GATEWAY_URL = "IGNITION_MCP_SETUP_GATEWAY_URL"
 ENV_MCP_URL = "IGNITION_MCP_SETUP_MCP_URL"
@@ -79,14 +96,15 @@ COMPATIBILITY_STATUSES = frozenset({"SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UN
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: A resource, project or Server Config name this CLI is willing to address.
+NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 EXIT_CODE_DOC = """\
 exit codes:
   0  command completed with no FAIL (doctor/verify) and no BLOCKED (plan)
   1  a check failed or a transport error occurred
   2  usage error: bad flags, unreadable/invalid manifest, credential file rejected
-  3  plan reports at least one BLOCKED action
+  3  plan reports at least one BLOCKED action (apply writes nothing and exits 3)
 """
 
 ENV_DOC = f"""\
@@ -97,14 +115,25 @@ environment fallbacks (flags win):
   {ENV_MCP_TOKEN}      bearer token for a secured/static-auth MCP endpoint
 
 Token files must be regular, non-symlink files readable only by their owner
-(mode 0600) holding exactly one non-empty line.  No command in this group
-mutates a Gateway: ``apply`` (Phase 4) and ``install-module`` (Phase 6) do not
-exist yet, so ``plan`` only ever reports intentions.
+(mode 0600) holding exactly one non-empty line.  ``apply`` writes the bundle
+project, the Server Config and the Runtime Target Policy through documented
+Native REST routes and stops before it writes while any plan line is BLOCKED;
+``--provision-security-levels`` and ``--create-runtime-token`` add D20's two
+opt-in writes (a dedicated Runtime Security Level and a Runtime API token per
+profile), which never modify an existing one, and the token secret goes only to
+the operator-named ``--runtime-token-file``; ``install-module`` (Phase 6) does
+not exist yet.
 """
 
 
 class UsageError(Exception):
     """Bad flag, unreadable artifact, or rejected credential input (exit 2)."""
+
+
+def default_security_level_name(profile: str) -> str:
+    """The dedicated Runtime Security Level's name for one privilege profile (D09)."""
+
+    return f"{SECURITY_LEVEL_PREFIX}{profile.capitalize()}"
 
 
 class UsageParser(argparse.ArgumentParser):
@@ -150,10 +179,46 @@ class Inputs:
     timeout_seconds: float
     allow_insecure_authorize: bool
     as_json: bool
+    #: ``apply`` inputs (D20). The two documents are loaded and validated by the
+    #: command that needs them, so ``plan`` can run without them.
+    policy_file: Path | None = None
+    permissions_file: Path | None = None
+    acknowledge_upgrade: bool = False
+    backup_dir: Path | None = None
+    #: D20's two opt-in provisioning switches (ticket #22). Both default off: without
+    #: them this CLI detects a Security Level and an API token and writes neither.
+    provision_security_levels: bool = False
+    security_level_name: str | None = None
+    create_runtime_token: bool = False
+    runtime_token_file: Path | None = None
+    runtime_token_name: str | None = None
+    runtime_token_insecure_channel: bool = False
 
     @property
     def bundle_version(self) -> str:
         return str(self.manifest["bundleVersion"])
+
+    @property
+    def security_level(self) -> str:
+        """The dedicated Runtime Security Level's name (D09: one per profile)."""
+
+        return self.security_level_name or default_security_level_name(self.profile)
+
+    @property
+    def security_level_path(self) -> str:
+        return f"{SECURITY_LEVEL_PARENT}/{self.security_level}"
+
+    @property
+    def runtime_token(self) -> str:
+        """The Runtime API token resource's name; empty unless it is to be created."""
+
+        return self.runtime_token_name or self.server_config_name or ""
+
+    @property
+    def provisions_security(self) -> bool:
+        """Whether this run reasons about the Gateway's security planes at all."""
+
+        return self.provision_security_levels or self.create_runtime_token
 
     def profile_inventory(self, key: str) -> list[str]:
         """The selected profile's Tool / Resource / Prompt inventory."""
@@ -162,6 +227,21 @@ class Inputs:
 
     def tested_tuples(self) -> list[dict[str, Any]]:
         return tested_tuples(self.manifest)
+
+    def runtime_endpoint(self) -> Endpoint | None:
+        """The Runtime MCP endpoint to verify: ``--mcp-url``, else the Server Config path."""
+
+        if self.mcp_url is not None:
+            return self.mcp_url
+        if self.server_config_name is None:
+            return None
+        base = self.gateway_url
+        return Endpoint(
+            url=f"{base.url}/data/mcp/{self.server_config_name}",
+            scheme=base.scheme,
+            host=base.host,
+            port=base.port,
+        )
 
 
 def manifest_inventory(manifest: dict[str, Any], profile: str, key: str) -> list[str]:
@@ -193,7 +273,9 @@ def build_base_parser() -> UsageParser:
     flags.add_argument("--bundle-zip", metavar="PATH", help="bundle ZIP; its SHA-256 must match the manifest")
     flags.add_argument("--profile", default="readonly", choices=PROFILE_NAMES, help="profile inventory (readonly)")
     flags.add_argument("--gateway-url", metavar="URL", help=f"Gateway base URL (or ${ENV_GATEWAY_URL})")
-    flags.add_argument("--mcp-url", metavar="URL", help=f"Runtime MCP endpoint URL (or ${ENV_MCP_URL})")
+    flags.add_argument("--mcp-url", metavar="URL",
+                       help=f"Runtime MCP endpoint URL (or ${ENV_MCP_URL}; doctor/verify derive it "
+                            "from --server-config-name when this is absent)")
     flags.add_argument("--gateway-token-file", metavar="PATH",
                        help=f"0600 file with the Ignition API token (or ${ENV_GATEWAY_TOKEN})")
     flags.add_argument("--mcp-token-file", metavar="PATH",
@@ -204,6 +286,30 @@ def build_base_parser() -> UsageParser:
                        help="expected MCP server-config resource name (presence check only)")
     flags.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS",
                        help=f"per-request HTTP budget ({DEFAULT_TIMEOUT_SECONDS:g}s; MCP initialize {MCP_TIMEOUT_SECONDS:g}s)")
+    flags.add_argument("--policy-file", metavar="PATH",
+                       help="Runtime Target Policy JSON document apply writes to the reserved Tag provider")
+    flags.add_argument("--server-config-permissions-file", metavar="PATH",
+                       help="permissions tree for a Server Config this run creates (never invented by the CLI)")
+    flags.add_argument("--acknowledge-upgrade", action="store_true",
+                       help="accept a MAJOR or downgrade bundle change (plan marks those lines)")
+    flags.add_argument("--backup-dir", metavar="PATH",
+                       help="before overwriting a managed bundle project, export the deployed one into this directory")
+    flags.add_argument("--provision-security-levels", action="store_true",
+                       help="create the dedicated Runtime Security Level this profile needs (D09/D20); "
+                            "an existing level is never modified")
+    flags.add_argument("--security-level-name", metavar="NAME",
+                       help=f"the dedicated Security Level's name (default {SECURITY_LEVEL_PREFIX}<Profile>; "
+                            f"always a child of {SECURITY_LEVEL_PARENT})")
+    flags.add_argument("--create-runtime-token", action="store_true",
+                       help="create the Runtime API token this profile's MCP service uses (D20); an existing "
+                            "token is never overwritten")
+    flags.add_argument("--runtime-token-file", metavar="PATH",
+                       help="where the created token's secret is written: mode 0600, created with 0600, "
+                            "and never reported")
+    flags.add_argument("--runtime-token-name", metavar="NAME",
+                       help="the token resource's name (default: --server-config-name)")
+    flags.add_argument("--runtime-token-insecure-channel", action="store_true",
+                       help="create the token with secureChannelRequired=false (plain-HTTP lab Gateways only)")
     flags.add_argument("--allow-insecure-authorize", action="store_true",
                        help="send the API token over plain HTTP to a non-loopback Gateway")
     flags.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report on stdout")
@@ -229,6 +335,7 @@ _COMMAND_HELP = {
     "doctor": "Read-only diagnosis of a Runtime Bundle deployment (never mutates anything).",
     "plan": "Report the CREATE / UPDATE / NO CHANGE / BLOCKED intentions for a deployment.",
     "verify": "Verify a provisioned deployment: exact inventories, resource/prompt smokes, bundle_info.",
+    "apply": "Apply the planned bundle project, Server Config and Runtime Target Policy, then verify.",
 }
 
 
@@ -268,10 +375,21 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if not gateway_raw:
         raise UsageError(f"--gateway-url (or ${ENV_GATEWAY_URL}) is required")
     gateway_url = _endpoint(gateway_raw, "--gateway-url")
+    server_config_name = (
+        None
+        if namespace.server_config_name is None
+        else _require_name(_text(namespace.server_config_name, "--server-config-name"), "--server-config-name")
+    )
     mcp_raw = _text_or_none(namespace.mcp_url) or os.environ.get(ENV_MCP_URL)
-    if command in ("doctor", "verify") and not mcp_raw:
-        raise UsageError(f"--mcp-url (or ${ENV_MCP_URL}) is required for {command}")
     mcp_url = None if mcp_raw is None else _endpoint(mcp_raw, "--mcp-url")
+    # `doctor` and `verify` need an endpoint to talk to: either the URL or the Server
+    # Config whose documented path it is (`/data/mcp/<name>`), which is what `apply`
+    # has just written and what it verifies through.
+    if command in ("doctor", "verify") and mcp_url is None and server_config_name is None:
+        raise UsageError(
+            f"an MCP endpoint is required for {command}: --mcp-url (or ${ENV_MCP_URL}), "
+            "or --server-config-name to derive it"
+        )
 
     gateway_token = _resolve_token(
         _text_or_none(namespace.gateway_token_file),
@@ -292,6 +410,64 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if not 0.0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise UsageError(f"--timeout-seconds must be in (0, {MAX_TIMEOUT_SECONDS:g}]")
 
+    policy_file = _optional_path(_text_or_none(namespace.policy_file), "--policy-file")
+    permissions_file = _optional_path(
+        _text_or_none(namespace.server_config_permissions_file), "--server-config-permissions-file",
+    )
+    backup_dir = _optional_path(_text_or_none(namespace.backup_dir), "--backup-dir")
+    provision_security_levels = bool(namespace.provision_security_levels)
+    create_runtime_token = bool(namespace.create_runtime_token)
+    security_level_name = (
+        None
+        if namespace.security_level_name is None
+        else _require_name(_text(namespace.security_level_name, "--security-level-name"), "--security-level-name")
+    )
+    runtime_token_file = _optional_path(_text_or_none(namespace.runtime_token_file), "--runtime-token-file")
+    runtime_token_name = (
+        None
+        if namespace.runtime_token_name is None
+        else _require_name(_text(namespace.runtime_token_name, "--runtime-token-name"), "--runtime-token-name")
+    )
+    # D20's provisioning is opt-in, and each flag carries what it needs: a secret is
+    # written only to a file the operator named, and a token is named after the Server
+    # Config it serves unless the operator says otherwise.
+    if create_runtime_token and runtime_token_file is None:
+        raise UsageError(
+            "--create-runtime-token needs --runtime-token-file: the Gateway returns the secret once, and "
+            "it is written to an operator-named 0600 file rather than reported"
+        )
+    if create_runtime_token and runtime_token_name is None and server_config_name is None:
+        raise UsageError(
+            "--create-runtime-token needs --runtime-token-name (or --server-config-name) to name the "
+            "token resource"
+        )
+    if not create_runtime_token and (
+        runtime_token_file is not None
+        or runtime_token_name is not None
+        or bool(namespace.runtime_token_insecure_channel)
+    ):
+        raise UsageError(
+            "--runtime-token-file, --runtime-token-name and --runtime-token-insecure-channel have no effect "
+            "without --create-runtime-token"
+        )
+    if security_level_name is not None and not (provision_security_levels or create_runtime_token):
+        raise UsageError(
+            "--security-level-name has no effect without --provision-security-levels or --create-runtime-token"
+        )
+    if command == "apply":
+        missing = [
+            flag for flag, value in (
+                ("--server-config-name", server_config_name),
+                ("--bundle-zip", bundle_zip),
+                ("--policy-file", policy_file),
+            ) if value is None
+        ]
+        if missing:
+            raise UsageError(
+                f"apply needs {', '.join(missing)}: it writes that Server Config, that project "
+                "archive and that Runtime Target Policy document"
+            )
+
     return Inputs(
         command=command,
         manifest_path=manifest_path,
@@ -301,15 +477,29 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
         bundle_zip=bundle_zip,
         profile=profile,
         bundle_project=_require_name(_text_or_none(namespace.bundle_project) or DEFAULT_BUNDLE_PROJECT, "--bundle-project"),
-        server_config_name=(None if namespace.server_config_name is None
-                            else _require_name(_text(namespace.server_config_name, "--server-config-name"),
-                                               "--server-config-name")),
+        server_config_name=server_config_name,
         gateway_token=gateway_token,
         mcp_token=mcp_token,
         timeout_seconds=timeout,
         allow_insecure_authorize=bool(namespace.allow_insecure_authorize),
         as_json=bool(namespace.as_json),
+        policy_file=policy_file,
+        permissions_file=permissions_file,
+        acknowledge_upgrade=bool(namespace.acknowledge_upgrade),
+        backup_dir=backup_dir,
+        provision_security_levels=provision_security_levels,
+        security_level_name=security_level_name,
+        create_runtime_token=create_runtime_token,
+        runtime_token_file=runtime_token_file,
+        runtime_token_name=runtime_token_name,
+        runtime_token_insecure_channel=bool(namespace.runtime_token_insecure_channel),
     )
+
+
+def _optional_path(value: str | None, flag: str) -> Path | None:
+    if value is None or not value.strip():
+        return None
+    return _require_path(value.strip(), flag)
 
 
 def validate_manifest(document: Any) -> dict[str, Any]:
@@ -485,7 +675,7 @@ def _require_path(raw: str, flag: str) -> Path:
 
 def _require_name(value: str, flag: str) -> str:
     name = value.strip()
-    if _NAME_TOKEN.fullmatch(name) is None:
+    if NAME_TOKEN.fullmatch(name) is None:
         raise UsageError(f"{flag}: {value!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}")
     return name
 

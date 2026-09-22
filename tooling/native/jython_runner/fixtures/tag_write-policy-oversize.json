@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": [
+    "writes",
+    "timeout"
+  ],
+  "arguments": {
+    "writes": [
+      {
+        "path": "[default]AHU/Setpoint",
+        "value": 1
+      }
+    ],
+    "timeout": 5000
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 40000
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -15,11 +15,13 @@ import tarfile
 import tempfile
 import unittest
 from unittest import mock
+import urllib.error
 
 from tooling.ci.actionlint import (
     ActionlintError,
     Asset,
     CHUNK_BYTES,
+    DOWNLOAD_ATTEMPTS,
     OVERRIDE_ENV,
     VERSION,
     asset_for,
@@ -176,10 +178,73 @@ class FetchTest(unittest.TestCase):
             sha256="0" * 64,
             size=len(payload),
         )
+        attempts: list[float] = []
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(ActionlintError) as caught:
-                ensure_binary(asset, cache_dir=Path(temporary), fetch=lambda url, limit: payload)
+                ensure_binary(
+                    asset, cache_dir=Path(temporary),
+                    fetch=lambda url, limit: payload, sleep=attempts.append,
+                )
         self.assertIn("0" * 64, str(caught.exception))
+        # Bounded work: the digest fails on every attempt, and the retries are
+        # spaced by the documented backoff rather than run in a tight loop.
+        self.assertEqual(attempts, [1.0, 2.0, 4.0, 8.0])
+        self.assertIn(f"in {DOWNLOAD_ATTEMPTS} attempt(s)", str(caught.exception))
+
+    def test_a_transient_release_failure_is_retried_with_backoff(self) -> None:
+        """The release CDN answered HTTP 500 in run 35669308034 and failed an
+        otherwise clean push; the pinned download rides that out."""
+        payload = _tarball()
+        asset = _asset(payload)
+        responses: list[object] = [
+            urllib.error.HTTPError(asset.url, 500, "Internal Server Error", {}, None),
+            urllib.error.HTTPError(asset.url, 503, "Service Unavailable", {}, None),
+            _Response(payload),
+        ]
+        attempts: list[float] = []
+
+        def urlopen(url: str, timeout: float | None = None) -> object:
+            self.assertEqual(url, asset.url)
+            response = responses.pop(0)
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch("tooling.ci.actionlint.urllib.request.urlopen", side_effect=urlopen):
+                binary = ensure_binary(asset, cache_dir=Path(temporary), sleep=attempts.append)
+            self.assertEqual(binary.read_bytes(), b"#!/bin/sh\necho stub actionlint\n")
+        self.assertEqual(responses, [])
+        self.assertEqual(attempts, [1.0, 2.0])
+
+    def test_a_truncated_download_is_fetched_again(self) -> None:
+        """A body that does not match the pin is retried, and the checksum still
+        decides: a download that never matches aborts instead of being accepted."""
+        payload = _tarball()
+        asset = _asset(payload)
+        served: list[int] = []
+
+        def fetch(url: str, limit: int) -> bytes:
+            served.append(limit)
+            return payload[: len(payload) // 2] if len(served) == 1 else payload
+
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = ensure_binary(asset, cache_dir=Path(temporary), fetch=fetch, sleep=lambda _: None)
+            delivered = binary.read_bytes()
+        self.assertEqual(len(served), 2)
+        self.assertEqual(delivered, b"#!/bin/sh\necho stub actionlint\n")
+
+    def test_an_over_pin_response_is_not_retried(self) -> None:
+        """A body over the pin is a response the pin rejects, not a transient
+        network condition, so the loop spends one attempt on it."""
+        asset = asset_for("linux", "x86_64")
+        response = _Response(b"\0" * (asset.size * 4))
+        attempts: list[float] = []
+        with tempfile.TemporaryDirectory() as temporary:
+            with mock.patch("tooling.ci.actionlint.urllib.request.urlopen", return_value=response):
+                with self.assertRaises(ActionlintError):
+                    ensure_binary(asset, cache_dir=Path(temporary), sleep=attempts.append)
+        self.assertEqual(attempts, [])
 
     def test_corrupted_cache_is_never_trusted(self) -> None:
         asset = asset_for("linux", "x86_64")

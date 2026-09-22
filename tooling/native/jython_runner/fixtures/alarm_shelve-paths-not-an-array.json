@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_shelve",
+  "parameterOrder": [
+    "paths",
+    "timeoutSeconds"
+  ],
+  "arguments": {
+    "paths": [],
+    "timeoutSeconds": 60
+  },
+  "calls": []
+}

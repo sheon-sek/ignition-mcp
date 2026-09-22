@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"invalid_argument\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"items\": [{\"index\": 0, \"path\": \"\", \"reason\": \"itemKeysMustBePathAndFingerprint\"}], \"reason\": \"preflightInputFailed\"}, \"message\": \"Every item must carry an absolute provider-qualified config path and the tcf1 fingerprint of that target's own tag_get_config read; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

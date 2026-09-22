@@ -1,0 +1,126 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "recorded replay"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "status": "executed",
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/TextTarget",
+        "status": "executed",
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Nested/Inner",
+        "status": "executed",
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Missing",
+        "status": "executed",
+        "quality": {
+          "code": 260,
+          "name": "Bad_NotFound",
+          "level": "Error",
+          "good": false,
+          "diagnosticMessage": "Path '[default]IgnitionMCP_CI/Missing' not found."
+        }
+      }
+    ],
+    "observed": [
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "status": "ok",
+        "value": 22,
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        },
+        "timestamp": "2026-09-22T00:00:00Z"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/TextTarget",
+        "status": "ok",
+        "value": "phase4-written",
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        },
+        "timestamp": "2026-09-22T00:00:00Z"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Nested/Inner",
+        "status": "ok",
+        "value": 7,
+        "quality": {
+          "code": 192,
+          "name": "Good",
+          "level": "Good",
+          "good": true,
+          "diagnosticMessage": null
+        },
+        "timestamp": "2026-09-22T00:00:00Z"
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/Missing",
+        "status": "ok",
+        "value": {
+          "$ignition": "null"
+        },
+        "quality": {
+          "code": 260,
+          "name": "Bad_NotFound",
+          "level": "Error",
+          "good": false,
+          "diagnosticMessage": "Path '[default]IgnitionMCP_CI/Missing' not found."
+        },
+        "timestamp": {
+          "$ignition": "null"
+        }
+      }
+    ],
+    "summary": {
+      "requested": 4,
+      "succeeded": 3,
+      "failed": 1,
+      "outcomeUnknown": 0,
+      "auditMode": "best_effort",
+      "auditRecorded": true
+    },
+    "meta": {
+      "correlationId": "0f6c0a52-0000-4000-8000-00000000c0de"
+    }
+  }
+}

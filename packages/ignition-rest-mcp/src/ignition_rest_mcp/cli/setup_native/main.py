@@ -1,9 +1,11 @@
-"""Entry point for ``ignition-mcp setup-native doctor|plan|verify`` (D20, D25).
+"""Entry point for ``ignition-mcp setup-native doctor|plan|apply|verify`` (D20, D25).
 
-Only the read-only half of the D20 command surface exists in Phase 3: there is no
-``apply`` and no ``install-module``.  Usage problems exit 2, an interrupted run
-exits 2, and an unexpected crash exits 1 reporting the exception type only, so a
-credential can never leak through a traceback.
+``doctor``, ``plan`` and ``verify`` are read-only; ``apply`` writes the planned
+bundle project, Server Config and Runtime Target Policy through the curated
+guarded path and then verifies.  ``install-module`` is Phase 6 and is not
+implemented.  Usage problems exit 2, an interrupted run exits 2, and an unexpected
+crash exits 1 reporting the exception type only, so a credential can never leak
+through a traceback.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from collections.abc import Callable, Coroutine, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from ignition_rest_mcp.cli.setup_native import doctor, plan, verify
+from ignition_rest_mcp.cli.setup_native import apply, doctor, plan, verify
 from ignition_rest_mcp.cli.setup_native.inputs import (
     COMMANDS,
     ENV_DOC,
@@ -31,17 +33,18 @@ from ignition_rest_mcp.cli.setup_native.inputs import (
 PROG = "ignition-mcp"
 GROUP = "setup-native"
 #: Mutation commands named here so the refusal message can explain itself.
-NOT_IMPLEMENTED = ("apply", "install-module")
+NOT_IMPLEMENTED = ("install-module",)
 
 GROUP_DESCRIPTION = (
-    "Detect, plan and verify an ignition-runtime-bundle deployment across its documented REST and "
-    "MCP endpoints. Read-only: apply (Phase 4) and install-module (Phase 6) are not implemented."
+    "Detect, plan, apply and verify an ignition-runtime-bundle deployment across its documented "
+    "REST and MCP endpoints. install-module (Phase 6) is not implemented."
 )
 
 _COMMANDS: dict[str, Callable[[Inputs], Coroutine[Any, Any, int]]] = {
     "doctor": doctor.run,
     "plan": plan.run,
     "verify": verify.run,
+    "apply": apply.run,
 }
 
 
@@ -86,6 +89,9 @@ _COMMAND_SUMMARY = {
     "doctor": "ordered read-only diagnosis of a deployment (never mutates anything)",
     "plan": "report CREATE / UPDATE / NO CHANGE / BLOCKED intentions without applying them",
     "verify": "verify a provisioned deployment: exact inventories, resource/prompt smokes, bundle_info",
+    "apply": (
+        "apply the planned bundle project, Server Config and Runtime Target Policy, then verify"
+    ),
 }
 
 
@@ -108,7 +114,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args[0] != GROUP:
         return _usage_error(
             f"unknown command group {args[0]!r}; only {GROUP!r} is implemented "
-            "(apply and install-module are Phase 4/6 and deliberately absent)",
+            "(install-module is Phase 6 and deliberately absent)",
             tree.root,
         )
     rest = args[1:]
@@ -116,8 +122,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _usage_error(f"{GROUP} needs one of {', '.join(COMMANDS)}", tree.group)
     if rest[0] in NOT_IMPLEMENTED:
         return _usage_error(
-            f"{rest[0]} is not implemented: this CLI only detects, plans and verifies "
-            "(provisioning lands in Phase 4, module installation in Phase 6)",
+            f"{rest[0]} is not implemented: module installation is Phase 6 "
+            "(doctor, plan, apply and verify are implemented)",
             tree.group,
         )
     if rest[0] in ("-h", "--help"):

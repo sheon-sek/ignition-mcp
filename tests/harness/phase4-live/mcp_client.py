@@ -144,8 +144,16 @@ class McpClient:
                 return tools
         raise McpError("tools/list needed more than 20 pages")
 
+    def tool_result(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """The raw `tools/call` result, including a Tool Error (`isError`) result.
+
+        `tool_call` refuses an error result; the Phase 4 refusal cases need the
+        canonical error the Tool returned, so this variant does not raise on it.
+        """
+        return self.request("tools/call", {"name": name, "arguments": arguments})
+
     def tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        result = self.request("tools/call", {"name": name, "arguments": arguments})
+        result = self.tool_result(name, arguments)
         if result.get("isError"):
             raise McpError(f"tool {name} returned isError: {json.dumps(result)[:600]}")
         return result

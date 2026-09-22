@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"not_found\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_copy\", \"auditRecorded\": true, \"items\": [{\"code\": \"not_found\", \"destinationPath\": \"__MISSING_DESTINATION__\", \"index\": 0, \"path\": \"__MISSING_SOURCE__\", \"reason\": \"sourceMissing\", \"sourcePath\": \"__MISSING_SOURCE__\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"The source must exist and be readable, and the destination must be free: an occupied destination is conflict and a source that is not there is not_found; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

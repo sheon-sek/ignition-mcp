@@ -1,13 +1,32 @@
 #!/usr/bin/env python3
-"""Rehearse the Phase 4 ticket #6 driver against the recorded Gateway fake.
+"""Rehearse the Phase 4 driver against the recorded Gateway fake.
 
 Run this before spending a live `phase4-live` run. It starts the shared recorded
 Gateway fake on the one origin the driver accepts (`127.0.0.1:8093`), writes the
-CI marker the live workflow writes, and runs every driver stage over it:
+CI marker the live workflow writes, and runs one milestone's driver stages over it
+(`--stages 4a` is the default; `--stages 4b` is the ticket #10 Tag CONFIG
+Mutation):
 
 * ``policy-provision`` exercises the Native REST Tag provider + Tag import path.
 * ``policy-read`` / ``alarm`` exercise the driver's probe-call and fact-derivation
   code against the recorded probe payloads.
+* ``tag-write`` / ``alarm-no-policy`` / ``alarm-shelve`` exercise the shipped
+  Mutation cases against the recorded Tool bodies.
+* ``tag-update-no-policy`` / ``tag-update-setup`` / ``tag-update`` (milestone 4b)
+  exercise the Tag config fingerprint and `tag_update` against the recorded Tag
+  configuration the fake serves.
+* ``tag-create`` / ``tag-copy`` (milestone 4b, ticket #11) exercise the two Runtime Tag
+  CONFIG Mutations that write a node: the create/copy result, its collision, the leaf
+  rule, the allowlist and reserved-provider refusals and the D10 ceilings, against the
+  Tag state the fake models. They need no setup stage of their own because
+  ``tag-update-setup`` already seeds the fixture Tags, the audit profile and the policy
+  provider they run against, and each installs its own policy document.
+* ``tag-move`` / ``tag-rename`` / ``tag-delete`` (milestone 4b, ticket #12) exercise the
+  three Mutations that relocate or remove a node: the move and the rename with both of
+  their ends re-read from the provider export the fake serves, the delete with its
+  partial-failure batch (a Folder takes the Tag a later item names), each Tool's
+  collision, its Precondition token, its allowlist and reserved-provider refusals, and
+  the D10 ceilings.
 * ``summarize`` exercises the drift check and verdict.
 
 The rehearsal runs against ``tests/fixtures/recorded/gateway-8.3/phase4``. Those
@@ -37,19 +56,60 @@ import driver  # noqa: E402
 import policy_document  # noqa: E402
 
 DRIVER = Path(__file__).resolve().parent / "driver.py"
+#: The milestone's CI marker label; the live workflow writes the same one, and the
+#: driver's guard compares it, so a rehearsal marker can never stand in for another
+#: milestone's.
+MARKER_LABELS = {driver.MILESTONE_4A: "g4a", driver.MILESTONE_4B: "g4b"}
 GATEWAY_VERSION = "8.3.8"
 GATEWAY_BUILD = "2026071409"
 RUN_ID = "0000000000"
 ALARM_ROOT = "mcp_p4_" + RUN_ID
 MCP_PATH = driver.EXPECTED_MCP_PATH
+MILESTONES = {
+    driver.MILESTONE_4A: [
+        (["tag-write-no-policy"], "tag-write-no-policy"),
+        (["alarm-no-policy"], "alarm-no-policy"),
+        (["policy-provision"], "policy-provision"),
+        (["policy-read", "--label", "before-restart"], "policy-read-before-restart"),
+        (["policy-read", "--label", "after-restart"], "policy-read-after-restart"),
+        (["alarm"], "alarm"),
+        (["tag-write-setup"], "tag-write-setup"),
+        (["tag-write"], "tag-write"),
+        (["alarm-shelve"], "alarm-shelve"),
+    ],
+    driver.MILESTONE_4B: [
+        (["tag-update-no-policy"], "tag-update-no-policy"),
+        (["policy-provision"], "policy-provision"),
+        (["tag-update-setup"], "tag-update-setup"),
+        (["tag-update"], "tag-update"),
+        (["tag-create"], "tag-create"),
+        (["tag-copy"], "tag-copy"),
+        (["tag-move"], "tag-move"),
+        (["tag-rename"], "tag-rename"),
+        (["tag-delete"], "tag-delete"),
+    ],
+}
 FIXTURE_DIR = ROOT / "tests/fixtures/recorded/gateway-8.3/phase4"
+
+
+def tag_update_paths() -> dict[str, str]:
+    """The Tag CONFIG Mutation paths of this rehearsal's run, for the fake's templates."""
+    return {
+        "writeTarget": policy_document.TAG_UPDATE_TARGET,
+        "textTarget": policy_document.TAG_UPDATE_TEXT_TARGET,
+        "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
+        "writeProbe": policy_document.WRITE_PROBE_PATH,
+        "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
+        "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
+        "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
+    }
 
 
 def recorded_fixtures() -> list[str]:
     return sorted(path.name for path in FIXTURE_DIR.glob("*.json"))
 
 
-def write_marker(path: Path) -> None:
+def write_marker(path: Path, label: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({
         "marker": "ignition-mcp-phase4-live",
@@ -57,10 +117,12 @@ def write_marker(path: Path) -> None:
         "runId": RUN_ID,
         "gatewayVersion": GATEWAY_VERSION,
         "gatewayBuild": GATEWAY_BUILD,
-        "gatewayId": f"phase4-g4a-{GATEWAY_VERSION}-{RUN_ID}",
+        "gatewayId": f"phase4-{label}-{GATEWAY_VERSION}-{RUN_ID}",
         "trustedRepo": "sheon-sek/ignition-mcp",
         "policyProvider": policy_document.POLICY_PROVIDER,
         "alarmRoot": ALARM_ROOT,
+        "runtimeProject": driver.RUNTIME_PROJECT,
+        "auditProfile": policy_document.AUDIT_PROFILE_NAME,
     }, indent=2) + "\n", encoding="utf-8")
 
 
@@ -70,12 +132,16 @@ EXIT_DRIFTED = 3
 
 def run_stage(
     stage: list[str], base_url: str, mcp_url: str, work: Path, marker: Path, evidence: Path,
-    characterization: str,
+    characterization: str, stages: str,
 ) -> int:
     command = [
         sys.executable, str(DRIVER), *stage,
         "--base-url", base_url,
         "--mcp-url", mcp_url,
+        "--operator-mcp-url", base_url + driver.OPERATOR_MCP_PATH,
+        "--configurator-mcp-url", base_url + driver.CONFIGURATOR_MCP_PATH,
+        "--marker-label", MARKER_LABELS[stages],
+        "--stages", stages,
         "--api-token", API_TOKEN,
         "--evidence-dir", str(evidence),
         "--ci-marker", str(marker),
@@ -83,6 +149,7 @@ def run_stage(
         "--gateway-version", GATEWAY_VERSION,
         "--gateway-build", GATEWAY_BUILD,
         "--root-name", ALARM_ROOT,
+        "--audit-profile", policy_document.AUDIT_PROFILE_NAME,
         "--characterization", characterization,
         "--noise-count", "60",
         "--cycles", "3",
@@ -102,9 +169,14 @@ def run_stage(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Rehearse the Phase 4 driver against the recorded Gateway fake")
     parser.add_argument(
+        "--stages", default=driver.MILESTONE_4A, choices=sorted(driver.STAGE_SETS),
+        help="which milestone's stages and expectations to rehearse",
+    )
+    parser.add_argument(
         "--characterization",
-        default=str(Path(__file__).resolve().parent / "characterization.json"),
-        help="expectation file the summarize stage compares against",
+        default="",
+        help="expectation file the summarize stage compares against; defaults to the "
+             "selected milestone's own file",
     )
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
@@ -114,26 +186,32 @@ def main(argv: list[str] | None = None) -> int:
         work = Path(temporary)
         marker = work / "ci-marker.json"
         evidence = work / "evidence"
-        write_marker(marker)
+        write_marker(marker, MARKER_LABELS[args.stages])
         with RecordedGateway(
             policy_provider=policy_document.POLICY_PROVIDER,
-            runtime_tools=("policy_probe", "alarm_probe"),
+            runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+            audit_profile=policy_document.AUDIT_PROFILE_NAME,
             port=driver.EXPECTED_ORIGIN_PORT,
+            alarm_root=ALARM_ROOT,
+            tag_update_paths=tag_update_paths(),
+            tag_create_paths=driver.tag_create_paths(),
+            tag_copy_paths=driver.tag_copy_paths(),
+            tag_delete_paths=driver.tag_delete_paths(),
+            tag_move_paths=driver.tag_move_paths(),
+            tag_rename_paths=driver.tag_rename_paths(),
         ) as gateway:
             base_url = gateway.base_url
             mcp_url = base_url + MCP_PATH
-            stages = [
-                (["policy-provision"], "policy-provision"),
-                (["policy-read", "--label", "before-restart"], "policy-read-before-restart"),
-                (["policy-read", "--label", "after-restart"], "policy-read-after-restart"),
-                (["alarm"], "alarm"),
-            ]
-            for stage, record in stages:
-                code = run_stage(stage, base_url, mcp_url, work, marker, evidence, args.characterization)
+            for stage, record in MILESTONES[args.stages]:
+                code = run_stage(
+                    stage, base_url, mcp_url, work, marker, evidence, args.characterization, args.stages,
+                )
                 if code != 0:
                     print(f"rehearsal stage {record} failed with exit {code}", file=sys.stderr)
                     return 2
-            code = run_stage(["summarize"], base_url, mcp_url, work, marker, evidence, args.characterization)
+            code = run_stage(
+                ["summarize"], base_url, mcp_url, work, marker, evidence, args.characterization, args.stages,
+            )
             evidence_path = evidence / "evidence.json"
             if not evidence_path.is_file():
                 print("summarize produced no evidence.json", file=sys.stderr)

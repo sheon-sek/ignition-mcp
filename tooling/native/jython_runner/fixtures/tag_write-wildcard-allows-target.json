@@ -1,0 +1,140 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": [
+    "writes",
+    "timeout"
+  ],
+  "arguments": {
+    "writes": [
+      {
+        "path": "[default]Other/Setpoint",
+        "value": "off"
+      }
+    ],
+    "timeout": 5000
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 178
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"tag_write\":[\"*\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_write",
+        "actionTarget": "[default]Other/Setpoint",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.writeBlocking",
+      "args": [
+        [
+          "[default]Other/Setpoint"
+        ],
+        [
+          "off"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_write",
+        "actionTarget": "[default]Other/Setpoint",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[default]Other/Setpoint"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "value": "off",
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "timestamp": "2026-09-22T00:00:00Z"
+          }
+        ]
+      }
+    }
+  ]
+}

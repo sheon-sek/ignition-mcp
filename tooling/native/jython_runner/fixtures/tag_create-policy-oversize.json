@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_create",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 40000
+          }
+        ]
+      }
+    }
+  ]
+}

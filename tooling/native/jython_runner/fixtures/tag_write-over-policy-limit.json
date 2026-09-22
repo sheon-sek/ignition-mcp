@@ -1,0 +1,147 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": [
+    "writes",
+    "timeout"
+  ],
+  "arguments": {
+    "writes": [
+      {
+        "path": "[default]AHU/T00",
+        "value": 0
+      },
+      {
+        "path": "[default]AHU/T01",
+        "value": 1
+      },
+      {
+        "path": "[default]AHU/T02",
+        "value": 2
+      },
+      {
+        "path": "[default]AHU/T03",
+        "value": 3
+      },
+      {
+        "path": "[default]AHU/T04",
+        "value": 4
+      },
+      {
+        "path": "[default]AHU/T05",
+        "value": 5
+      },
+      {
+        "path": "[default]AHU/T06",
+        "value": 6
+      },
+      {
+        "path": "[default]AHU/T07",
+        "value": 7
+      },
+      {
+        "path": "[default]AHU/T08",
+        "value": 8
+      },
+      {
+        "path": "[default]AHU/T09",
+        "value": 9
+      },
+      {
+        "path": "[default]AHU/T10",
+        "value": 10
+      },
+      {
+        "path": "[default]AHU/T11",
+        "value": 11
+      },
+      {
+        "path": "[default]AHU/T12",
+        "value": 12
+      },
+      {
+        "path": "[default]AHU/T13",
+        "value": 13
+      },
+      {
+        "path": "[default]AHU/T14",
+        "value": 14
+      },
+      {
+        "path": "[default]AHU/T15",
+        "value": 15
+      },
+      {
+        "path": "[default]AHU/T16",
+        "value": 16
+      },
+      {
+        "path": "[default]AHU/T17",
+        "value": 17
+      },
+      {
+        "path": "[default]AHU/T18",
+        "value": 18
+      },
+      {
+        "path": "[default]AHU/T19",
+        "value": 19
+      },
+      {
+        "path": "[default]AHU/T20",
+        "value": 20
+      }
+    ],
+    "timeout": 5000
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 130
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_write\":[\"[default]AHU\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

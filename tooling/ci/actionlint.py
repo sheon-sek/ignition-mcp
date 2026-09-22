@@ -24,13 +24,16 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 import hashlib
+import http.client
 import os
 from pathlib import Path
 import platform
 import re
 import subprocess
 import tarfile
+import time
 from typing import BinaryIO
+import urllib.error
 import urllib.request
 
 VERSION = "1.7.12"
@@ -39,6 +42,15 @@ BASE_URL = f"https://github.com/rhysd/actionlint/releases/download/v{VERSION}"
 #: Bytes per archive read. Small enough that an oversized body is abandoned
 #: after a bounded amount of work, large enough not to syscall per byte.
 CHUNK_BYTES = 64 * 1024
+
+#: How many times the pinned archive is fetched before the check gives up, and
+#: the first backoff step (doubled per attempt: 1 s, 2 s, 4 s, 8 s). The release
+#: CDN answered HTTP 500 in run 35669308034, which failed an otherwise clean push
+#: before a single live job ran; a bounded retry rides that out while the sha256
+#: still decides what is accepted.
+DOWNLOAD_ATTEMPTS = 5
+DOWNLOAD_BACKOFF_SECONDS = 1.0
+DOWNLOAD_TIMEOUT_SECONDS = 60.0
 
 #: Opt-in for the test-only ``--actionlint`` override. Production and CI never
 #: set it, so the documented command cannot be pointed at another executable;
@@ -62,6 +74,14 @@ MACHINE_ALIASES = {"amd64": "x86_64", "x86_64": "x86_64", "aarch64": "aarch64", 
 
 class ActionlintError(RuntimeError):
     """actionlint could not be fetched, verified, or run."""
+
+
+class OversizeResponseError(ActionlintError):
+    """A response (or a cached archive) was larger than the pin.
+
+    Retrying cannot help — the pin rejects the body outright — so the fetch loop
+    surfaces it immediately instead of spending its attempts on it.
+    """
 
 
 @dataclass(frozen=True)
@@ -120,7 +140,9 @@ def _chunks(stream: BinaryIO, limit: int, *, source: str) -> Iterator[bytes]:
 
     The bound is on retention, not only on the final digest: an oversized body is
     abandoned where it crosses the pin instead of being read to the end and
-    rejected afterwards. The already-read chunk is dropped, never yielded.
+    rejected afterwards. The already-read chunk is dropped, never yielded. The
+    failure is an :class:`OversizeResponseError`, which the fetch loop does not
+    retry: a body over the pin is not a transient network condition.
     """
     total = 0
     while True:
@@ -129,7 +151,7 @@ def _chunks(stream: BinaryIO, limit: int, *, source: str) -> Iterator[bytes]:
             return
         total += len(chunk)
         if total > limit:
-            raise ActionlintError(
+            raise OversizeResponseError(
                 f"{source} is larger than the pinned {limit} bytes of actionlint {VERSION}; "
                 f"refusing to read past {total} bytes"
             )
@@ -137,9 +159,53 @@ def _chunks(stream: BinaryIO, limit: int, *, source: str) -> Iterator[bytes]:
 
 
 def _download(url: str, limit: int) -> bytes:
-    """The pinned archive over HTTP, bounded by ``limit`` bytes."""
-    with urllib.request.urlopen(url, timeout=60) as response:  # noqa: S310 - pinned https release URL
-        return b"".join(_chunks(response, limit, source=url))
+    """One bounded attempt at the pinned archive over HTTP.
+
+    A transport failure is reported as an :class:`ActionlintError` so the fetch
+    loop can retry it; an over-pin body is not, because retrying cannot change a
+    response the pin rejects.
+    """
+    try:
+        with urllib.request.urlopen(url, timeout=DOWNLOAD_TIMEOUT_SECONDS) as response:  # noqa: S310 - pinned https release URL
+            return b"".join(_chunks(response, limit, source=url))
+    except (urllib.error.HTTPError, urllib.error.URLError, OSError, http.client.HTTPException) as error:
+        raise ActionlintError(f"fetching {url} failed: {type(error).__name__}: {error}") from error
+
+
+def _fetch_pinned(
+    asset: Asset,
+    *,
+    fetch: Callable[[str, int], bytes],
+    sleep: Callable[[float], None],
+    attempts: int = DOWNLOAD_ATTEMPTS,
+) -> bytes:
+    """The pinned archive's bytes, retried while the failure can be transient.
+
+    The release CDN is a single point of failure for the whole check: it answered
+    HTTP 500 in run 35669308034 and failed an otherwise clean push before a single
+    live job ran. A transport failure, and a body whose digest is not the pinned
+    one (a truncated download), are retried with exponential backoff. The sha256
+    still decides: bytes that never match abort after :data:`DOWNLOAD_ATTEMPTS`,
+    and an over-pin body aborts at once.
+    """
+    last = "no attempt was made"
+    for attempt in range(attempts):
+        try:
+            payload = fetch(asset.url, asset.size)
+        except OversizeResponseError:
+            raise
+        except ActionlintError as error:
+            last = str(error)
+        else:
+            digest = hashlib.sha256(payload).hexdigest()
+            if digest == asset.sha256:
+                return payload
+            last = f"the download's sha256 is {digest}, not the pinned {asset.sha256}"
+        if attempt + 1 < attempts:
+            sleep(DOWNLOAD_BACKOFF_SECONDS * (2 ** attempt))
+    raise ActionlintError(
+        f"could not obtain the pinned actionlint {VERSION} archive in {attempts} attempt(s): {last}"
+    )
 
 
 def _sha256(path: Path, limit: int) -> str:
@@ -156,14 +222,17 @@ def ensure_binary(
     *,
     cache_dir: Path | None = None,
     fetch: Callable[[str, int], bytes] = _download,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> Path:
     """Path to the pinned actionlint binary, downloaded, verified, and extracted.
 
     The archive's sha256 is re-checked on every call, including cache hits, and
     the executable is rebuilt from that verified archive every time: a replaced
-    or corrupted cached binary never lints, it is overwritten. Both the download
-    and the cache read are capped by the asset's pinned size, so neither can be
-    talked into an unbounded read before that check.
+    or corrupted cached binary never lints, it is overwritten. The download is
+    retried with backoff when the failure can be transient and the cache read is
+    capped by the asset's pinned size, so neither can be talked into an unbounded
+    read before that check — and the sha256, not the retry, is what accepts the
+    bytes.
     """
     if asset is None:
         asset = asset_for(platform.system(), platform.machine())
@@ -171,7 +240,7 @@ def ensure_binary(
     directory.mkdir(parents=True, exist_ok=True)
     tarball = directory / asset.name
     if not tarball.is_file():
-        _write_atomically(tarball, fetch(asset.url, asset.size))
+        _write_atomically(tarball, _fetch_pinned(asset, fetch=fetch, sleep=sleep))
     digest = _sha256(tarball, asset.size)
     if digest != asset.sha256:
         raise ActionlintError(

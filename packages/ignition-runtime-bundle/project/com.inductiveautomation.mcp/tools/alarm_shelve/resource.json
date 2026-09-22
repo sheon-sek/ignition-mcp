@@ -1,0 +1,15 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "alarm_shelve",
+    "description": "Shelve Alarms at exact Alarm paths via system.alarm.shelve, for an explicit duration in seconds. Wildcard targets are forbidden (D12), so every path must be provider-qualified with no *: a pattern without * matches only the source it spells out, which is what keeps a shelve from widening to a subtree. timeoutSeconds is required, minimum 1, hard maximum 86400; the Runtime Target Policy may lower that cap through alarmShelveMaxSeconds and never raise it. The result's Observed state is the alarm_shelved_list view of the exact paths and never decides success. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable; a path outside the alarm_shelve Target allowlist, or one that names the reserved IgnitionMCPPolicy provider (whatever the allowlist says, including an explicit *), fails with permission_denied before anything executes and records one audit decision row. Preflight checks every item before any item runs, with no rollback; items then execute one at a time. Runtime audit follows the policy's auditMode; a failed post-shelve audit reports auditRecorded=false and stays a success, and the per-item outcomes are reported even when the Observed state is over its budget or cannot be serialized. D28 ignition-null-v1 encodes logical null as {\"$ignition\":\"null\"}. D10: the default batch is 20 items, raisable by the policy's alarmMaxPaths up to the hard maximum of 100, with a finite aggregate input-byte budget; an over-budget request fails with limit_exceeded, the requested amount and the limit. Example: {\"paths\":[\"prov:default:/tag:AHU/AHU01:/alm:HighSetpoint\"],\"timeoutSeconds\":3600}.",
+    "parameters": [
+      {"name": "paths", "description": "1..100 exact Alarm paths. Provider-qualified with no wildcard, for example prov:default:/tag:Folder/Tag:/alm:AlarmName. Default 20 (D10), raisable to the hard maximum of 100 by the Runtime Target Policy's alarmMaxPaths; at most 2048 characters per path and 65536 bytes for the whole list.", "type": "array", "required": true},
+      {"name": "timeoutSeconds", "description": "Shelve duration in seconds. Required, 1..86400; the Runtime Target Policy may lower the effective maximum.", "type": "integer", "required": true}
+    ]
+  }
+}

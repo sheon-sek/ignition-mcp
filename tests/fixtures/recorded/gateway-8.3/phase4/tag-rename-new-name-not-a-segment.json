@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"invalid_argument\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"items\": [{\"index\": 0, \"path\": \"__TARGET__\", \"reason\": \"newNameNotASingleSegment\"}], \"reason\": \"preflightInputFailed\"}, \"message\": \"Every item must carry an absolute provider-qualified config path, the tcf1 fingerprint of that target's own tag_get_config read, and a new name that is one path segment; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

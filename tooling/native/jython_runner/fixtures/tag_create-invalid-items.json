@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_create",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      "not-an-object",
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget"
+      },
+      {
+        "path": "IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "tagType": "AtomicTag"
+        }
+      },
+      {
+        "path": "[default]*",
+        "config": {
+          "tagType": "AtomicTag"
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {}
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "value": 3
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "tags": [
+            {
+              "name": "child"
+            }
+          ]
+        }
+      },
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "name": "SomewhereElse"
+        }
+      }
+    ]
+  },
+  "calls": []
+}

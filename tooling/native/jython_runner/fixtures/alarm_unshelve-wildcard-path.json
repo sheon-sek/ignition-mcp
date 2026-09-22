@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_unshelve",
+  "parameterOrder": [
+    "paths"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:MCP_P4_1/*"
+    ]
+  },
+  "calls": []
+}

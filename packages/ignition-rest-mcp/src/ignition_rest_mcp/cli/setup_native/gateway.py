@@ -28,7 +28,14 @@ GATEWAY_INFO_PATH = "/data/api/v1/gateway-info"
 MODULES_PATH = "/data/api/v1/modules/healthy"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 SERVER_CONFIG_FIND_PATH = "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"
+#: The find route of any config resource type, for the reads ``apply`` reasons over
+#: (the reserved policy Tag provider's resource).
+RESOURCE_FIND_PATH = "/data/api/v1/resources/find/{resource_type}/{name}"
+#: The Tag export route: the documented read-back of a Tag provider's content.
+TAGS_EXPORT_PATH = "/data/api/v1/tags/export"
 SECURITY_LEVELS_PATH = "/data/api/v1/resources/singleton/ignition/security-levels"
+#: The find route of a resource *type's* single resource (the Security Levels tree).
+SINGLETON_PATH = "/data/api/v1/resources/singleton/{resource_type}"
 API_TOKEN_PATH = "/data/api/v1/resources/ignition/api-token"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
@@ -242,9 +249,38 @@ class GatewayRest:
         document = await self.get_json(PROJECT_FIND_PATH.format(name=quote(name, safe="")), allow_404=True)
         return classify_project(name, document if isinstance(document, dict) else None)
 
-    async def server_config_exists(self, name: str) -> bool:
+    async def server_config_document(self, name: str) -> dict[str, Any] | None:
+        """The Server Config resource document, or ``None`` when it is absent."""
+
         document = await self.get_json(SERVER_CONFIG_FIND_PATH.format(name=quote(name, safe="")), allow_404=True)
-        return document is not None
+        return document if isinstance(document, dict) else None
+
+    async def singleton_document(self, resource_type: str) -> dict[str, Any] | None:
+        """A resource *type's* single resource document, or ``None`` when it serves none."""
+
+        path = SINGLETON_PATH.format(resource_type=quote(resource_type, safe="/"))
+        document = await self.get_json(path, allow_404=True)
+        return document if isinstance(document, dict) else None
+
+    async def resource_document(self, resource_type: str, name: str) -> dict[str, Any] | None:
+        """One config resource document of any type, or ``None`` when it is absent."""
+
+        # The type id is a documented ``<module>/<typeId>`` and both halves are path
+        # segments: escaping the separator makes the Gateway answer 404 for a resource
+        # that exists (found live on the ticket #21 row), so only the name is escaped.
+        path = RESOURCE_FIND_PATH.format(
+            resource_type=quote(resource_type, safe="/"), name=quote(name, safe=""),
+        )
+        document = await self.get_json(path, allow_404=True)
+        return document if isinstance(document, dict) else None
+
+    async def export_tags(self, provider: str) -> dict[str, Any]:
+        """One Tag provider's JSON export, bounded; a provider that is not there is an error."""
+
+        document = await self.get_json(TAGS_EXPORT_PATH, params={"provider": provider, "type": "json"})
+        if not isinstance(document, dict):
+            raise GatewayProbeError(f"the {provider} Tag export did not return a JSON object")
+        return document
 
     async def get_json(
         self, path: str, *, params: dict[str, str] | None = None, allow_404: bool = False

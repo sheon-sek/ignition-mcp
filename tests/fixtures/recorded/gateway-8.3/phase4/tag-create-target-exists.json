@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"conflict\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_create\", \"auditRecorded\": true, \"items\": [{\"code\": \"conflict\", \"index\": 0, \"path\": \"__EXISTING__\", \"reason\": \"targetExists\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target must be absent: this Tool never overwrites an existing Tag, so an existing target is conflict and an unanswered existence check is upstream_error; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

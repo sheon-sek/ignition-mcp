@@ -1,0 +1,13 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": true,
+  "files": [
+    "config.json"
+  ],
+  "attributes": {
+    "title": "Phase 4 Runtime Configurator",
+    "uuid": "6f1c1f4a-58cc-4d3b-9a3f-2f0d0c9a7b51"
+  }
+}

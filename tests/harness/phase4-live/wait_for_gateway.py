@@ -58,20 +58,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Wait for the disposable Gateway's REST and MCP surfaces")
     parser.add_argument("--base-url", required=True)
     parser.add_argument("--api-token", required=True)
-    parser.add_argument("--mcp-url", required=True)
+    parser.add_argument(
+        "--mcp-url", required=True, action="append", dest="mcp_urls",
+        help="a Module-hosted endpoint to initialize; repeat for each hosted project",
+    )
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument("--evidence-dir")
     args = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
-    try:
-        driver.require_origin(args.base_url, args.mcp_url)
-    except driver.GuardError as error:
-        print(json.dumps({"originRefused": str(error)}), file=sys.stderr)
-        return EXIT_ORIGIN_REFUSED
+    for mcp_url in args.mcp_urls:
+        try:
+            driver.require_origin(args.base_url, mcp_url)
+        except driver.GuardError as error:
+            print(json.dumps({"originRefused": str(error)}), file=sys.stderr)
+            return EXIT_ORIGIN_REFUSED
 
     deadline = time.monotonic() + args.timeout
     rest_ok = False
-    mcp_ok = False
+    mcp_ok = dict((url, False) for url in args.mcp_urls)
     last_error = ""
     while time.monotonic() < deadline:
         if not rest_ok:
@@ -82,13 +86,14 @@ def main(argv: list[str] | None = None) -> int:
                 (path / "gateway-info.json").write_text(
                     json.dumps(info, indent=2, sort_keys=True) + "\n", encoding="utf-8",
                 )
-        if not mcp_ok:
-            mcp_ok, last_error = mcp_ready(args.mcp_url, args.api_token)
-        if rest_ok and mcp_ok:
-            print(json.dumps({"rest": True, "mcp": True}))
+        for mcp_url in args.mcp_urls:
+            if not mcp_ok[mcp_url]:
+                mcp_ok[mcp_url], last_error = mcp_ready(mcp_url, args.api_token)
+        if rest_ok and all(mcp_ok.values()):
+            print(json.dumps({"rest": True, "mcp": {url: True for url in args.mcp_urls}}, sort_keys=True))
             return EXIT_READY
         time.sleep(3.0)
-    print(json.dumps({"rest": rest_ok, "mcp": mcp_ok, "lastError": last_error}), file=sys.stderr)
+    print(json.dumps({"rest": rest_ok, "mcp": mcp_ok, "lastError": last_error}, sort_keys=True), file=sys.stderr)
     return EXIT_NOT_READY
 
 

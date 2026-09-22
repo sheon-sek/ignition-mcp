@@ -13,6 +13,7 @@ from pathlib import Path
 import threading
 from typing import Any
 import urllib.parse
+import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,12 +36,21 @@ _OPENAPI_OPERATIONS = (
     # read its verification uses.
     ("delete", "/data/alarm-notification/api/v1/pipeline"),
     ("get", "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"),
+    # Ticket #21: the Server Config create and modify routes `setup-native apply`
+    # writes through (never `config_resource_*`, which refuses the type by design).
+    ("post", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
+    ("put", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
     ("get", "/data/api/v1/resources/type/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/names/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/list/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/find/ignition.gateway/idp-links/{name}"),
     ("get", "/data/api/v1/resources/singleton/ignition/security-levels"),
     ("post", "/data/api/v1/resources/ignition/api-token"),
+    # Ticket #22: D20's opt-in provisioning writes — the Security Levels singleton
+    # (modify, with the Resource signature as the optimistic precondition) and the
+    # Gateway's own API-token key/hash generator.
+    ("put", "/data/api/v1/resources/ignition/security-levels"),
+    ("post", "/data/api/v1/api-token/generate"),
     ("post", "/data/api/v1/resources/com.inductiveautomation.historian/historian-provider"),
     ("post", "/data/api/v1/resources/ignition/audit-profile"),
     ("post", "/data/api/v1/resources/ignition/database-connection"),
@@ -76,10 +86,14 @@ _OPENAPI_OPERATIONS = (
     ("post", "/data/api/v1/resources/ignition/tag-provider"),
     ("get", "/data/api/v1/resources/find/ignition/tag-provider/{name}"),
     ("get", "/data/api/v1/resources/type/ignition/tag-provider"),
+    # Phase 4 ticket #7: the audit profile the Runtime audit mode names, and the
+    # audit log the recorded attempt/result rows are read back from.
+    ("get", "/data/api/v1/resources/find/ignition/audit-profile/{name}"),
+    ("get", "/data/api/v1/audit/log/{name}"),
     # Phase 4 ticket #36: the same provider type through the generic config Mutations.
     # D30 owner ruling 4 refuses the resource named `IgnitionMCPPolicy` by name, and
     # the cases that prove the *rest* of the type stays manageable need its update,
-    # delete and rename routes to exist — a type without them has no such Tool at all
+    # delete and rename routes to exist - a type without them has no such Tool at all
     # (the capability snapshot withholds it), so the refusal being asserted could
     # never be reached.
     ("put", "/data/api/v1/resources/ignition/tag-provider"),
@@ -101,6 +115,46 @@ _RENAME_ROUTE_PREFIX = "/data/api/v1/resources/rename/"
 #: parameter's own example says (``core``). D30's owner ruling 5 pins generic config
 #: Mutations to it explicitly, so every request a Mutation makes names it.
 DEFAULT_COLLECTION = "core"
+
+#: The D20 ownership marker a managed Runtime Bundle Project carries in the last line
+#: of its description. Ticket #21 models what the Module reports: a Project that was
+#: *imported* carries its own bundle version, so `bundle_info` follows it.
+_MANAGED_MARKER_RE = re.compile(r"^ignition-mcp-managed:\s*product=(\S+)\s*;\s*bundle=(\S+)\s*$")
+MANAGED_PRODUCT = "ignition-runtime-bundle"
+
+#: The MCP Module's own Server Config resource type. ``setup-native apply`` writes it
+#: through the type's collection routes; D30 §5 refuses it to the generic config
+#: Mutations, which is exactly why apply has its own curated path.
+SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
+
+#: Ticket #22: the resource types D20's opt-in provisioning writes — the Gateway's
+#: Security Levels singleton and an API token. D30 §5 refuses both to the generic
+#: config Mutations, so ``setup-native apply`` owns them through its curated path.
+SECURITY_LEVELS_TYPE = "ignition/security-levels"
+API_TOKEN_TYPE = "ignition/api-token"
+
+#: The security tree the fake serves. Modelled from the live G0 evidence
+#: (``tests/compatibility/evidence/g0-8.3.8-mcp-2026021307/ci-security.json`` records
+#: the CI level as an "Authenticated child; sibling of Authenticated/Roles"), so a
+#: plan reads the same shape the disposable Gateway serves and has a real sibling to
+#: preserve.
+AUTHENTICATED_DESCRIPTION = "Represents a user who has been authenticated by the system."
+STOCK_SECURITY_LEVELS: list[dict[str, Any]] = [
+    {
+        "name": "Authenticated",
+        "description": AUTHENTICATED_DESCRIPTION,
+        "children": [{"name": "Roles", "children": []}],
+    },
+]
+
+#: The Gateway-generated ``key``/``hash`` pair the token routes answer with. Recorded,
+#: not modelled: the key is the harness's own disposable CI credential (a value that
+#: exists nowhere but an ephemeral CI Gateway, and that the job destroys), and the hash
+#: is the one the live G0 run recorded for it in the evidence file above. The pair
+#: follows the documented derivation — the hash is the unpadded Base64URL SHA-256
+#: digest of the decoded key bytes.
+GENERATED_API_TOKEN_KEY = "zG48znDwfapnZCJA_d7THMrQJpejwONfXMFZ5oBYn0I"
+GENERATED_API_TOKEN_HASH = "QaH9skRX4DQggE1M8oVuwZSNIU9tOzkt9TKzKNPt53M"
 
 
 def _resource_type_segment(path: str) -> str | None:
@@ -218,6 +272,302 @@ def _fixture(path: str) -> Any:
     return json.loads((FIXTURES / path).read_text(encoding="utf-8"))
 
 
+def _alarm_body(server: Any, path: str) -> dict[str, Any]:
+    """One recorded Alarm body with the run-unique Alarm root substituted in.
+
+    The Alarm fixture is run-unique on a live Gateway, so a recorded body carries
+    either the ``__ALARM_ROOT__`` placeholder (the replayed Tool results) or the
+    root of the run it was recorded from (the probe report, whose many nested
+    patterns all name that root).
+    """
+    text = (FIXTURES / path).read_text(encoding="utf-8")
+    if "__ALARM_ROOT__" in text:
+        return json.loads(text.replace("__ALARM_ROOT__", server.alarm_root or "__ALARM_ROOT__"))
+    document = json.loads(text)
+    recorded_root = document.get("rootName") if isinstance(document, dict) else None
+    if server.alarm_root and isinstance(recorded_root, str) and recorded_root and recorded_root != server.alarm_root:
+        text = text.replace(recorded_root, server.alarm_root)
+        document = json.loads(text)
+    return document
+
+
+#: The run-scoped values a recorded ticket #10 refusal body carries. The refusal
+#: bodies come from a live run (or are modelled until the first one), and the paths
+#: and fingerprints are the run's own, so they are templated.
+_TAG_UPDATE_TEMPLATES = (
+    ("__TARGET__", "writeTarget"),
+    ("__TEXT_TARGET__", "textTarget"),
+    ("__FOLDER__", "nestedFolder"),
+    ("__RESERVED__", "writeProbe"),
+    ("__SIBLING__", "siblingTarget"),
+    ("__MISSING__", "missingTarget"),
+    ("__UDT__", "udtTarget"),
+)
+
+
+def _tag_update_body(server: Any, arguments: dict[str, Any], body: dict[str, Any]) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_update` refusal carries."""
+    from tooling.contracts.lint import encode_nulls, tag_config_fingerprint
+
+    text = json.dumps(body)
+    for placeholder, key in _TAG_UPDATE_TEMPLATES:
+        text = text.replace(placeholder, server.tag_update_paths.get(key, ""))
+    paths = _tag_update_paths(arguments)
+    expected = ""
+    for item in arguments.get("items") or []:
+        if isinstance(item, dict) and item.get("path") == (paths[0] if paths else None):
+            expected = str(item.get("expectedFingerprint", ""))
+    observed = tag_config_fingerprint(encode_nulls(server.tag_config.get(paths[0], []))) if paths else ""
+    text = text.replace("__OBSERVED_FINGERPRINT__", observed).replace("__EXPECTED_FINGERPRINT__", expected)
+    # A refusal carries a correlation ID like any other Tool Error; a replay has no
+    # run of its own, so it answers with the same fixed one the other replayed Tools do.
+    text = text.replace("__CORRELATION__", "recorded-replay")
+    return json.loads(text)
+
+
+#: The run-scoped values a ticket #11 refusal body carries. The paths are the run's
+#: own; so are the item ceiling the served document names, the item count the call
+#: carried and the bounded echo of an over-budget path, because the handler derives
+#: all three from the request rather than from a constant.
+_TAG_CREATE_TEMPLATES = (
+    ("__EXISTING__", "existingTarget"),
+    ("__RESERVED__", "writeProbe"),
+    ("__SIBLING__", "siblingTarget"),
+    ("__TARGET__", "createTarget"),
+    ("__UDT__", "udtTarget"),
+)
+_TAG_COPY_TEMPLATES = (
+    ("__DESTINATION__", "destination"),
+    ("__MISSING_DESTINATION__", "missingSourceDestination"),
+    ("__MISSING_SOURCE__", "missingSource"),
+    ("__RESERVED_DESTINATION__", "reservedDestination"),
+    ("__RESERVED_SOURCE_DESTINATION__", "reservedSourceDestination"),
+    ("__RESERVED_SOURCE__", "reservedSource"),
+    ("__SIBLING__", "siblingDestination"),
+    ("__SOURCE__", "source"),
+    ("__UDT__", "udtDestination"),
+)
+
+#: The D10 budgets a request crosses with no native call at all (the item count and the
+#: path length), the project default an absent policy field falls back to, and the
+#: length the handler bounds an echoed path to. They are the shipped constants, restated
+#: here so the rehearsal selects a case the way the handler decides one.
+HARD_MAX_ITEMS = 100
+PATH_MAX_BYTES = 2048
+DEFAULT_MAX_ITEMS = 20
+ECHOED_PATH_MAX_CHARS = 256
+
+
+def _target_leaf(path: str) -> str:
+    """The node a config path names, with the provider bracket excluded.
+
+    A path whose body has no ``/`` names a node at the provider root, where a `str.rsplit`
+    on ``/`` would answer with the whole path — the handler's own segment rule is what the
+    leaf comparisons and the written `name` have to agree with.
+    """
+    closing = path.find("]")
+    segments = [segment for segment in path[closing + 1:].split("/") if segment] if closing > 0 else []
+    return segments[-1] if segments else ""
+
+
+def _tag_path_candidates(arguments: dict[str, Any]) -> list[str]:
+    """Every path one ticket #11 call names, whichever key its item carries it in.
+
+    A create names one path per item and a copy names two, and the D10 path ceiling
+    is quoted with the offending path only.
+    """
+    found: list[str] = []
+    for item in arguments.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        found.extend(
+            str(value) for key, value in item.items() if key == "path" or str(key).endswith("Path")
+        )
+    return found
+
+
+def _requested_fingerprints(server: Any, arguments: dict[str, Any]) -> tuple[str, str]:
+    """The token a call carried and the fingerprint of the state it was compared against.
+
+    A fingerprint refusal names both, and neither is a run constant: the expected half
+    is the caller's own token and the observed half is the fingerprint the served state
+    holds for that item's target, which is what the shipped handler compared.
+    """
+    for item in arguments.get("items") or []:
+        if not isinstance(item, dict):
+            continue
+        expected = str(item.get("expectedFingerprint", ""))
+        path = str(item.get("path") or item.get("sourcePath") or "")
+        if expected.startswith("tcf1:") and path:
+            return expected, _tag_config_fingerprint(server.tag_config.get(path, []))
+    return "", ""
+
+
+def _render_tag_error_body(
+    server: Any, body: dict[str, Any], templates: tuple[tuple[str, str], ...], values: dict[str, str],
+    arguments: dict[str, Any], *, limit: int,
+) -> dict[str, Any]:
+    """Fill one recorded ticket #11 refusal with the values of this run's call.
+
+    The numbers are substituted bare, so a body that quotes a ceiling stays valid
+    JSON whichever ceiling the served document names.
+    """
+    text = json.dumps(body)
+    for placeholder, key in sorted(templates, key=lambda pair: -len(pair[0])):
+        text = text.replace(placeholder, values.get(key, ""))
+    # The handler bounds every free-text value it echoes, so the replayed refusal
+    # quotes the same bounded prefix a live call reads.
+    long_path = next(
+        (path for path in _tag_path_candidates(arguments)
+         if len(path.encode("utf-8")) > PATH_MAX_BYTES),
+        "",
+    )
+    path_bytes = len(long_path.encode("utf-8"))
+    quoted = long_path
+    if len(long_path) > ECHOED_PATH_MAX_CHARS:
+        quoted = long_path[:ECHOED_PATH_MAX_CHARS] + "..."
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    # A replay has no run of its own, so it answers with the same fixed correlation
+    # ID the other replayed Tools do.
+    text = text.replace("__CORRELATION__", "recorded-replay")
+    # A fingerprint refusal quotes the token the call carried and the fingerprint the
+    # served state holds for that target.
+    expected_fingerprint, observed_fingerprint = _requested_fingerprints(server, arguments)
+    text = text.replace("__EXPECTED_FINGERPRINT__", expected_fingerprint)
+    text = text.replace("__OBSERVED_FINGERPRINT__", observed_fingerprint)
+    # A leaf refusal quotes the destination the caller actually named, which is the
+    # one path in that case which is not a run constant.
+    text = text.replace(
+        "__REQUESTED_DESTINATION__", str((items[0] if items else {}).get("destinationPath", "")),
+    )
+    # The serialized body escapes the quotes around a recorded value, so a number is
+    # substituted with them and then bare, whichever form the fixture used.
+    for placeholder, number in (("__POLICY_LIMIT__", limit), ("__ITEM_COUNT__", len(items)),
+                                ("__PATH_BYTES__", path_bytes)):
+        text = text.replace(f'\\"{placeholder}\\"', str(number))
+        text = text.replace(placeholder, str(number))
+    text = text.replace("__LONG_PATH__", quoted)
+    return json.loads(text)
+
+
+#: The encoded Good QualityCode a dispatched mutation item reports. D28 escapes the
+#: absent diagnostic, so the replay publishes exactly what the handler publishes.
+GOOD_OUTCOME = {
+    "code": 192, "name": "Good", "level": "Good", "good": True,
+    "diagnosticMessage": {"$ignition": "null"},
+}
+
+
+def _tag_create_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_create` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_CREATE_TEMPLATES, server.tag_create_paths, arguments,
+        limit=_served_item_limit(server, "tagCreateMaxItems"),
+    )
+
+
+def _tag_copy_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_copy` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_COPY_TEMPLATES, server.tag_copy_paths, arguments,
+        limit=_served_item_limit(server, "tagCopyMaxItems"),
+    )
+
+
+#: The run-scoped values a ticket #12 refusal body carries, one map per Tool.
+_TAG_DELETE_TEMPLATES = (
+    ("__FOLDER_CHILD__", "folderChild"),
+    ("__FOLDER__", "folder"),
+    ("__MISSING__", "missingTarget"),
+    ("__RESERVED__", "reservedTarget"),
+    ("__SIBLING__", "siblingTarget"),
+    ("__STALE__", "staleTarget"),
+    ("__TARGET__", "target"),
+    ("__UDT__", "udtTarget"),
+)
+_TAG_MOVE_TEMPLATES = (
+    ("__OCCUPIED_DESTINATION__", "occupiedDestination"),
+    ("__OCCUPIED_SOURCE__", "writeTarget"),
+    ("__STALE_SOURCE__", "writeTarget"),
+    ("__LEAF_MISMATCH_DESTINATION__", "leafMismatchDestination"),
+    ("__MISSING_DESTINATION__", "missingDestination"),
+    ("__MISSING_SOURCE__", "missingSource"),
+    ("__RESERVED_DESTINATION__", "reservedDestination"),
+    ("__RESERVED_SOURCE_DESTINATION__", "reservedSourceDestination"),
+    ("__RESERVED_SOURCE__", "reservedSource"),
+    ("__SIBLING_DESTINATION__", "siblingDestination"),
+    ("__SIBLING_SOURCE__", "siblingSource"),
+    ("__SOURCE__", "source"),
+    ("__DESTINATION__", "destination"),
+    ("__UDT_DESTINATION__", "udtDestination"),
+    ("__UDT_SOURCE__", "udtSource"),
+)
+_TAG_RENAME_TEMPLATES = (
+    ("__MULTI_SEGMENT_NAME__", "multiSegmentName"),
+    ("__OCCUPIED_SOURCE__", "occupiedSource"),
+    ("__OCCUPIED_NEW_PATH__", "targetNewPath"),
+    ("__STALE_SOURCE__", "staleSource"),
+    ("__STALE_NEW_NAME__", "staleNewName"),
+    ("__MISSING_TARGET__", "missingTarget"),
+    ("__MISSING_NEW_NAME__", "missingNewName"),
+    ("__SIBLING_TARGET__", "siblingTarget"),
+    ("__SIBLING_NEW_NAME__", "siblingNewName"),
+    ("__SIBLING_NEW_PATH__", "siblingNewPath"),
+    ("__RESERVED_TARGET__", "reservedTarget"),
+    ("__RESERVED_NEW_NAME__", "reservedNewName"),
+    ("__RESERVED_NEW_PATH__", "reservedNewPath"),
+    ("__UDT_TARGET__", "udtTarget"),
+    ("__UDT_NEW_NAME__", "udtNewName"),
+    ("__UDT_NEW_PATH__", "udtNewPath"),
+    ("__TARGET_NEW_PATH__", "targetNewPath"),
+    ("__TARGET_NEW_NAME__", "targetNewName"),
+    ("__TARGET__", "target"),
+)
+
+#: The Bad QualityCode a `system.tag.deleteTags` answers for a path that is gone.
+#: The shape is the recorded one from the ticket #7 `tag_write` evidence (code 260,
+#: `Bad_NotFound`, level `Error`); a live Gateway's own answer is what the live
+#: stage records, and this models it for the rehearsal.
+BAD_NOT_FOUND_OUTCOME = {
+    "code": 260, "name": "Bad_NotFound", "level": "Error", "good": False,
+    "diagnosticMessage": "The path does not exist.",
+}
+
+
+def _tag_delete_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_delete` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_DELETE_TEMPLATES, server.tag_delete_paths, arguments,
+        limit=_served_item_limit(server, "tagDeleteMaxItems"),
+    )
+
+
+def _tag_move_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_move` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_MOVE_TEMPLATES, server.tag_move_paths, arguments,
+        limit=_served_item_limit(server, "tagMoveMaxItems"),
+    )
+
+
+def _tag_rename_body(
+    server: Any, arguments: dict[str, Any], body: dict[str, Any],
+) -> dict[str, Any]:
+    """Substitute the run-scoped values a recorded `tag_rename` refusal carries."""
+    return _render_tag_error_body(
+        server, body, _TAG_RENAME_TEMPLATES, server.tag_rename_paths, arguments,
+        limit=_served_item_limit(server, "tagRenameMaxItems"),
+    )
+
+
 def _zip_entries(data: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         return {entry.filename: archive.read(entry.filename) for entry in archive.infolist()}
@@ -255,6 +605,969 @@ def _gateway_import(current: bytes | None, incoming: bytes) -> bytes:
     else:
         incoming_entries["project.json"] = current_entries["project.json"]
     return _zip_bytes(incoming_entries)
+
+
+GOOD_QUALITY = {
+    "code": 192, "name": "Good", "level": "Good", "good": True, "diagnosticMessage": None,
+}
+
+
+def _policy_probe_report(server: Any, report: dict[str, Any]) -> dict[str, Any]:
+    """Apply the modelled provider state to one recorded `policy_probe` report.
+
+    `policy_provider_unready_reads` counts down per probe: while it is positive
+    (or `-1`, which never becomes ready) the provider answers handler reads with
+    `Error_Configuration`. That is the state the live 8.3.9 run of
+    `Phase 4 Live Gateway G4a` 35654626095 recorded: `/resources/find` and
+    `/tags/export` answered 200 for a provider whose Tag actors had not started.
+    """
+
+    remaining = server.policy_provider_unready_reads
+    if remaining == 0:
+        return report
+    if remaining > 0:
+        server.policy_provider_unready_reads = remaining - 1
+    document = json.loads(json.dumps(report))
+    for entry in document.get("measurements") or []:
+        if not isinstance(entry, dict):
+            continue
+        name = str(entry.get("name", ""))
+        if name.startswith("tag.readBlocking."):
+            for item in entry.get("items") or []:
+                if isinstance(item, dict):
+                    item["quality"] = 'Error_Configuration("The Tag provider is not serving tags.")'
+            entry["jsonKind"] = ""
+            entry["jsonKeys"] = []
+        elif name.startswith("tag.gatedRead."):
+            entry["gate"] = "blocked"
+            entry["reason"] = "the running provider is not serving tags"
+            entry["materialized"] = False
+    return document
+
+
+def _record_tag_import(server: Any, body: bytes) -> None:
+    """Track the policy document an accepted import leaves in the provider.
+
+    `setup-native apply` (and the ticket #7 harness) verifies the *served*
+    document through a handler-scope read, so the fake has to remember what it
+    was asked to write instead of only replaying the response body.
+    """
+    try:
+        document = json.loads(body)
+    except (ValueError, TypeError):
+        return
+    if not isinstance(document, dict):
+        return
+    entries = [entry for entry in document.get("tags") or [] if isinstance(entry, dict)]
+    for entry in entries:
+        value = entry.get("value")
+        if entry.get("name") == "RuntimeTargetPolicy" and isinstance(value, str):
+            server.policy_value = value
+        if isinstance(value, str) and "WriteProbe" == entry.get("name"):
+            server.write_probe_value = value
+    if entries:
+        # Ticket #21: what the provider *serves* is what was imported, so
+        # `setup-native apply`'s read-back (and its declared-length companion) can be
+        # compared with the document it wrote. Before the first import the recorded
+        # provider export fixture answers instead.
+        server.served_policy_tags = entries
+
+
+def _tag_read_replay(server: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
+    """The recorded `tag_read` domain for a path the fake models, else None.
+
+    The fake answers an invalid path with the recorded Tool Error the Phase 3
+    rehearsal relies on, so only modeled paths take this branch.
+    """
+    paths = [str(path) for path in arguments.get("tagPaths") or []]
+    if not paths:
+        return None
+    items = []
+    for path in paths:
+        if path == "[IgnitionMCPPolicy]RuntimeTargetPolicy" and server.policy_value:
+            items.append({"path": path, "status": "ok", "value": server.policy_value,
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        if path == "[IgnitionMCPPolicy]WriteProbe" and server.write_probe_value:
+            items.append({"path": path, "status": "ok", "value": server.write_probe_value,
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        if path in server.tag_state:
+            items.append({"path": path, "status": "ok", "value": server.tag_state[path],
+                          "quality": GOOD_QUALITY, "timestamp": "2026-09-22T00:00:00Z"})
+            continue
+        return None
+    return {
+        "items": items,
+        "summary": {"requested": len(paths), "succeeded": len(items), "failed": 0},
+        "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _published_configuration(configuration: list[Any]) -> list[Any]:
+    """The D28-encoded form a Tool publishes, which is also what it fingerprints.
+
+    The fake stores the native configuration it serves; a handler publishes the
+    encoded form and fingerprints exactly that, so the fake does the same and the
+    live driver's check (which hashes the published value as it stands) holds.
+    """
+    from tooling.contracts.lint import encode_nulls
+
+    return encode_nulls(configuration)
+
+
+def _tag_config_fingerprint(configuration: list[Any]) -> str:
+    from tooling.contracts.lint import tag_config_fingerprint
+
+    return tag_config_fingerprint(_published_configuration(configuration))
+
+
+#: The node a Gateway answers for a configuration read of a path that is not
+#: there, recorded from phase4-live-g4b run 35668653064 on both rows: the same
+#: node and the same fingerprint on 8.3.8 and 8.3.9. The `path` comes back as a
+#: native `BasicTagPath` object, which is why the recorded body carries the
+#: handler's own native-object form of it.
+def _synthesized_node(path: str) -> dict[str, Any]:
+    """The node a Gateway answers for a configuration read of a path that is not there.
+
+    The body is the recorded one (`phase4/tag-get-config-missing-template.json`), with
+    the requested path and its leaf substituted.
+    """
+    template = _fixture("phase4/tag-get-config-missing-template.json")["configuration"][0]
+    body = json.dumps(template).replace("__PATH__", path).replace("__NAME__", path.rsplit("/", 1)[-1])
+    return json.loads(body)
+
+
+def _tag_config_domain(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The recorded `tag_get_config` domain for a path the fake models.
+
+    A path the fake has no configuration for answers the synthesized node a live
+    Gateway answers (recorded), which is what makes the missing-target case model
+    the Gateway rather than the rehearsal's convenience.
+    """
+    path = arguments.get("path")
+    if not isinstance(path, str):
+        return None
+    if path not in server.tag_config:
+        configuration = _published_configuration([_synthesized_node(path)])
+        return {
+            "path": path,
+            "recursive": bool(arguments.get("recursive", False)),
+            "overridesOnly": bool(arguments.get("overridesOnly", False)),
+            "fingerprint": _tag_config_fingerprint(configuration),
+            "configuration": configuration,
+            "summary": {"returned": 1, "limit": 50},
+            "meta": {"correlationId": "recorded-replay"},
+        }
+    configuration = _published_configuration(server.tag_config[path])
+    recursive = bool(arguments.get("recursive", False))
+    overrides_only = bool(arguments.get("overridesOnly", False))
+    limit = arguments.get("maxResults")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = 50
+    return {
+        "path": path,
+        "recursive": recursive,
+        "overridesOnly": overrides_only,
+        "fingerprint": _tag_config_fingerprint(configuration),
+        "configuration": configuration,
+        "summary": {"returned": len(configuration) if recursive else 1, "limit": limit},
+        "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _provider_component(path: str) -> str:
+    """The bracketed provider of a Tag path, which is what the reserved rule names.
+
+    A prefix or substring test would also refuse a provider whose name merely
+    starts with the reserved one, so the comparison is on the component itself.
+    """
+    if not path.startswith("["):
+        return ""
+    closing = path.find("]")
+    if closing <= 1:
+        return ""
+    return path[1:closing]
+
+
+def _tag_update_paths(arguments: dict[str, Any]) -> list[str]:
+    return [
+        str(item.get("path", ""))
+        for item in (arguments.get("items") or [])
+        if isinstance(item, dict)
+    ]
+
+
+def _served_item_limit(server: Any, field: str) -> int:
+    """The item ceiling one Tool's policy field carries, defaulting to D10's 20.
+
+    Each CONFIG Mutation has its own field, so a refusal quotes the number the
+    *served* document names for that Tool, not a constant the fake shares with it.
+    """
+    try:
+        document = json.loads(server.policy_value)
+        limit = document.get(field)
+    except (AttributeError, TypeError, ValueError):
+        return DEFAULT_MAX_ITEMS
+    return int(limit) if isinstance(limit, int) and not isinstance(limit, bool) else DEFAULT_MAX_ITEMS
+
+
+def _served_allowlist(server: Any, tool: str) -> list[str]:
+    """The allowlist the policy Tag currently serves for one Tool, if any."""
+    try:
+        document = json.loads(server.policy_value)
+        entries = (document.get("allowlists") or {}).get(tool)
+    except (AttributeError, TypeError, ValueError):
+        return []
+    return [str(entry) for entry in entries] if isinstance(entries, list) else []
+
+
+def _served_audit_mode(server: Any) -> str:
+    """The Runtime audit mode the served policy carries; D18's three states."""
+    try:
+        document = json.loads(server.policy_value)
+        mode = document.get("auditMode")
+    except (AttributeError, TypeError, ValueError):
+        return "best_effort"
+    return mode if mode in {"best_effort", "required", "off"} else "best_effort"
+
+
+def _allowlisted(path: str, entries: list[str]) -> bool:
+    """D30 1: an entry is a provider-qualified prefix, matched at segment boundaries.
+
+    A substring test would let `[default]IgnitionMCP_CI` cover its `IgnitionMCP_CI2`
+    sibling, which is the exact regression the segment-boundary case exists to catch.
+    """
+    return any(entry == "*" or path == entry or path.startswith(entry + "/") for entry in entries)
+
+
+def _names_udt_namespace(path: str) -> bool:
+    """Whether the path itself sits inside a provider's `_types_` namespace.
+
+    D30 §6 names `[provider]_types_/...`, so the rule is positional: only the first
+    post-provider segment selects the definition namespace, and a folder that merely
+    happens to be called `_types_` deeper in the path is an ordinary target. The
+    shipped handlers implement exactly this, and the fake has to as well or a
+    rehearsal would answer a path the Gateway does not.
+    """
+    closing = path.find("]")
+    if closing <= 0:
+        return False
+    segments = [segment for segment in path[closing + 1:].split("/") if segment]
+    return bool(segments) and segments[0] == "_types_"
+
+
+def _udt_allowlisted(path: str, entries: list[str]) -> bool:
+    """D30 6: only an entry that itself names `_types_` lets a definition through."""
+    return any(
+        entry != "*" and _names_udt_namespace(entry) and _allowlisted(path, [entry])
+        for entry in entries
+    )
+
+
+def _tag_create_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(item.get("path", "")) for item in (arguments.get("items") or []) if isinstance(item, dict)]
+
+
+def _tag_copy_pairs(arguments: dict[str, Any]) -> list[tuple[str, str]]:
+    return [
+        (str(item.get("sourcePath", "")), str(item.get("destinationPath", "")))
+        for item in (arguments.get("items") or []) if isinstance(item, dict)
+    ]
+
+
+def _tag_create_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_create` refusal, or the modelled create, these arguments ask for.
+
+    The selection mirrors the shipped handler's own order: the two D10 ceilings a
+    request crosses with no native call at all, then the policy gate, then the
+    deployment's item ceiling, then the reserved provider, the allowlist with D30 6's
+    `_types_` rule, and last `system.tag.exists` — which for a create has to answer
+    *absent*, because an existing target is the collision the caller is told about
+    instead of an overwrite.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    paths = [str(item.get("path", "")) for item in items]
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(len(path.encode("utf-8")) > PATH_MAX_BYTES for path in paths):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagCreateMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_create")
+    refused: list[tuple[int, str]] = []
+    for index, path in enumerate(paths):
+        if _provider_component(path) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-provider-refusal"))
+        elif _names_udt_namespace(path) and not _udt_allowlisted(path, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(path, entries):
+            refused.append((index, "sibling-denial"))
+    if refused:
+        # A refused Preflight lists every failing item and executes none, so a batch
+        # whose allowed item would have created something replays the body that names
+        # only the refused end.
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    if any(path in server.tag_config for path in paths):
+        return "target-exists", paths
+    return "created", paths
+
+
+def _apply_tag_create(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.configure(base, [config + name], "Abort")` per item.
+
+    The created node is the item's own configuration plus the target's leaf as its
+    name, which is what the target path — not the configuration — decides. Storing it
+    in the served configuration is what lets the driver's independent `tag_get_config`
+    re-read and the provider export see the node the create promised to build.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    server.tag_create_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for item in items:
+        path = str(item.get("path", ""))
+        node = {str(key): value for key, value in (item.get("config") or {}).items()}
+        node["name"] = _target_leaf(path)
+        node.setdefault("tagType", "AtomicTag")
+        node["path"] = path
+        server.tag_config[path] = [node]
+        results.append({
+            "path": path,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": path,
+            "status": "ok",
+            "fingerprint": _tag_config_fingerprint(server.tag_config[path]),
+            "configuration": _published_configuration(server.tag_config[path]),
+        })
+    return _tag_mutation_result(
+        server, items=len(items), results=results, observed=observed,
+    )
+
+
+def _tag_copy_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_copy` refusal, or the modelled copy, these arguments ask for.
+
+    Same order as the shipped handler, with the two differences the contract names:
+    the destination's leaf is an *input* rule (one native call lands each source
+    under its own name), and only the destination is measured against the allowlist
+    and D30 6's `_types_` rule, while the reserved provider bounds both ends because a
+    copy out of the policy provider would publish the document elsewhere. Preflight
+    then reads the endpoints: the source has to exist and answer a configuration read,
+    the destination has to be free.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    pairs = _tag_copy_pairs(arguments)
+    paths = [destination for _source, destination in pairs]
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    # The handler refuses a destination whose leaf differs inside its input pass, and
+    # measures the D10 ceilings only after every item passed it, so a request with both
+    # problems reports the leaf. The fake has to take the same order or a rehearsal
+    # would pick the ceiling body where a Gateway answers the leaf one.
+    if any(_target_leaf(source) != _target_leaf(destination) for source, destination in pairs):
+        return "destination-leaf-mismatch", paths
+    if any(
+        len(value.encode("utf-8")) > PATH_MAX_BYTES
+        for source, destination in pairs for value in (source, destination)
+    ):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagCopyMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_copy")
+    refused: list[tuple[int, str]] = []
+    for index, (source, destination) in enumerate(pairs):
+        if _provider_component(source) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-source-refusal"))
+        elif _provider_component(destination) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-destination-refusal"))
+        elif _names_udt_namespace(destination) and not _udt_allowlisted(destination, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(destination, entries):
+            refused.append((index, "sibling-denial"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for source, destination in pairs:
+        if source not in server.tag_config:
+            return "source-missing", paths
+        if destination in server.tag_config:
+            return "destination-exists", paths
+    return "copied", paths
+
+
+def _apply_tag_copy(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.copy([source], targetBase(destination), "Abort")` per item.
+
+    The copied node carries the source's configuration and its own destination path,
+    and the source stays exactly where it was: a copy is not a move, and the driver
+    proves that by re-reading both ends.
+    """
+    pairs = _tag_copy_pairs(arguments)
+    server.tag_copy_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for source, destination in pairs:
+        node = json.loads(json.dumps((server.tag_config.get(source) or [{}])[0]))
+        node["name"] = _target_leaf(destination)
+        if isinstance(node.get("path"), dict):
+            node["path"] = dict(node["path"], text=destination)
+        else:
+            node["path"] = destination
+        server.tag_config[destination] = [node]
+        results.append({
+            "sourcePath": source,
+            "destinationPath": destination,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": destination,
+            "status": "ok",
+            "fingerprint": _tag_config_fingerprint(server.tag_config[destination]),
+            "configuration": _published_configuration(server.tag_config[destination]),
+        })
+    return _tag_mutation_result(
+        server, items=len(pairs), results=results, observed=observed,
+    )
+
+
+def _tag_delete_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(item.get("path", "")) for item in (arguments.get("items") or []) if isinstance(item, dict)]
+
+
+def _tag_move_pairs(arguments: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(item.get("sourcePath", "")),
+            str(item.get("destinationPath", "")),
+            str(item.get("expectedFingerprint", "")),
+        )
+        for item in (arguments.get("items") or []) if isinstance(item, dict)
+    ]
+
+
+def _tag_rename_items(arguments: dict[str, Any]) -> list[tuple[str, str, str]]:
+    return [
+        (
+            str(item.get("path", "")),
+            str(item.get("newName", "")),
+            str(item.get("expectedFingerprint", "")),
+        )
+        for item in (arguments.get("items") or []) if isinstance(item, dict)
+    ]
+
+
+def _renamed_path(path: str, new_name: str) -> str:
+    """The new path a rename makes: the target's own parent plus the new name.
+
+    `system.tag.rename` takes a name, never a path, so the parent survives — which is
+    what D30 §6 measures against the allowlist. A target at the provider root has the
+    bracket as its base, so the name joins it directly.
+    """
+    index = path.rfind("/")
+    base = path[0:index] if index > path.find("]") else path[0:path.find("]") + 1]
+    return base + new_name if base.endswith("]") else base + "/" + new_name
+
+
+def _tag_delete_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_delete` refusal, or the modelled delete, these arguments ask for.
+
+    The selection mirrors the shipped handler's order: the input pass, the two D10
+    ceilings a request crosses with no native call at all, the policy gate, the
+    deployment's item ceiling, the reserved provider, the allowlist with D30 §6's
+    `_types_` rule, then `system.tag.exists` and the Precondition token.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    paths = _tag_delete_paths(arguments)
+    if any(set(item) != {"path", "expectedFingerprint"} for item in items) or len(items) != len(raw_items):
+        return "item-keys", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(len(path.encode("utf-8")) > PATH_MAX_BYTES for path in paths):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagDeleteMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_delete")
+    refused: list[tuple[int, str]] = []
+    for index, path in enumerate(paths):
+        if _provider_component(path) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-provider-refusal"))
+        elif _names_udt_namespace(path) and not _udt_allowlisted(path, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(path, entries):
+            refused.append((index, "sibling-denial"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for path in paths:
+        if path not in server.tag_config:
+            return "missing-target", paths
+    for item, path in zip(items, paths, strict=True):
+        if item.get("expectedFingerprint") != _tag_config_fingerprint(server.tag_config.get(path, [])):
+            return "stale-fingerprint", paths
+    return "deleted", paths
+
+
+def _apply_tag_delete(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.deleteTags([path])` per item.
+
+    A Folder takes everything beneath it, so the modelled delete drops the node and
+    every path under it — which is what makes a batch that names a folder and a Tag
+    inside it a real partial failure: the second item's own call answers Bad, nothing
+    is retried, and no rollback undoes the first item.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    server.tag_delete_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    succeeded = 0
+    failed = 0
+    for item in items:
+        path = str(item.get("path", ""))
+        if path in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == path or key.startswith(path + "/")]:
+                del server.tag_config[key]
+            results.append({"path": path, "status": "executed", "nativeOutcome": dict(GOOD_OUTCOME)})
+            succeeded += 1
+        else:
+            # The item passed Preflight and the path is gone at dispatch: the Batch
+            # reports that item's own Bad outcome and nothing is rolled back.
+            outcome = dict(BAD_NOT_FOUND_OUTCOME)
+            outcome["diagnosticMessage"] = "Path '" + path + "' not found."
+            results.append({"path": path, "status": "executed", "nativeOutcome": outcome})
+            failed += 1
+        observed.append({"path": path, "status": "ok", "absent": True})
+    server.tag_delete_targets = ",".join(item.get("path", "") for item in items)
+    return _tag_mutation_result(
+        server, items=len(items), results=results, observed=observed,
+        succeeded=succeeded, failed=failed,
+    )
+
+
+def _tag_move_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_move` refusal, or the modelled move, these arguments ask for.
+
+    Same order as the shipped handler: the input pass (the destination's leaf is an
+    input rule, because one `system.tag.move` call lands each source under its own
+    name), the D10 ceilings, the policy gate, the deployment's item ceiling, both
+    ends' reserved-provider and allowlist rules, then the source's existence and
+    Precondition token and the destination's absence.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    pairs = _tag_move_pairs(arguments)
+    paths = [destination for _source, destination, _fingerprint in pairs]
+    if any(set(item) != {"sourcePath", "destinationPath", "expectedFingerprint"} for item in items) \
+            or len(items) != len(raw_items):
+        return "item-keys", paths
+    if any(_target_leaf(source) != _target_leaf(destination) for source, destination, _f in pairs):
+        return "destination-leaf-mismatch", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(
+        len(value.encode("utf-8")) > PATH_MAX_BYTES
+        for source, destination, _fingerprint in pairs for value in (source, destination)
+    ):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagMoveMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_move")
+    refused: list[tuple[int, str]] = []
+    for index, (source, destination, _fingerprint) in enumerate(pairs):
+        if _provider_component(source) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-source-refusal"))
+        elif _provider_component(destination) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-destination-refusal"))
+        elif _names_udt_namespace(source) and not _udt_allowlisted(source, entries):
+            refused.append((index, "udt-source-not-allowlisted"))
+        elif not _allowlisted(source, entries):
+            refused.append((index, "source-not-allowlisted"))
+        elif _names_udt_namespace(destination) and not _udt_allowlisted(destination, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(destination, entries):
+            refused.append((index, "destination-not-allowlisted"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for source, destination, fingerprint in pairs:
+        if source not in server.tag_config:
+            return "source-missing", paths
+        if fingerprint != _tag_config_fingerprint(server.tag_config.get(source, [])):
+            return "stale-fingerprint", paths
+        if destination in server.tag_config:
+            return "destination-exists", paths
+    return "moved", paths
+
+
+def _apply_tag_move(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.move([source], destinationParent, "Abort")` per item.
+
+    The moved node keeps its configuration and gains the destination path, the source
+    is gone, and the Observed state reports both ends in that order.
+    """
+    pairs = _tag_move_pairs(arguments)
+    server.tag_move_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for source, destination, _fingerprint in pairs:
+        if source in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == source or key.startswith(source + "/")]:
+                node = json.loads(json.dumps(server.tag_config.pop(key)))
+                moved = key.replace(source, destination, 1)
+                if isinstance(node[0].get("path"), dict):
+                    node[0]["path"] = dict(node[0]["path"], text=moved)
+                else:
+                    node[0]["path"] = moved
+                server.tag_config[moved] = node
+        results.append({
+            "sourcePath": source,
+            "destinationPath": destination,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": destination,
+            "status": "ok",
+            "absent": False,
+            "fingerprint": _tag_config_fingerprint(server.tag_config.get(destination, [])),
+            "configuration": _published_configuration(server.tag_config.get(destination, [])),
+        })
+        observed.append({"path": source, "status": "ok", "absent": True})
+    server.tag_move_targets = ",".join(
+        path for pair in pairs for path in (pair[1], pair[0])
+    )
+    return _tag_mutation_result(
+        server, items=len(pairs), results=results, observed=observed,
+    )
+
+
+def _tag_rename_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_rename` refusal, or the modelled rename, these arguments ask for.
+
+    Same order as the shipped handler: the input pass (a new name is one path segment,
+    and the new path is the target's own parent plus that name), the D10 ceilings, the
+    policy gate, the deployment's item ceiling, the reserved provider and the new
+    path's allowlist, then the target's existence and token and the new path's
+    absence.
+    """
+    raw_items = (arguments.get("items") or [])
+    items = [item for item in raw_items if isinstance(item, dict)]
+    pairs = _tag_rename_items(arguments)
+    paths = [_renamed_path(path, new_name) for path, new_name, _fingerprint in pairs]
+    if any(set(item) != {"path", "newName", "expectedFingerprint"} for item in items) \
+            or len(items) != len(raw_items):
+        return "item-keys", paths
+    if any(not _one_segment(new_name) for _path, new_name, _fingerprint in pairs):
+        return "new-name-not-a-segment", paths
+    if len(items) > HARD_MAX_ITEMS:
+        return "items-over-hard-limit", paths
+    if any(
+        len(value.encode("utf-8")) > PATH_MAX_BYTES
+        for path, _new_name, _fingerprint in pairs for value in (path, _renamed_path(path, _new_name))
+    ):
+        return "path-over-length", paths
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    if len(items) > _served_item_limit(server, "tagRenameMaxItems"):
+        return "over-policy-limit", paths
+    entries = _served_allowlist(server, "tag_rename")
+    refused: list[tuple[int, str]] = []
+    for index, (path, new_name, _fingerprint) in enumerate(pairs):
+        new_path = _renamed_path(path, new_name)
+        if _provider_component(path) == "IgnitionMCPPolicy" \
+                or _provider_component(new_path) == "IgnitionMCPPolicy":
+            refused.append((index, "reserved-provider-refusal"))
+        elif _names_udt_namespace(new_path) and not _udt_allowlisted(new_path, entries):
+            refused.append((index, "udt-not-allowlisted"))
+        elif not _allowlisted(new_path, entries):
+            refused.append((index, "target-not-allowlisted"))
+    if refused:
+        return (refused[0][1] if len(refused) == len(items) else "preflight-refusal"), paths
+    for (path, _new_name, fingerprint), new_path in zip(pairs, paths, strict=True):
+        if path not in server.tag_config:
+            return "missing-target", paths
+        if fingerprint != _tag_config_fingerprint(server.tag_config.get(path, [])):
+            return "stale-fingerprint", paths
+        if new_path in server.tag_config:
+            return "new-path-exists", paths
+    return "renamed", paths
+
+
+def _apply_tag_rename(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Model one `system.tag.rename(target, newName, "Abort")` per item.
+
+    The node stays in its own parent and takes the new name, the old path is gone, and
+    the Observed state reports the new path first and the old path second.
+    """
+    entries = _tag_rename_items(arguments)
+    server.tag_rename_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    for path, new_name, _fingerprint in entries:
+        new_path = _renamed_path(path, new_name)
+        if path in server.tag_config:
+            for key in [key for key in list(server.tag_config) if key == path or key.startswith(path + "/")]:
+                node = json.loads(json.dumps(server.tag_config.pop(key)))
+                renamed = new_path + key[len(path):]
+                if isinstance(node[0].get("path"), dict):
+                    node[0]["path"] = dict(node[0]["path"], text=renamed)
+                else:
+                    node[0]["path"] = renamed
+                node[0]["name"] = new_name if key == path else node[0].get("name")
+                server.tag_config[renamed] = node
+        results.append({
+            "path": path,
+            "newPath": new_path,
+            "status": "executed",
+            "nativeOutcome": dict(GOOD_OUTCOME),
+        })
+        observed.append({
+            "path": new_path,
+            "status": "ok",
+            "absent": False,
+            "fingerprint": _tag_config_fingerprint(server.tag_config.get(new_path, [])),
+            "configuration": _published_configuration(server.tag_config.get(new_path, [])),
+        })
+        observed.append({"path": path, "status": "ok", "absent": True})
+    server.tag_rename_targets = ",".join(
+        path for pair in entries for path in (_renamed_path(pair[0], pair[1]), pair[0])
+    )
+    return _tag_mutation_result(
+        server, items=len(entries), results=results, observed=observed,
+    )
+
+
+def _one_segment(value: str) -> bool:
+    """Whether a new name is one path segment, as the shipped rename rule decides."""
+    if not value or value != value.strip():
+        return False
+    return not any(character in value for character in ("/", ".", "[", "]", "*", "?", ":"))
+
+
+def _tag_mutation_result(
+    server: Any, *, items: int, results: list[dict[str, Any]], observed: list[dict[str, Any]],
+    succeeded: int | None = None, failed: int = 0,
+) -> dict[str, Any]:
+    """The structuredContent a dispatched batch publishes.
+
+    The default counts are the driver's own arithmetic on `items`, because every item
+    a batch case models dispatches and succeeds; a Tool whose dispatch can answer a
+    per-item Bad outcome passes the counts its own applier observed on the served
+    state. The audit mode is the served document's.
+    """
+    return {
+        "content": [{"type": "text", "text": "recorded replay"}],
+        "isError": False,
+        "structuredContent": {
+            "items": results,
+            "observed": observed,
+            "summary": {
+                "requested": items,
+                "succeeded": len(results) if succeeded is None else succeeded,
+                "failed": failed,
+                "outcomeUnknown": 0,
+                "notExecuted": 0, "auditMode": _served_audit_mode(server), "auditRecorded": True,
+            },
+            "meta": {"correlationId": "recorded-replay"},
+        },
+    }
+
+
+def _tag_update_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_update` refusal, or the modelled merge, these arguments ask for.
+
+    The selection mirrors the shipped handler's own order — policy gate, input,
+    reserved provider, allowlist (with D30 6's `_types_` rule), existence, then the
+    Precondition token — so the rehearsal exercises the branches the live Gateway
+    answers in the same order.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    paths = [str(item.get("path", "")) for item in items]
+    if not items or not server.policy_provider_created or not server.policy_value:
+        return "no-policy", paths
+    # D10: the deployment's item ceiling is checked right after the Policy read,
+    # before any Target or Precondition check.
+    if len(items) > _served_item_limit(server, "tagUpdateMaxItems"):
+        return "over-policy-limit", paths
+    if any(_provider_component(path) == "IgnitionMCPPolicy" for path in paths):
+        return "reserved-provider-refusal", paths
+    entries = _served_allowlist(server, "tag_update")
+    for path in paths:
+        if "_types_" in path and not any("_types_" in entry for entry in entries):
+            return "udt-not-allowlisted", paths
+    if any("IgnitionMCP_CI2" in path for path in paths):
+        return "sibling-denial", paths
+    if any(path not in server.tag_config for path in paths):
+        return "missing-target", paths
+    for item in items:
+        path = str(item.get("path", ""))
+        actual = _tag_config_fingerprint(server.tag_config.get(path, []))
+        if item.get("expectedFingerprint") != actual:
+            return "stale-fingerprint", paths
+    return "allowlisted", paths
+
+
+def _apply_tag_update(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Merge the requested properties the way MergeOverwrite leaves them.
+
+    Only the driver's own merge is modelled: the item's properties are merged into
+    the node's top-level configuration, a property the read did not carry is added,
+    and the observed half of the result is the post-merge state.
+    """
+    items = [item for item in (arguments.get("items") or []) if isinstance(item, dict)]
+    server.tag_update_correlation_id = "recorded-replay"
+    results = []
+    observed = []
+    succeeded = 0
+    for item in items:
+        path = str(item.get("path", ""))
+        node = dict((server.tag_config.get(path) or [{}])[0])
+        for key, value in (item.get("config") or {}).items():
+            node[str(key)] = value
+        node["name"] = path.rsplit("/", 1)[-1]
+        server.tag_config[path] = [node]
+        results.append({
+            "path": path,
+            "status": "executed",
+            "nativeOutcome": {
+                "code": 192, "name": "Good", "level": "Good", "good": True,
+                "diagnosticMessage": {"$ignition": "null"},
+            },
+        })
+        observed.append({
+            "path": path,
+            "status": "ok",
+            "fingerprint": _tag_config_fingerprint(server.tag_config[path]),
+            "configuration": _published_configuration(server.tag_config[path]),
+        })
+        succeeded += 1
+    return {
+        "content": [{"type": "text", "text": "recorded replay"}],
+        "isError": False,
+        "structuredContent": {
+            "items": results,
+            "observed": observed,
+            "summary": {
+                "requested": len(items), "succeeded": succeeded, "failed": 0, "outcomeUnknown": 0,
+                "notExecuted": 0, "auditMode": "best_effort", "auditRecorded": True,
+            },
+            "meta": {"correlationId": "recorded-replay"},
+        },
+    }
+
+
+def _tag_write_case(server: Any, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded `tag_write` body the fake replays for these arguments."""
+    writes = arguments.get("writes")
+    paths = [
+        str(item.get("path", ""))
+        for item in (writes or []) if isinstance(item, dict)
+    ]
+    if not server.policy_provider_created:
+        return "no-policy", paths
+    if any(path.startswith("[IgnitionMCPPolicy]") for path in paths):
+        return "reserved-provider-refusal", paths
+    if any("IgnitionMCP_CI2" in path for path in paths):
+        return ("preflight-refusal" if len(paths) > 1 else "sibling-denial"), paths
+    return "allowlisted-batch", paths
+
+
+def _installed_shelve_cap(server: Any) -> int:
+    """The shelve cap the policy Tag currently served carries, defaulting to the D12 hard max."""
+    try:
+        document = json.loads(server.policy_value)
+        cap = document.get("alarmShelveMaxSeconds")
+    except (TypeError, ValueError):
+        return 86400
+    return int(cap) if isinstance(cap, int) and not isinstance(cap, bool) else 86400
+
+
+def _alarm_mutation_paths(arguments: dict[str, Any]) -> list[str]:
+    return [str(path) for path in arguments.get("paths") or []]
+
+
+def _alarm_mutation_case(server: Any, tool: str, arguments: dict[str, Any]) -> tuple[str, list[str]]:
+    """Which recorded Alarm Mutation body the fake replays for these arguments.
+
+    The case selection mirrors the shipped Tool's own refusal order, so the
+    rehearsal exercises the same branches the live Gateway answers: the policy
+    gate, the input grammar, the allowlist and the (shelve-only) duration bounds.
+    """
+    paths = _alarm_mutation_paths(arguments)
+    if not server.policy_provider_created:
+        return "no-policy", paths
+    if any("*" in path for path in paths):
+        return "wildcard-refusal", paths
+    if any("_sibling" in path for path in paths):
+        return ("preflight-refusal" if len(paths) > 1 else "sibling-denial"), paths
+    if tool == "alarm_shelve":
+        seconds = arguments.get("timeoutSeconds")
+        if seconds == 86401:
+            return "hard-max-refusal", paths
+        if isinstance(seconds, int) and not isinstance(seconds, bool) and seconds > _installed_shelve_cap(server):
+            return "cap-refusal", paths
+    return "allowlisted", paths
+
+
+def _apply_alarm_mutation_case(server: Any, tool: str, case: str, body: dict[str, Any]) -> None:
+    """Model the shelving state an executed Alarm Mutation leaves behind."""
+    structured = body.get("structuredContent") or {}
+    correlation = str((structured.get("meta") or {}).get("correlationId", ""))
+    if correlation:
+        server.alarm_correlation_id = correlation
+    if case != "allowlisted":
+        return
+    for item in structured.get("observed") or []:
+        if not isinstance(item, dict) or item.get("status") != "ok":
+            continue
+        path = str(item.get("path", ""))
+        if not path:
+            continue
+        if tool == "alarm_shelve" and item.get("shelved") is True:
+            server.shelved_paths[path] = {
+                "user": item.get("user"),
+                "expiration": item.get("expiration"),
+                "expired": bool(item.get("expired")),
+            }
+        if tool == "alarm_unshelve":
+            server.shelved_paths.pop(path, None)
+
+
+def _alarm_shelved_list_result(server: Any, arguments: dict[str, Any]) -> dict[str, Any]:
+    """The `alarm_shelved_list` domain for the shelving state the fake models."""
+    limit = arguments.get("maxResults")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        limit = 100
+    items = [
+        {"path": path, "user": entry.get("user"), "expiration": entry.get("expiration"),
+         "expired": bool(entry.get("expired"))}
+        for path, entry in sorted(server.shelved_paths.items())
+    ]
+    return {
+        "items": items,
+        "summary": {"returned": len(items), "limit": limit},
+        "meta": {"correlationId": "recorded-replay"},
+    }
+
+
+def _apply_tag_write_case(server: Any, case: str, body: dict[str, Any]) -> None:
+    if case != "allowlisted-batch":
+        return
+    structured = body.get("structuredContent") or {}
+    server.tag_write_correlation_id = str((structured.get("meta") or {}).get("correlationId", ""))
+    for item in structured.get("observed") or []:
+        if isinstance(item, dict) and item.get("status") == "ok" and item.get("path") in server.tag_state:
+            server.tag_state[str(item["path"])] = item.get("value")
 
 
 class _Handler(http.server.BaseHTTPRequestHandler):
@@ -378,6 +1691,69 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 "inheritable": bool(document.get("inheritable", False)),
             })
             return
+        if path.startswith("/data/api/v1/audit/log/"):
+            query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            action_filter = (query.get("actionFilter") or [""])[0]
+            if action_filter.startswith("ignition-mcp.alarm") and server.alarm_correlation_id:
+                tool = action_filter.rsplit(".", 1)[-1]
+                document = json.loads(json.dumps(_fixture("phase4/audit-log-alarm.json")))
+                for row in document["items"]:
+                    row["action"] = str(row["action"]).replace("__ACTION__", action_filter)
+                    row["actionValue"] = str(row["actionValue"]).replace("__TOOL__", tool).replace(
+                        "__CORRELATION__", server.alarm_correlation_id,
+                    )
+                self._json(200, document)
+                return
+            if action_filter.startswith("ignition-mcp.tag_update") and server.tag_update_correlation_id:
+                document = json.loads(json.dumps(_fixture("phase4/audit-log-config.json")))
+                for row in document["items"]:
+                    row["actionTarget"] = str(row["actionTarget"]).replace(
+                        "__TARGET__", server.tag_update_paths.get("writeTarget", ""),
+                    )
+                    row["actionValue"] = str(row["actionValue"]).replace(
+                        "__CORRELATION__", server.tag_update_correlation_id,
+                    )
+                self._json(200, document)
+                return
+            if action_filter in (
+                "ignition-mcp.tag_create", "ignition-mcp.tag_copy",
+                "ignition-mcp.tag_delete", "ignition-mcp.tag_move", "ignition-mcp.tag_rename",
+            ):
+                # Ticket #11 and #12: each CONFIG Mutation audits under its own action,
+                # so the driver's read-back can only match the rows of the Tool it
+                # called.
+                tool = action_filter.rsplit(".", 1)[-1]
+                correlation = getattr(server, tool + "_correlation_id", "")
+                if not correlation:
+                    self._json(200, {
+                        "items": [],
+                        "metadata": {"total": 0.0, "matching": 0.0, "limit": 100, "offset": 0},
+                    })
+                    return
+                document = json.loads(json.dumps(_fixture("phase4/audit-log-tag-config.json")))
+                if tool in ("tag_delete", "tag_move", "tag_rename"):
+                    # Ticket #12: the action target is the paths the call's Observed
+                    # state reports, which the applier recorded for this batch.
+                    target = getattr(server, tool + "_targets", "")
+                else:
+                    paths = server.tag_create_paths if tool == "tag_create" else server.tag_copy_paths
+                    target = paths.get("createTarget" if tool == "tag_create" else "destination", "")
+                for row in document["items"]:
+                    row["action"] = str(row["action"]).replace("__ACTION__", action_filter)
+                    row["actionTarget"] = str(row["actionTarget"]).replace("__TARGET__", target)
+                    row["actionValue"] = str(row["actionValue"]).replace("__TOOL__", tool).replace(
+                        "__CORRELATION__", correlation,
+                    )
+                self._json(200, document)
+                return
+            if server.tag_write_correlation_id:
+                document = json.loads(json.dumps(_fixture("phase4/audit-log.json")))
+                for row in document["items"]:
+                    row["actionValue"] = str(row["actionValue"]).replace("__CORRELATION__", server.tag_write_correlation_id)
+                self._json(200, document)
+                return
+            self._json(200, {"items": [], "metadata": {"total": 0.0, "matching": 0.0, "limit": 100, "offset": 0}})
+            return
         if path.startswith("/data/api/v1/resources/find/ignition/tag-provider/"):
             name = path.rsplit("/", 1)[-1]
             # Ticket #6's recorded provider document, for the harness that provisions the
@@ -388,9 +1764,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             if name == server.policy_provider and server.policy_provider_created:
                 self._json(200, _fixture("phase4/tag-provider-find.json"))
                 return
-        if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
-            self._json(200, {"name": "phase3-runtime"})
-            return
+        # Ticket #21: the Server Config find answers from the modelled resource state
+        # (``server.resources``), exactly as every other config-resource read does, so
+        # a config apply created is readable and a config that is not there is a 404.
         if path.startswith("/data/api/v1/resources/"):
             payload = server.read_resource(
                 path,
@@ -408,9 +1784,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not server.policy_provider_created:
                     self._json(404, {"message": "No tag provider", "status": "404"})
                     return
-                self._send(200, json.dumps(
-                    _fixture("phase4/tag-export.json"), separators=(",", ":"),
-                ).encode("utf-8"), "application/octet-stream")
+                served = server.served_policy_tags
+                document = (
+                    {"name": "", "tagType": "Provider", "tags": served}
+                    if served else _fixture("phase4/tag-export.json")
+                )
+                self._send(200, json.dumps(document, separators=(",", ":")).encode("utf-8"),
+                           "application/octet-stream")
                 return
             if provider in server.tags:
                 # Phase 4 ticket #17: a modelled provider exports its own state, so an
@@ -427,6 +1807,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                     return
                 self._send(200, json.dumps(document, separators=(",", ":")).encode("utf-8"),
                            "application/octet-stream")
+                return
+            if provider == server.tag_state_provider:
+                # Ticket #10: the disposable Tag provider the Tag CONFIG Mutation
+                # cases run against. The fake answers from the configuration it
+                # serves, so an export that does not carry a path is evidence the
+                # Tool never created it.
+                self._json(200, {
+                    "path": "",
+                    "tags": [
+                        {"name": path.rsplit("/", 1)[-1], "path": path, "tagType": "AtomicTag"}
+                        for path in sorted(server.tag_config)
+                        if path.startswith("[" + provider + "]")
+                    ],
+                })
                 return
             self._json(200, {"path": "", "tags": [{"name": "Status", "tagType": "Boolean"}]})
             return
@@ -468,12 +1862,25 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 self._json(200, response)
                 return
             if method == "tools/list":
+                if str(path).endswith("phase4-operator"):
+                    operator_tools = [
+                        str(item["name"]) for item in _fixture("phase4/tools-list-operator.json")["tools"]
+                    ]
+                elif str(path).endswith("phase4-configurator"):
+                    # Read from the contract, exactly as the live workflow's Server
+                    # Config is written from it (D09's explicit lists).
+                    profile = json.loads(
+                        (ROOT / "contracts/profiles/configurator.yaml").read_text(encoding="utf-8")
+                    )
+                    operator_tools = [str(name) for name in profile["tools"]]
+                else:
+                    operator_tools = list(server.runtime_tools)
                 self._json(200, {
                     "jsonrpc": "2.0",
                     "id": payload.get("id"),
                     "result": {"tools": [
                         {"name": name, "description": f"{name} recorded replay"}
-                        for name in server.runtime_tools
+                        for name in operator_tools
                     ]},
                 })
                 return
@@ -500,13 +1907,15 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 })
                 return
             if method == "tools/call":
-                tool = str((payload.get("params") or {}).get("name"))
+                params = payload.get("params") or {}
+                tool = str(params.get("name"))
+                tool_arguments = params.get("arguments") if isinstance(params.get("arguments"), dict) else {}
                 if tool == "bundle_info":
                     result = {
                         "content": [{"type": "text", "text": "recorded replay"}],
                         "isError": False,
                         "structuredContent": {
-                            "bundleVersion": server.bundle_version,
+                            "bundleVersion": server.deployed_bundle_version(),
                             "bundleSourceRevision": server.source_revision,
                             "gatewayVersion": "8.3.8 (b2026071409)",
                             "mcpModuleVersion": "1.3.5-SNAPSHOT",
@@ -514,16 +1923,121 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         },
                     }
                 elif tool == "tag_read":
-                    result = {
-                        "content": [{"type": "text", "text": "tag path is not valid"}],
-                        "isError": True,
-                    }
-                elif tool in {"policy_probe", "alarm_probe"}:
-                    fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
+                    domain = _tag_read_replay(server, tool_arguments)
+                    if domain is None:
+                        result = {
+                            "content": [{"type": "text", "text": "tag path is not valid"}],
+                            "isError": True,
+                        }
+                    else:
+                        result = {
+                            "content": [{"type": "text", "text": "recorded replay"}],
+                            "isError": False,
+                            "structuredContent": domain,
+                        }
+                elif tool == "tag_fixture_probe":
+                    report = json.loads(json.dumps(_fixture("phase4/tag-fixture-probe.json")))
+                    # Ticket #10: the fake serves the fixture Tags' configuration
+                    # from the recorded body, so `tag_get_config` and `tag_update`
+                    # then agree on one state exactly as the live Gateway does.
+                    seeded = json.loads(json.dumps(_fixture("phase4/tag-config.json")))
+                    for path, configuration in seeded.items():
+                        server.tag_config.setdefault(path, configuration)
+                    for entry in report.get("initialValues") or []:
+                        if isinstance(entry, dict) and isinstance(entry.get("path"), str):
+                            raw = str(entry.get("value"))
+                            server.tag_state[entry["path"]] = int(raw) if raw.lstrip("-").isdigit() else raw
+                    server.tag_state.setdefault("[default]IgnitionMCP_CI/Nested/Inner", 0)
                     result = {
                         "content": [{"type": "text", "text": "recorded replay"}],
                         "isError": False,
-                        "structuredContent": _fixture(fixture),
+                        "structuredContent": report,
+                    }
+                elif tool == "tag_get_config":
+                    domain = _tag_config_domain(server, tool_arguments)
+                    if domain is None:  # pragma: no cover - the fake models every valid path
+                        result = {
+                            "content": [{"type": "text", "text": json.dumps({
+                                "code": "not_found",
+                                "message": "The Tag configuration read found no such path.",
+                                "correlationId": "recorded-replay",
+                            })},
+                            ],
+                            "isError": True,
+                        }
+                    else:
+                        result = {
+                            "content": [{"type": "text", "text": "recorded replay"}],
+                            "isError": False,
+                            "structuredContent": domain,
+                        }
+                elif tool == "tag_update":
+                    case, _paths = _tag_update_case(server, tool_arguments)
+                    if case == "allowlisted":
+                        result = _apply_tag_update(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-update-{case}.json")))
+                        result = _tag_update_body(server, tool_arguments, body)
+                elif tool == "tag_create":
+                    case, _paths = _tag_create_case(server, tool_arguments)
+                    if case == "created":
+                        result = _apply_tag_create(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-create-{case}.json")))
+                        result = _tag_create_body(server, tool_arguments, body)
+                elif tool == "tag_copy":
+                    case, _paths = _tag_copy_case(server, tool_arguments)
+                    if case == "copied":
+                        result = _apply_tag_copy(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-copy-{case}.json")))
+                        result = _tag_copy_body(server, tool_arguments, body)
+                elif tool == "tag_delete":
+                    case, _paths = _tag_delete_case(server, tool_arguments)
+                    if case == "deleted":
+                        result = _apply_tag_delete(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-delete-{case}.json")))
+                        result = _tag_delete_body(server, tool_arguments, body)
+                elif tool == "tag_move":
+                    case, _paths = _tag_move_case(server, tool_arguments)
+                    if case == "moved":
+                        result = _apply_tag_move(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-move-{case}.json")))
+                        result = _tag_move_body(server, tool_arguments, body)
+                elif tool == "tag_rename":
+                    case, _paths = _tag_rename_case(server, tool_arguments)
+                    if case == "renamed":
+                        result = _apply_tag_rename(server, tool_arguments)
+                    else:
+                        body = json.loads(json.dumps(_fixture(f"phase4/tag-rename-{case}.json")))
+                        result = _tag_rename_body(server, tool_arguments, body)
+                elif tool == "tag_write":
+                    case, _paths = _tag_write_case(server, tool_arguments)
+                    body = json.loads(json.dumps(_fixture(f"phase4/tag-write-{case}.json")))
+                    _apply_tag_write_case(server, case, body)
+                    result = body
+                elif tool in {"alarm_shelve", "alarm_unshelve"}:
+                    case, _paths = _alarm_mutation_case(server, tool, tool_arguments)
+                    body = _alarm_body(server, f"phase4/{tool.replace('_', '-')}-{case}.json")
+                    _apply_alarm_mutation_case(server, tool, case, body)
+                    result = body
+                elif tool == "alarm_shelved_list":
+                    result = {
+                        "content": [{"type": "text", "text": "recorded replay"}],
+                        "isError": False,
+                        "structuredContent": _alarm_shelved_list_result(server, tool_arguments),
+                    }
+                elif tool in {"policy_probe", "alarm_probe"}:
+                    fixture = "phase4/policy-probe.json" if tool == "policy_probe" else "phase4/alarm-probe.json"
+                    report = _fixture(fixture) if tool == "policy_probe" else _alarm_body(server, fixture)
+                    if tool == "policy_probe":
+                        report = _policy_probe_report(server, report)
+                    result = {
+                        "content": [{"type": "text", "text": "recorded replay"}],
+                        "isError": False,
+                        "structuredContent": report,
                     }
                 else:
                     self._json(200, {
@@ -581,6 +2095,20 @@ class _Handler(http.server.BaseHTTPRequestHandler):
         if path == "/data/api/v1/resources/ignition/audit-profile":
             self._json(200, {})
             return
+        if path == "/data/api/v1/api-token/generate":
+            # Ticket #22: the Gateway's own key/hash generator. It persists nothing;
+            # the pair is what the token create below stores.
+            self._json(200, server.generated_token_pair)
+            return
+        if path == "/data/api/v1/resources/ignition/api-token":
+            # Ticket #22: the Runtime API token an opt-in apply creates. The type has
+            # no published state until a token is seeded or created, so this branch
+            # publishes it on demand instead of at startup, which would change what the
+            # ticket #15/#36 cases read back from an unseeded Gateway.
+            server.resources.setdefault(API_TOKEN_TYPE, {})
+            status, payload = server.apply_resource_create(API_TOKEN_TYPE, body)
+            self._json(status, payload)
+            return
         if path == "/data/api/v1/resources/ignition/tag-provider":
             resources = json.loads(body)
             names = [item.get("name") for item in resources] if isinstance(resources, list) else []
@@ -594,9 +2122,17 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             provider = query.get("provider", [""])[0]
             collision_policy = query.get("collisionPolicy", [""])[0]
+            _record_tag_import(server, body)
             if provider == server.policy_provider:
                 if not server.policy_provider_created:
                     self._json(404, _fixture("phase2/no-route.json"))
+                    return
+                if server.policy_provider_unready_reads != 0:
+                    # A provider that has not finished starting applies the import to
+                    # its config while the Tag's actor never starts — the recorded
+                    # `Bad 776 ... cleanPath is null` hazard, which a handler read
+                    # then answers with Error_Configuration forever.
+                    self._json(200, _fixture("phase4/tag-import-provider-not-ready.json"))
                     return
                 if not server.policy_tags_imported:
                     if not server.policy_import_flaked:
@@ -707,6 +2243,14 @@ class _Server(http.server.ThreadingHTTPServer):
         bundle_version: str,
         policy_provider: str = "",
         port: int = 0,
+        audit_profile: str = "",
+        alarm_root: str = "",
+        tag_update_paths: dict[str, str] | None = None,
+        tag_create_paths: dict[str, str] | None = None,
+        tag_copy_paths: dict[str, str] | None = None,
+        tag_delete_paths: dict[str, str] | None = None,
+        tag_move_paths: dict[str, str] | None = None,
+        tag_rename_paths: dict[str, str] | None = None,
     ) -> None:
         super().__init__(("127.0.0.1", port), _Handler)
         self.requests: list[dict[str, Any]] = []
@@ -724,6 +2268,12 @@ class _Server(http.server.ThreadingHTTPServer):
         self.policy_provider_created = False
         self.policy_tags_imported = False
         self.policy_import_flaked = False
+        #: The second recorded provider-startup hazard: a freshly created provider
+        #: answers handler reads of its Tags with `Error_Configuration` until it has
+        #: finished loading, and an import applied in that window leaves a Tag whose
+        #: actor never starts. A positive count models a provider that becomes
+        #: ready after that many handler reads, `-1` models one that never does.
+        self.policy_provider_unready_reads = 0
         #: Modelled Tag state, keyed by provider: the provider root node in the
         #: recorded JSON export shape (``{"name": "", "tagType": "Provider", "tags": [...]}``).
         #: Seed it through :meth:`RecordedGateway.seed_tags`; the tag routes answer
@@ -747,6 +2297,63 @@ class _Server(http.server.ThreadingHTTPServer):
         #: interpret (a negative count, a count of the wrong type, ``null``). Set it
         #: through :meth:`answer_tag_import_with`.
         self.tag_import_body: Any = _UNSET
+        # Ticket #7: the fake models Tag values so a `tag_read` after a Mutation
+        # reports what that Mutation recorded, and the audit log can answer with
+        # the correlation ID the recorded `tag_write` result carried.
+        self.audit_profile = audit_profile
+        self.tag_state: dict[str, Any] = {}
+        self.tag_write_correlation_id = ""
+        #: Ticket #8: the shelving state a replayed Alarm Mutation leaves behind,
+        #: plus the correlation ID the recorded result carried so the audit log can
+        #: answer for it. `alarm_root` is the run-unique Alarm root the driver used,
+        #: substituted for `__ALARM_ROOT__` in the recorded Alarm bodies.
+        self.shelved_paths: dict[str, dict[str, Any]] = {}
+        self.alarm_correlation_id = ""
+        self.alarm_root = alarm_root
+        #: The Tag CONFIG Mutation paths of a ticket #10 run. The driver passes them
+        #: through `RecordedGateway(tag_update_paths=...)`, and a recorded refusal
+        #: body templates them because they are the run's own. Ticket #11's two Tools
+        #: carry their own path sets for the same reason: a `tag_copy` refusal names the
+        #: refused *end*, which is not a path any ticket #10 run had a name for.
+        self.tag_update_paths: dict[str, str] = dict(tag_update_paths or {})
+        self.tag_create_paths: dict[str, str] = dict(tag_create_paths or {})
+        self.tag_copy_paths: dict[str, str] = dict(tag_copy_paths or {})
+        #: Ticket #12's three Tools carry their own path sets for the same reason:
+        #: a `tag_move` or `tag_rename` refusal names an endpoint pair, and a
+        #: `tag_delete` refusal names the target, none of which is a path any earlier
+        #: ticket's run had a name for.
+        self.tag_delete_paths: dict[str, str] = dict(tag_delete_paths or {})
+        self.tag_move_paths: dict[str, str] = dict(tag_move_paths or {})
+        self.tag_rename_paths: dict[str, str] = dict(tag_rename_paths or {})
+        #: The correlation ID the modelled Mutation result carried, so the audit log can
+        #: answer for it the way the recorded `tag_write` rows do.
+        self.tag_update_correlation_id = ""
+        self.tag_create_correlation_id = ""
+        self.tag_copy_correlation_id = ""
+        self.tag_delete_correlation_id = ""
+        self.tag_move_correlation_id = ""
+        self.tag_rename_correlation_id = ""
+        #: The action target the audit rows of the last modelled batch carry: the
+        #: paths that batch's Observed state reports, in the handler's own order.
+        self.tag_delete_targets = ""
+        self.tag_move_targets = ""
+        self.tag_rename_targets = ""
+        #: The provider the ticket #10 Tag fixture lives in; its export is modelled
+        #: from the configuration the fake serves.
+        self.tag_state_provider = "default"
+        self.policy_value = ""
+        #: Ticket #21: the Tags the reserved provider currently serves (the last
+        #: imported document), so an apply read-back sees what it wrote.
+        self.served_policy_tags: list[dict[str, Any]] = []
+        self.write_probe_value = "phase4-write-probe-value"
+        #: Ticket #10: the Tag configuration the fake serves, keyed by exact path.
+        #: `tag_get_config` answers from it and `tag_update` merges into it, so a
+        #: local rehearsal can follow a change from one Tool to the other. The
+        #: fingerprints are derived with the contracts linter's own copy of the D30
+        #: rule (`tooling.contracts.lint`), which is the definition the shipped
+        #: handler implements; a rehearsal is never evidence, and the live run
+        #: re-reads everything through a real Gateway.
+        self.tag_config: dict[str, list[Any]] = {}
         #: config resource state: resource type -> (name, collection) -> document.
         #: Keying by collection as well as name is what makes the fixture able to
         #: tell two resources with one name in different collections apart. Seed it
@@ -771,6 +2378,14 @@ class _Server(http.server.ThreadingHTTPServer):
         self.pipeline_cancel_status: int | None = None
         self.pipeline_cancel_race: dict[str, str] | None = None
         self.signature_serial = 0
+        #: Ticket #22: the API-token key/hash pair the generate route answers with
+        #: (recorded, see ``GENERATED_API_TOKEN_KEY``), and the security tree the
+        #: Security Levels singleton serves. ``answer_api_token_generation_with``
+        #: replaces the pair for the case where a Gateway answers an inconsistent one.
+        self.generated_token_pair: Any = {
+            "key": GENERATED_API_TOKEN_KEY,
+            "hash": GENERATED_API_TOKEN_HASH,
+        }
         #: Modelled (not recorded) per-operation write behaviour, keyed by the
         #: operation the Tool performs ("update", "create", "delete", "rename"):
         #: a Gateway that refuses a change inside a 200 (`write_problem`), one that
@@ -784,6 +2399,87 @@ class _Server(http.server.ThreadingHTTPServer):
         #: A and the D16 pre-import re-export A').
         self.exports_served = 0
         self.project_change_after: tuple[str, int, dict[str, bytes]] | None = None
+        self._seed_server_config(runtime_tools, bundle_version)
+        self._seed_security_levels()
+
+    def _seed_security_levels(self) -> None:
+        """Publish the Security Levels singleton ``setup-native apply`` reconciles.
+
+        Ticket #22: the stock tree (modelled from the live G0 evidence) with the
+        ``Authenticated`` level a dedicated Runtime level hangs under, so a plan has a
+        real tree to preserve and a real signature to precondition a write with.
+        """
+
+        levels = json.loads(json.dumps(STOCK_SECURITY_LEVELS))
+        self.resources[SECURITY_LEVELS_TYPE] = {
+            ("security-levels", DEFAULT_COLLECTION): {
+                "type": "security-levels",
+                "name": "security-levels",
+                "enabled": True,
+                "description": "",
+                "collection": DEFAULT_COLLECTION,
+                "signature": self.next_signature(),
+                "config": {"securityLevels": levels},
+            },
+        }
+
+    def deployed_bundle_version(self) -> str:
+        """The bundle version the served Project reports, as the Module's handler reads it.
+
+        Ticket #21: ``setup-native apply`` imports the Project, so the bundle a
+        deployment now serves is the imported one. A Project that was seeded without
+        an import (the harness deploys by copying) keeps the configured version.
+        """
+
+        for name in reversed(self.imports):
+            archive = self.projects.get(name)
+            if archive is None:
+                continue
+            try:
+                document = json.loads(_zip_entries(archive)["project.json"])
+            except (KeyError, ValueError, zipfile.BadZipFile):
+                continue
+            description = document.get("description")
+            if not isinstance(description, str) or not description.strip():
+                continue
+            match = _MANAGED_MARKER_RE.fullmatch(description.rstrip().splitlines()[-1].strip())
+            if match is not None and match.group(1) == MANAGED_PRODUCT:
+                return match.group(2)
+        return self.bundle_version
+
+    def _seed_server_config(self, runtime_tools: tuple[str, ...], bundle_version: str) -> None:
+        """Publish the deployed MCP Server Config the harness workflows deploy by hand.
+
+        Ticket #21: an explicit Tool list and a permissions tree, so ``setup-native
+        plan``/``apply`` read and reconcile the same document shape the live harness
+        copies onto the Gateway. A config apply creates lands in the same state
+        through the modelled collection routes.
+        """
+
+        self.resources[SERVER_CONFIG_TYPE] = {
+            ("phase3-runtime", DEFAULT_COLLECTION): {
+                "type": "server-config",
+                "name": "phase3-runtime",
+                "enabled": True,
+                "description": "",
+                "collection": DEFAULT_COLLECTION,
+                "signature": self.next_signature(),
+                "config": {
+                    "title": "Phase 3 Runtime Readonly",
+                    "version": bundle_version,
+                    "permissions": {
+                        "type": "AllOf",
+                        "securityLevels": [{
+                            "name": "Authenticated",
+                            "children": [{"name": "IgnitionMcpCi", "children": []}],
+                        }],
+                    },
+                    "tools": {"project/ignition_runtime": list(runtime_tools)},
+                    "resources": {"project/ignition_runtime": "*"},
+                    "prompts": {"project/ignition_runtime": "*"},
+                },
+            },
+        }
 
     # ------------------------------------------------------- projects
 
@@ -1565,6 +3261,15 @@ class RecordedGateway:
         bundle_version: str = "0.2.0",
         policy_provider: str = "",
         port: int = 0,
+        audit_profile: str = "",
+        alarm_root: str = "",
+        policy_provider_unready_reads: int = 0,
+        tag_update_paths: dict[str, str] | None = None,
+        tag_create_paths: dict[str, str] | None = None,
+        tag_copy_paths: dict[str, str] | None = None,
+        tag_delete_paths: dict[str, str] | None = None,
+        tag_move_paths: dict[str, str] | None = None,
+        tag_rename_paths: dict[str, str] | None = None,
     ) -> None:
         self._server = _Server(
             projects or {},
@@ -1576,8 +3281,26 @@ class RecordedGateway:
             bundle_version,
             policy_provider,
             port,
+            audit_profile,
+            alarm_root,
+            tag_update_paths,
+            tag_create_paths,
+            tag_copy_paths,
+            tag_delete_paths,
+            tag_move_paths,
+            tag_rename_paths,
         )
+        self._server.policy_provider_unready_reads = policy_provider_unready_reads
         self._thread = threading.Thread(target=self._server.serve_forever, daemon=True)
+        if audit_profile:
+            # The Phase 4 policy names an audit profile the harness creates
+            # through Native REST; publish it as a config resource so the fake
+            # answers the same find the live Gateway does.
+            self.seed_resource(
+                "ignition/audit-profile", audit_profile,
+                config={"profile": {"type": "local"}, "settings": {}},
+                enabled=True, description="Disposable Phase 4 CI local audit profile",
+            )
 
     @property
     def base_url(self) -> str:
@@ -1601,6 +3324,15 @@ class RecordedGateway:
         """The Project archive the Gateway currently serves for ``name``."""
 
         return self._server.projects.get(name)
+
+    def served_policy_tags(self) -> list[dict[str, Any]]:
+        """The Tags the reserved policy provider currently serves.
+
+        Ticket #21: the provider's own state after the last import, so a case can
+        assert what ``setup-native apply`` left in it without a second HTTP read.
+        """
+
+        return list(self._server.served_policy_tags)
 
     def change_project_out_of_band(self, name: str, entries: dict[str, bytes]) -> None:
         """Change a Project without the MCP server, as another operator would; a
@@ -1828,6 +3560,22 @@ class RecordedGateway:
 
     def signature(self, resource_type: str, name: str, collection: str = DEFAULT_COLLECTION) -> str:
         return str(self.resource(resource_type, name, collection)["signature"])
+
+    def security_levels(self) -> list[dict[str, Any]] | None:
+        """The security tree the fake currently serves (``None`` = no singleton)."""
+
+        document = self._server._singleton(SECURITY_LEVELS_TYPE)
+        tree = document.get("config", {}).get("securityLevels") if isinstance(document, dict) else None
+        return tree if isinstance(tree, list) else None
+
+    def answer_api_token_generation_with(self, payload: Any) -> None:
+        """Answer the API-token generate route with ``payload`` whatever it is.
+
+        Modelled, not recorded: the case is a 2xx body this CLI cannot turn into a
+        credential — a key/hash pair that disagrees, or a body that is not a pair.
+        """
+
+        self._server.generated_token_pair = payload
 
     def refuse_writes_with(self, operation: str, problem: str | None) -> None:
         """Model a Gateway that answers 200 with ``success=false`` for one operation.

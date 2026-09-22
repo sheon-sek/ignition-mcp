@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "action": "ignition-mcp.tag_write",
+      "actionTarget": "[default]IgnitionMCP_CI/WriteTarget,[default]IgnitionMCP_CI/TextTarget,[default]IgnitionMCP_CI/Nested/Inner,[default]IgnitionMCP_CI/Missing",
+      "actionValue": "tool=tag_write phase=result correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=executed succeeded=3 failed=1 outcomeUnknown=0",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "statusCode": 0,
+      "timestamp": 1789000000000,
+      "result": ""
+    },
+    {
+      "action": "ignition-mcp.tag_write",
+      "actionTarget": "[default]IgnitionMCP_CI/WriteTarget,[default]IgnitionMCP_CI/TextTarget,[default]IgnitionMCP_CI/Nested/Inner,[default]IgnitionMCP_CI/Missing",
+      "actionValue": "tool=tag_write phase=attempt correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=attempt requested=4",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "statusCode": 0,
+      "timestamp": 1789000000000,
+      "result": ""
+    }
+  ],
+  "metadata": {
+    "total": 2.0,
+    "matching": 2.0,
+    "limit": 100,
+    "offset": 0
+  }
+}

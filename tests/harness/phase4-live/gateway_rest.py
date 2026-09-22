@@ -109,12 +109,35 @@ def openapi_endpoints(base_url: str, token: str) -> set[tuple[str, str]]:
 
 
 def create_tag_provider(base_url: str, token: str, resource: dict[str, Any]) -> tuple[int, Any]:
+    return create_resource(base_url, token, "ignition/tag-provider", resource)
+
+
+def create_resource(
+    base_url: str, token: str, resource_type: str, resource: dict[str, Any], *, timeout: float = 60.0,
+) -> tuple[int, Any]:
+    """Create one resource of `resource_type` (the D30 `apply` write path shape)."""
     body = json.dumps([resource], separators=(",", ":")).encode("utf-8")
     status, payload = request(
-        base_url, token, "POST", "/data/api/v1/resources/ignition/tag-provider",
-        body=body, content_type="application/json",
+        base_url, token, "POST", f"/data/api/v1/resources/{resource_type}",
+        body=body, content_type="application/json", timeout=timeout,
     )
     return status, decode(payload)
+
+
+def audit_rows(
+    base_url: str, token: str, profile: str, *, action: str, limit: int = 100, timeout: float = 30.0,
+) -> tuple[int, list[dict[str, Any]]]:
+    """Query one audit profile for rows whose action matches, newest page first."""
+    status, payload = request(
+        base_url, token, "GET", f"/data/api/v1/audit/log/{profile}",
+        query={"actionFilter": action, "limit": str(limit), "offset": "0"},
+        timeout=timeout,
+    )
+    document = decode(payload)
+    items = document.get("items") if isinstance(document, dict) else document
+    if not isinstance(items, list):
+        items = []
+    return status, [item for item in items if isinstance(item, dict)]
 
 
 def find_resource(base_url: str, token: str, resource_type: str, name: str) -> tuple[int, Any]:

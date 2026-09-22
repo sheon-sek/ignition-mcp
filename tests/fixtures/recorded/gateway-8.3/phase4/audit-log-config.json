@@ -1,0 +1,34 @@
+{
+  "items": [
+    {
+      "action": "ignition-mcp.tag_update",
+      "actionTarget": "__TARGET__",
+      "actionValue": "tool=tag_update phase=result correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=executed succeeded=1 failed=0 outcomeUnknown=0",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "statusCode": 0,
+      "timestamp": 1789000000000,
+      "result": ""
+    },
+    {
+      "action": "ignition-mcp.tag_update",
+      "actionTarget": "__TARGET__",
+      "actionValue": "tool=tag_update phase=attempt correlationId=__CORRELATION__ serviceIdentity=ignition-mcp-service outcome=attempt requested=1",
+      "actor": "ignition-mcp-service",
+      "actorHost": "",
+      "originatingContext": 0,
+      "originatingSystem": "ignition_runtime",
+      "statusCode": 0,
+      "timestamp": 1789000000000,
+      "result": ""
+    }
+  ],
+  "metadata": {
+    "total": 2.0,
+    "matching": 2.0,
+    "limit": 100,
+    "offset": 0
+  }
+}

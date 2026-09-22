@@ -1,0 +1,416 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_copy",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      }
+    ]
+  },
+  "calls": []
+}
