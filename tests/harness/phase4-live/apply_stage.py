@@ -238,7 +238,10 @@ async def run_stage(args: argparse.Namespace) -> int:
         if not _last_verify_ok(evidence):
             verify_attempts = await _reverify_after_reload(evidence, args, argv, verify_attempts)
     evidence["steps"]["apply"]["verifyAttempts"] = verify_attempts
-    if not _verify_ok((evidence["steps"]["apply"].get("lastVerify") or apply_report.get("verify")) or {}):
+    # The judgement is the *most recent* verify this stage ran (apply's own, a bounded
+    # retry, or the one after the reload) — never apply's embedded report alone, which
+    # is red by definition whenever the retries above had to run.
+    if not _last_verify_ok(evidence):
         _fail(evidence, args, f"apply exited {apply_code} and verify never went green")
         return 1
 
@@ -525,13 +528,14 @@ async def _reverify_after_reload(
 ) -> int:
     """Reload the disposable Gateway once, then verify again.
 
-    The harness's own discipline: the milestone 4a/4b rows deploy their Project and
-    Server Config by file copy and only judge the endpoint after the Gateway has
-    started with them in place. A Module that has not scanned a Project the CLI
-    imported seconds ago answers a Server Config it accepted live with no primitives
-    at all (``capabilities=[-]``, ``tools/list -> -32600``). Nothing is written here;
-    the reload only makes the already-applied deployment servable, and the reload and
-    every verify attempt are recorded in the evidence.
+    Last resort only: `apply` re-announces a Server Config whose endpoint serves no
+    primitives (the Module resolves a Server Config's Tool list when the resource is
+    written and registers a Project's provider on the Project's own thread, so a
+    server built in that window serves nothing), and a green verify there means this
+    never runs. If the CLI could not make the endpoint serve, one Gateway reload is
+    the harness's own discipline — the 4a/4b rows always judge an endpoint the Gateway
+    started with. Nothing of the plan is written here; the reload and every verify
+    attempt are recorded in the evidence.
     """
 
     if not args.compose_file:
