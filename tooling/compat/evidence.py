@@ -61,6 +61,9 @@ G5_LIVE_CASES: dict[str, tuple[str, ...]] = {
         "perspective-view-upsert-commits",
         "perspective-view-upsert-verifies-its-own-candidate",
         "perspective-view-upsert-is-observed-by-a-fresh-read",
+        # The same case covers the create: D15's upsert creates the resource when the
+        # Project has none at the path, and the list and the read are what show it landed.
+        "perspective-view-upsert-creates-a-view-the-project-lacks",
     ),
     "no-op": (
         "perspective-view-upsert-of-the-current-document-is-no-change",

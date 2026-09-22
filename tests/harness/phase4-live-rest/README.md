@@ -141,6 +141,7 @@ observe:
 | `perspective-view-upsert-of-the-current-document-is-no-change` | re-sending that document is D16's `NO_CHANGE` |
 | `perspective-view-upsert-no-change-dispatches-nothing` | …and nothing was dispatched |
 | `perspective-view-upsert-preserves-every-other-entry` | every archive entry outside the Target's own directory is byte-identical across the edit: the unrelated resource, the other resources and the manifest |
+| `perspective-view-upsert-creates-a-view-the-project-lacks` | an upsert of a Logical path the Project has none of commits, and the created View appears in `perspective_view_list` and reads back as the document the write published |
 | `perspective-view-upsert-of-an-inherited-view-is-invalid-argument` | a write to the View the child inherits is refused as input |
 | `perspective-view-upsert-of-an-inherited-view-names-the-reason` | …and the refusal names `inherited_resource`, so it cannot be read as any other bad input |
 | `perspective-view-upsert-of-an-inherited-view-changes-nothing` | …and the child's View and fingerprint are exactly what they were |
@@ -230,9 +231,13 @@ resource fails before a case runs.
 The archive layout is the one the live 8.3 module resolves, confirmed against a real
 Gateway before these cases were written: `views/<Logical path>/view.json` with its
 `resource.json`, and `page-config/config.json` / `session-props/props.json`, each with its
-own `resource.json`. The metadata file beside each data file is load-bearing. The Gateway's project import
-keeps an entry only when the resource metadata declares it, so a fixture or a write that
-publishes a bare data file publishes nothing at all.
+own `resource.json`. The metadata file beside each data file is load-bearing: the Gateway's
+project import keeps an entry only when the resource metadata declares it, so a fixture or
+a write that publishes a bare data file publishes nothing at all.
+
+One case covers the other half of D15's upsert: a Logical path the Project has none of,
+which the write creates, and which the list and a fresh read then serve. That path names
+no resource any ancestor defines, so the case is creation rather than an override.
 
 The preservation case is why the fixture carries an unrelated resource: it compares the
 child's export entry by entry across the edit, and every entry outside the Target View's

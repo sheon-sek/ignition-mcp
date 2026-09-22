@@ -286,6 +286,25 @@ class _StubSession:
         raise AssertionError(f"unexpected tool call: {tool}")
 
 
+class _StaleListSession(_StubSession):
+    """A stub whose listing never shows a View that an upsert created.
+
+    The create case claims more than "the write committed": the new View has to appear in
+    `perspective_view_list`. This stub is how that claim is exercised, because a listing
+    that lags is exactly the failure the case exists to catch.
+    """
+
+    def __init__(self, project: _FakeProject) -> None:
+        super().__init__(project)
+        self._initial = project.views()
+
+    async def call(self, tool: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        result = await super().call(tool, arguments)
+        if tool == driver.PERSPECTIVE_VIEW_LIST_TOOL and not result.get("isError"):
+            result["structuredContent"]["items"] = list(self._initial)
+        return result
+
+
 class _StubArtifacts:
     """The one artifact route the section uses: the export download."""
 
@@ -340,6 +359,7 @@ def test_the_section_passes_against_the_modelled_contract(
         "perspective-view-upsert-commits",
         "perspective-view-upsert-of-the-current-document-is-no-change",
         "perspective-view-upsert-preserves-every-other-entry",
+        "perspective-view-upsert-creates-a-view-the-project-lacks",
         "perspective-view-upsert-of-an-inherited-view-is-invalid-argument",
         "perspective-view-upsert-of-an-inherited-view-names-the-reason",
         "perspective-view-upsert-after-an-external-change-is-conflict",
@@ -350,11 +370,26 @@ def test_the_section_passes_against_the_modelled_contract(
     ):
         assert case in names, case
     assert observations["preservation"]["changedOutsideTarget"] == []
-    # Every write the section reports ran once, in the order the cases address them.
+    # The delete case removed the child's own View; the View the create case published is
+    # still served, which is the state the last two document updates left behind.
+    assert session._project.views() == [driver.CREATED_VIEW_PATH]
+    # Every dispatched write ran once, in the order the cases address them: the edit, the
+    # create, the external change, the delete, then the two document updates.
     assert session._project.writes == [
+        driver.PERSPECTIVE_VIEW_UPSERT_TOOL,
         driver.PERSPECTIVE_VIEW_UPSERT_TOOL,
         driver.PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL,
         driver.PERSPECTIVE_VIEW_DELETE_TOOL,
         driver.PERSPECTIVE_PAGE_CONFIG_UPDATE_TOOL,
         driver.PERSPECTIVE_SESSION_PROPS_UPDATE_TOOL,
+    ]
+
+
+def test_the_create_case_checks_the_listing_and_not_only_the_write(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _StaleListSession(_project(tmp_path))
+    cases, _ = _run_cases(tmp_path, session, monkeypatch)
+    assert [case["case"] for case in cases if not case["ok"]] == [
+        "perspective-view-upsert-creates-a-view-the-project-lacks"
     ]

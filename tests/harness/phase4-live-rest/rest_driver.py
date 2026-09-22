@@ -256,6 +256,26 @@ UPSERT_SESSION_PROPS: dict[str, Any] = {"props": {"auth": {"enabled": False}}}
 #: The external change the conflict case makes *between* its read and its write. A second
 #: Perspective document is the smallest change that moves the Precondition token.
 EXTERNAL_SESSION_PROPS: dict[str, Any] = {"props": {"auth": {"enabled": True}}}
+#: The Logical path the create case addresses: no ancestor defines it either, so the write
+#: creates the resource instead of overriding an inherited one. D15's upsert creates when
+#: the Project has no resource at the path, and the document it publishes is its own
+#: marker, so the list and the read below cannot be confused with the edit's document.
+CREATED_VIEW_PATH = "Dashboard/Created"
+CREATED_VIEW_DOCUMENT: dict[str, Any] = {
+    "root": {
+        "type": "ia.container.flex",
+        "props": {"style": {"overflow": "auto"}},
+        "children": [
+            {
+                "type": "ia.display.label",
+                "meta": {"name": "Created"},
+                "position": {"basis": "auto"},
+                "props": {"text": "p5-created"},
+            },
+        ],
+    },
+    "custom": {"mcp": "p5-created"},
+}
 
 #: The effective REST inventory: this deployment enables the sensitive-export gate as
 #: well as the config mutation class (the Project cases read their Precondition token
@@ -1316,6 +1336,32 @@ async def perspective_cases(
             "changedOutsideTarget": outside,
         }
         _check(cases, "perspective-view-upsert-preserves-every-other-entry", [], outside)
+
+        # -------------------------------------------------- the create that is absent
+        # D15: an upsert creates the resource when the Project has none at the path. The
+        # two independent reads are what show the Gateway published it, and the path is one
+        # no ancestor defines either, so this is creation rather than an override.
+        created = _read_result(await agent.call(PERSPECTIVE_VIEW_UPSERT_TOOL, {
+            "projectName": child_project, "path": CREATED_VIEW_PATH,
+            "view": CREATED_VIEW_DOCUMENT,
+            "expectedFingerprint": await _project_fingerprint(agent, child_project),
+        }))
+        observations["viewCreate"] = created
+        listed_after_create = _read_result(await agent.call(PERSPECTIVE_VIEW_LIST_TOOL, {
+            "projectName": child_project, "limit": 100, "offset": 0,
+        }))
+        created_read = _read_result(await agent.call(PERSPECTIVE_VIEW_GET_TOOL, {
+            "projectName": child_project, "path": CREATED_VIEW_PATH,
+        }))
+        _check(
+            cases, "perspective-view-upsert-creates-a-view-the-project-lacks",
+            {"state": "COMMITTED", "listed": True, "view": CREATED_VIEW_DOCUMENT},
+            {
+                "state": _nested(created, "state"),
+                "listed": CREATED_VIEW_PATH in (_nested(listed_after_create, "items") or []),
+                "view": _nested(created_read, "view"),
+            },
+        )
 
         # ------------------------------------------------- the inherited refusal
         inherited_token = await _project_fingerprint(agent, child_project)
