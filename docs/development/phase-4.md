@@ -315,12 +315,26 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     digest is not the pinned one, with exponential backoff (five attempts, 1 s to
     8 s); the sha256 still decides what is accepted, so a retry cannot substitute a
     different artifact, and a body over the pinned size is refused without a retry.
-    **LIVE EVIDENCE PENDING (Actions outage):** GitHub Actions created no workflow
-    run for this repository after 2026-09-21T23:49:41Z, so the round-2 head has no
-    G4a run of its own and the red 8.3.8 row's rerun is outstanding. The fix is
-    covered locally (the workflow check passes, and the retry path is tested against
-    a transient HTTP 500); the confirmation that both G4a rows are green on the
-    round-2 head is part of the coordinator's post-outage sweep.
+    **Live evidence (head `ccd0820`, draft PR #32):** `Phase 4 Live Gateway G4a`
+    run
+    [35672150054](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150054)
+    is **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}`, the 8.3.8 row's validation stage (the one that failed on the
+    download) green, the gate serving on its first attempt on both rows, one policy
+    import, one policy read with no repair and a verified gate, and every ticket
+    #7/#8 live case holding. CI
+    [35672150036](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150036),
+    Phase 0 G0
+    [35672150084](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150084),
+    Phase 3 G3
+    [35672150073](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150073),
+    the REST mutation workflow
+    [35672150065](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150065)
+    and `Phase 4 Live Gateway G4b`
+    [35672150067](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150067)
+    are green on the same head. GitHub Actions created no run between
+    2026-09-21T23:49:41Z and 2026-09-22T00:29:12Z, so the round-2 head was briefly
+    marked `LIVE EVIDENCE PENDING (Actions outage)`; this run replaced that mark.
 - **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
     Gateway G4a` run
     [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)
