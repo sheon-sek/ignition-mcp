@@ -996,13 +996,31 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     needed no change — it pins `fixedKnobs`, the Precondition token and the structural
     disposition, none of which moved — and it stays green; the package README's three
     collection paragraphs were updated to the same rule.
-  - **Validation.** Full `AGENTS.md` command block green (**924 pytest cases**, +5 on the
-    pre-review 919; ruff, mypy strict, lock, workflow linter, native validate/build/release,
-    compat, contract lint, `sync_schemas` no-op), and the local recorded-Gateway rehearsal
-    `tests/harness/phase4-live-rest/rehearse_local.py` — **194/194 cases**, unchanged: the
-    new refusal is only reachable for a Gateway document no real Gateway serves, so the live
-    rows cannot exercise it (the unit fixtures are the proof), and this change must keep every
-    live row green.
+  - **Validation.** Full `AGENTS.md` command block green on the fix head `ca08e92`
+    (**924 pytest cases**, +5 on the pre-review 919; ruff, mypy strict, lock, workflow
+    linter, native validate/build/release, compat, contract lint, `sync_schemas` no-op), and
+    the local recorded-Gateway rehearsal `tests/harness/phase4-live-rest/rehearse_local.py`
+    — **194/194 cases**, unchanged.
+  - **Live** (head `ca08e92`, workflow `Phase 4 Live Gateway REST mutation`,
+    [run 35680756386](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756386)):
+    **both rows green — 194/194 cases on 8.3.8 (`2026071409`, required) and 194/194 on 8.3.9
+    (`2026082511`, candidate), no failed case**, including every collection case from the
+    first round (`update-reports-the-core-collection`, `explicit-core-collection-*`,
+    `non-core-collection-*`, `core-collection-is-on-every-read`,
+    `core-collection-write-count` = 1, `core-collection-write-names-the-collection-route`).
+    No flake occurred in this round. The new refusal itself cannot be exercised live — no real
+    Gateway documents a change item without the field — so the live artifacts were used for
+    the opposite check: the `openapi-8.3.8.json` and `openapi-8.3.9.json` each row uploads
+    were run through the same capability derivation the server uses, and **every reachable
+    type on both versions (55 each) declares `collection` in its item schema and accepts
+    `core`**, so the rule disables nothing on either supported Gateway and the unit fixtures
+    remain the proof of the refusal itself. Frozen gates on the same head: CI
+    [35680756384](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756384),
+    Phase 3 Live Gateway G3
+    [35680756395](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756395), and
+    Phase 4 Live Gateway G4a
+    [35680756382](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756382) —
+    all green.
 
 ## Open questions
 
