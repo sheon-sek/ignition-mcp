@@ -96,6 +96,13 @@ REQUIRED_ROUTES = {
 }
 PROVIDER_READY_DEADLINE_SECONDS = 120.0
 POLICY_READ_DEADLINE_SECONDS = 240.0
+#: How long a readiness or repair loop waits between two attempts, in seconds. A
+#: provider that is still loading its Tags needs real seconds, so a live run keeps
+#: the intervals the recorded runs needed; the harness tests install a virtual
+#: :data:`CLOCK` whose wait advances its own clock, which reaches the same deadline
+#: after the same attempts without spending the wall time.
+PROVIDER_READY_RETRY_SECONDS = 2.0
+PROVIDER_SETTLE_RETRY_SECONDS = 3.0
 RAW_LIMIT = 24_000
 EXIT_OK = 0
 EXIT_STAGE_FAILED = 2
@@ -132,6 +139,27 @@ class GuardError(RuntimeError):
 
 class StageFailure(RuntimeError):
     """A stage could not characterize its question."""
+
+
+class RetryClock:
+    """The clock every readiness and repair loop runs on.
+
+    Real seconds are what a live Gateway needs, so :data:`CLOCK` is the wall clock.
+    The harness tests install a virtual clock here instead: its ``now`` never moves
+    on its own and its ``wait`` moves it by the interval it was asked to wait, so a
+    loop runs the attempts a live run would run — and its deadlines, elapsed
+    measurements and retry counts stay the live ones — while the suite waits no
+    wall time.
+    """
+
+    def now(self) -> float:
+        return time.monotonic()
+
+    def wait(self, seconds: float) -> None:
+        time.sleep(seconds)
+
+
+CLOCK = RetryClock()
 
 
 @dataclass
@@ -336,12 +364,12 @@ def identity(config: Config) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 
 def wait_for_provider(config: Config) -> dict[str, Any]:
-    deadline = time.monotonic() + config.provider_ready_deadline_seconds
-    started = time.monotonic()
+    deadline = CLOCK.now() + config.provider_ready_deadline_seconds
+    started = CLOCK.now()
     attempts = 0
     find_status = 0
     export_status = 0
-    while time.monotonic() < deadline:
+    while CLOCK.now() < deadline:
         attempts += 1
         find_status, _ = gateway_rest.find_resource(
             config.base_url, config.api_token, "ignition/tag-provider", config.provider,
@@ -353,15 +381,15 @@ def wait_for_provider(config: Config) -> dict[str, Any]:
             return {
                 "ready": True,
                 "attempts": attempts,
-                "waitedMs": int((time.monotonic() - started) * 1000),
+                "waitedMs": int((CLOCK.now() - started) * 1000),
                 "findStatus": find_status,
                 "exportStatus": export_status,
             }
-        time.sleep(2.0)
+        CLOCK.wait(PROVIDER_READY_RETRY_SECONDS)
     return {
         "ready": False,
         "attempts": attempts,
-        "waitedMs": int((time.monotonic() - started) * 1000),
+        "waitedMs": int((CLOCK.now() - started) * 1000),
         "findStatus": find_status,
         "exportStatus": export_status,
     }
@@ -425,8 +453,8 @@ def wait_for_handler_read(
     if client is None:
         client = mcp_client.McpClient(config.mcp_url, config.api_token)
         client.initialize()
-    deadline = time.monotonic() + config.provider_ready_deadline_seconds
-    started = time.monotonic()
+    deadline = CLOCK.now() + config.provider_ready_deadline_seconds
+    started = CLOCK.now()
     attempts: list[dict[str, Any]] = []
     while True:
         state = provider_read_state(config, client)
@@ -441,13 +469,13 @@ def wait_for_handler_read(
         result = {
             "serving": provider_is_serving(state),
             "attempts": len(attempts),
-            "waitedMs": int((time.monotonic() - started) * 1000),
+            "waitedMs": int((CLOCK.now() - started) * 1000),
             "missingPathQuality": str(state.get("missingPathQuality", "")),
             "lastAttempts": attempts[-3:],
         }
-        if result["serving"] or time.monotonic() >= deadline:
+        if result["serving"] or CLOCK.now() >= deadline:
             return result
-        time.sleep(2.0)
+        CLOCK.wait(PROVIDER_READY_RETRY_SECONDS)
 
 
 def import_policy(
@@ -461,7 +489,7 @@ def import_policy(
     single import as reliable. The first attempt keeps D30's `Abort` policy; the
     retries are idempotent so a partially applied import cannot wedge the write.
     """
-    started = time.monotonic()
+    started = CLOCK.now()
     attempts: list[dict[str, Any]] = []
     while True:
         policy = first_policy if not attempts else "MergeOverwrite"
@@ -475,13 +503,13 @@ def import_policy(
             "status": status,
             "body": bounded(payload),
             "failures": bounded(failures),
-            "elapsedMs": int((time.monotonic() - started) * 1000),
+            "elapsedMs": int((CLOCK.now() - started) * 1000),
         })
         if status == 200 and failures is None:
             return {"ok": True, "attempts": attempts, "attemptCount": len(attempts)}
-        if time.monotonic() - started >= deadline_seconds:
+        if CLOCK.now() - started >= deadline_seconds:
             return {"ok": False, "attempts": attempts, "attemptCount": len(attempts)}
-        time.sleep(3.0)
+        CLOCK.wait(PROVIDER_SETTLE_RETRY_SECONDS)
 
 
 def stage_policy_provision(config: Config) -> dict[str, Any]:
@@ -725,7 +753,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
     if "policy_probe" not in tools:
         raise StageFailure(f"policy_probe is not discoverable; tools/list = {sorted(tools)}")
     arguments = policy_probe_arguments(config)
-    deadline = time.monotonic() + config.policy_read_deadline_seconds
+    deadline = CLOCK.now() + config.policy_read_deadline_seconds
     attempts: list[dict[str, Any]] = []
     repairs = 0
     facts: dict[str, Any] = {}
@@ -775,13 +803,13 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         # document whose report carries no gate measurement is a stale recorded
         # payload (the expectation drift check reports it), and a gate that
         # answered "oversize"/"blocked" is a deterministic refusal.
-        if healthy or deterministic_refusal or (served_document and not gate_reported) or time.monotonic() >= deadline:
+        if healthy or deterministic_refusal or (served_document and not gate_reported) or CLOCK.now() >= deadline:
             attempts.append(attempt)
             break
         if provider_serving is False:
             # Wait for the provider to serve again instead of re-importing into it.
             attempts.append(attempt)
-            time.sleep(3.0)
+            CLOCK.wait(PROVIDER_SETTLE_RETRY_SECONDS)
             continue
         # Two recorded 8.3.8 provider-startup failures motivate this loop: the
         # first /tags/import can be rejected while the provider is starting, and
@@ -795,7 +823,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         repairs = repairs + 1
         attempt["repairImport"] = bounded(repair, 4000)
         attempts.append(attempt)
-        time.sleep(3.0)
+        CLOCK.wait(PROVIDER_SETTLE_RETRY_SECONDS)
     facts["tools"] = sorted(tools)
     facts["policyReadAttempts"] = len(attempts)
     facts["policyReadRepairImports"] = repairs
@@ -1073,7 +1101,7 @@ def install_policy(
     Tags (ticket #6 recorded both startup failures), so the install is confirmed
     with the same handler-scope read the shipped mutation performs.
     """
-    started = time.monotonic()
+    started = CLOCK.now()
     attempts: list[dict[str, Any]] = []
     while True:
         status, payload = gateway_rest.import_tags(
@@ -1097,9 +1125,9 @@ def install_policy(
         })
         if served == expected_sha256:
             return {"ok": True, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
-        if time.monotonic() - started >= deadline_seconds:
+        if CLOCK.now() - started >= deadline_seconds:
             return {"ok": False, "attempts": attempts, "attemptCount": len(attempts), "servedSha256": served}
-        time.sleep(3.0)
+        CLOCK.wait(PROVIDER_SETTLE_RETRY_SECONDS)
 
 
 def install_tag_write_policy(

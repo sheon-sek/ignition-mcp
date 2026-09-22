@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
 import os
@@ -151,7 +152,17 @@ def _java_executable() -> str:
     return resolved
 
 
+@functools.lru_cache(maxsize=None)
 def _require_java_11(java: str) -> None:
+    """Check one resolved Java executable once per process.
+
+    Every recorded call would otherwise start a JVM of its own just to read
+    ``java -version``, which is the same executable answering the same question.
+    The executable path is the key, so a caller that re-resolves it — including one
+    whose environment moved ``JYTHON_RUNNER_JAVA`` — is checked again. A rejected
+    executable raises, and an exception leaves no cache entry: the next call runs
+    the check again.
+    """
     completed = subprocess.run(
         [java, "-version"],
         check=False,

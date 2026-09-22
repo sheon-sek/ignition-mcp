@@ -43,7 +43,9 @@ def _load(name: str, path: Path) -> ModuleType:
     return module
 
 
-driver = _load("phase4_driver", PHASE4 / "driver.py")
+#: Loaded under its own name: `wait_for_gateway` and the rehearsal import `driver`,
+#: and one module instance means one retry clock and one monkeypatch target.
+driver = _load("driver", PHASE4 / "driver.py")
 policy_document = _load("phase4_policy_document", PHASE4 / "policy_document.py")
 gateway_rest = _load("phase4_gateway_rest", PHASE4 / "gateway_rest.py")
 mcp_client = _load("phase4_mcp_client", PHASE4 / "mcp_client.py")
@@ -89,6 +91,40 @@ def _tag_update_paths() -> dict[str, str]:
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
     }
+
+
+class _VirtualClock:
+    """A retry clock that moves only when a loop waits for it.
+
+    The interval the loop asks for is the live one, so every deadline, elapsed
+    measurement and attempt count stays what a live run would produce; only the
+    wall time the waiting costs disappears.
+    """
+
+    def __init__(self) -> None:
+        self.seconds = 0.0
+        self.waits: list[float] = []
+
+    def now(self) -> float:
+        return self.seconds
+
+    def wait(self, seconds: float) -> None:
+        self.waits.append(seconds)
+        self.seconds += seconds
+
+
+@pytest.fixture(autouse=True)
+def retry_clock(monkeypatch: pytest.MonkeyPatch) -> _VirtualClock:
+    """Run every case in this module on the virtual clock instead of the wall one.
+
+    The wall clock is what a live Gateway needs (2 s and 3 s intervals in
+    `driver`), and this fake answers at once, so the harness cases would otherwise
+    spend those intervals per retry: the whole file is minutes of sleeping. The
+    injected clock keeps the retries and their intervals and removes the waiting.
+    """
+    clock = _VirtualClock()
+    monkeypatch.setattr(driver, "CLOCK", clock)
+    return clock
 
 
 class _StubMcp:
@@ -335,7 +371,7 @@ def test_policy_read_fails_closed_when_the_gate_refuses_the_document(
 
 
 def test_policy_read_retries_a_gate_that_cannot_read_its_length_tag(
-    stub_mcp: dict[str, Any], tmp_path: Path,
+    stub_mcp: dict[str, Any], tmp_path: Path, retry_clock: _VirtualClock,
 ) -> None:
     """The provider-startup case: an unreadable companion Tag is not a deliberate
     refusal, so the read path repairs with a re-import instead of failing."""
@@ -365,6 +401,9 @@ def test_policy_read_retries_a_gate_that_cannot_read_its_length_tag(
     assert facts["policyReadAttempts"] == 2
     assert facts["policyReadRepairImports"] == 1
     assert facts["policyGatedReadServedAndVerified"] is True
+    # The rejected import and the repair both waited the live settle interval, so
+    # the two attempts are the live two.
+    assert retry_clock.waits == [driver.PROVIDER_SETTLE_RETRY_SECONDS] * 2
 
 
 def test_policy_read_reports_a_stale_fixture_as_drift_not_failure(
@@ -488,7 +527,7 @@ def test_the_handler_read_gate_opens_an_mcp_session(tmp_path: Path) -> None:
     assert sessions == ["mcp-session-1"]
 
 
-def test_policy_provision_gates_the_import_on_a_handler_read(tmp_path: Path) -> None:
+def test_policy_provision_gates_the_import_on_a_handler_read(tmp_path: Path, retry_clock: _VirtualClock) -> None:
     """REST readiness cannot see a provider that is still loading its Tags, and an
     import applied in that window leaves a Tag whose actor never starts (live run
     35654626095). The provision stage must prove the provider serves a handler read
@@ -504,6 +543,9 @@ def test_policy_provision_gates_the_import_on_a_handler_read(tmp_path: Path) -> 
         record = driver.stage_policy_provision(config)
     facts = record["facts"]
     assert facts["providerHandlerReadAttempts"] == 3
+    # The two probes that answered "not serving" each waited the live interval, so
+    # the attempt count above is the live one with the waiting taken out.
+    assert retry_clock.waits[:2] == [driver.PROVIDER_READY_RETRY_SECONDS] * 2
     assert facts["providerHandlerReadServing"] is True
     assert facts["providerHandlerReadQuality"].startswith("Bad_NotFound")
     assert facts["policyImported"] is True
@@ -2124,13 +2166,20 @@ def _guarded_config(tmp_path: Path, *, base_url: str, **overrides: Any) -> Any:
     return driver.Config(**values)
 
 
+#: How long the two origin probes below wait between attempts. A busy port is a
+#: concurrent run, not a Gateway that needs settling time: the reservation waits its
+#: own deadline out either way, so polling it often only shortens the delay.
+ORIGIN_POLL_SECONDS = 0.05
+
+
 def _origin_socket(port: int = driver.EXPECTED_ORIGIN_PORT, deadline_seconds: float = 300.0) -> int:
     """The one origin the guard accepts, waiting out a concurrent run rather than skipping.
 
     Every Phase 4 fake and rehearsal binds the same origin, so two agents on one
     workstation collide by construction. A busy port is a queue, not a result:
     waiting for it keeps the case green or red on its own evidence, where skipping
-    it would hide a real drift behind somebody else's socket.
+    it would hide a real drift behind somebody else's socket. The wait polls; the
+    port is either free or not, and it needs no settling time of its own.
     """
     deadline = time.monotonic() + deadline_seconds
     while True:
@@ -2141,7 +2190,7 @@ def _origin_socket(port: int = driver.EXPECTED_ORIGIN_PORT, deadline_seconds: fl
             except OSError:
                 if time.monotonic() >= deadline:
                     raise RuntimeError(f"127.0.0.1:{port} stayed busy") from None
-                time.sleep(1.0)
+                time.sleep(ORIGIN_POLL_SECONDS)
                 continue
             return probe.getsockname()[1]
 
@@ -2346,7 +2395,7 @@ def test_wait_for_gateway_times_out_when_the_origin_does_not_answer(tmp_path: Pa
                 free = True
                 break
             except OSError:
-                time.sleep(0.2)
+                time.sleep(ORIGIN_POLL_SECONDS)
     if not free:  # pragma: no cover - depends on the workstation
         pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} never became free")
     origin = f"http://127.0.0.1:{driver.EXPECTED_ORIGIN_PORT}"
