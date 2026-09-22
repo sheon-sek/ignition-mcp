@@ -900,11 +900,48 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   its enabled flag across an update, a delete and a rename. The full `AGENTS.md` command
   block is green (**919 pytest cases**, ruff, mypy strict, lock, workflow linter, native
   validate/build/release, compat, contract lint, `sync_schemas` no-op).
-- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **193/193 cases**
-  against the recorded Gateway (182 before this ticket; the 11 new ones are the five gate-on
-  collection cases and the six fault-mode wire cases).
-- **Live**: see Open questions for the PR handover; the run IDs, the case counts per row and
-  the conclusion are recorded below once the runs on the ticket head settle.
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **194/194 cases**
+  against the recorded Gateway (182 before this ticket; the 12 new ones are the five gate-on
+  collection cases and the seven fault-mode wire cases).
+- **Live** ([run 35678385105](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385105),
+  head `0bfcb69`, workflow `Phase 4 Live Gateway REST mutation`): **both rows green, 194/194
+  live cases on 8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)**. What
+  the rows recorded for this ticket:
+  - gate-on: `update-reports-the-core-collection` — the result of an update that omitted the
+    collection reports `"core"`; `explicit-core-collection-is-accepted` and
+    `explicit-core-collection-reports-core` — naming `core` explicitly is accepted and reported;
+    `non-core-collection-is-invalid-argument` with `non-core-collection-changes-nothing` — a
+    `custom` collection is refused with the D06 envelope
+    (`collection must be core: a Target is the exact <resourceType>/<name> in the core
+    collection…`, recorded in `observations.json`) and the signature the accepted update
+    reported is still served;
+  - fault mode: the proxy's own record of the hop the server's HTTP client wrote through, on
+    both Gateway versions, is exactly
+    `GET /data/api/v1/resources/find/ignition/audit-profile/MCP_CI_AUDIT?collection=core`,
+    `PUT /data/api/v1/resources/ignition/audit-profile?allowInvalidReferences=false`,
+    `GET …/MCP_CI_AUDIT?collection=core` — two reads that name the core collection and one
+    write on the type's documented collection route, with the update applied
+    (`core-collection-update-applies`, `…-moves-the-signature`);
+  - `provision.json` shows the harness's *own* fixture writes going the same way: four
+    `ignition/audit-profile` resources created with the explicit `"collection": "core"` item
+    field (HTTP 200 each) and read back with `?collection=core`, and the refused API token and
+    the allowed singleton both readable in that collection.
+- **One timing flake, and what changed because of it.** The first live attempt of the previous
+  head (`d6294e1`, [run 35677461853](https://github.com/sheon-sek/ignition-mcp/actions/runs/35677461853))
+  was green on 8.3.8 (193/193) but failed the candidate row's four
+  `fault-import-after-full-body-*` cases — a `#20` case, not this ticket's: the proxy recorded
+  `bodyBytes: 0` with `forwarded: true` and no answer, so the archive body never left the
+  server inside that instance's 8 s tool budget and the D16 transaction ended `NOT_APPLIED`
+  (`conflict`) instead of `COMMITTED`. Rerunning the same head's failed job was green
+  (193/193). This ticket's fault-mode case therefore runs **after** the `#20` cases (commit
+  `0bfcb69`), so it cannot add requests in front of evidence it does not own; the case counts
+  above are from that reordered head.
+- **Frozen gates, green on the same head (`0bfcb69`)**: CI
+  [35678385028](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385028),
+  Phase 3 Live Gateway G3
+  [35678385023](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385023), and
+  Phase 4 Live Gateway G4a
+  [35678385007](https://github.com/sheon-sek/ignition-mcp/actions/runs/35678385007).
 - **The live form of the rule.** A real Gateway answers a read that omits the collection
   exactly as it answers one that names `core`, so Gateway state cannot show which request
   the server sent. The fault-mode instance therefore reads the proxy hop's own record of the
