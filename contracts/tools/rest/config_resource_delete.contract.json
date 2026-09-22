@@ -35,7 +35,8 @@
       "type": "string",
       "required": false,
       "default": "",
-      "maxLength": 128
+      "maxLength": 128,
+      "note": "the core collection: an omitted or empty value means core, and the Tool sends collection=core on every Gateway read and write it makes; any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)"
     }
   },
   "outputSchema": "contracts/schemas/config-resource-delete.output.schema.json",
@@ -59,7 +60,7 @@
   },
   "targetId": {
     "form": "<resourceType>/<name>, or <resourceType> for a singleton",
-    "collection": "the default configuration collection only: the Target allowlist names a resource, so a caller-supplied collection is refused with invalid_argument",
+    "collection": "the core collection only: the reads and the documented DELETE route name it as the collection query parameter (the route's path carries the Target and the signature, and it takes no request body), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,
@@ -72,9 +73,10 @@
     "unclassified": "refused"
   },
   "fixedKnobs": {
-    "confirm": "never sent"
+    "confirm": "never sent",
+    "collection": "core"
   },
-  "fixedKnobsNote": "The documented DELETE route takes an optional `confirm` flag for a delete the Gateway says would affect other resources. The caller cannot choose it: it is never sent, so such a delete is refused like any other rejection and no call can authorize a cascade outside its Targets.",
+  "fixedKnobsNote": "The documented DELETE route takes an optional `confirm` flag for a delete the Gateway says would affect other resources. The caller cannot choose it: it is never sent, so such a delete is refused like any other rejection and no call can authorize a cascade outside its Targets. The route's `collection` query parameter is the other fixed knob: it is always `core` (D30 owner ruling 5).",
   "boundedInputBytes": 262144,
   "requestSchemaValidation": {
     "source": "gateway-openapi-capability-snapshot",

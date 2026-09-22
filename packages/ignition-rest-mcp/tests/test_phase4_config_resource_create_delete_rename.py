@@ -21,9 +21,11 @@ from starlette.testclient import TestClient
 
 import ignition_rest_mcp.server as server_module
 from phase4_fixtures import (
+    CORE_COLLECTION,
     CREATED_RESOURCE,
     CREATE_TOOL,
     DELETE_TOOL,
+    OTHER_COLLECTION,
     PROFILE,
     READ_INVENTORY,
     RENAMED_RESOURCE,
@@ -36,17 +38,18 @@ from phase4_fixtures import (
     envelope,
     mutation_settings,
     operation_record,
+    resource_route_requests,
     seed_config_resources,
     structured,
     write_requests,
 )
 from phase4_fixtures import Session as Session
-from phase4_fixtures import CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
+from phase4_fixtures import ARTIFACT_DELETE_TOOL, CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
 
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
-from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
+from recorded_gateway import API_TOKEN, COMMITTED_OPENAPI, RecordedGateway  # noqa: E402
 
 #: Every Phase 4 REST Mutation Tool, not just this milestone's: the class gate, not
 #: the operation allowlist, decides discovery (D08/D30), and the recorded Gateway
@@ -66,12 +69,44 @@ def _settings(tmp_path: Path, gateway: RecordedGateway, **overrides: Any) -> Any
     return mutation_settings(**values)
 
 
+def _committed_document_without_the_create_item_collection_field() -> bytes:
+    """The committed Gateway document with the Target type's ``POST`` change item no
+    longer declaring ``collection``.
+
+    The item schema stays otherwise valid, so this is what a Gateway whose create
+    cannot address the pinned collection would serve: the Tool must refuse it rather
+    than let the Gateway's own default choose the collection (D30 owner ruling 5).
+    """
+
+    document = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
+    route = document["paths"][f"/data/api/v1/resources/{PROFILE}"]["post"]
+    item = route["requestBody"]["content"]["application/json"]["schema"]["items"]
+    del item["properties"]["collection"]
+    return json.dumps(document).encode("utf-8")
+
+
 def _delete_path(name: str, signature: str) -> str:
-    return f"/data/api/v1/resources/{PROFILE}/{name}/{signature}"
+    """The documented DELETE target, which names the collection it applies in."""
+
+    return (
+        f"/data/api/v1/resources/{PROFILE}/{name}/{signature}"
+        f"?collection={CORE_COLLECTION}"
+    )
 
 
 def _rename_path(name: str) -> str:
-    return f"/data/api/v1/resources/rename/{PROFILE}/{name}"
+    """The documented rename target, which names the collection it applies in."""
+
+    return f"/data/api/v1/resources/rename/{PROFILE}/{name}?collection={CORE_COLLECTION}"
+
+
+def _read_paths(gateway: RecordedGateway) -> list[str]:
+    """The targets of every config-resource read the server sent the Gateway."""
+
+    return [
+        request["path"] for request in resource_route_requests(gateway)
+        if request["method"] == "GET"
+    ]
 
 
 # ------------------------------------------------------------------ inventory
@@ -96,7 +131,8 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
 ) -> None:
     """A Gateway whose document has no create route exposes no create Tool, and the
     same holds for delete, rename and a Tag import: the D04 capability is what gates
-    discovery."""
+    discovery. ``artifact_delete`` is the exception D30 creates — it has no HTTP route
+    to be gated on, so the class gate is its whole discovery rule."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
@@ -118,7 +154,8 @@ def test_a_tool_is_hidden_when_the_gateway_documents_no_such_route(
         with TestClient(server_module.create_server(settings).http_app()) as http:
             names = Session(http, "cfg-secret").tools()
 
-    assert MUTATION_TOOLS.isdisjoint(names)
+    assert (MUTATION_TOOLS - {ARTIFACT_DELETE_TOOL}).isdisjoint(names)
+    assert ARTIFACT_DELETE_TOOL in names
     assert "config_resource_get" in names
 
 
@@ -144,19 +181,26 @@ def test_an_allowlisted_create_publishes_the_resource_and_reports_its_signature(
             })
 
         posts = write_requests(gateway, "POST")
+        reads = _read_paths(gateway)
         stored = gateway.resource(PROFILE, CREATED_RESOURCE)
 
     assert len(posts) == 1, posts
     assert posts[0]["path"] == f"/data/api/v1/resources/{PROFILE}?allowInvalidReferences=false"
     assert json.loads(posts[0]["body"]) == [{
         "name": CREATED_RESOURCE,
+        "collection": CORE_COLLECTION,
         "config": {"profile": {"type": "local", "retentionDays": 7}},
         "description": "created by the Phase 4 cases",
-    }], "a create item carries no signature"
+    }], "a create item carries no signature, but it does name the core collection"
+    assert reads == [
+        f"/data/api/v1/resources/find/{PROFILE}/{CREATED_RESOURCE}?collection={CORE_COLLECTION}",
+    ] * 2, "the collision probe and the read-back both name the core collection"
     assert stored["config"] == {"profile": {"type": "local", "retentionDays": 7}}
 
     body = structured(result)
-    assert (body["resourceType"], body["name"], body["collection"]) == (PROFILE, CREATED_RESOURCE, "")
+    assert (body["resourceType"], body["name"], body["collection"]) == (
+        PROFILE, CREATED_RESOURCE, CORE_COLLECTION,
+    )
     assert body["signature"] == stored["signature"]
     assert body["observedState"]["description"] == "created by the Phase 4 cases"
     assert operation_record(tmp_path, body["correlationId"]) == (CREATE_TOOL, "succeeded", None)
@@ -176,7 +220,9 @@ def test_a_create_that_supplies_only_a_name_still_dispatches(tmp_path: Path) -> 
 
         posts = write_requests(gateway, "POST")
 
-    assert json.loads(posts[0]["body"]) == [{"name": CREATED_RESOURCE}]
+    assert json.loads(posts[0]["body"]) == [
+        {"name": CREATED_RESOURCE, "collection": CORE_COLLECTION},
+    ]
     assert structured(result)["observedState"]["name"] == CREATED_RESOURCE
 
 
@@ -199,9 +245,9 @@ def test_a_create_leaves_one_audited_decision_attempt_and_result(tmp_path: Path)
         for row in rows
     ] == [
         ("decision", "allowed", "CONFIG", 0,
-         '{"collection":"","name":"MCP_CI_AUDIT_CREATED","resourceType":"ignition/audit-profile"}'),
+         '{"collection":"core","name":"MCP_CI_AUDIT_CREATED","resourceType":"ignition/audit-profile"}'),
         ("attempt", "attempted", "CONFIG", 0,
-         '{"collection":"","name":"MCP_CI_AUDIT_CREATED","resourceType":"ignition/audit-profile"}'),
+         '{"collection":"core","name":"MCP_CI_AUDIT_CREATED","resourceType":"ignition/audit-profile"}'),
         ("result", "completed", "CONFIG", 0, "{}"),
     ]
     assert rows[0]["actor_key"] == "static-token:config-agent"
@@ -329,22 +375,61 @@ def test_a_create_outside_the_target_allowlist_is_permission_denied(tmp_path: Pa
     assert posts == []
 
 
-def test_a_collection_qualified_create_is_refused(tmp_path: Path) -> None:
-    """The Target allowlist cannot name a collection, so a create into another one is
-    refused rather than resolved to a look-alike."""
+def test_a_non_core_collection_create_is_refused(tmp_path: Path) -> None:
+    """D30 owner ruling 5: a create into another collection is refused before the
+    resource is even read, so nothing can be published outside `core`."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
         settings = _settings(tmp_path, gateway, targets={CREATE_TOOL: ("*",)})
         with TestClient(server_module.create_server(settings).http_app()) as http:
             result = Session(http, "cfg-secret").call(CREATE_TOOL, {
-                "resourceType": PROFILE, "name": CREATED_RESOURCE, "collection": "custom",
+                "resourceType": PROFILE, "name": CREATED_RESOURCE,
+                "collection": OTHER_COLLECTION,
             })
 
-        posts = write_requests(gateway, "POST")
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
 
     assert envelope(result)["code"] == "invalid_argument"
-    assert posts == []
+    assert requests == [], "a non-core collection must not reach the Gateway at all"
+    assert rows == [], "the refusal is input validation, before any audited decision"
+
+
+def test_a_type_whose_item_cannot_name_the_collection_has_no_create_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D30 owner ruling 5 for the create route: its change item is the only place the
+    collection can travel, so a documented item schema without that field leaves the
+    create unable to address `core`. The Tool refuses it instead of publishing a
+    resource whose collection the Gateway's own default would pick."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        document = _committed_document_without_the_create_item_collection_field()
+
+        async def collection_less_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", collection_less_openapi)
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            session = Session(http, "cfg-secret")
+            result = session.call(CREATE_TOOL, {
+                "resourceType": PROFILE, "name": CREATED_RESOURCE,
+                "config": {"profile": {"type": "local"}},
+            })
+            # The refused call's own requests, before the read Tool's independent
+            # lookup below: that lookup is the caller's read, not part of this call.
+            requests = resource_route_requests(gateway)
+            absent = session.read(PROFILE, CREATED_RESOURCE)
+
+        rows = audit_rows(tmp_path)
+
+    assert envelope(result)["code"] == "unsupported_capability"
+    assert requests == [], "a create that cannot name the collection must not reach the Gateway"
+    assert rows == [], "the refusal is a capability fact, before any audited decision"
+    assert envelope(absent)["code"] == "not_found", "nothing may be published"
 
 
 def test_a_create_that_violates_the_gateway_request_schema_never_dispatches(
@@ -418,22 +503,34 @@ def test_an_allowlisted_delete_removes_the_resource_and_reports_absence(tmp_path
             result = session.call(DELETE_TOOL, {
                 "resourceType": PROFILE, "expectedSignature": before, "name": RESOURCE,
             })
+            # The Mutation's own reads, before the read Tool's independent lookup below:
+            # that lookup is the caller's read, not part of this change.
+            mutation_reads = _read_paths(gateway)
             gone = session.read(PROFILE, RESOURCE)
 
         deletes = write_requests(gateway, "DELETE")
         rows = audit_rows(tmp_path)
+        look_alike = gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION)
 
     assert len(deletes) == 1, deletes
     assert deletes[0]["path"] == _delete_path(RESOURCE, before)
     assert deletes[0]["body"] == b"", "the documented DELETE route takes no request body"
+    assert mutation_reads == [
+        f"/data/api/v1/resources/find/{PROFILE}/{RESOURCE}?collection={CORE_COLLECTION}",
+    ] * 2, "the pre-dispatch read and the read-back both name the core collection"
     assert envelope(gone)["code"] == "not_found", "the resource is gone, as a read confirms"
 
     body = structured(result)
-    assert (body["resourceType"], body["name"], body["collection"]) == (PROFILE, RESOURCE, "")
+    assert (body["resourceType"], body["name"], body["collection"]) == (
+        PROFILE, RESOURCE, CORE_COLLECTION,
+    )
     assert body["present"] is False
     assert operation_record(tmp_path, body["correlationId"]) == (DELETE_TOOL, "succeeded", None)
     # D08/#13: the Tool declares itself destructive, and its own audit rows say so.
     assert [row["destructive"] for row in rows] == [1, 1, 1]
+    # D30 owner ruling 5: only the core collection's resource was removed; the
+    # same-named look-alike in another collection is still there.
+    assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == look_alike
 
 
 def test_a_delete_of_a_singleton_puts_no_name_in_the_path(tmp_path: Path) -> None:
@@ -452,7 +549,9 @@ def test_a_delete_of_a_singleton_puts_no_name_in_the_path(tmp_path: Path) -> Non
         deletes = write_requests(gateway, "DELETE")
 
     assert structured(result)["present"] is False
-    assert deletes[0]["path"] == f"/data/api/v1/resources/{SINGLETON_TYPE}/{before}"
+    assert deletes[0]["path"] == (
+        f"/data/api/v1/resources/{SINGLETON_TYPE}/{before}?collection={CORE_COLLECTION}"
+    )
 
 
 def test_a_stale_signature_is_a_conflict_that_never_dispatches(tmp_path: Path) -> None:
@@ -545,6 +644,27 @@ def test_a_delete_outside_the_target_allowlist_is_permission_denied(tmp_path: Pa
     assert envelope(result)["code"] == "permission_denied"
     assert deletes == []
     assert rows[0]["outcome"] == "denied:target-allowlist:target-not-allowlisted"
+
+
+def test_a_non_core_collection_delete_is_refused(tmp_path: Path) -> None:
+    """D30 owner ruling 5: a delete addressed to another collection is refused before
+    the resource is read, so the look-alike there keeps its signature."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        look_alike = gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION)
+        settings = _settings(tmp_path, gateway, targets={DELETE_TOOL: ("*",)})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(DELETE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": look_alike,
+                "name": RESOURCE, "collection": OTHER_COLLECTION,
+            })
+
+        requests = resource_route_requests(gateway)
+
+    assert envelope(result)["code"] == "invalid_argument"
+    assert requests == [], "a non-core collection must not reach the Gateway at all"
+    assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == look_alike
 
 
 def test_a_gateway_refusal_inside_a_success_response_is_final_for_a_delete(
@@ -671,10 +791,18 @@ def test_an_allowlisted_rename_moves_the_resource_and_reports_both_names(
             })
 
         posts = write_requests(gateway, "POST")
+        reads = _read_paths(gateway)
         rows = audit_rows(tmp_path)
+        look_alike = gateway.resource(PROFILE, RESOURCE, OTHER_COLLECTION)
 
     assert len(posts) == 1, posts
     assert posts[0]["path"] == _rename_path(RESOURCE)
+    assert reads == [
+        f"/data/api/v1/resources/find/{PROFILE}/{RESOURCE}?collection={CORE_COLLECTION}",
+        f"/data/api/v1/resources/find/{PROFILE}/{RENAMED_RESOURCE}?collection={CORE_COLLECTION}",
+        f"/data/api/v1/resources/find/{PROFILE}/{RENAMED_RESOURCE}?collection={CORE_COLLECTION}",
+        f"/data/api/v1/resources/find/{PROFILE}/{RESOURCE}?collection={CORE_COLLECTION}",
+    ], "every read the rename makes names the core collection"
     assert json.loads(posts[0]["body"]) == {"name": RENAMED_RESOURCE, "references": "ABORT"}
     moved = gateway.resource(PROFILE, RENAMED_RESOURCE)
     assert moved["config"]["profile"] == {"type": "local", "retentionDays": 14}
@@ -682,7 +810,11 @@ def test_an_allowlisted_rename_moves_the_resource_and_reports_both_names(
     body = structured(result)
     assert body["resourceType"] == PROFILE
     assert (body["name"], body["previousName"]) == (RENAMED_RESOURCE, RESOURCE)
+    assert body["collection"] == CORE_COLLECTION
     assert body["signature"] == moved["signature"]
+    assert moved["collection"] == CORE_COLLECTION
+    # D30 owner ruling 5: the look-alike in another collection did not move.
+    assert gateway.resource(PROFILE, RESOURCE, OTHER_COLLECTION) == look_alike
     assert operation_record(tmp_path, body["correlationId"]) == (RENAME_TOOL, "succeeded", None)
     assert [(row["phase"], row["outcome"], row["destructive"]) for row in rows] == [
         ("decision", "allowed", 0), ("attempt", "attempted", 0), ("result", "completed", 0),
@@ -771,6 +903,30 @@ def test_a_rename_outside_the_target_allowlist_is_permission_denied(tmp_path: Pa
 
     assert envelope(result)["code"] == "permission_denied"
     assert posts == []
+
+
+def test_a_non_core_collection_rename_is_refused(tmp_path: Path) -> None:
+    """D30 owner ruling 5: a rename addressed to another collection is refused before
+    the source is read, so neither collection's resource moves."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        look_alike = gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION)
+        settings = _settings(tmp_path, gateway, targets={RENAME_TOOL: ("*",)})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(RENAME_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": look_alike,
+                "name": RESOURCE, "newName": RENAMED_RESOURCE,
+                "collection": OTHER_COLLECTION,
+            })
+
+        requests = resource_route_requests(gateway)
+
+    assert envelope(result)["code"] == "invalid_argument"
+    assert requests == [], "a non-core collection must not reach the Gateway at all"
+    assert gateway.signature(PROFILE, RESOURCE) == before
+    assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == look_alike
 
 
 def test_a_rename_into_an_unallowlisted_destination_is_permission_denied(

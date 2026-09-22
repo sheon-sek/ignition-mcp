@@ -6,6 +6,7 @@ from pathlib import Path
 from ignition_rest_mcp.models import (
     AlarmPipelineCancelResult,
     AlarmPipelineListResult,
+    ArtifactDeleteResult,
     ArtifactInfoResult,
     ArtifactListResult,
     OperationDiagnoseResult,
@@ -63,6 +64,7 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (TagConfigImportResult, "tag-config-import.output.schema.json"),
         (ArtifactListResult, "artifact-list.output.schema.json"),
         (ArtifactInfoResult, "artifact-info.output.schema.json"),
+        (ArtifactDeleteResult, "artifact-delete.output.schema.json"),
         (OperationDiagnoseResult, "operation-diagnose.output.schema.json"),
     )
     for model, schema_name in cases:

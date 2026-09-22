@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_copy",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 260,
+              "name": "Bad_NotFound",
+              "level": "Error",
+              "good": false,
+              "diagnosticMessage": "Path '[IgnitionMCPPolicy]RuntimeTargetPolicyLength' not found."
+            },
+            "value": null
+          }
+        ]
+      }
+    }
+  ]
+}

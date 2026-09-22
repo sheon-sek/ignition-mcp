@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_create",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/CreatedTarget",
+        "config": {
+          "documentation": {
+            "documentation": {
+              "documentation": {
+                "documentation": {
+                  "documentation": {
+                    "documentation": {
+                      "documentation": {
+                        "documentation": {
+                          "documentation": {
+                            "name": "leaf"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "calls": []
+}

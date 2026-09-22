@@ -1,0 +1,155 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_create",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "config": {
+          "tagType": "AtomicTag",
+          "dataType": "Int4"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 237
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_create\":[\"[default]IgnitionMCP_CI\",\"[default]_types_/IgnitionMCP_CI\",\"[default]_types_/Phase4Probe\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI/ProbeType"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": false
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_create",
+        "actionTarget": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI",
+        [
+          {
+            "tagType": "AtomicTag",
+            "dataType": "Int4",
+            "name": "ProbeType"
+          }
+        ],
+        "Abort"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_create",
+        "actionTarget": "[default]_types_/IgnitionMCP_CI/ProbeType",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]_types_/IgnitionMCP_CI/ProbeType",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "ProbeType",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]_types_/IgnitionMCP_CI/ProbeType",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    }
+  ]
+}

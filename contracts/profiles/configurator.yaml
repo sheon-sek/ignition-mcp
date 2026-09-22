@@ -19,6 +19,8 @@
     "historian_query_aggregate",
     "database_query_list",
     "database_query",
-    "tag_update"
+    "tag_update",
+    "tag_create",
+    "tag_copy"
   ]
 }

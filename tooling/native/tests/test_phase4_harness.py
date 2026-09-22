@@ -1036,6 +1036,8 @@ def test_summarize_verdict_carries_the_tag_update_result(tmp_path: Path) -> None
         audit_profile=policy_document.AUDIT_PROFILE_NAME,
         alarm_root=ALARM_ROOT,
         tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
     ) as gateway:
         config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN, stages=driver.MILESTONE_4B)
         stages = [
@@ -1043,16 +1045,434 @@ def test_summarize_verdict_carries_the_tag_update_result(tmp_path: Path) -> None
             ("policy-provision", driver.stage_policy_provision),
             ("tag-update-setup", driver.stage_tag_update_setup),
             ("tag-update", driver.stage_tag_update),
+            ("tag-create", driver.stage_tag_create),
+            ("tag-copy", driver.stage_tag_copy),
         ]
         for name, stage in stages:
             _record_stage(tmp_path, name, stage(config))
     evidence, code = driver.stage_summarize(config)
     assert code == driver.EXIT_OK
     assert evidence["milestone"] == driver.MILESTONE_4B
-    assert evidence["tickets"] == ["#10"]
+    assert evidence["tickets"] == ["#10", "#11"]
     assert evidence["drift"] == {}
     assert evidence["verdict"]["runtimeTagConfigMutation"]["update"]["status"] == "executed"
     assert evidence["verdict"]["runtimeTagConfigMutation"]["staleFingerprint"]["changedNothing"] is True
+
+
+def test_tag_create_case_selector_replays_the_recorded_refusals() -> None:
+    """The rehearsal's `tag_create` selection mirrors the shipped handler's own order.
+
+    The two D10 ceilings a request crosses with no native call come first, then the
+    policy gate, then the deployment's ceiling, the reserved provider, the allowlist
+    with D30 6's `_types_` rule, and last the existence check a create answers by being
+    absent. Every selected case has to be a body the fake can actually replay.
+    """
+
+    class _Base:
+        policy_provider_created = True
+        policy_value = ""
+        tag_create_paths: dict[str, str] = {}
+        tag_config = {
+            policy_document.TAG_CREATE_EXISTING_TARGET: [{"name": "WriteTarget", "value": 0}],
+        }
+
+    def serve(policy: dict[str, Any]) -> Any:
+        return type("Server", (_Base,), {
+            "policy_value": json.dumps(policy, sort_keys=True, separators=(",", ":")),
+        })()
+
+    def create(*paths: str) -> dict[str, Any]:
+        return {"items": [
+            {"path": path, "config": dict(policy_document.TAG_CREATE_CONFIG)} for path in paths
+        ]}
+
+    plain = serve(policy_document.tag_create_policy())
+    types = serve(policy_document.tag_create_policy(
+        allowlist=policy_document.TAG_CREATE_TYPES_ALLOWLIST,
+    ))
+    wildcard = serve(policy_document.tag_create_policy(allowlist=policy_document.WILDCARD_ALLOWLIST))
+    ceiling = serve(policy_document.tag_create_policy(max_items=1))
+    # A Gateway where nothing is seeded yet: the only state that lets a create execute.
+    absent = serve(policy_document.tag_create_policy())
+    absent.tag_config = {}
+
+    cases = [
+        (absent, create(policy_document.TAG_CREATE_TARGET), "created"),
+        (plain, create(policy_document.TAG_CREATE_EXISTING_TARGET), "target-exists"),
+        (plain, create(policy_document.TAG_CREATE_BATCH_TARGET,
+                       policy_document.TAG_CREATE_EXISTING_TARGET), "target-exists"),
+        (plain, create(policy_document.TAG_CREATE_SIBLING_TARGET), "sibling-denial"),
+        (plain, create(policy_document.TAG_CREATE_BATCH_TARGET,
+                       policy_document.TAG_CREATE_SIBLING_TARGET), "preflight-refusal"),
+        (plain, create(policy_document.TAG_CREATE_UDT_TARGET), "udt-not-allowlisted"),
+        (wildcard, create(policy_document.TAG_CREATE_UDT_TARGET), "udt-not-allowlisted"),
+        (wildcard, create(policy_document.WRITE_PROBE_PATH), "reserved-provider-refusal"),
+        # The entry is what changed: the definition item passes and only the sibling is
+        # listed, so a refused batch dispatches nothing on either item.
+        (types, create(policy_document.TAG_CREATE_UDT_TARGET,
+                       policy_document.TAG_CREATE_SIBLING_TARGET), "preflight-refusal"),
+        (plain, create(*[policy_document.TAG_CREATE_TARGET] * 21), "over-policy-limit"),
+        (ceiling, create(policy_document.TAG_CREATE_TARGET,
+                         policy_document.TAG_CREATE_BATCH_TARGET), "over-policy-limit"),
+        (plain, create(*[policy_document.TAG_CREATE_TARGET] * 101), "items-over-hard-limit"),
+        (plain, create(f"[{policy_document.TAG_FIXTURE_PROVIDER}]"
+                       f"{policy_document.TAG_FIXTURE_ROOT}/{policy_document.OVERLONG_PATH_LEAF}"),
+         "path-over-length"),
+    ]
+    for server, arguments, expected in cases:
+        case, paths = recorded_gateway._tag_create_case(server, arguments)
+        assert case == expected, (arguments, expected, case)
+        assert paths == [item["path"] for item in arguments["items"]]
+        if case != "created":
+            assert (FIXTURES / f"tag-create-{case}.json").is_file(), case
+
+    class _NoPolicy(_Base):
+        policy_provider_created = False
+        policy_value = ""
+
+    case, _paths = recorded_gateway._tag_create_case(
+        _NoPolicy(), create(policy_document.TAG_CREATE_TARGET),
+    )
+    assert case == "no-policy"
+    # The ceilings are measured over the request, so they answer before the gate does.
+    assert recorded_gateway._tag_create_case(
+        _NoPolicy(), create(*[policy_document.TAG_CREATE_TARGET] * 101),
+    )[0] == "items-over-hard-limit"
+
+
+def test_tag_copy_case_selector_replays_the_recorded_refusals() -> None:
+    """The rehearsal's `tag_copy` selection keeps the leaf rule first and the source exempt."""
+
+    class _Base:
+        policy_provider_created = True
+        policy_value = ""
+        tag_copy_paths: dict[str, str] = {}
+        tag_config = {
+            policy_document.TAG_COPY_SOURCE: [{"name": "WriteTarget", "value": 0}],
+            policy_document.TAG_COPY_SIBLING_SOURCE: [{"name": "WriteTarget", "value": 0}],
+        }
+
+    def serve(policy: dict[str, Any], **config: Any) -> Any:
+        return type("Server", (_Base,), {
+            "policy_value": json.dumps(policy, sort_keys=True, separators=(",", ":")),
+            "tag_config": dict(_Base.tag_config, **config),
+        })()
+
+    def pair(source: str = "", destination: str = "") -> dict[str, Any]:
+        return {"items": [{
+            "sourcePath": source or policy_document.TAG_COPY_SOURCE,
+            "destinationPath": destination or policy_document.TAG_COPY_DESTINATION,
+        }]}
+
+    def batch(*destinations: str) -> dict[str, Any]:
+        return {"items": [pair()["items"][0] | {"destinationPath": d} for d in destinations]}
+
+    plain = serve(policy_document.tag_copy_policy())
+    occupied = serve(policy_document.tag_copy_policy(), **{
+        policy_document.TAG_COPY_DESTINATION: [{"name": "WriteTarget"}],
+    })
+    types = serve(policy_document.tag_copy_policy(allowlist=policy_document.TAG_COPY_TYPES_ALLOWLIST))
+    wildcard = serve(policy_document.tag_copy_policy(allowlist=policy_document.WILDCARD_ALLOWLIST))
+    ceiling = serve(policy_document.tag_copy_policy(max_items=1))
+
+    cases = [
+        (plain, pair(), "copied"),
+        # A copy is not a move, and an occupied destination is the collision it refuses.
+        (occupied, pair(), "destination-exists"),
+        (plain, pair(policy_document.TAG_COPY_MISSING_SOURCE,
+                     policy_document.TAG_COPY_MISSING_SOURCE_DESTINATION), "source-missing"),
+        # The source is exempt: the same Tag one segment outside the allowed prefix is
+        # answered by the endpoint stage, never by the allowlist one.
+        (occupied, pair(source=policy_document.TAG_COPY_SIBLING_SOURCE), "destination-exists"),
+        (plain, pair(destination=policy_document.TAG_COPY_SIBLING_DESTINATION), "sibling-denial"),
+        (plain, pair(destination=policy_document.TAG_COPY_UDT_DESTINATION), "udt-not-allowlisted"),
+        (wildcard, pair(destination=policy_document.TAG_COPY_UDT_DESTINATION), "udt-not-allowlisted"),
+        (wildcard, pair(policy_document.TAG_COPY_RESERVED_SOURCE,
+                        policy_document.TAG_COPY_RESERVED_SOURCE_DESTINATION),
+         "reserved-source-refusal"),
+        (wildcard, pair(destination=policy_document.TAG_COPY_RESERVED_DESTINATION),
+         "reserved-destination-refusal"),
+        (types, batch(policy_document.TAG_COPY_UDT_DESTINATION,
+                      policy_document.TAG_COPY_SIBLING_DESTINATION),
+         "preflight-refusal"),
+        (plain, batch(policy_document.TAG_COPY_UDT_DESTINATION,
+                      policy_document.TAG_COPY_SIBLING_DESTINATION),
+         "udt-not-allowlisted"),
+        (plain, {"items": [pair()["items"][0]] * 21}, "over-policy-limit"),
+        (ceiling, {"items": [pair()["items"][0]] * 2}, "over-policy-limit"),
+        (plain, {"items": [pair()["items"][0]] * 101}, "items-over-hard-limit"),
+        (plain, pair(destination=f"[{policy_document.TAG_FIXTURE_PROVIDER}]"
+                                 f"{policy_document.TAG_FIXTURE_ROOT}/"
+                                 f"{policy_document.OVERLONG_PATH_LEAF}"), "path-over-length"),
+    ]
+    for server, arguments, expected in cases:
+        case, _paths = recorded_gateway._tag_copy_case(server, arguments)
+        assert case == expected, (arguments, expected, case)
+        if case != "copied":
+            assert (FIXTURES / f"tag-copy-{case}.json").is_file(), case
+
+    # The leaf rule is an input rule, so it is refused even where an allowlist refusal
+    # would otherwise follow.
+    leaf_cases = [
+        (plain, pair(destination=f"{policy_document.TAG_COPY_DESTINATION}Renamed"),
+         "destination-leaf-mismatch"),
+        (plain, pair(destination=policy_document.TAG_COPY_SIBLING_DESTINATION + "Renamed"),
+         "destination-leaf-mismatch"),
+        # A leaf mismatch outranks everything else, including an allowlist refusal of
+        # the same destination.
+        (plain, batch(f"{policy_document.TAG_COPY_DESTINATION}Renamed",
+                      policy_document.TAG_COPY_SIBLING_DESTINATION),
+         "destination-leaf-mismatch"),
+    ]
+    for server, arguments, expected in leaf_cases:
+        case, _paths = recorded_gateway._tag_copy_case(server, arguments)
+        assert case == expected, (arguments, expected, case)
+
+    class _NoPolicy(_Base):
+        policy_provider_created = False
+        policy_value = ""
+
+    assert recorded_gateway._tag_copy_case(_NoPolicy(), pair())[0] == "no-policy"
+    # The gate is read before the endpoints: a source that is not there answers
+    # `sourceMissing` only once a usable Policy exists.
+    assert recorded_gateway._tag_copy_case(
+        _NoPolicy(), pair(policy_document.TAG_COPY_MISSING_SOURCE,
+                          policy_document.TAG_COPY_MISSING_SOURCE_DESTINATION),
+    )[0] == "no-policy"
+
+
+def _ticket_11_records(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The two ticket #11 stage records, over the chain both tickets provision.
+
+    The Tools run on the fixtures and audit profile `tag-update-setup` seeds, so a test
+    that wants their evidence replays that whole chain; this is where it lives.
+    """
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        driver.stage_tag_update_no_policy(config)
+        driver.stage_policy_provision(config)
+        driver.stage_tag_update_setup(config)
+        driver.stage_tag_update(config)
+        return driver.stage_tag_create(config), driver.stage_tag_copy(config)
+
+
+def _ticket_11_facts(tmp_path: Path) -> tuple[dict[str, Any], dict[str, Any]]:
+    create, copy = _ticket_11_records(tmp_path)
+    return create["facts"], copy["facts"]
+
+
+def test_tag_create_stage_records_the_live_facts(tmp_path: Path) -> None:
+    """`tag_create` creates, refuses a collision, and never executes part of a batch."""
+    create, _copy = _ticket_11_facts(tmp_path)
+    # The CONFIG class is deployed on the configurator profile and nowhere else.
+    assert create["tagCreateConfiguratorInventoryMatchesProfile"] is True
+    assert create["tagCreateConfiguratorCarriesBothTools"] is True
+    assert create["tagCreateOperatorInventoryExcludesBothTools"] is True
+    # The created node is what an independent read and the provider's export show, and
+    # the Observed fingerprint is the token that read publishes.
+    assert create["tagCreateStatus"] == "executed"
+    assert create["tagCreateNativeOutcome"] == "Good"
+    assert create["tagCreateIndependentReadShowsTheNode"] is True
+    assert create["tagCreateObservedFingerprintIsIndependentRead"] is True
+    assert create["tagCreateObservedFingerprintIsDerivable"] is True
+    assert create["tagCreateNodeVisibleInExport"] is True
+    assert create["tagCreateAuditRowsForCorrelation"] == 2
+    assert create["tagCreateAuditActorIsServiceIdentity"] is True
+    # An existing target is the collision a create refuses, and it changes nothing.
+    assert create["tagCreateCollisionIsConflict"] is True
+    assert create["tagCreateCollisionChangedNothing"] is True
+    assert create["tagCreateCollisionAuditRecorded"] is True
+    assert create["tagCreateBatchTargetAbsentFromExport"] is True
+    # The allowlist refusal is at a segment boundary, and one refused item refuses the
+    # batch: the allowed item stays absent.
+    assert create["tagCreateSiblingDenialIsSegmentBoundary"] is True
+    assert create["tagCreateSiblingDenialAuditRecorded"] is True
+    assert create["tagCreatePreflightRefusalNamesOnlyTheRefusedEnd"] is True
+    assert create["tagCreatePreflightExecutedNothing"] is True
+    # D30 6 both ways, the reserved provider under an explicit *, and every D10 ceiling.
+    assert create["tagCreateUdtNeedsExplicitTypesEntry"] is True
+    assert create["tagCreateBareWildcardDoesNotCoverUdt"] is True
+    assert create["tagCreateTypesEntryIsHonoured"] is True
+    assert create["tagCreateTypesPreflightExecutedNothing"] is True
+    assert create["tagCreateReservedProviderRefusedUnderWildcard"] is True
+    assert create["tagCreateReservedProviderValueUnchanged"] is True
+    assert create["tagCreatePolicyDocumentUnclobbered"] is True
+    assert create["tagCreatePathOverCeilingNamesTheCeiling"] is True
+    assert create["tagCreateHardItemCeilingIsRefused"] is True
+    assert create["tagCreateOverPolicyLimitIsRefused"] is True
+    assert create["tagCreatePolicyCeilingIsHonoured"] is True
+
+
+def test_tag_copy_stage_records_the_live_facts(tmp_path: Path) -> None:
+    """`tag_copy` copies without moving, and refuses both ends of a violation."""
+    _create, copy = _ticket_11_facts(tmp_path)
+    assert copy["tagCopyStatus"] == "executed"
+    assert copy["tagCopyNativeOutcome"] == "Good"
+    assert copy["tagCopyItemCarriesBothEnds"] is True
+    assert copy["tagCopyIndependentReadShowsTheCopy"] is True
+    assert copy["tagCopyObservedFingerprintIsIndependentRead"] is True
+    assert copy["tagCopySourceUnchanged"] is True
+    assert copy["tagCopyAuditRowsForCorrelation"] == 2
+    assert copy["tagCopyAuditActorIsServiceIdentity"] is True
+    assert copy["tagCopyOccupiedDestinationIsConflict"] is True
+    assert copy["tagCopyOccupiedDestinationChangedNothing"] is True
+    assert copy["tagCopyOccupiedDestinationAuditRecorded"] is True
+    assert copy["tagCopyLeafRuleIsRefusedBeforeAnyRead"] is True
+    assert copy["tagCopyLeafMismatchNamesTheDestination"] is True
+    assert copy["tagCopySourceMissingIsNotFound"] is True
+    assert copy["tagCopySourceMissingNamesTheSource"] is True
+    assert copy["tagCopySiblingDenialIsSegmentBoundary"] is True
+    assert copy["tagCopySiblingDenialNamesTheDestination"] is True
+    assert copy["tagCopySourceIsExemptFromAllowlist"] is True
+    assert copy["tagCopyUdtNeedsExplicitTypesEntry"] is True
+    assert copy["tagCopyBareWildcardDoesNotCoverUdt"] is True
+    assert copy["tagCopyTypesEntryIsHonoured"] is True
+    assert copy["tagCopyPreflightExecutedNothing"] is True
+    assert copy["tagCopyReservedSourceRefusedUnderWildcard"] is True
+    assert copy["tagCopyReservedDestinationRefusedUnderWildcard"] is True
+    assert copy["tagCopyReservedProviderValueUnchanged"] is True
+    assert copy["tagCopyPolicyDocumentUnclobbered"] is True
+    assert copy["tagCopyPathOverCeilingNamesTheCeiling"] is True
+    assert copy["tagCopyHardItemCeilingIsRefused"] is True
+    assert copy["tagCopyOverPolicyLimitIsRefused"] is True
+    assert copy["tagCopyPolicyCeilingIsHonoured"] is True
+
+
+def test_tag_create_stage_fails_closed_on_a_change_that_did_not_land(tmp_path: Path) -> None:
+    """A create the Gateway refuses is a stage failure, not a fact about a landing.
+
+    Running the stage twice on one Gateway is what produces the state: the first run
+    creates its positive target, so the second run's "positive" call answers the
+    collision refusal and the stage that expects a change has to stop on it.
+    """
+    _ticket_11_facts(tmp_path)
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+    ) as gateway:
+        config = _config(tmp_path / "second", base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        driver.stage_tag_update_no_policy(config)
+        driver.stage_policy_provision(config)
+        driver.stage_tag_update_setup(config)
+        driver.stage_tag_update(config)
+        gateway._server.tag_config[policy_document.TAG_CREATE_TARGET] = [{"name": "CreateTarget"}]
+        with pytest.raises(driver.StageFailure, match="tag_create failed"):
+            driver.stage_tag_create(config)
+
+
+def test_tag_create_stage_fails_closed_on_a_policy_that_never_became_served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An import the provider never serves cannot stand in as a measured refusal."""
+    monkeypatch.setattr(
+        driver, "install_policy",
+        lambda *args, **kwargs: {"ok": False, "attemptCount": 1, "attempts": [{}], "servedSha256": ""},
+    )
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        with pytest.raises(driver.StageFailure, match="never served the tag_create policy"):
+            driver.stage_tag_create(config)
+
+
+def test_summarize_verdict_carries_the_tag_config_mutations(tmp_path: Path) -> None:
+    """The 4b verdict reports ticket #10 and ticket #11 side by side."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        for name, stage in [
+            ("tag-update-no-policy", driver.stage_tag_update_no_policy),
+            ("policy-provision", driver.stage_policy_provision),
+            ("tag-update-setup", driver.stage_tag_update_setup),
+            ("tag-update", driver.stage_tag_update),
+            ("tag-create", driver.stage_tag_create),
+            ("tag-copy", driver.stage_tag_copy),
+        ]:
+            _record_stage(tmp_path, name, stage(config))
+    evidence, code = driver.stage_summarize(config)
+    assert code == driver.EXIT_OK
+    assert evidence["tickets"] == ["#10", "#11"]
+    assert evidence["drift"] == {}
+    mutations = evidence["verdict"]["runtimeTagConfigMutations"]
+    assert mutations["tagCreate"]["allowlisted"]["status"] == "executed"
+    assert mutations["tagCreate"]["existingTarget"]["reason"] == "targetExists"
+    assert mutations["tagCreate"]["targetAllowlist"]["preflightExecutedNothing"] is True
+    assert mutations["tagCreate"]["udtDefinitions"]["explicitTypesEntryHonoured"] is True
+    assert mutations["tagCreate"]["reservedProvider"]["refusedUnderExplicitWildcard"] is True
+    assert mutations["tagCreate"]["audit"]["rowsForCorrelation"] == 2
+    assert mutations["tagCopy"]["allowlisted"]["sourceUnchanged"] is True
+    assert mutations["tagCopy"]["occupiedDestination"]["reason"] == "destinationExists"
+    assert mutations["tagCopy"]["destinationLeafRule"]["reason"] == (
+        "destinationLeafDiffersFromSource"
+    )
+    assert mutations["tagCopy"]["source"]["exemptFromAllowlist"] is True
+    assert mutations["tagCopy"]["reservedProvider"]["destinationRefusedUnderExplicitWildcard"] is True
+    assert mutations["tagCopy"]["inputBounds"]["deploymentCeilingHonoured"] is True
+    assert evidence["verdict"]["runtimeTagConfigMutation"]["update"]["status"] == "executed"
+
+
+def test_summarize_reports_a_broken_tag_config_mutation_fact_as_drift(tmp_path: Path) -> None:
+    """A create fact that stops holding is drift, not a passing milestone."""
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER,
+        runtime_tools=("policy_probe", "alarm_probe", "tag_fixture_probe"),
+        audit_profile=policy_document.AUDIT_PROFILE_NAME,
+        alarm_root=ALARM_ROOT,
+        tag_update_paths=_tag_update_paths(),
+        tag_create_paths=driver.tag_create_paths(),
+        tag_copy_paths=driver.tag_copy_paths(),
+    ) as gateway:
+        config = _config(tmp_path, base_url=gateway.base_url, api_token=API_TOKEN,
+                         stages=driver.MILESTONE_4B)
+        for name, stage in [
+            ("tag-update-no-policy", driver.stage_tag_update_no_policy),
+            ("policy-provision", driver.stage_policy_provision),
+            ("tag-update-setup", driver.stage_tag_update_setup),
+            ("tag-update", driver.stage_tag_update),
+            ("tag-create", driver.stage_tag_create),
+            ("tag-copy", driver.stage_tag_copy),
+        ]:
+            _record_stage(tmp_path, name, stage(config))
+    record = json.loads((tmp_path / "tag-create.json").read_text(encoding="utf-8"))
+    record["facts"]["tagCreateCollisionChangedNothing"] = False
+    _record_stage(tmp_path, "tag-create", record)
+    evidence, code = driver.stage_summarize(config)
+    assert code == driver.EXIT_DRIFTED
+    assert evidence["drift"]["tagCreateCollisionChangedNothing"]["observed"] is False
+    assert evidence["verdict"]["runtimeTagConfigMutations"]["tagCreate"][
+        "existingTarget"
+    ]["changedNothing"] is False
 
 
 def test_alarm_mutation_case_selector_replays_the_recorded_refusals() -> None:
@@ -1126,6 +1546,59 @@ def test_alarm_stages_record_the_live_facts(
     assert facts["alarmUnshelveExactPathRemoved"] is True
     assert facts["alarmUnshelveSiblingDenialReason"] == "targetNotAllowlisted"
     assert facts["alarmUnshelveWildcardRefusalReason"] == "wildcardPath"
+
+
+def test_the_drivers_cli_accepts_every_registered_stage() -> None:
+    """A stage in a milestone's set has to be runnable, or `summarize` waits for nothing.
+
+    The CLI's choices and the stage sets are two lists that drift apart silently: a name
+    missing from `choices` exits at argparse, and `policy-read` is the one stage whose
+    record names are labelled rather than literal.
+    """
+    records = {"policy-read-before-restart": "policy-read", "policy-read-after-restart": "policy-read"}
+    for milestone, stages in driver.STAGE_SETS.items():
+        for name in stages:
+            stage = records.get(name, name)
+            config = driver.build_config(
+                [stage, "--api-token", "t", "--gateway-version", "8.3.8", "--stages", milestone],
+            )
+            assert config.stage == stage
+            assert config.stages == milestone
+        assert driver.build_config(
+            ["summarize", "--api-token", "t", "--gateway-version", "8.3.8", "--stages", milestone],
+        ).stage == "summarize"
+
+
+def test_recorded_tag_config_mutation_bodies_are_canonical_and_schemata_valid(
+    tmp_path: Path,
+) -> None:
+    """The bodies the rehearsal replays are the shipped Tools' own results and errors.
+
+    A positive result is modelled by the fake rather than recorded, so it has to satisfy
+    the Tool's shipped output schema exactly; a refusal carries the canonical D06 error
+    object in its single text part, with only the detail keys the contract documents.
+    """
+    create, copy = _ticket_11_records(tmp_path)
+    for tool, record, key in (
+        ("tag_create", create, "allowlistedCreate"),
+        ("tag_copy", copy, "allowlistedCopy"),
+    ):
+        contract = json.loads((ROOT / f"contracts/tools/runtime/{tool}.contract.json").read_text())
+        schema = json.loads((ROOT / contract["outputSchema"]).read_text(encoding="utf-8"))
+        Draft202012Validator(schema).validate(record["raw"][key])
+    for path in sorted(FIXTURES.glob("tag-create-*.json")) + sorted(FIXTURES.glob("tag-copy-*.json")):
+        body = json.loads(path.read_text(encoding="utf-8"))
+        assert body["isError"] is True, path.name
+        error = json.loads(body["content"][0]["text"])
+        assert set(error) <= {"code", "message", "correlationId", "details"}, path.name
+        assert error["code"] in {
+            "conflict", "invalid_argument", "limit_exceeded", "not_found",
+            "operation_disabled", "permission_denied",
+        }, path.name
+        assert set(error["details"]) <= {
+            "reason", "allowlistKey", "items", "auditRecorded", "policyPath",
+            "index", "limit", "requested", "path",
+        }, path.name
 
 
 def test_summarize_verdict_carries_the_alarm_mutation_result(
@@ -1237,14 +1710,35 @@ def _guarded_config(tmp_path: Path, *, base_url: str, **overrides: Any) -> Any:
     return driver.Config(**values)
 
 
+def _origin_socket(port: int = driver.EXPECTED_ORIGIN_PORT, deadline_seconds: float = 300.0) -> int:
+    """The one origin the guard accepts, waiting out a concurrent run rather than skipping.
+
+    Every Phase 4 fake and rehearsal binds the same origin, so two agents on one
+    workstation collide by construction. A busy port is a queue, not a result:
+    waiting for it keeps the case green or red on its own evidence, where skipping
+    it would hide a real drift behind somebody else's socket.
+    """
+    deadline = time.monotonic() + deadline_seconds
+    while True:
+        with socket.socket() as probe:
+            probe.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                probe.bind(("127.0.0.1", port))
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(f"127.0.0.1:{port} stayed busy") from None
+                time.sleep(1.0)
+                continue
+            return probe.getsockname()[1]
+
+
 @pytest.fixture()
 def disposable_gateway() -> Any:
     """The recorded fake bound to the one origin the guard accepts."""
-    try:
-        gateway = RecordedGateway(policy_provider=policy_document.POLICY_PROVIDER, port=driver.EXPECTED_ORIGIN_PORT)
-    except OSError as error:  # pragma: no cover - depends on the workstation
-        pytest.skip(f"127.0.0.1:{driver.EXPECTED_ORIGIN_PORT} is not available: {error}")
-    with gateway:
+    _origin_socket()
+    with RecordedGateway(
+        policy_provider=policy_document.POLICY_PROVIDER, port=driver.EXPECTED_ORIGIN_PORT,
+    ) as gateway:
         yield gateway
 
 
@@ -1315,6 +1809,8 @@ class _RedirectOnly(http.server.BaseHTTPRequestHandler):
         self.send_header("Location", f"{self.server.target}{self.path}")  # type: ignore[attr-defined]
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+
 
 
 def test_guard_refuses_a_redirected_gateway_info(tmp_path: Path) -> None:
@@ -1513,10 +2009,18 @@ def test_phase4_g4b_workflow_is_guarded_and_environment_scoped() -> None:
     assert "pull_request:" in text
     assert "environment: phase4-live" in text
     assert "github.event.pull_request.head.repo.full_name == github.repository" in text
-    for stage in ("tag-update-no-policy", "policy-provision", "tag-update-setup", "tag-update", "summarize"):
+    for stage in ("tag-update-no-policy", "policy-provision", "tag-update-setup", "tag-update",
+                  "tag-create", "tag-copy", "summarize"):
         assert stage in text, stage
     assert "docker compose -f \"$COMPOSE_FILE\" down -v --remove-orphans" in text
     assert "rehearse_local.py --stages 4b" in text
+    # Ticket #11 runs after ticket #10 and before the milestone's summarize, and each
+    # stage's own log is evidence.
+    assert text.index("driver.py tag-update ") < text.index("driver.py tag-create") < (
+        text.index("driver.py tag-copy")
+    ) < text.index("driver.py summarize")
+    for log in ("driver-tag-create.log", "driver-tag-copy.log"):
+        assert f'$EVIDENCE_DIR/{log}"' in text, log
     assert 'P4_MILESTONE: "4b"' in text
     assert "P4_MARKER_LABEL: g4b" in text
     assert '"gatewayId": "phase4-g4b-${GATEWAY_VERSION}-${GITHUB_RUN_ID}"' in text

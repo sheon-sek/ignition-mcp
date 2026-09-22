@@ -1,0 +1,21 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": [
+    "onToolCalled.py"
+  ],
+  "attributes": {
+    "title": "tag_copy",
+    "description": "Copy a Tag or Folder to a new path via system.tag.copy with the handler-fixed Abort collision policy. Each item carries a source path and the exact destination path the copy must land on. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable. D30 6 checks the destination: only it is measured against the tag_copy Target allowlist (a UDT definition only under an explicit _types_ entry), while the source must exist and be readable — a source that is not there is not_found and a source that cannot be read is upstream_error. Owner ruling 1 covers both ends: a source or destination inside the reserved IgnitionMCPPolicy provider is refused with permission_denied whatever the allowlist says, including an explicit *, and the source is refused before any read. D30 2 gives this Tool no Precondition token: an occupied destination is conflict (details.items[].reason = destinationExists), so nothing is ever overwritten, and Abort keeps a destination that appears in the race window from being replaced. The destination's last segment must equal the source's, because one system.tag.copy call copies a path list into one destination folder under each source's own name; a copy that renames is tag_rename's. Runtime audit follows the policy's auditMode; a failed post-Mutation audit write gives auditRecorded=false, never a failure. The copied node's tag_get_config re-read, with its tcf1 Tag config fingerprint, is Observed state for the caller's next Mutation and never decides success. Every request is bounded (D10): 20 targets by default up to the 100-target hard maximum, and the deployment may raise the default through tagCopyMaxItems in the Runtime Target Policy; both paths in an item and the batch as a whole have finite ceilings, and an over-budget request is a limit_exceeded refusal before any native call. A refused Destination, endpoint check or Precondition writes one Runtime audit decision row (none in off mode, fail-closed in required mode), and the Observed state carries its own budget so a per-item Native outcome is never replaced by an output-limit error.",
+    "parameters": [
+      {
+        "name": "items",
+        "description": "1..100 copy items: {\"sourcePath\": provider-qualified Tag or Folder path to copy, \"destinationPath\": the exact new path of the copy, whose last segment must equal the source's}. The destination must not exist — an occupied one is conflict, and nothing is overwritten. Default 20 (D10), hard maximum 100.",
+        "type": "array",
+        "required": true
+      }
+    ]
+  }
+}

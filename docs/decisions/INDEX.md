@@ -39,7 +39,7 @@ D01–D30 are binding unless explicitly reopened through a new decision or amend
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 | D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 | D29 | DECIDED | [Recorded Jython runner for Runtime Tool handlers](D29-recorded-jython-runtime-runner.md) | owner-approved test-only `jython-standalone` 2.7.4 + Java 11, required locally and in CI; adds to D23 L4, does not replace it |
-| D30 | DECIDED | [Phase 4 Mutation Contract Rules](D30-phase4-mutation-contract-rules.md) | owner-approved 2026-09-22: Runtime Target Policy, Precondition tokens, batch Preflight, fixed Gateway knobs, Refused resource types; amends D07 (named static-token scopes), D11 (Tag Mutation contracts), D12 (acknowledge pairs, shelve cap) |
+| D30 | DECIDED | [Phase 4 Mutation Contract Rules](D30-phase4-mutation-contract-rules.md) | owner-approved 2026-09-22: Runtime Target Policy, Precondition tokens, batch Preflight, fixed Gateway knobs, Refused resource types; amends D07 (named static-token scopes), D11 (Tag Mutation contracts), D12 (acknowledge pairs, shelve cap); owner rulings 2026-09-22 (reserved policy provider, acknowledge parked, phase4-live env, core collection) |
 
 ## Cross-decision amendment
 

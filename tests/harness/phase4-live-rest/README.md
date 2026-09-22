@@ -2,10 +2,10 @@
 
 Live proof for the REST Mutation Tools — `config_resource_update`,
 `config_resource_create`, `config_resource_delete`, `config_resource_rename`,
-`project_import` and `tag_config_import` (CONFIG) and `alarm_pipeline_cancel`
-(CONTROL) — on disposable CI-owned Gateways. Driven by `.github/workflows/phase4-live-rest.yml`
-on pull requests in the trusted repository, under the `phase4-live` GitHub
-environment.
+`project_import` and `tag_config_import` (CONFIG), `alarm_pipeline_cancel`
+(CONTROL) and `artifact_delete` (CONFIG) — on disposable CI-owned Gateways. Driven
+by `.github/workflows/phase4-live-rest.yml` on pull requests in the trusted
+repository, under the `phase4-live` GitHub environment.
 
 ## What it proves
 
@@ -22,7 +22,12 @@ observe:
 | `allowlisted-update-applies` | an allowlisted change returns structured success |
 | `update-moves-the-signature` | the Resource signature moved, so the caller has a fresh Precondition token |
 | `observed-state-carries-the-change` | the Observed state re-read shows the intended change |
+| `update-reports-the-core-collection` | an omitted `collection` means `core`, and the result reports it (D30 owner ruling 5) |
 | `independent-reread-confirms` | a separate `config_resource_get` agrees with the reported signature |
+| `explicit-core-collection-is-accepted` | naming `core` explicitly is accepted |
+| `explicit-core-collection-reports-core` | …and the result reports the same collection |
+| `non-core-collection-is-invalid-argument` | any other collection value is `invalid_argument` |
+| `non-core-collection-changes-nothing` | …and the resource is left exactly as it was |
 | `stale-signature-is-conflict` | re-sending the pre-change signature is a `conflict` |
 | `stale-signature-changes-nothing` | the refused change left the resource alone |
 | `refused-resource-type-is-permission-denied` | the Gateway's own API token is `permission_denied` under any Target allowlist |
@@ -101,6 +106,22 @@ observe:
 | `pipeline-cancel-refusals-change-nothing` | the bounded status read serves the same runs before and after every refusal above |
 | `inventory-gate-off-exact` | with the classes disabled every Mutation Tool is gone from discovery |
 | `disabled-class-call-is-refused` | …and calling one is refused, never executed |
+| `disabled-class-artifact-delete-is-refused` | …including the artifact removal, whose discovery has no Gateway capability to lose |
+| `artifact-delete-target-is-served` | the artifact the removal case addresses is served by `artifact_list` first |
+| `artifact-delete-removes-the-artifact` | the owning credential removes its own export through the D17 ArtifactStore |
+| `artifact-delete-reports-absence` | the result names the identifier it removed |
+| `artifact-delete-reports-the-kind` | …and the kind of artifact it removed |
+| `artifact-delete-observed-state-is-absence` | the Observed state a removal leaves is `present: false` |
+| `artifact-delete-independent-reread-is-not-found` | a separate `artifact_info` answers `not_found` |
+| `artifact-delete-listing-no-longer-serves-it` | …and `artifact_list` no longer serves it |
+| `artifact-delete-of-an-absent-target-is-not-found` | removing it again is `not_found`, not a success |
+| `artifact-delete-invisible-artifact-is-not-found` | D30 §6: an artifact another principal owns answers `not_found` |
+| `artifact-delete-invisible-artifact-survives` | …and its owner still sees it |
+| `artifact-delete-reader-credential-is-permission-denied` | the effect is CONFIG, so the read-only credential is refused |
+| `artifact-delete-denied-call-changes-nothing` | …and the artifact it could not remove is still there |
+| `artifact-delete-oversize-identifier-is-invalid-argument` | D10: the identifier bound, refused with the requested length |
+| `artifact-delete-malformed-identifier-is-invalid-argument` | …and a traversal-shaped identifier is refused as input |
+| `artifact-delete-data-plane-route-is-absent` | D30: `DELETE /artifacts/{id}` is HTTP 405 — the Tool is the only delete path |
 
 The candidate archive the import cases upload is the export the Project already had,
 with one SQL comment appended to its first named-query payload. That is the edit the
@@ -151,13 +172,92 @@ which this harness does not provision; the dispatched-and-verified path is prove
 unit fixture in `packages/ignition-rest-mcp/tests/test_phase4_alarm_pipeline_cancel.py`,
 and `docs/development/phase-4.md` records the limitation and what would close it.
 
+The artifact removal cases need no Gateway at all, which is the point of the Tool: D30
+dropped the artifact HTTP route, so `artifact_delete` dispatches nothing and its cases
+prove the server's own store — the removal and its Observed state, an independent
+`artifact_info`/`artifact_list` re-read, the ownership rule of D30 §6, the CONFIG scope,
+both D10 input bounds, and the dropped data-plane route. Two of its rules are
+fixture-only and `docs/development/phase-4.md` records them: the **Target-allowlist
+denial**, because artifact identifiers are generated at removal time so this deployment
+must write the explicit `*` (D30 §3), and the **retention-lock `conflict`**, because a
+locked RECOVERY artifact comes from a D16 transaction that ended unresolved and no case
+in this harness produces one. `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py`
+pins both, and the same fixture pins the crash-safe `DELETING` recovery.
+
+## Injected transport failures (ticket #20)
+
+The driver's third mode (`--mode fault`) drives a second `ignition-rest` instance whose
+Gateway URL points at `fault_proxy.py`: a stdlib-only TCP hop the compose stack runs on
+the host network, with a control port that arms one fault at a time. A case is
+`arm(mode, route) → call the Tool → judge` against three independent records: what the
+caller saw, what the *hop* did (every request it saw, whether it reached the Gateway,
+whether the body completed), and what the *server* audited (D18's rows) and persisted
+(the D16 transaction row).
+
+| Fault | What it does | Why it is the right shape |
+|---|---|---|
+| `refuse_after_forward` | answers the first *N* matching requests, then closes its data listener | a refused connect needs the listener itself to go away: a RST after `accept()` is a *successful* connect, which the server correctly classifies as possibly dispatched |
+| `drop_mid_body` | reads a few body bytes, then RSTs without dialling the Gateway | the connection dies while the body is being written, and the Gateway never sees the request |
+| `drop_after_body` | relays the whole request, reads the Gateway's answer, then RSTs the client | the Gateway applied the change and answered; the caller cannot learn anything from the exchange |
+| `delay_response` | relays the request, then holds the answer for *N* seconds | the answer arrives after the deployment's deadline |
+| `connect_refused` | closes the data listener immediately | every connect is refused (used where a case needs the hop to be gone for the whole call) |
+
+The proxy answers **one request per connection** and says so on the wire (`Connection:
+close`, rewritten on the answer head as well). Without that, a pooled client would send
+its next request into a socket the proxy had already closed, and the server would see an
+ambiguous boundary where the armed fault meant a refused connect.
+
+| Case | Expectation |
+|---|---|
+| `fault-not-sent-*` | the write's connect is refused: the caller gets `gateway_unavailable`, the audit result row is `not_sent`, and nothing changed |
+| `fault-mid-body-*` | the proxy never forwarded the request, the read-back shows the pre-state, so the call is `conflict`/`not_applied` |
+| `fault-after-full-body-*` | the change is in place *and* the caller gets `outcome_unknown` — a read-back alone may not claim this call's success (D30 §2) |
+| `fault-deadline-*` | the caller gets the deployment's `timeout`; the audit holds one cancelled result row naming the boundary and the Target; the change may well have applied |
+| `fault-cancellation-*` | `notifications/cancelled` is answered with JSON-RPC `-32800`; one attempt, one cancelled result row, no replay |
+| `fault-import-not-sent-*` | the D16 row records `importDispatched: false` and the `not_sent` boundary, holds no recovery lock, and the Project is unchanged |
+| `fault-import-mid-body-*` | `NOT_APPLIED` on the read-back, with the ambiguous boundary on the row |
+| `fault-import-after-full-body-*` | D16's reconciliation: the post-import export equals the staged candidate, so the transaction is `COMMITTED` and the content lands |
+| `fault-import-cancellation-*` | the row is left interrupted and the reconcile loop ends it `OUTCOME_UNKNOWN` — never a success, and never a second dispatch |
+| `core-collection-update-applies` | an allowlisted update through the proxy succeeds |
+| `core-collection-update-moves-the-signature` | …and the Resource signature moved |
+| `core-collection-read-count`, `core-collection-is-on-every-read` | the hop saw exactly the update's two reads, both with `collection=core` |
+| `core-collection-write-count`, `core-collection-write-names-the-collection-route` | exactly one `PUT` left the server, to the resource type's documented collection route |
+
+The `core-collection-*` rows are the live form of D30's owner ruling 5. A real Gateway
+answers a read that omits the collection exactly as it answers one that names `core`, so
+Gateway state alone cannot show what the server sent; the proxy owns the hop the server's
+own HTTP client wrote through, and the driver reads its record of the request targets. The
+`collection` field of a *change item* is not observable there (the proxy records targets,
+not bodies): the unit tests pin it against the recorded Gateway, which keys its resource
+state by `(name, collection)` and therefore answers a request that omitted or misnamed the
+collection with the wrong resource or none at all. The case runs **after** the fault cases
+above, because the fault instance runs a deliberately small tool budget and the `#20` cases
+are timing-sensitive: a few extra requests in front of them would perturb evidence this
+ticket does not own.
+
+"Never a replay" is asserted twice, and independently: the audit log holds exactly one
+`attempt` row for the call, and the proxy's per-method counter shows exactly one write
+left the server.
+
+The fault instance runs with the deployment's smallest useful budgets
+(`IGNITION_MCP_TOOL_TIMEOUT_SECONDS`, `IGNITION_MCP_ARTIFACT_TIMEOUT_SECONDS`) and a
+short `IGNITION_MCP_PROJECT_RECONCILE_INTERVAL_SECONDS`, so a case costs seconds rather
+than minutes; the deadlines themselves are the production rules, only smaller. Its
+`--raw-dir` is a subdirectory, so its raw bodies cannot overwrite the other modes'.
+
 ## Layout
 
-- `docker-compose.yml` — one Gateway, no MCP Module: the REST plane needs none.
+- `docker-compose.yml` — one Gateway, no MCP Module: the REST plane needs none. It also
+  runs the fault proxy (`fault-proxy`) for the injected-failure cases; that service uses
+  the host network on purpose, so the data port it closes is a real loopback socket and
+  a closed one is a *refused* connect rather than a Docker-proxied one.
 - `provision.py` — test-only fixture provisioning through the Gateway's own Native
   REST API: four `ignition/audit-profile` resources (the allowlisted Target, an
-  allowlist control, and the two rename sources). It waits for the required OpenAPI
-  routes first, including the `DELETE` and rename routes the new Tools need, so no
+  allowlist control, and the two rename sources), each created with an explicit
+  `"collection": "core"` item field and read back with `?collection=core`, so the
+  fixtures sit where the Tools look for them (D30 owner ruling 5). It waits for the
+  required OpenAPI routes first, including the `DELETE` and rename routes the new Tools
+  need, so no
   fixture mutation happens before the capability exists. The name the create case
   publishes is deliberately not provisioned. It also confirms the two disposable
   Projects the import cases address are installed and listed, so a missing Project
@@ -169,13 +269,22 @@ and `docs/development/phase-4.md` records the limitation and what would close it
   import document shapes (a named root and a provider-root document), read back from a
   provider-root export, so the rule the Tool's verification depends on is live evidence
   in every row rather than an assumption.
-- `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`. The two
-  pipeline paths the cancel cases address are derived by the workflow from the disposable
-  Projects (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and
-  the paths the driver sends are the same run-unique strings.
+- `rest_driver.py` — the live cases, in `--mode gate-on`, `--mode gate-off` and
+  `--mode fault` (the D23 injected failures). The two pipeline paths the cancel cases
+  address are derived by the workflow from the disposable Projects
+  (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and the
+  paths the driver sends are the same run-unique strings. The fault mode also reads the
+  server's own `audit.db` and `state.db` **read-only** for the D18 audit rows and the
+  D16 transaction row: those are the server's record of the attempt, and nothing in the
+  harness writes to them.
+- `fault_proxy.py` — the fault-injecting proxy (#20): a stdlib-only data listener plus a
+  control listener (`GET /state`, `POST /fault`, `POST /reset`) that reports every
+  request it saw. It runs as a compose service on the host network, and the Docker-free
+  rehearsal starts the same class in-process.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
-  `tests/harness/recorded_gateway.py` and runs both driver modes with the same
-  per-Tool Target allowlists the workflow configures.
+  `tests/harness/recorded_gateway.py`, in front of which it also starts `fault_proxy.py`,
+  and runs all three driver modes with the same per-Tool Target allowlists the workflow
+  configures.
 
 ## Rehearsing
 

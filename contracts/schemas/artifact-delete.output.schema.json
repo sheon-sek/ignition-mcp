@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:rest:artifact-delete:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "correlationId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "artifactId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "kind": {
+      "description": "The kind of the artifact that was removed, as the pre-state read reported it.",
+      "enum": [
+        "project_archive",
+        "project_export",
+        "tag_config_export"
+      ]
+    },
+    "present": {
+      "description": "The bounded Observed state a delete leaves: false when the read-back found no READY artifact at the Target, which is what a successful delete had to observe. A delete never reports true.",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "correlationId",
+    "artifactId",
+    "kind",
+    "present"
+  ]
+}

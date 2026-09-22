@@ -1,6 +1,6 @@
 {
   "title": "Phase 4 Runtime Configurator",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "permissions": {
     "type": "AllOf",
     "securityLevels": [
@@ -30,7 +30,9 @@
       "historian_query_aggregate",
       "database_query_list",
       "database_query",
-      "tag_update"
+      "tag_update",
+      "tag_create",
+      "tag_copy"
     ]
   },
   "resources": {

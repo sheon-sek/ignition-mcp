@@ -33,7 +33,8 @@ Matching rules:
 - `args` is compared exactly; `kwargs` compares only the recorded keys (so a generated
   value such as a correlation ID inside `actionValue` stays out of the fixture).
 - Result kinds: `none` (returns `None`), `qualified-values` (`system.tag.readBlocking`),
-  `quality-codes` (`system.tag.writeBlocking`), `results` (`system.tag.query`),
+  `quality-codes` (`system.tag.writeBlocking` and `system.tag.copy`, one QualityCode
+  per path), `results` (`system.tag.query`),
   `resource` / `missing` (`system.config.getResource`), and `raise` (a
   `java.lang.RuntimeException`, the shape a handler's `except (Exception, JavaException)`
   catches).

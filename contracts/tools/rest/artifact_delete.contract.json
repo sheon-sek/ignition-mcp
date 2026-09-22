@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "name": "artifact_delete",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": true,
+  "budgetClass": "ARTIFACT",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "storageBacked": true,
+  "principalScoped": true,
+  "parameters": {
+    "artifactId": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 128,
+      "source": "artifact_list.items[].artifactId, artifact_info.artifact.artifactId or project_export.artifact.artifactId",
+      "note": "an opaque generated identifier, matched exactly: the D17 storage key is never derived from a user or Gateway name, so the bound is the store's own identifier limit (128 characters, the same one validate_artifact_id enforces) and nothing else is accepted"
+    }
+  },
+  "outputSchema": "contracts/schemas/artifact-delete.output.schema.json",
+  "nativeRequirements": [],
+  "capabilityId": null,
+  "localCapability": {
+    "name": "artifact_store",
+    "reason": "D30 drops the `DELETE /artifacts/{id}` data-plane route, so this Mutation dispatches nothing to the Gateway and has no D04 capability to be gated on. Its requirement is the server's own D17 ArtifactStore and the metadata database behind it; `_invoke` resolves both before the D08 chain runs, so a missing or broken store is an `internal_error` rather than a policy denial, and the operation declares `gateway_backed=False` so the capability layer never consults the D04 registry.",
+    "discovery": "The Tool is a storage-backed Mutation: its discovery is decided by the deployment's mutation-class gate alone (D08 deny-by-default), never by a Gateway capability, so an unreachable Gateway cannot hide or expose it. The class gate is repeated at call time by the D08 chain."
+  },
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "none",
+    "policy": "D30 §2 lists no Precondition token for this Tool, and its table names the retention lock instead: the artifact's identity is the caller's own `artifactId` from a read it already made, and D17's `DELETING` state — reached inside one store transaction that is crash-recoverable by `reconcile` — is what makes the removal safe to repeat."
+  },
+  "targetId": {
+    "form": "<artifactId>: the exact D17 storage key the caller read",
+    "resolution": "the identifier the caller supplied, matched exactly; the allowlist is evaluated before the artifact is read, so a Target the deployment does not name is refused without touching the store",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled",
+    "wildcardNote": "Artifact identifiers are generated at delete time (uuid7), so a deployment that lets an agent collect its own artifacts writes `*` explicitly; naming individual identifiers stays available for a long-lived artifact a deployment wants to pin. Visibility below is what bounds `*`: a caller still deletes only what it owns, or `ignition.admin` can."
+  },
+  "visibility": {
+    "rule": "D30 §6/D17: only the owning principal — the Mutation principal that produced or uploaded the artifact — may delete it, or any holder of `ignition.admin`. An artifact the caller cannot see answers `not_found`, exactly as an unknown identifier does, so the Tool is never an existence oracle.",
+    "checkedBeforeTheEffect": "the resolution runs as the D08 Precondition hook, after the Target allowlist and before the audit decision, the attempt and the removal",
+    "state": "only a READY artifact is visible (D17); an artifact in STAGING, PUBLISHING, DELETING or LOST is not addressable through this Tool"
+  },
+  "retention": {
+    "rule": "D17/D30: a RECOVERY artifact whose transaction has not reached a lock-releasing terminal state is retention-locked. Removing it fails with `conflict` (D30 §7) and nothing is unlinked; the store's own lock check and the state transition into `DELETING` are one transaction.",
+    "lockRelease": "the D16 transaction releases the lock when it reaches COMMITTED, NO_CHANGE, NOT_APPLIED, CONFLICTED or FAILED_PRE_IMPORT; OUTCOME_UNKNOWN and RECOVERY_REQUIRED keep it, and `artifact_delete` cannot override that"
+  },
+  "fixedKnobs": {},
+  "fixedKnobsNote": "D30 §4's fixed knobs govern what a Mutation sends to the Gateway. This Tool sends nothing: it has no HTTP route at all (D30 drops `DELETE /artifacts/{id}`), so there is no knob to fix and the caller cannot reach the Gateway through it.",
+  "boundedInputBytes": 128,
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit refusal is the result of the attempt. Two refusals reach this Tool and neither is ever turned into a success by a read-back: a Target the allowlist does not name (`permission_denied`, before the artifact is read) and a retention-locked artifact (`conflict`, refused inside the store transaction with nothing unlinked). A store failure is the caller's error too, never a quiet success.",
+    "verificationMaySucceedWhen": [
+      "the store recorded the removal (the artifact left the store's visible state inside the removal transaction) and the bounded read-back no longer reports it"
+    ],
+    "ambiguousAttribution": "an artifact that is absent after a failed removal cannot be credited to this call: TTL cleanup, the D16 transaction and another administrator all remove artifacts, so no read-back turns an error into this caller's success",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "a bounded read-back of the same identifier through the store: the call is a success only when no READY artifact is left at it, and that absence is what the result reports as Observed state (`present: false`). A read-back that still reports the artifact makes the call `outcome_unknown` and nothing is replayed.",
+  "crashSafety": {
+    "decision": "D17/D26",
+    "rule": "the removal commits the DELETING state first (`UPDATE ... SET state='DELETING'`, one transaction with the retention-lock check), then unlinks the object and fsyncs its directory, then deletes the row. Every split point is recoverable: an artifact left in DELETING by a crash is finished by the store's `reconcile` at startup and in its periodic pass, and it is never visible to any consumer in the meantime.",
+    "idempotence": "D17: deletion is idempotent for the caller's purposes — a second call for the same identifier answers `not_found`, never a success and never a second effect.",
+    "httpRoute": "absent by D30: the data plane serves GET, HEAD and POST only, so this Tool is the only delete path."
+  }
+}

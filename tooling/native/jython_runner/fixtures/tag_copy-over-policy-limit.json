@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_copy",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 170
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_copy\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    }
+  ]
+}

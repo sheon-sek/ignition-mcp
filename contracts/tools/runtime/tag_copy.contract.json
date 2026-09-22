@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_copy",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "items": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "default": 20,
+      "itemRequired": [
+        "sourcePath",
+        "destinationPath"
+      ],
+      "itemProperties": {
+        "sourcePath": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "readable": "the source must exist and its configuration must be readable; it is not checked against the Target allowlist (D30 6)"
+        },
+        "destinationPath": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "leaf": "the destination's last segment must equal the source's, because one system.tag.copy call copies into a destination folder under the source's own name"
+        }
+      }
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-copy.output.schema.json",
+  "nativeRequirements": [
+    "system.tag.readBlocking",
+    "system.tag.exists",
+    "system.tag.copy",
+    "system.tag.getConfiguration",
+    "system.util.audit"
+  ],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "one system.tag.copy call per item, with the source as a one-element path list and the destination's parent folder as the native destination; its single QualityCode is that item's outcome, and Observed state never decides success",
+  "preconditionToken": {
+    "kind": "none",
+    "why": "D30 2 gives tag_copy no Precondition token: the destination must not exist, so there is no destination read to compare against, and the source is read by the handler itself. The concurrency rule is the existence pair below plus D11's collision rule.",
+    "existingTarget": "conflict",
+    "existingTargetCheck": "system.tag.exists(destinationPath) for every item before any item executes, alongside system.tag.exists(sourcePath) and the source's configuration read",
+    "existingTargetReason": "destinationExists"
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_copy",
+    "allowlistMatch": "the destination is a provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition. The source is never allowlist-checked (D30 6), and only the reserved-provider rule reaches it",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight for the source and the destination, whatever the allowlist says, including an explicit *: a copy into the provider would create a node there, and a copy out of it would publish the policy document elsewhere (owner ruling 1)",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "targetPath": {
+    "form": "<provider>Tag, <provider>Folder or <provider>Folder/Tag, and <provider>_types_/... for a UDT definition",
+    "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
+    "leaf": "the destination's last segment must equal the source's, because system.tag.copy copies a path list into one destination folder under its own leaf name; a copy that renames would be tag_rename's (which checks the new path), so a differing leaf is invalid_argument"
+  },
+  "sourcePath": {
+    "readable": "system.tag.exists(sourcePath) must answer true (not_found, details.items[].reason = sourceMissing) and system.tag.getConfiguration(sourcePath, false, false) must answer a node (upstream_error, reasons sourceReadFailed / sourceConfigurationUnavailable) before any item executes",
+    "notAllowlistChecked": "D30 6 checks the destination for a copy; the source is bounded by the reserved-provider rule, its own readability, and the destination the caller names",
+    "reservedProvider": "a source inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
+  },
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a destination inside the _types_ namespace is refused with permission_denied unless an entry that itself names _types_ matches it, so a bare * does not cover a UDT definition (D30 6)",
+  "collisionPolicy": "Abort",
+  "existingTargetFails": "conflict (details.items[].reason = destinationExists): the copy lands at a path that already holds something, and D11 forbids overwriting it",
+  "neverOverwrites": "the handler sends collisionPolicy=Abort, so a destination that appears between the Preflight existence check and the dispatch aborts that item's copy instead of overwriting it; the source is left in place either way",
+  "fixedKnobs": {
+    "collisionPolicy": "Abort"
+  },
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "ambiguousOutcomeScope": "an item whose own dispatch raised is outcome_unknown and ends the batch (later items are not_executed); an item whose dispatch answered an unattributable QualityCode is outcome_unknown and the batch continues. Nothing is replayed",
+  "nullEncoding": "ignition-null-v1",
+  "existenceCheck": {
+    "call": "system.tag.exists(sourcePath) and system.tag.exists(destinationPath) for every item, before any item executes",
+    "why": "a Gateway answers system.tag.getConfiguration for a path that is not there with a synthesized default node, so neither the source's presence nor the destination's absence can be read from a configuration read; the ticket #10 live run recorded the same synthesized node on 8.3.8 and 8.3.9",
+    "sourceMissing": "not_found (details.items[].reason = sourceMissing), and nothing is dispatched",
+    "destinationPresent": "conflict (details.items[].reason = destinationExists), and nothing is dispatched",
+    "unanswered": "upstream_error (reasons existenceCheckFailed / existenceCheckIndeterminate): a Gateway that raises or answers something that is not a boolean is never read as present or as absent",
+    "observedReadBacks": "the provider export is the independent presence check the harness uses for both ends"
+  },
+  "inputBounds": {
+    "itemsParameter": "items",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagCopyMaxItems",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxBytes": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "observedConfigurationMaxBytes": 16384,
+    "observedStateMaxBytes": 65536,
+    "outputMaxBytes": 262144
+  },
+  "observedState": "the copied node's own tag_get_config read: `system.tag.getConfiguration(destinationPath, false, false)`, published with the D30 2 fingerprint of that read. It is Observed state and never decides success, and the fingerprint is the token the caller's next tag_update/tag_delete would use",
+  "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused existence or readability check each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes"
+}

@@ -353,6 +353,9 @@ class _Tag(object):
     def configure(self, *args, **kwargs):
         return self.recorder.take("system.tag.configure", args, kwargs)
 
+    def copy(self, *args, **kwargs):
+        return self.recorder.take("system.tag.copy", args, kwargs)
+
     def exists(self, *args, **kwargs):
         return self.recorder.take("system.tag.exists", args, kwargs)
 

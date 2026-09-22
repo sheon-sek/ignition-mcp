@@ -36,6 +36,7 @@ sys.path.insert(0, str(HARNESS))
 sys.path.insert(0, str(HARNESS.parent))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
+from fault_proxy import FaultProxy  # noqa: E402
 from rest_driver import (  # noqa: E402
     ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
@@ -56,6 +57,7 @@ from rest_driver import (  # noqa: E402
     REFUSED_TYPE,
     SINGLETON_TYPE,
     UNALLOWLISTED_RENAMED,
+    run_fault_mode,
     run_gate_off,
     run_gate_on,
 )
@@ -83,6 +85,14 @@ UNALLOWLISTED = "MCP_CI_AUDIT_OTHER"
 READER_TOKEN = "phase4-rehearsal-reader"
 AGENT_TOKEN = "phase4-rehearsal-agent"
 OPERATOR_TOKEN = "phase4-rehearsal-operator"
+#: The fault-mode deployment's budgets (ticket #20). Smaller than a production one so a
+#: case does not wait out a full deadline, and matched by the live workflow's fault
+#: instance; the proxy delays past *this* budget, which is the rule under test.
+FAULT_TOOL_TIMEOUT = 8.0
+FAULT_ARTIFACT_TIMEOUT = 20.0
+#: The D16 reconcile interval the fault mode runs with, so a cancelled import settles
+#: inside the case instead of at the next restart.
+FAULT_RECONCILE_INTERVAL = 2.0
 #: The same per-Tool Target allowlists the live workflow configures: one entry list
 #: per Mutation Tool, and every name a case addresses that must be allowed.
 MUTATION_TARGETS = {
@@ -105,6 +115,10 @@ MUTATION_TARGETS = {
     "project_import": (PROJECT,),
     # D30 §3/#17: the Target of a Tag import is the provider-qualified destination path.
     TAG_IMPORT_TOOL: (f"[{TAG_PROVIDER}]{TAG_TARGET_PATH}",),
+    # D30 §3/#19: the Target of an artifact removal is the artifact's own storage
+    # identifier, which is generated at removal time — so the deployment writes the
+    # explicit wildcard, and ownership (D30 §6) is what bounds it.
+    "artifact_delete": ("*",),
     # D30 §6/#18: the Target of a pipeline cancel is the exact pipeline path.
     ALARM_CANCEL_TOOL: (PIPELINE,),
 }
@@ -116,9 +130,19 @@ def _free_port() -> int:
         return int(probe.getsockname()[1])
 
 
-def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool) -> Settings:
+def _settings(
+    gateway_url: str, data_dir: str, *, mutation_enabled: bool, fault: bool = False,
+) -> Settings:
+    """The deployment the rehearsal runs, optionally the fault mode's own.
+
+    ``fault`` is the D23 injected-failure deployment (ticket #20): it points its Gateway
+    URL at the fault proxy, and its budgets are small so a case does not have to wait out
+    a production deadline — the proxy delays past *this* deployment's deadline, which is
+    the same rule a real one follows.
+    """
+
     return Settings(
-        gateway_url=gateway.base_url, gateway_api_token=API_TOKEN, bind_host="127.0.0.1",
+        gateway_url=gateway_url, gateway_api_token=API_TOKEN, bind_host="127.0.0.1",
         bind_port=_free_port(), mcp_path="/mcp", deployment_profile="development",
         auth_mode="static-token",
         static_tokens=(
@@ -130,7 +154,8 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         ),
         service_identity="phase4-rehearsal", watcher_interval_seconds=2.0, request_timeout_seconds=10.0,
         structured_output_limit_bytes=262_144, log_format="text", data_dir=data_dir,
-        tool_timeout_seconds=30.0, query_timeout_seconds=30.0, artifact_timeout_seconds=120.0,
+        tool_timeout_seconds=FAULT_TOOL_TIMEOUT if fault else 30.0, query_timeout_seconds=30.0,
+        artifact_timeout_seconds=FAULT_ARTIFACT_TIMEOUT if fault else 120.0,
         audit_max_rows=50_000, audit_max_age_days=90, operation_record_max_rows=10_000,
         operation_record_max_age_hours=72, retention_interval_seconds=3600.0, retention_batch_rows=500,
         storage_probe_interval_seconds=3600.0, artifact_max_bytes=268_435_456,
@@ -143,7 +168,8 @@ def _settings(gateway: RecordedGateway, data_dir: str, *, mutation_enabled: bool
         mutation_targets=MUTATION_TARGETS,
         project_designer_policy="deny", gateway_id="phase4-rehearsal", project_writer_enabled=True,
         project_lock_timeout_seconds=10.0, project_lock_max_entries=32,
-        project_reconcile_interval_seconds=3600.0, project_verification_timeout_seconds=60.0,
+        project_reconcile_interval_seconds=FAULT_RECONCILE_INTERVAL if fault else 3600.0,
+        project_verification_timeout_seconds=60.0,
     )
 
 
@@ -169,6 +195,49 @@ def _server(settings: Settings) -> Iterator[str]:
     finally:
         instance.should_exit = True
         thread.join(timeout=15)
+
+
+@contextmanager
+def _fault_proxy(upstream_url: str) -> Iterator[tuple[str, str]]:
+    """The fault proxy (ticket #20) in front of the recorded Gateway.
+
+    The proxy is real TCP code, so a rehearsal exercises the same transport failures a
+    live run does; only the Gateway behind it is recorded.
+    """
+
+    host, port = upstream_url.split("//", 1)[1].split("/", 1)[0].split(":")
+    proxy = FaultProxy(
+        listen_host="127.0.0.1", listen_port=_free_port(), control_host="127.0.0.1",
+        control_port=0, upstream_host=host, upstream_port=int(port),
+    )
+    ready = threading.Event()
+    loop_holder: dict[str, Any] = {}
+
+    def run() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop_holder["loop"] = loop
+        loop.create_task(proxy.serve())
+
+        async def announce() -> None:
+            while proxy.control_port == 0 or not proxy.state.listening:
+                await asyncio.sleep(0.02)
+            ready.set()
+
+        loop.create_task(announce())
+        loop.run_forever()
+
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    try:
+        if not ready.wait(10):
+            raise RuntimeError("the fault proxy did not start")
+        yield f"http://127.0.0.1:{proxy.listen_port}", proxy.control_address
+    finally:
+        loop = loop_holder.get("loop")
+        if loop is not None:
+            loop.call_soon_threadsafe(proxy.stop)
+        thread.join(timeout=10)
 
 
 def _project_archive(marker: str) -> bytes:
@@ -262,7 +331,7 @@ def main() -> int:
     with tempfile.TemporaryDirectory(prefix="phase4-rehearsal-") as data_dir, \
             RecordedGateway(projects=projects) as gateway:
         _seed(gateway)
-        with _server(_settings(gateway, data_dir, mutation_enabled=True)) as url:
+        with _server(_settings(gateway.base_url, data_dir, mutation_enabled=True)) as url:
             gate_on = asyncio.run(run_gate_on(
                 rest_url=url, reader_token=READER_TOKEN, agent_token=AGENT_TOKEN,
                 operator_token=OPERATOR_TOKEN,
@@ -278,15 +347,30 @@ def main() -> int:
                 alarm_event_id=ALARM_EVENT_ID,
                 raw_dir=args.raw_dir,
             ))
-        with _server(_settings(gateway, data_dir, mutation_enabled=False)) as url:
+        with _server(_settings(gateway.base_url, data_dir, mutation_enabled=False)) as url:
             gate_off = asyncio.run(run_gate_off(
                 rest_url=url, agent_token=AGENT_TOKEN, raw_dir=args.raw_dir,
             ))
+        # The fault cases run last: they leave the allowlisted resource and the import
+        # Project in the states their transport failures produced.
+        with _fault_proxy(gateway.base_url) as (proxied_url, control_url):
+            fault_settings = _settings(proxied_url, data_dir, mutation_enabled=True, fault=True)
+            with _server(fault_settings) as url:
+                fault = asyncio.run(run_fault_mode(
+                    rest_url=url, agent_token=AGENT_TOKEN, proxy_control_url=control_url,
+                    data_dir=Path(data_dir), resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
+                    project=PROJECT, tool_timeout_seconds=fault_settings.tool_timeout_seconds,
+                    raw_dir=args.raw_dir,
+                ))
 
-    cases: list[dict[str, Any]] = [*gate_on["cases"], *gate_off["cases"]]
+    cases: list[dict[str, Any]] = [*gate_on["cases"], *gate_off["cases"], *fault["cases"]]
     report = {
         "schemaVersion": 1, "gate": "G4", "milestone": "4c", "rehearsal": True,
-        "cases": cases, "passed": all(case["ok"] for case in cases),
+        "cases": cases,
+        "observations": {
+            **gate_on["observations"], **gate_off["observations"], **fault["observations"],
+        },
+        "passed": all(case["ok"] for case in cases),
     }
     (args.raw_dir / "rehearsal.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8",
