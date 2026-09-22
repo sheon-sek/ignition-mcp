@@ -648,6 +648,58 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     fake had answered `pathOverLength`. `d33251e` fixes the case, the fake's selection order and the
     selector test; the run above is the one that records this ticket's evidence.
 
+#### Review round 1 — owner scope cut
+
+Review round 1 (`11-review-1.md`) raised five blockers and one nit. **The owner cut the scope of
+this round**: Phase 4 now goes for maximum speed, so only a Tool that runs with correct *input and
+output* counts; byte-accounting precision is deferred. The round therefore fixes **S4** and **S5**
+only, and records the rest as deferred work rather than doing it now.
+
+- **S4 — the `_types_` rule is positional (`isUdtDefinitionTarget`).** D30 §6 names
+  `[provider]_types_/...`, so only the **first** post-provider segment selects the UDT definition
+  namespace. Both handlers used a bare membership test (`"_types_" in targetSegments(value)`), so
+  `[default]Area/_types_/Tag` was treated as a definition and refused under a wildcard. Both the
+  target and the allowlist entry now use the positional rule (`segments[0] == "_types_"`), which is
+  the correction ticket #10 already carries for `tag_update`.
+  Fixtures: `tag_create-deeper-folder-types-namespace`, `tag_copy-deeper-folder-types-namespace` —
+  a folder called `_types_` one segment below the provider root, covered by the ordinary
+  `[default]IgnitionMCP_CI` prefix. Both reach the Gateway; the pre-fix handler refused both before
+  any native call.
+- **S5 — the check-to-dispatch race is a collision, not a failed mutation.** Preflight finds the
+  target absent (or the destination free) and dispatches; a competing writer acts first; the fixed
+  `collisionPolicy=Abort` refuses instead of overwriting. Each handler now reports that item as
+  `conflict` — `details.items[].reason = targetExists` / `destinationExists` — with its own Native
+  outcome still attached, so the provider's answer stays visible and nothing is replayed. Which
+  QualityCode a Gateway returns for that `Abort` is **not established by this repository**, so the
+  handler does not infer from the code: one bounded post-failure `system.tag.exists` for that item's
+  own path decides it, and a raised or non-boolean check leaves the item's own Native outcome
+  standing rather than claiming either outcome. Both output schemas gained the `conflict` item
+  shape, and both contracts gained a `racedCollision` clause.
+  Fixtures: `tag_create-raced-collision`, `tag_copy-raced-collision` — `exists` answers false, the
+  native call answers a Bad collision, and the post-failure check answers true. Both fail on
+  `a3ab3fc` and pass after the change.
+
+**Deferred by the owner's scope cut (S1, S2, S3, S5's live case, and the review's P1 nit).** These
+are real gaps the reviewer named and they are **not** fixed in this round:
+
+1. **S1 — the Observed walk is not bounded before conversion.** Both handlers still call
+   `jsonValue(nativeConfiguration)` before the size check, and the later counter does not mirror
+   `jsonValue` for `iteritems`-only objects, Java arrays arriving as `array.array`, Datasets and
+   their column names, enums/native-object text, or wide numbers.
+2. **S2 — input accounting materializes full strings and scans past the aggregate ceiling**, and
+   the hard-count, path, configuration and policy-count refusals carry no structured `advice`.
+3. **S3 — QualityCode `name`/`level` are truncated** by character count rather than being exact or
+   omitted, and are presented as required identifiers.
+4. **Byte-accounting precision generally.** The coordinator's exactness requirement (the walk's
+   reported byte count must equal the published JSON's length exactly, with near-budget fixtures
+   for a mapping, an `$ignition` mapping and a Dataset) is deferred with the rest of the precision
+   work. The accepted ticket #10 lane's walk measures `text + className` for a rendered value while
+   publishing a larger JSON wrapper, so its own count is optimistic; making the count exact is part
+   of this deferred issue, not a tag_create/tag_copy-only change.
+5. **P1 — the modelled refusal bodies** in `tests/fixtures/recorded/gateway-8.3/provenance.json`
+   are still labelled `modelled` after two green G4b runs; re-recording them is a runbook
+   follow-up.
+
 ### Ticket #16 — REST `project_import` (milestone 4c)
 
 - Fixture-first coverage: the recorded Gateway now models the Project import the way it
@@ -1435,6 +1487,33 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     in this ticket touches the Project-import path.
 
 ## Open questions
+
+- **Owed by the owner's #11 scope cut: the byte-accounting precision issue.** Review round 1 named
+  five blockers; the owner cut the round to the two correctness ones (S4 positional `_types_`, S5
+  collision race) so Phase 4 could move at maximum speed, and deferred the precision work:
+  - the Observed walk must measure every native shape (a Dataset and its column names, an
+    `iteritems` object, a Java array arriving as `array.array`, a wide number, an enum/native-object
+    text) **before** converting, in one pass, and the count it reports must equal the byte length of
+    the JSON the caller receives **exactly** — not as an upper or lower bound — with near-budget
+    fixtures (value at the ceiling returned, ceiling+1 refused) for a mapping, a reserved-key
+    mapping and a Dataset;
+  - the input walk must count UTF-8 incrementally, validate and account in one request-order pass
+    that stops at the 65536-byte budget, and every `limit_exceeded` site must carry `requested`,
+    `limit` and `advice` in both the structured details and the message;
+  - a QualityCode `name`/`level` over its ceiling must be exact or omitted with a
+    `nameOverLimitBytes`/`levelOverLimitBytes` marker, and the diagnostic a bounded marked prefix;
+  - the same holds for `tag_write` (#7) and `tag_update` (#10): all three handlers must agree, and
+    the accepted #10 walk currently charges `text + className` for a rendered value while
+    publishing a larger JSON wrapper, so its count is optimistic by that wrapper's bytes. **For the
+    owner:** file the follow-up issue and decide whether the count is made exact for all three
+    Tools in one change (recommended, since the fixed points are shared) or per Tool.
+- **Owed by the owner's #11 scope cut: the modelled refusal bodies (review nit P1).**
+  `tests/fixtures/recorded/gateway-8.3/provenance.json` still labels the 21 ticket #11 refusal
+  bodies `modelled` although two G4b runs are now green, and their provenance says the first live
+  run re-records them. A live run does not do that by itself, so re-recording the eligible bodies
+  from the green G4b artifacts (keeping pure request-check fixtures modelled, with the reason
+  stated) is a follow-up commit. **For the owner:** confirm, or accept the modelled bodies as
+  permanent for this milestone.
 
 - **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
   `tag_copy` no name of its own and D30 §6 checks only the destination, but the native call
