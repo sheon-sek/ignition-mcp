@@ -525,6 +525,10 @@ def test_the_aggregate_input_byte_budget_is_finite() -> None:
     assert error["details"]["reason"] == "inputOverByteBudget"
     assert error["details"]["limit"] == 65536
     assert error["details"]["requested"] > error["details"]["limit"]
+    # The six items of the batch are worth 72714 bytes between them, but the refusal
+    # counts only up to the aggregate budget and stops there, so the reported amount
+    # sits just past the ceiling instead of being the whole batch rescan.
+    assert error["details"]["requested"] - error["details"]["limit"] < 4096
     _assert_reduction_advice(error, "split the batch")
 
 
@@ -675,6 +679,9 @@ def test_the_observed_read_back_is_walked_before_it_is_converted() -> None:
         ("observed-configuration-native-object-over-budget", "over the 16384-byte Observed-state budget"),
         ("observed-configuration-dataset-column-name-over-budget", "over the 16384-byte Observed-state budget"),
         ("observed-configuration-dataset-deep-cell", "33 levels deep"),
+        ("observed-configuration-wide-empty-strings", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-big-integer-over-budget", "over the 16384-byte Observed-state budget"),
+        ("observed-configuration-java-big-decimal-over-budget", "over the 16384-byte Observed-state budget"),
     ],
 )
 def test_every_shape_the_observed_read_back_takes_is_bounded_before_conversion(name: str, fragment: str) -> None:
@@ -683,9 +690,11 @@ def test_every_shape_the_observed_read_back_takes_is_bounded_before_conversion(n
     actually publishes: a `dict`, an object that only offers `iteritems`, a
     `java.util.Map`, a list, an enum, a Java array that exposes `getClass`, the
     `array.array`-typed PyArray a Java array really arrives as, a native object
-    with no container interface, and a Dataset whose column names and cells are
-    counted before its text is rendered. A shape that used to be charged 64 bytes as
-    an opaque scalar is now refused as an explicit per-item Observed `limit_exceeded`
+    with no container interface, a Dataset whose column names and cells are counted
+    before its text is rendered, a collection wide enough that only its per-member
+    punctuation bounds it, and an integer or decimal wide enough that only its
+    emitted digits bound it. A shape that used to be charged 64 bytes as an opaque
+    scalar is now refused as an explicit per-item Observed `limit_exceeded`
     stating the requested amount, the ceiling and the reduction advice -- never a
     conversion, a recursion or an exhaustion that would replace the item's
     completed Native outcome."""
@@ -704,7 +713,13 @@ def test_every_shape_the_observed_read_back_takes_is_bounded_before_conversion(n
 
 @pytest.mark.parametrize(
     "name",
-    ["observed-configuration-java-array-over-budget", "observed-configuration-native-object-over-budget"],
+    [
+        "observed-configuration-java-array-over-budget",
+        "observed-configuration-native-object-over-budget",
+        "observed-configuration-wide-empty-strings",
+        "observed-configuration-big-integer-over-budget",
+        "observed-configuration-java-big-decimal-over-budget",
+    ],
 )
 def test_an_over_budget_observed_shape_states_the_amount_it_refused(name: str) -> None:
     message = _structured(name)["observed"][0]["error"]["message"]

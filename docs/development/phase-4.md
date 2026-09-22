@@ -404,8 +404,8 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   D28-null and escaped-reserved-key cases.
 - **Fixture-first coverage.** 9 recorded-Jython tests
   (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over five golden
-  vectors; 68 tests for `tag_update`
-  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 65 fixtures; and 5
+  vectors; 74 tests for `tag_update`
+  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 68 fixtures; and 5
   tests for the `tag_get_config` definition read
   (`tooling/native/jython_runner/tests/test_tag_get_config.py`) over 8 fixtures.
   Together they cover: the policy gate (missing, oversize, length mismatch, malformed,
@@ -428,8 +428,10 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   nests deeper than the depth ceiling, a native shape inside the budget publishing
   exactly what it published before, the QualityCode identifier and diagnostic
   ceilings (`nameOverLimitBytes`, `levelOverLimitBytes`,
-  `diagnosticMessageOverLimitBytes`), and a folder named `_types_` below the
-  provider's first segment in both Tools. The D29 runner gained the `system.tag.getConfiguration` and
+  `diagnosticMessageOverLimitBytes`), a collection wide enough that only its
+  per-member punctuation bounds it, a wide integer and a wide decimal, the
+  aggregate input refusal stopping at the batch budget, and a folder named
+  `_types_` below the provider's first segment in both Tools. The D29 runner gained the `system.tag.getConfiguration` and
   `system.tag.configure` recordings, so a fixture proves the *absence* of a call
   as well as its result.
 - Contracts: `contracts/tools/runtime/tag_update.contract.json` (CONFIG, not
@@ -620,6 +622,31 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `native-outcome-oversize-level`, `native-outcome-oversize-diagnostic`) fail on the previous
     handler; the output schema's `quality` definition, the contract's `inputBounds` and
     `nativeOutcomeText`, and `resource.json` carry the new fields and rule.
+- **Review round 4 fixes.** The #7 round-4 review found four more gaps in `tag_write`'s walker;
+  the same four existed here:
+  - *Width: every collection member pays its own punctuation.* The Observed walk charged a list
+    `2 + Σ member`, so a list of arbitrarily many empty strings cost 2 bytes and passed the gate
+    before the conversion copied it. `objectValue` now charges the comma, the key's quotes and the
+    colon for every member, `arrayValue` charges the comma, and a string is charged its JSON width
+    (quotes and `\u00xx` escapes included) instead of its raw bytes, so a wide collection is bounded
+    by its own width. The input walk charges the same punctuation, so its aggregate measure cannot be
+    hidden behind empty members either.
+  - *Java arrays recurse under the same depth and budget.* `arrayValue` is the one element walk for a
+    list, a `java.util.List`, the `getClass().isArray()` shape and the `array.array`-typed PyArray, so
+    a Java array is measured element by element at `depth+1` under the same budget before its text is
+    rendered (`tag_update-observed-configuration-java-array-over-depth` and `-over-budget`).
+  - *Wide integers and decimals are counted, not copied.* An `int`/`long` (and a
+    `java.math.BigInteger`, which Jython hands to a handler as a `long`) costs `max(24, digits)` with
+    the digit count taken from `bit_length`/`bitLength` — O(1), no text produced — and a `BigDecimal`
+    is refused from its `precision()`/`scale()` estimate *before* it is rendered.
+    `tag_update-observed-configuration-big-integer-over-budget` failed with `status: ok`, publishing
+    a 20000-digit integer charged as 24 bytes; `-java-big-decimal-over-budget` is the same refusal
+    reached without rendering it (round 3 already refused that decimal from its rendered text).
+  - *The aggregate input measurement stops at the aggregate budget.* `configSize` is given the bytes
+    the batch still has left (`min(32768, remaining)`) and passes that remainder down through every
+    child, and the aggregate refusal fires where the budget is spent instead of after the whole batch
+    is rescanned: the six-item `input-over-byte-budget` fixture reports a count just past 65536
+    (`requested - limit < 4096`) rather than its full 72714 bytes.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
@@ -1139,6 +1166,19 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   than truncated — which is why the contract, the output schema's `quality` definition and
   `resource.json` did change in this round. **For the owner:** no decision; the Observed bound
   values (16384 bytes, 32 levels) and the error shape are unchanged.
+- **Ticket #10 — review round 4 completed the walker's width and number bounds (fixed).** The #7
+  round-4 review's four gaps existed here too: a list of empty members cost 2 bytes, a wide integer or
+  decimal cost 24, a Java array's elements were only bounded by the text they were rendered into, and
+  the aggregate input measurement rescanned every item with a fresh budget after the batch budget was
+  already spent. Collection members now pay their own JSON punctuation, strings their JSON width
+  (quotes and escapes), integers their emitted digits (from `bit_length`, without producing the text)
+  and decimals their `precision()`/`scale()` estimate before rendering; the input walk carries the
+  batch's remaining budget down through every child, so the refusal stops where the budget is spent
+  (`requested - limit < 4096` on the six-item fixture instead of its full 72714 bytes). Two shape
+  notes: Jython hands a `java.math.BigInteger` to a handler as a `long`, so one integer fixture covers
+  both, and a `BigDecimal` was already refused from its rendered text in round 3 — round 4 refuses it
+  before rendering it, so its fixture pins the same outcome reached with bounded work rather than a
+  before/after difference. **For the owner:** no decision; no bound value changed.
 - **Ticket #10 — the Preflight fingerprint conversion keeps no ceilings (recorded, not changed).**
   `tag_update` compares a target's `expectedFingerprint` against the configuration it reads back
   with the same walk the Observed read-back uses, but with no byte or depth ceiling, because that

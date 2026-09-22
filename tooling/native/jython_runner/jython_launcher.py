@@ -31,6 +31,7 @@ replays a shape JSON cannot express on its own. ``nativeType`` is reserved for
 that, and ``_recorded_value`` decodes it recursively:
 
     {"nativeType": "Dataset", "columns": [...], "rows": [[...]]}
+    {"nativeType": "big-integer" | "java-big-decimal", "digits": 20000}
     {"nativeType": "iteritems-object", "entries": [[key, value], ...]}
     {"nativeType": "java-array", "items": [...]}
     {"nativeType": "native-object", "class": "com.example.Native", "text": "...",
@@ -48,6 +49,7 @@ import json
 import sys
 
 from java.lang import Object, RuntimeException
+from java.math import BigDecimal
 from java.lang.reflect import Array as ReflectionArray
 from java.util import ArrayList, LinkedHashMap
 
@@ -232,6 +234,12 @@ def _recorded_value(value):
         marker = value.get("nativeType")
         if marker == "Dataset":
             return _RecordedDataset(value)
+        if marker == "big-integer":
+            # A Jython long with `digits` decimal digits: a handler has to count its
+            # digits rather than copy its text.
+            return long("1" * int(value["digits"]))  # noqa: F821 - Jython 2.7 built-in
+        if marker == "java-big-decimal":
+            return BigDecimal("1" * int(value["digits"]) + ".5")
         if marker == "TagPath":
             return _RecordedTagPath(value)
         if marker == "iteritems-object":

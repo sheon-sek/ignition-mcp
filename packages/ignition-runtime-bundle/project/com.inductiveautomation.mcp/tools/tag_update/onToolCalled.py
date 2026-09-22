@@ -264,49 +264,113 @@ def onToolCalled(builder, items):
 		return total
 
 	def countBytes(value, maxBytes):
-		# The observed walk's size for one text. It has no ceiling to check when the
-		# Preflight fingerprint conversion runs, so it counts nothing there.
+		# The observed walk's size for one rendered text (a Dataset's or a native
+		# object's own text). It has no ceiling to check when the Preflight fingerprint
+		# conversion runs, so it counts nothing there.
 		if maxBytes is None:
 			return 0
 		return utf8BytesBounded(value, maxBytes)
 
-	def configSize(value, depth):
-		# (bounded size, problem) with problem = (reason, requested, limit). The walk
-		# stops at the first ceiling it crosses, so an over-budget request is never
-		# measured in full.
+	def jsonStringBytes(value, budget):
+		# The JSON width of a string, quotes and escapes included: `"` and `\` cost two
+		# characters each and a control character the six-character \u00xx form, so a
+		# string is charged what the published JSON will carry rather than its raw
+		# bytes. The count stops at the budget it is checked against.
+		total = 2
+		for character in text(value):
+			code = ord(character)
+			if character == '"' or character == "\\":
+				total += 2
+			elif code < 32:
+				total += 6
+			else:
+				total += utf8CharacterBytes(character)
+			if total > budget:
+				return total
+		return total
+
+	def countJsonText(value, maxBytes):
+		# The observed walk's size for one string value or member key.
+		if maxBytes is None:
+			return 0
+		return jsonStringBytes(value, maxBytes)
+
+	def integerDigits(value):
+		# The decimal digits an integer emits, from above and without rendering it:
+		# log10(2) is 0.30103 and the two extra digits cover the rounding and the sign.
+		# `bit_length`/`bitLength` is O(1), so a Jython long or a Java BigInteger of any
+		# width is measured without producing its text.
+		bits = int(value.bit_length()) if isinstance(value, (int, long)) else int(value.bitLength())
+		if bits <= 0:
+			return 1
+		return (bits * 30103) // 100000 + 2
+
+	def integerBytes(value, floorBytes):
+		# D10: an integer emits its whole decimal text, so its digits are counted
+		# against the budget instead of a fixed cost; the floor keeps a small number's
+		# accounting what it was.
+		digits = integerDigits(value)
+		return digits if digits > floorBytes else floorBytes
+
+	def decimalBytes(value, floorBytes):
+		# The emitted width of a Java BigDecimal, from above and without rendering it:
+		# its precision, the zeros a positive scale adds, and the exponent form's tail.
+		digits = int(value.precision()) + max(int(value.scale()), 0) + 8
+		return digits if digits > floorBytes else floorBytes
+
+	def configSize(value, depth, budget, limit):
+		# (bounded size, problem) with problem = (reason, requested, limit). `budget` is
+		# what this configuration may still spend: its own byte ceiling, or the bytes the
+		# batch budget has left when that is smaller, passed down to every child so a scan
+		# that has spent the budget stops there instead of measuring the rest of the
+		# request. `limit` is the nominal ceiling the problem reports. Every member is
+		# charged its own JSON punctuation as well as its content, so a wide collection of
+		# empty members cannot hide behind them, and every count stops at the budget it is
+		# checked against.
 		if depth > CONFIG_MAX_DEPTH:
 			return (0, ("configOverDepth", depth, CONFIG_MAX_DEPTH))
 		if value is None or isinstance(value, bool) or isinstance(value, Boolean):
 			return (5, None)
 		if isinstance(value, basestring):
-			size = utf8BytesBounded(value, CONFIG_STRING_MAX_BYTES)
-			if size > CONFIG_STRING_MAX_BYTES:
-				return (size, ("configStringOverLimit", size, CONFIG_STRING_MAX_BYTES))
-			return (size, None)
-		if isinstance(value, (int, long, float, Number)):
+			# The string's own ceiling is the caller's text in UTF-8 bytes, which is what
+			# the contract and the advice state; the emitted JSON also pays for the quotes
+			# and the escapes, so the batch is charged that width.
+			raw = utf8BytesBounded(value, min(CONFIG_STRING_MAX_BYTES, budget))
+			if raw > CONFIG_STRING_MAX_BYTES:
+				return (raw, ("configStringOverLimit", raw, CONFIG_STRING_MAX_BYTES))
+			return (jsonStringBytes(value, budget), None)
+		if isinstance(value, (int, long)):
+			return (integerBytes(value, NUMERIC_INPUT_BYTES), None)
+		if isinstance(value, (float, Number)):
+			if isinstance(value, Number):
+				typeName = unicode(value.getClass().getName())
+				if typeName == "java.math.BigInteger":
+					return (integerBytes(value, NUMERIC_INPUT_BYTES), None)
+				if typeName == "java.math.BigDecimal":
+					return (decimalBytes(value, NUMERIC_INPUT_BYTES), None)
 			return (NUMERIC_INPUT_BYTES, None)
 		if isinstance(value, (dict, Map)):
 			keys = value.keys() if isinstance(value, dict) else [entry.getKey() for entry in value.entrySet()]
 			total = 2
 			for key in keys:
-				childSize, problem = configSize(value.get(key), depth + 1)
+				childSize, problem = configSize(value.get(key), depth + 1, max(budget - total, 0), limit)
 				if problem is not None:
 					return (0, problem)
-				total += utf8BytesBounded(unicode(key), CONFIG_MAX_BYTES) + childSize
-				if total > CONFIG_MAX_BYTES:
-					return (total, ("configOverByteBudget", total, CONFIG_MAX_BYTES))
+				total += 2 + jsonStringBytes(unicode(key), max(budget - total, 0)) + childSize
+				if total > budget:
+					return (total, ("configOverByteBudget", total, limit))
 			return (total, None)
 		if isinstance(value, (list, tuple, List)):
 			if len(value) > CONFIG_ARRAY_MAX_ELEMENTS:
 				return (0, ("configArrayOverLimit", len(value), CONFIG_ARRAY_MAX_ELEMENTS))
 			total = 2
 			for child in value:
-				childSize, problem = configSize(child, depth + 1)
+				childSize, problem = configSize(child, depth + 1, max(budget - total, 0), limit)
 				if problem is not None:
 					return (0, problem)
-				total += childSize
-				if total > CONFIG_MAX_BYTES:
-					return (total, ("configOverByteBudget", total, CONFIG_MAX_BYTES))
+				total += 1 + childSize
+				if total > budget:
+					return (total, ("configOverByteBudget", total, limit))
 			return (total, None)
 		return (64, None)
 
@@ -332,7 +396,9 @@ def onToolCalled(builder, items):
 	def objectValue(pairs, depth, maxDepth, maxBytes):
 		# The shared body of the three object shapes (plain dict, an object that only
 		# offers `iteritems`, java.util.Map): all three convert to one JSON object and
-		# are measured the same way, key bytes and child bytes included.
+		# are measured the same way. Every member pays for its own punctuation -- the
+		# comma, the quotes around the key and the colon -- as well as its key and child
+		# bytes, so a wide object cannot hide behind empty members.
 		total = 2
 		converted = {}
 		for key, child in pairs:
@@ -341,7 +407,7 @@ def onToolCalled(builder, items):
 				return (None, 0, problem)
 			key = unicode(key)
 			converted[key] = childValue
-			total += countBytes(key, maxBytes) + childSize
+			total += 2 + countJsonText(key, maxBytes) + childSize
 			if maxBytes is not None and total > maxBytes:
 				return (None, total, ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE))
 		return (converted, total, None)
@@ -349,7 +415,8 @@ def onToolCalled(builder, items):
 	def arrayValue(children, depth, maxDepth, maxBytes):
 		# The shared body of every array shape (list, tuple, java.util.List, a Java
 		# array that exposes getClass, the PyArray a Jython handler receives a Java array
-		# as): every element is measured as it is converted.
+		# as): every element is measured as it is converted and pays the comma that
+		# separates it, so a list of many empty members is still bounded by its width.
 		total = 2
 		converted = []
 		for child in children:
@@ -357,7 +424,7 @@ def onToolCalled(builder, items):
 			if problem is not None:
 				return (None, 0, problem)
 			converted.append(childValue)
-			total += childSize
+			total += 1 + childSize
 			if maxBytes is not None and total > maxBytes:
 				return (None, total, ("observedConfigurationOverBytes", total, maxBytes, OBSERVED_BYTES_ADVICE))
 		return (converted, total, None)
@@ -384,9 +451,9 @@ def onToolCalled(builder, items):
 		if isinstance(value, bool):
 			return (value, 5, None)
 		if isinstance(value, (int, long)):
-			return (value, 24, None)
+			return (value, integerBytes(value, 24), None)
 		if isinstance(value, basestring):
-			return (value, countBytes(value, maxBytes), None)
+			return (value, countJsonText(value, maxBytes), None)
 		if isinstance(value, Boolean):
 			return (value.booleanValue(), 5, None)
 		if isinstance(value, float):
@@ -395,15 +462,22 @@ def onToolCalled(builder, items):
 			return (value, 24, None)
 		if isinstance(value, Number):
 			typeName = unicode(value.getClass().getName())
-			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
+			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long"):
 				return (long(unicode(value)), 24, None)
+			if typeName == "java.math.BigInteger":
+				return (long(unicode(value)), integerBytes(value, 24), None)
 			if typeName == "java.math.BigDecimal":
+				# A decimal emits its whole precision, so its width is bounded before the
+				# text is rendered; only a decimal that fits is rendered at all.
+				digits = decimalBytes(value, 0)
+				if maxBytes is not None and digits > maxBytes:
+					return (None, 0, ("observedConfigurationOverBytes", digits, maxBytes, OBSERVED_BYTES_ADVICE))
 				text = unicode(value)
 				return boundedRenderedValue({"type": "decimal", "text": text}, text, maxBytes)
 			return configurationValue(float(value.doubleValue()), depth, maxDepth, maxBytes)
 		if isinstance(value, Date):
 			text = unicode(value.toInstant().toString())
-			return (text, countBytes(text, maxBytes), None)
+			return (text, countJsonText(text, maxBytes), None)
 		if isinstance(value, dict):
 			return objectValue(value.items(), depth, maxDepth, maxBytes)
 		if hasattr(value, "iteritems"):
@@ -810,22 +884,31 @@ def onToolCalled(builder, items):
 		if inputProblems:
 			return toolError("invalid_argument", "Every item must carry an absolute provider-qualified config path, the tcf1 fingerprint of that target's own tag_get_config read, and a non-empty configuration object; no item was executed.", {"reason": "preflightInputFailed", "items": inputProblems})
 		# D10 input ceilings: pure validation over the request, so an over-budget
-		# batch never reaches the policy read, let alone the Gateway.
+		# batch never reaches the policy read, let alone the Gateway. Every
+		# configuration is measured with the bytes the batch has left whenever that is
+		# smaller than the configuration's own ceiling, and that remainder is passed
+		# down through the walk, so a batch that is already over the aggregate budget
+		# stops the scan there instead of rescanning every item with a fresh budget.
 		totalInputBytes = 0
 		for index in range(len(paths)):
 			pathBytes = utf8BytesBounded(paths[index], PATH_MAX_BYTES)
 			if pathBytes > PATH_MAX_BYTES:
 				return toolError("limit_exceeded", "A target path is at least " + unicode(pathBytes) + " bytes, over the " + unicode(PATH_MAX_BYTES) + "-byte path ceiling (a reported byte amount is counted only up to that ceiling); no item was executed. " + PATH_ADVICE, {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES, "advice": PATH_ADVICE})
-			configBytes, problem = configSize(configurations[index], 1)
+			remaining = INPUT_MAX_BYTES - totalInputBytes - pathBytes - len(fingerprints[index])
+			itemBudget = CONFIG_MAX_BYTES if remaining > CONFIG_MAX_BYTES else max(remaining, 0)
+			configBytes, problem = configSize(configurations[index], 1, itemBudget, itemBudget)
 			if problem is not None:
+				if problem[0] == "configOverByteBudget" and itemBudget < CONFIG_MAX_BYTES:
+					# The configuration fits its own ceiling but not what the batch has
+					# left, so the refusal is the aggregate one.
+					counted = totalInputBytes + pathBytes + problem[1] + len(fingerprints[index])
+					return toolError("limit_exceeded", "The update batch is at least " + unicode(counted) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget (a reported byte amount is counted only up to that ceiling); no item was executed. " + INPUT_BYTES_ADVICE, {"reason": "inputOverByteBudget", "requested": counted, "limit": INPUT_MAX_BYTES, "advice": INPUT_BYTES_ADVICE})
 				advice = CONFIG_ADVICE[problem[0]]
 				bytesOverCeiling = problem[0] in ("configStringOverLimit", "configOverByteBudget")
 				counted = "at least " if bytesOverCeiling else ""
 				clause = " (a reported byte amount is counted only up to that ceiling)" if bytesOverCeiling else ""
 				return toolError("limit_exceeded", "A configuration is over the D10 " + problem[0] + " input ceiling with " + counted + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + clause + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
 			totalInputBytes += pathBytes + configBytes + len(fingerprints[index])
-		if totalInputBytes > INPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "The update batch is at least " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget (a reported byte amount is counted only up to that ceiling); no item was executed. " + INPUT_BYTES_ADVICE, {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES, "advice": INPUT_BYTES_ADVICE})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
