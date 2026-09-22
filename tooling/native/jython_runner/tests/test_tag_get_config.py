@@ -62,6 +62,19 @@ def test_the_read_token_and_the_update_it_authorizes_agree() -> None:
     assert structured["summary"]["succeeded"] == 1
 
 
+def test_a_folder_named_types_below_the_provider_is_not_the_definition_namespace() -> None:
+    """D30 6 names `[provider]_types_/...`. Only the first post-provider segment
+    selects the definition namespace, so a recursive read of an ordinary folder
+    called `_types_` is not the definition read and is not refused as one."""
+    structured = run_recorded_tool(
+        "tag_get_config", _fixture("tag_get_config-nested-folder-types-read")
+    )["structuredContent"]
+
+    assert structured["path"] == "[default]IgnitionMCP_CI/_types_/Probe"
+    assert structured["recursive"] is True
+    assert structured["summary"]["returned"] == 2
+
+
 def test_the_contract_separates_the_exact_definition_read_from_the_subtree_view() -> None:
     contract = json.loads(
         (ROOT / "contracts/tools/runtime/tag_get_config.contract.json").read_text(encoding="utf-8")

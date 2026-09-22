@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_get_config",
+  "parameterOrder": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "maxResults"
+  ],
+  "arguments": {
+    "path": "[default]IgnitionMCP_CI/_types_/Probe",
+    "recursive": true,
+    "overridesOnly": false,
+    "maxResults": 50
+  },
+  "calls": [
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/_types_/Probe",
+        true,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "name": "_types_",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/_types_/Probe",
+              "type": "native-object"
+            },
+            "tagType": "Folder",
+            "tags": [
+              {
+                "dataType": "Int4",
+                "enabled": true,
+                "name": "Probe",
+                "path": {
+                  "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+                  "text": "[default]IgnitionMCP_CI/_types_/Probe/Probe",
+                  "type": "native-object"
+                },
+                "tagType": "AtomicTag",
+                "value": 0,
+                "valueSource": "memory"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ]
+}

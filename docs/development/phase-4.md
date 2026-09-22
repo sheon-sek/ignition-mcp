@@ -402,11 +402,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   the shipped `tag_get_config` handler under Jython 2.7.4 over the same reads and
   requires the same fingerprints, including the non-ASCII, control-character,
   D28-null and escaped-reserved-key cases.
-- **Fixture-first coverage.** 8 recorded-Jython tests
-  (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over four golden
-  vectors, and 38 tests for `tag_update`
-  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 32 fixtures that
-  cover: the policy gate (missing, oversize, length mismatch, malformed,
+- **Fixture-first coverage.** 9 recorded-Jython tests
+  (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over five golden
+  vectors; 56 tests for `tag_update`
+  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 55 fixtures; and 5
+  tests for the `tag_get_config` definition read
+  (`tooling/native/jython_runner/tests/test_tag_get_config.py`) over 8 fixtures.
+  Together they cover: the policy gate (missing, oversize, length mismatch, malformed,
   explicit-null `auditProfile`, a broken own-key entry, a policy that names the
   Tool no allowlist at all), the item array bounds and every item-shape refusal
   (keys, path grammar, fingerprint form, empty config, and the three refused keys),
@@ -417,8 +419,11 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`conflict` with nothing dispatched), a missing target (`not_found`, never
   created), a Preflight read that raises, the `required`/`best_effort`/`off` audit
   paths, an item-scoped indeterminate native outcome, a dispatch that raises (the
-  item is `outcome_unknown` and later items are `not_executed`), and a failed or
-  empty observed read. The D29 runner gained the `system.tag.getConfiguration` and
+  item is `outcome_unknown` and later items are `not_executed`), a failed or
+  empty observed read, the reduction advice on every over-budget refusal, an
+  Observed read-back past the Observed depth ceiling (the item's Native outcome
+  survives it), and a folder named `_types_` below the provider's first segment in
+  both Tools. The D29 runner gained the `system.tag.getConfiguration` and
   `system.tag.configure` recordings, so a fixture proves the *absence* of a call
   as well as its result.
 - Contracts: `contracts/tools/runtime/tag_update.contract.json` (CONFIG, not
@@ -504,16 +509,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `policyTagUpdateMaxItems`), plus a 2048-byte path ceiling, a 16384-byte configuration-string
     ceiling, a 1000-element array ceiling, a nesting ceiling of 8, a 32768-byte per-configuration
     budget and one finite 65536-byte aggregate input budget. Every one of them is pure validation
-    over the request, refused with `limit_exceeded` (`requested` and `limit`) before the policy
-    read; the contract declares them as `inputBounds` and the linter checks them, including that
-    the named Policy field is part of the document schema.
+    over the request, refused with `limit_exceeded` (`requested`, `limit` and — since review round
+    2 — the `advice` that says how to split or reduce the request) before the policy read; the
+    contract declares them as `inputBounds` and the linter checks them, including that the named
+    Policy field is part of the document schema.
   - *Denied Mutations are audited (D08/D18).* A refused Target and a refused Precondition each
     write one bounded `decision` row and dispatch nothing; `off` records nothing, and `required`
     refuses the call (`auditAttemptFailed`, `phase=decision`) when the row cannot be written. The
     ordered D29 fixtures prove the denial produces exactly one audit call and no `configure`.
-  - *Outcome preservation.* The Observed state carries its own budget (16384 bytes per
-    configuration, 65536 bytes in total) measured on the raw native read before conversion, so an
-    over-budget configuration is an explicit `limit_exceeded` observed error; the serializer is
+  - *Outcome preservation.* The Observed state carries its own budget (16384 bytes and — since
+    review round 2 — 32 levels per configuration, 65536 bytes in total) measured by a walk over the
+    raw native read that runs before any conversion, so an over-budget configuration is an explicit
+    `limit_exceeded` observed error; the serializer is
     caught locally and the result is re-rendered without the Observed state instead of replacing
     the per-item Native outcomes, with a last-resort `limit_exceeded` that states the requested
     bytes, the limit and the outcome counts. The Native `diagnosticMessage` is bounded too.
@@ -542,6 +549,27 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     case still held, including the fingerprint recomputed from the published configuration with
     the corrected (single-encoding) verifier. CI, Phase 0 G0, Phase 3 G3, Phase 4 G4a and the REST
     row are green on the same head.
+- **Review round 2 fixes.** Two blockers and two nits, all addressed:
+  - *Every over-budget refusal carries reduction advice.* D10's third clause is now a stable
+    `advice` detail field on every `limit_exceeded` refusal — hard item ceiling, deployment item
+    limit, path bytes, configuration string/array/depth/bytes, batch bytes and output bytes — with
+    the same sentence in the message, and the contract declares
+    `inputBounds.overBudgetDetails: [requested, limit, advice]`. Every boundary fixture asserts the
+    advice, that it names the requested amount and the limit, and that the message contains it.
+  - *The Observed read-back is walked raw, with a depth ceiling.* `observedConfigurationSize` walks
+    the raw native value with a 16384-byte and a 32-level ceiling before `jsonValue` ever runs, so
+    a deep or oversized read-back is a per-item Observed `limit_exceeded` (requested amount, limit
+    and advice included) instead of a conversion that can recurse unbounded, an `upstream_error` or
+    an exhaustion. `tag_update-observed-configuration-over-depth` records 40 nested levels and
+    proves the completed Native outcome and `succeeded` summary survive; it failed with
+    `status: ok` before the fix.
+  - *The `_types_` grammar is positional in both Runtime handlers.* `tag_get_config` and
+    `tag_update` now read only the first post-provider segment, so `[provider]_types_/...` is the
+    definition namespace while a folder called `_types_` deeper in the path is an ordinary target —
+    the reading ticket #17 already recorded for the REST plane. Two new fixtures pin both.
+  - *The superseded outage entry is removed.* The Open-questions entry that blamed the missing
+    lane-head runs on a repository- or account-wide Actions fault is gone; the corrected entry that
+    records the `CONFLICTING` pull request is the only diagnosis left in the runbook.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
@@ -1000,20 +1028,6 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   `MERGEABLE` and every workflow run again on `16eb362`. The lesson for the coordinator: a lane
   that stops producing runs should be checked for `mergeable_state` before it is written off as an
   outage; the outage itself (23:49:41Z to 00:29:12Z) was real and affected every branch.
-- **Ticket #10 — GitHub Actions stopped creating `pull_request` runs for the lane head.** After
-  the `p4/runtime-fix` batch created its six runs at 23:49:41Z, no workflow run was created for the
-  repository at all: three pushes to `p4/runtime` (`25c8516`, `b5dde77`, `8593cb8`), a close/reopen
-  of draft PR #27 and a rerun of an older G4a row produced no new `github-actions` check suites for
-  those heads (only the `claude` app's suite appears), while the platform had accepted the same
-  repository's runs minutes earlier. A probe pull request (#33, opened and immediately closed, from
-  a throwaway branch at the same head) fired nothing either, so the cause is repository- or
-  account-wide rather than specific to this pull request. The lesson for the coordinator: the head's live row is
-  outstanding for that reason, not for a red result. Everything the head changes *after* the last
-  live row is either documentation or the harness's own batch-case expectation; the shipped
-  `tag_update` handler the live row exercised (`system.tag.exists` included) is byte-identical on
-  the head, and the local rehearsal plus the D29 and lint suites cover the rest. **For the owner:**
-  re-trigger the `phase4-live-g4b` workflow on the head when Actions accepts runs again, and confirm
-  whether the account's Actions limit was the cause.
 - **Ticket #10 — `tag_update` refuses three configuration keys beyond D30's text.** D30 §6
   says nothing about which properties a Tag CONFIG Mutation may merge, so the shipped handler
   refuses, with `invalid_argument`, the three keys that would leave its class or its target:
@@ -1027,11 +1041,33 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Ticket #10 — the D30 §6 `_types_` rule reads as "an entry that itself names `_types_`".**
   The decision says a UDT definition (`[provider]_types_/…`) is reachable "only when the Runtime
   Target Policy lists an explicit `_types_` prefix, and a bare `*` does not cover it". The shipped
-  rule is therefore: for a target with a `_types_` segment, at least one matching allowlist entry
-  must also carry a `_types_` segment. That makes `[default]_types_/IgnitionMCP_CI` reach
-  `[default]_types_/IgnitionMCP_CI/ProbeType`, and refuses both `*` and a plain
-  `[default]IgnitionMCP_CI` entry. **For the owner:** confirm, or say whether the entry must
-  repeat the target's own `_types_` prefix literally.
+  rule is therefore: for a target whose **first post-provider segment** is `_types_`, at least one
+  matching allowlist entry must also have `_types_` as its first post-provider segment. That makes
+  `[default]_types_/IgnitionMCP_CI` reach `[default]_types_/IgnitionMCP_CI/ProbeType`, and refuses
+  both `*` and a plain `[default]IgnitionMCP_CI` entry. The grammar is positional, per D30's
+  `[provider]_types_/…`: a folder that merely happens to be called `_types_` deeper in a path
+  (`[default]IgnitionMCP_CI/_types_/FolderTarget`) is an ordinary target, matched by the ordinary
+  allowlist, and `tag_get_config` reads it as an ordinary path too (review round 2). **For the
+  owner:** confirm, or say whether the entry must repeat the target's own `_types_` prefix
+  literally.
+- **Ticket #10 — review round 2 completed D10's third clause and bounded the Observed walk (fixed).**
+  Round 1 gave every over-limit refusal a `requested` and a `limit`, which is two of D10's three
+  clauses; the third — how to split or reduce the request — was missing everywhere, and the Observed
+  read-back was converted with `jsonValue` *before* its budget was measured on the raw value, in a
+  walk that had a byte ceiling but no depth ceiling. The handler now carries a stable `advice`
+  detail field on every `limit_exceeded` refusal (hard item ceiling, deployment item limit, path
+  bytes, configuration string/array/depth/bytes, batch bytes, output bytes) with the same sentence
+  repeated in the message, and the raw native read-back is walked with a 16384-byte *and* a 32-level
+  ceiling before `jsonValue` runs at all, so a deep or oversized configuration is a per-item
+  Observed `limit_exceeded` — requested amount, limit and advice included, and the item's Native
+  outcome untouched — rather than an `upstream_error` or an exhaustion. `inputBounds` declares
+  `observedConfigurationMaxDepth` and `overBudgetDetails: [requested, limit, advice]`;
+  `tag_update-observed-configuration-over-depth` (40 nested levels, completed outcome preserved)
+  and an advice assertion in every boundary fixture pin both, and each fixture was confirmed to
+  fail before the handler change. The same round made the D30 §6 `_types_` grammar positional in
+  both Runtime handlers, matching the reading ticket #17 already recorded for the REST plane.
+  **For the owner:** no decision; recorded because D10's third clause is now a contract field rather
+  than message prose.
 - **Ticket #10 — review round 1 adopted the #7 fix's D10 shape, including one shared linter helper.**
   `_check_input_bounds` is byte-identical to the helper the #7 fix introduces, but this lane calls it
   from the CONFIG path while that fix calls it from the shared `_check_runtime_mutation`, and this

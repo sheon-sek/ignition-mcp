@@ -55,11 +55,33 @@ def onToolCalled(builder, items):
 	NUMERIC_INPUT_BYTES = 32
 	# D10 output: the Observed state carries its own budget, so a configuration it
 	# cannot return never becomes the reason a completed change's outcomes
-	# disappear, and a Native diagnostic never runs unbounded either.
+	# disappear, and a Native diagnostic never runs unbounded either. A
+	# configuration is read back non-recursively, so its depth is bounded by the
+	# gateway's own node shape; the ceiling is four times the input depth ceiling
+	# and exists so the walk over the raw native value can never recurse without a
+	# bound, not to measure a legitimate read-back.
 	OBSERVED_CONFIGURATION_MAX_BYTES = 16384
+	OBSERVED_CONFIGURATION_MAX_DEPTH = 32
 	OBSERVED_STATE_MAX_BYTES = 65536
 	DIAGNOSTIC_MAX_BYTES = 256
 	OUTPUT_MAX_BYTES = 262144
+	# D10: an over-budget refusal states the requested amount, the applicable
+	# limit, and how to split or reduce the request. That last part is a stable
+	# `advice` detail field and the same sentence is repeated in the message, so a
+	# caller reading only the message still learns what to change.
+	ITEMS_HARD_ADVICE = "Split the batch into several calls of at most " + unicode(HARD_MAX_ITEMS) + " targets; the hard ceiling cannot be raised."
+	PATH_ADVICE = "Shorten the target path to at most " + unicode(PATH_MAX_BYTES) + " UTF-8 bytes, or update the Tag through a shorter parent path."
+	INPUT_BYTES_ADVICE = "Split the batch across several calls so each request stays inside the " + unicode(INPUT_MAX_BYTES) + "-byte input budget."
+	CONFIG_ADVICE = {
+		"configStringOverLimit": "Shorten the string value to at most " + unicode(CONFIG_STRING_MAX_BYTES) + " UTF-8 bytes, or move the text to a separate call.",
+		"configArrayOverLimit": "Prune the array to at most " + unicode(CONFIG_ARRAY_MAX_ELEMENTS) + " elements, or split the configuration across several calls.",
+		"configOverDepth": "Flatten the configuration to at most " + unicode(CONFIG_MAX_DEPTH) + " levels, and update a deeper child through its own target path.",
+		"configOverByteBudget": "Reduce the configuration to at most " + unicode(CONFIG_MAX_BYTES) + " bytes, or split it across several calls.",
+	}
+	OBSERVED_DEPTH_ADVICE = "The item's Native outcome above is unaffected; a configuration nested deeper than " + unicode(OBSERVED_CONFIGURATION_MAX_DEPTH) + " levels is not returned as Observed state, so re-read this target with tag_get_config or update a shallower target."
+	OBSERVED_BYTES_ADVICE = "The item's Native outcome above is unaffected; re-read this target with tag_get_config, or update fewer targets per call so the Observed state fits."
+	OBSERVED_STATE_ADVICE = "The item's Native outcome above is unaffected; update fewer targets per call and re-read the ones you need with tag_get_config."
+	OUTPUT_ADVICE = "Update fewer targets per call, use narrower configurations, and re-read the changed targets with tag_get_config."
 
 	def toolError(code, message, details):
 		error = {"code": code, "message": message, "correlationId": correlationId}
@@ -227,48 +249,69 @@ def onToolCalled(builder, items):
 			return (total, None)
 		return (64, None)
 
-	def valueBytesBounded(value, limit):
-		# The Observed half of the same idea: measuring what the Gateway returned
-		# must not itself materialize an unbounded value.
+	def observedConfigurationSize(value, depth, limit):
+		# D10: the Observed read-back is walked raw -- before any conversion -- with
+		# a depth ceiling as well as a byte ceiling, so a deeply nested or very large
+		# native value is refused here and never reaches the recursive jsonValue
+		# below. Measuring what the Gateway returned must not itself materialize an
+		# unbounded value. The walk stops at the first ceiling it crosses, so an
+		# over-budget read-back is never measured in full. Returns (size, problem)
+		# with problem = (reason, requested, limit, advice).
+		if depth > OBSERVED_CONFIGURATION_MAX_DEPTH:
+			return (0, ("observedConfigurationOverDepth", depth, OBSERVED_CONFIGURATION_MAX_DEPTH, OBSERVED_DEPTH_ADVICE))
 		if value is None:
-			return 4
+			return (4, None)
 		if isinstance(value, basestring):
-			return utf8Bytes(value)
+			return (utf8Bytes(value), None)
 		if isinstance(value, (bool, Boolean)):
-			return 5
+			return (5, None)
 		if isinstance(value, (int, long, float, Number)):
-			return 24
+			return (24, None)
 		if isinstance(value, (list, tuple, List)):
 			total = 2
 			for child in value:
-				total += valueBytesBounded(child, limit)
+				childSize, problem = observedConfigurationSize(child, depth + 1, limit)
+				if problem is not None:
+					return (0, problem)
+				total += childSize
 				if total > limit:
-					return total
-			return total
+					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
+			return (total, None)
 		if isinstance(value, Map):
 			total = 2
 			for entry in value.entrySet():
-				total += utf8Bytes(unicode(entry.getKey())) + valueBytesBounded(entry.getValue(), limit)
+				childSize, problem = observedConfigurationSize(entry.getValue(), depth + 1, limit)
+				if problem is not None:
+					return (0, problem)
+				total += utf8Bytes(unicode(entry.getKey())) + childSize
 				if total > limit:
-					return total
-			return total
+					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
+			return (total, None)
 		if isinstance(value, dict):
 			total = 2
 			for key in value:
-				total += utf8Bytes(unicode(key)) + valueBytesBounded(value[key], limit)
+				childSize, problem = observedConfigurationSize(value[key], depth + 1, limit)
+				if problem is not None:
+					return (0, problem)
+				total += utf8Bytes(unicode(key)) + childSize
 				if total > limit:
-					return total
-			return total
-		return 64
+					return (total, ("observedConfigurationOverBytes", total, limit, OBSERVED_BYTES_ADVICE))
+			return (total, None)
+		return (64, None)
 
-	def observedConfigurationProblem(value):
-		# The per-configuration half of the Observed-state budget. An over-budget
-		# configuration is an explicit observed error, never a silent truncation and
-		# never a reason to lose the item's Native outcome.
-		size = valueBytesBounded(value, OBSERVED_CONFIGURATION_MAX_BYTES)
-		if size > OBSERVED_CONFIGURATION_MAX_BYTES:
-			return "The Observed configuration is " + unicode(size) + " bytes, over the " + unicode(OBSERVED_CONFIGURATION_MAX_BYTES) + "-byte Observed-state configuration budget; it was not returned."
-		return None
+	def observedProblemMessage(problem):
+		# The per-configuration half of the Observed-state budget. D10: the refusal
+		# states the requested amount, the applicable limit and the reduction advice.
+		reason, requested, limit, advice = problem
+		if reason == "observedConfigurationOverDepth":
+			head = "The Observed configuration is nested " + unicode(requested) + " levels deep, over the " + unicode(limit) + "-level Observed-state depth budget"
+		elif reason == "observedStateOverByteBudget":
+			head = "Returning this configuration would take the Observed state to " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
+		elif reason == "observedStateBudgetSpent":
+			head = "The " + unicode(limit) + "-byte Observed-state budget is already spent, so this " + unicode(requested) + "-byte configuration is over it"
+		else:
+			head = "The Observed configuration is " + unicode(requested) + " bytes, over the " + unicode(limit) + "-byte Observed-state budget"
+		return head + "; it was not returned. " + advice
 
 	def observedError(path, code, message):
 		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
@@ -353,7 +396,12 @@ def onToolCalled(builder, items):
 		return value[0:index]
 
 	def isUdtDefinitionTarget(value):
-		return UDT_NAMESPACE in targetSegments(value)
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# target, matched by the ordinary allowlist.
+		segments = targetSegments(value)
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
 
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified prefixes matched at
@@ -386,11 +434,12 @@ def onToolCalled(builder, items):
 
 	def matchesUdtAllowlist(path, entries):
 		# D30 6: a UDT definition target needs an explicit _types_ entry; a bare *
-		# does not cover it, and the entry itself has to name the _types_ segment.
+		# does not cover it, and the entry itself has to name the _types_ segment the
+		# same positional way the target does.
 		for entry in entries:
 			if entry == WILDCARD:
 				continue
-			if UDT_NAMESPACE not in targetSegments(entry):
+			if not isUdtDefinitionTarget(entry):
 				continue
 			if matchesEntry(path, entry):
 				return True
@@ -560,7 +609,7 @@ def onToolCalled(builder, items):
 		if not isinstance(items, (list, tuple, List)) or len(items) == 0:
 			return toolError("invalid_argument", "items must be a non-empty array of {path, expectedFingerprint, config} items.", {"reason": "itemsNotAnArray"})
 		if len(items) > HARD_MAX_ITEMS:
-			return toolError("limit_exceeded", "items exceeds the hard limit of 100 targets.", {"reason": "itemsOverHardLimit", "requested": len(items), "limit": HARD_MAX_ITEMS})
+			return toolError("limit_exceeded", "items is " + unicode(len(items)) + " targets, over the hard limit of " + unicode(HARD_MAX_ITEMS) + "; no item was executed. " + ITEMS_HARD_ADVICE, {"reason": "itemsOverHardLimit", "requested": len(items), "limit": HARD_MAX_ITEMS, "advice": ITEMS_HARD_ADVICE})
 		paths = []
 		fingerprints = []
 		configurations = []
@@ -598,13 +647,14 @@ def onToolCalled(builder, items):
 		for index in range(len(paths)):
 			pathBytes = utf8Bytes(paths[index])
 			if pathBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
+				return toolError("limit_exceeded", "A target path is " + unicode(pathBytes) + " bytes, over the " + unicode(PATH_MAX_BYTES) + "-byte path ceiling; no item was executed. " + PATH_ADVICE, {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES, "advice": PATH_ADVICE})
 			configBytes, problem = configSize(configurations[index], 1)
 			if problem is not None:
-				return toolError("limit_exceeded", "A configuration is over a documented D10 input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+				advice = CONFIG_ADVICE[problem[0]]
+				return toolError("limit_exceeded", "A configuration is over the D10 " + problem[0] + " input ceiling with " + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
 			totalInputBytes += pathBytes + configBytes + len(fingerprints[index])
 		if totalInputBytes > INPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "The update batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
+			return toolError("limit_exceeded", "The update batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; no item was executed. " + INPUT_BYTES_ADVICE, {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES, "advice": INPUT_BYTES_ADVICE})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -624,7 +674,8 @@ def onToolCalled(builder, items):
 		if hasKey(policy, POLICY_MAX_ITEMS_FIELD):
 			effectiveMaxItems = int(policy.get(POLICY_MAX_ITEMS_FIELD))
 		if len(paths) > effectiveMaxItems:
-			return toolError("limit_exceeded", "items exceeds the deployment's limit of " + unicode(effectiveMaxItems) + " targets; split the batch or raise " + POLICY_MAX_ITEMS_FIELD + " in the Runtime Target Policy.", {"reason": "itemsOverPolicyLimit", "requested": len(paths), "limit": effectiveMaxItems})
+			policyAdvice = "Split the batch into several calls of at most " + unicode(effectiveMaxItems) + " targets, or raise " + POLICY_MAX_ITEMS_FIELD + " in the Runtime Target Policy."
+			return toolError("limit_exceeded", "items is " + unicode(len(paths)) + " targets, over the deployment's limit of " + unicode(effectiveMaxItems) + "; no item was executed. " + policyAdvice, {"reason": "itemsOverPolicyLimit", "requested": len(paths), "limit": effectiveMaxItems, "advice": policyAdvice})
 		if auditMode == "required" and not auditProfileAvailable(auditProfile):
 			# D30 6: the required-mode audit profile is checked before anything is
 			# executed and before any audit row is attempted.
@@ -746,26 +797,27 @@ def onToolCalled(builder, items):
 			path = paths[index]
 			try:
 				nativeConfiguration = system.tag.getConfiguration(path, False, False)
+				# D10: the raw native read-back is walked with both of its ceilings
+				# before it is converted, so a deeply nested or oversized configuration
+				# is refused as an explicit per-item Observed error instead of being
+				# materialized for the result -- and the item's Native outcome above is
+				# unaffected. Only a read-back that passed the walk is converted.
+				observedSize, problem = observedConfigurationSize(nativeConfiguration, 1, OBSERVED_CONFIGURATION_MAX_BYTES)
+				if problem is None and observedBudgetSpent:
+					problem = ("observedStateBudgetSpent", observedSize, OBSERVED_STATE_MAX_BYTES, OBSERVED_STATE_ADVICE)
+				if problem is None and observedBytes + observedSize > OBSERVED_STATE_MAX_BYTES:
+					problem = ("observedStateOverByteBudget", observedBytes + observedSize, OBSERVED_STATE_MAX_BYTES, OBSERVED_STATE_ADVICE)
+					observedBudgetSpent = True
+				if problem is not None:
+					observed.append(observedError(path, "limit_exceeded", observedProblemMessage(problem)))
+					continue
 				configuration = jsonValue(nativeConfiguration)
 				if not isinstance(configuration, (list, tuple, List)) or len(configuration) == 0:
 					raise TypeError("Observed configuration read returned no node")
-				# D10: the Observed state carries its own budget, measured on the raw
-				# native configuration before it is materialized for the result. An
-				# over-budget configuration is an explicit observed error; the item's
-				# Native outcome above is unaffected.
-				problem = observedConfigurationProblem(nativeConfiguration)
-				if problem is None and observedBudgetSpent:
-					problem = "The Observed-state budget of " + unicode(OBSERVED_STATE_MAX_BYTES) + " bytes is already spent; this configuration was not returned."
-				if problem is None and observedBytes + valueBytesBounded(nativeConfiguration, OBSERVED_CONFIGURATION_MAX_BYTES) > OBSERVED_STATE_MAX_BYTES:
-					problem = "The Observed state already holds " + unicode(observedBytes) + " bytes, so returning this configuration would pass the " + unicode(OBSERVED_STATE_MAX_BYTES) + "-byte budget; it was not returned."
-					observedBudgetSpent = True
-				if problem is not None:
-					observed.append(observedError(path, "limit_exceeded", problem))
-					continue
 				# The fingerprint is taken over the D28-encoded configuration, which is
 				# exactly what the domain-level encoding below publishes, so the raw
 				# value is stored and the encoding happens once.
-				observedBytes += valueBytesBounded(nativeConfiguration, OBSERVED_CONFIGURATION_MAX_BYTES)
+				observedBytes += observedSize
 				observed.append({"path": path, "status": "ok", "fingerprint": tagConfigFingerprint(encodeNulls(configuration)), "configuration": configuration})
 			except (Exception, JavaException) as itemExc:
 				logger.warn("correlationId=" + correlationId + " observed read failed for target=" + unicode(index) + ": " + text(itemExc))
@@ -791,7 +843,7 @@ def onToolCalled(builder, items):
 		if payloadBytes > OUTPUT_MAX_BYTES:
 			# D10: over-budget states what was requested, the limit, and what did
 			# execute, so a completed change is never silent.
-			return toolError("limit_exceeded", "The structured result is " + unicode(payloadBytes) + " bytes, over the " + unicode(OUTPUT_MAX_BYTES) + "-byte output ceiling, even without the Observed state; update fewer targets or use narrower configurations, and re-read with tag_get_config.", {"reason": "outputOverLimit", "requestedBytes": payloadBytes, "limitBytes": OUTPUT_MAX_BYTES, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
+			return toolError("limit_exceeded", "The structured result is " + unicode(payloadBytes) + " bytes, over the " + unicode(OUTPUT_MAX_BYTES) + "-byte output ceiling, even without the Observed state; the change itself is done. " + OUTPUT_ADVICE, {"reason": "outputOverLimit", "requestedBytes": payloadBytes, "limitBytes": OUTPUT_MAX_BYTES, "advice": OUTPUT_ADVICE, "requested": len(paths), "succeeded": succeeded, "failed": failed, "outcomeUnknown": outcomeUnknown, "auditRecorded": auditRecorded})
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " stage=" + stage + " tag_update failed: " + text(exc))
