@@ -452,6 +452,41 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     sentence to `name` and `level` and describes `diagnosticMessage` as a bounded
     512-byte prefix marked with `diagnosticMessageOverLimitBytes`. The schema is not a
     published Text Resource, so `tooling.native.sync_schemas` stays a no-op.
+  - **Live evidence (head `1133a9a`, draft PR #32, after the base sync):** `Phase 4 Live
+    Gateway G4a` run
+    [35686795695](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795695) is
+    **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}` on both, and every ticket #7 live case holds with the round-4 handler: the
+    allowlisted batch reported 3 Good + 1 `Bad_NotFound` with 0 `outcome_unknown` and
+    Observed state equal to what was written, the sibling denial and the whole-batch
+    Preflight refusal held, the reserved provider was refused under an explicit `*` with
+    its value unchanged, the policy Tag stayed unclobbered, and Runtime audit recorded two
+    rows for the correlation with the Service identity as actor. CI
+    [35686795696](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795696),
+    Phase 0 G0
+    [35686795753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795753),
+    Phase 3 G3
+    [35686795689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795689) and
+    `Phase 4 Live Gateway G4b`
+    [35686795721](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795721) are
+    green on the same head.
+    - The first `Phase 4 Live Gateway G4a` attempt on the fix head `b7df979` failed the
+      **8.3.9 row in "Validate the repository and build the probe fixture"**: Maven
+      Central's CDN answered `HTTP 404` for the pinned Jython JAR, which failed every
+      recorded-Jython test in that job; the rerun was green on both rows, and the fetch
+      retry above now makes that failure self-healing.
+    - The fix head could carry no `pull_request` runs while the base had moved past it —
+      GitHub computes no merge commit for a conflicting PR — so `origin/p4/runtime` was
+      merged into the fix branch. Both conflicts were additive (the policy document's new
+      budget fields, the runbook's Open questions) and both sides were kept.
+    - The first `Phase 4 Live Gateway REST mutation` attempt on the merged head, run
+      [35686795719](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795719),
+      failed the required 8.3.8 row in the **fault group only** (class-enabled and
+      class-disabled were green): `DriverError: the delay_response fault never forwarded
+      its request to the Gateway`, raised while `rest_driver.py` waited for the #20 fault
+      proxy. The 8.3.9 row passed on the same attempt, and nothing in this ticket touches
+      the REST plane or the proxy; the rerun was **green on both rows**. This is the same
+      #20 fault-proxy flake the base branch already records twice.
 
 ### Ticket #8: Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
 
