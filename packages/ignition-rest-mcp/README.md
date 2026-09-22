@@ -173,6 +173,20 @@ ambiguous dispatch whose read-back merely matches the intended state (another wr
 the same change) is `outcome_unknown`, and an ambiguous dispatch that changed nothing is
 `not_applied`.
 
+One resource is refused **by name inside an allowed type** (D30 §5, owner ruling 4): the
+`ignition/tag-provider` resource named `IgnitionMCPPolicy` is the provider the Runtime Target Policy
+lives in, and all four Tools refuse it with `permission_denied` **before** the Target allowlist is
+consulted, even under an explicit `*`. It is deliberately not an entry in the Refused resource types
+set: `ignition/tag-provider` stays an allowed type and every other Tag provider stays manageable. The
+whole name matches, never a substring — `IgnitionMCPPolicyStaging` is a different resource — and case
+is folded with surrounding whitespace ignored, fail-closed, because Ignition documents no rule for how
+two config resource names compare. A rename covers **both** of its names (D30 §3), so renaming another
+provider *into* the reserved name is refused as well as renaming the reserved provider away. The
+refusal is Mutation-only: `config_resource_get` still serves the resource, and the denial message names
+`ignition/tag-provider/IgnitionMCPPolicy`. Both refusals are decided from the Target's identity, so a
+refused call reads nothing and dispatches nothing; the D18 `decision` row records the Target-class
+reason (`denied:target-class:reserved-config-resource:ignition/tag-provider/IgnitionMCPPolicy`).
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

@@ -166,6 +166,61 @@ class ContractLintDriftTest(unittest.TestCase):
             with self.assertRaisesRegex(ContractError, "reserved Tag providers"):
                 lint_contracts(contracts)
 
+    def test_config_mutation_reserved_name_removal_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/config_resource_delete.contract.json",
+                lambda doc: doc.pop("reservedResourceNames"),
+            )
+            with self.assertRaisesRegex(ContractError, "reserved config resource"):
+                lint_contracts(contracts)
+
+    def test_config_mutation_reserved_name_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/config_resource_update.contract.json",
+                lambda doc: doc["reservedResourceNames"]["names"].append("IgnitionMCPPolicyStaging"),
+            )
+            with self.assertRaisesRegex(ContractError, "reserved config resource name"):
+                lint_contracts(contracts)
+
+    def test_rename_reserved_name_targets_drift_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/config_resource_rename.contract.json",
+                lambda doc: doc["reservedResourceNames"].update(targets=["name"]),
+            )
+            with self.assertRaisesRegex(ContractError, "Target name"):
+                lint_contracts(contracts)
+
+    def test_reserved_name_outside_a_config_mutation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "tools/rest/project_import.contract.json",
+                lambda doc: doc.update(reservedResourceNames={}),
+            )
+            with self.assertRaisesRegex(ContractError, "by name"):
+                lint_contracts(contracts)
+
+    def test_the_tag_provider_type_may_not_move_to_the_refused_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            contracts = self._copy(temp)
+            self._edit_json(
+                contracts / "shared/refused-resource-types.json",
+                lambda doc: (
+                    doc["allowed"].remove("ignition/tag-provider"),
+                    doc["refused"].append(
+                        {"resourceType": "ignition/tag-provider", "category": "D30 §5"},
+                    ),
+                ),
+            )
+            with self.assertRaisesRegex(ContractError, "stays allowed"):
+                lint_contracts(contracts)
+
 
 if __name__ == "__main__":
     unittest.main()
