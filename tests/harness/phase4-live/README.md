@@ -1,4 +1,4 @@
-# Phase 4 live Gateway harness — tickets #6, #7, #8 and #10
+# Phase 4 live Gateway harness — tickets #6–#12 and #21
 
 Ephemeral CI-owned evidence for the facts Phase 4 milestone 4a depends on:
 
@@ -94,6 +94,19 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
   Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs one milestone's driver stages against the recorded
   Gateway fake (`--stages 4a` by default, `--stages 4b` for ticket #10).
+- `apply_stage.py` (ticket #21, milestone 4d): drives the shipped
+  `ignition-mcp setup-native` CLI — `plan` -> `apply` -> `verify`, then a second
+  `plan`/`apply` that must be a `NO CHANGE` run that writes nothing — against the
+  Gateway row this workflow provisioned. It uses run-unique names for the Project
+  and the Server Config (so the first run really creates both), the deterministic
+  release the workflow built, the ticket #6 policy document and the harness's own
+  permissions tree. A verify that fails right after the write is re-run, bounded
+  and read-only, because a Gateway whose Module has not yet picked the new Project
+  or Server Config up answers the endpoint before it can serve it; a *write* is
+  never re-run. `--expected-origin` refuses any Gateway but the compose one.
+- `rehearse_apply.py`: builds the release into a temporary directory, starts the
+  recorded Gateway fake and runs `apply_stage.py` against it, so the stage is
+  rehearsed — writes, read-backs, idempotency — before a live Gateway is spent.
 - `../recorded_gateway.py`: replays the recorded Native REST and MCP bodies,
   including this ticket's `phase4/` fixtures.
 
@@ -191,6 +204,25 @@ through `GET /data/api/v1/tags/export`, the segment-boundary refusal, the D30 §
 `_types_` refusals and the explicit-entry pass-through, the reserved-provider
 refusal under an explicit `*`, a whole-batch Preflight refusal, and the Runtime
 audit rows for the call's correlation ID.
+
+## Apply stage (ticket #21)
+
+```bash
+uv run --no-sync python tests/harness/phase4-live/rehearse_apply.py
+uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
+  --base-url http://127.0.0.1:8093 --expected-origin 127.0.0.1:8093 \
+  --api-token "$CI_API_TOKEN" \
+  --bundle-manifest dist/release/ignition-runtime-bundle-<version>.manifest.json \
+  --bundle-zip dist/release/ignition-runtime-bundle-<version>.zip \
+  --evidence-dir artifacts/apply-<version> --source-revision "$(git rev-parse HEAD)" \
+  --project ignition_runtime_apply_<run> --server-config phase4-apply-runtime
+```
+
+The stage is the product under test, not a copy of it: the Workflow
+`.github/workflows/phase4-live-apply.yml` (milestone 4d, its own Gateway row and
+its own `phase4-live` environment reuse) runs it after the release build. It
+never shares a Gateway with the 4a/4b Mutation rows, because it writes deployment
+state — a Project, a Server Config and the reserved policy provider.
 
 ## Rehearsal
 

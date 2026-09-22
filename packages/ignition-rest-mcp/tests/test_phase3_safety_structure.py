@@ -200,6 +200,64 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
+def test_cli_write_routes_are_the_curated_set_of_ticket_21() -> None:
+    """Ticket #21: ``apply`` writes through one guarded module with named routes.
+
+    The CLI is excluded from the write-transport scan above (D25 code separation),
+    so its write half is pinned here instead: the route constants are exactly the
+    documented operations ``apply`` needs, every write dispatch goes through the
+    single ``_write`` chokepoint, and no other module in the package issues a
+    non-GET transport call. The only GET-shaped transport call in ``writer.py`` is
+    the bounded Project export.
+    """
+
+    cli_dir = SRC_ROOT / "cli" / "setup_native"
+    writer = cli_dir / "writer.py"
+    tree = _parse(writer)
+
+    routes: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.endswith("_PATH"):
+                    routes[target.id] = str(node.value.value)
+    assert routes == {
+        "PROJECT_IMPORT_PATH": "/data/api/v1/projects/import/{name}",
+        "PROJECT_EXPORT_PATH": "/data/api/v1/projects/export/{name}",
+        "RESOURCE_COLLECTION_PATH": "/data/api/v1/resources/{resource_type}",
+        "TAG_IMPORT_PATH": "/data/api/v1/tags/import",
+    }, sorted(routes)
+
+    chokepoints = {"_write": {"POST", "PUT"}, "_archive": {"GET"}}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name in chokepoints):
+            continue
+        for call in ast.walk(node):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
+                continue
+            if call.func.attr not in WRITE_METHOD_CALLS | {"stream"}:
+                continue
+            method = call.args[0] if call.args else None
+            if isinstance(method, ast.Constant):
+                allowed = chokepoints[node.name]
+                assert method.value in allowed, f"{node.name} issues {method.value}"
+            else:
+                # A non-literal method may only be the parameter the chokepoint received.
+                assert isinstance(method, ast.Name) and method.id == "method", (
+                    f"{node.name}:{call.lineno} dispatches an unvetted method"
+                )
+
+    for path in sorted(cli_dir.glob("*.py")):
+        if path.name in ("writer.py", "mcp_http.py"):
+            continue
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in WRITE_METHOD_CALLS
+            for node in ast.walk(_parse(path))
+        ), f"{path.name} issues a write-shaped transport call"
+
+
 # ------------------------------------------------------------------ 4. destructive declarations
 
 def test_destructive_registrations_match_the_tool_contracts() -> None:

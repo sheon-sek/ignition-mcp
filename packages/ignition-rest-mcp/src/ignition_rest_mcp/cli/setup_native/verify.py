@@ -25,7 +25,7 @@ from ignition_rest_mcp.cli.setup_native.doctor import (
     inventory_check,
     make_mcp,
 )
-from ignition_rest_mcp.cli.setup_native.inputs import Inputs
+from ignition_rest_mcp.cli.setup_native.inputs import Endpoint, Inputs
 from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
 
 #: Statuses that still count as verified.
@@ -93,27 +93,34 @@ async def _prompt_smokes(client: McpHttpClient, inputs: Inputs) -> list[Check]:
     return checks
 
 
-def verify_report(inputs: Inputs, checks: Sequence[Check], verified: bool, exit_code: int) -> dict[str, Any]:
+def verify_report(
+    inputs: Inputs, checks: Sequence[Check], verified: bool, exit_code: int, endpoint: Endpoint | None
+) -> dict[str, Any]:
     return {
         "command": "verify",
         "manifest": str(inputs.manifest_path),
         "bundleVersion": inputs.bundle_version,
         "profile": inputs.profile,
-        "mcpUrl": None if inputs.mcp_url is None else inputs.mcp_url.url,
+        "mcpUrl": None if endpoint is None else endpoint.url,
         "checks": [check.as_dict() for check in checks],
         "verified": verified,
         "exitCode": exit_code,
     }
 
 
-async def run(
+async def collect(
     inputs: Inputs,
     *,
     mcp_transport: httpx.AsyncBaseTransport | None = None,
-) -> int:
-    """Execute the verify sequence; exit 0 only when every check passed or was not applicable."""
+) -> tuple[dict[str, Any], list[str], int]:
+    """Execute the verify sequence and return its report, text lines and exit code.
+
+    ``apply`` embeds the report, so the sequence is exposed as data rather than as
+    a second JSON document on stdout; ``run`` is the printer.
+    """
 
     checks: list[Check] = []
+    endpoint = inputs.runtime_endpoint()
     async with make_mcp(inputs, mcp_transport) as client:
         try:
             answer = await client.reachability()
@@ -132,7 +139,7 @@ async def run(
                 )
             )
             return _finish(inputs, checks)
-        checks.append(Check("endpoint-reachable", PASS, f"{inputs.mcp_url.url if inputs.mcp_url else '?'} {answer}"))
+        checks.append(Check("endpoint-reachable", PASS, f"{endpoint.url if endpoint else '?'} {answer}"))
 
         try:
             await client.initialize()
@@ -172,10 +179,21 @@ async def run(
     return _finish(inputs, checks)
 
 
-def _finish(inputs: Inputs, checks: Sequence[Check]) -> int:
+def _finish(inputs: Inputs, checks: Sequence[Check]) -> tuple[dict[str, Any], list[str], int]:
     verified = all(check.status in _OK for check in checks)
     exit_code = 0 if verified else 1
     lines = [f"{check.status:<15}{check.name}: {check.detail}" for check in checks]
     lines.append(f"verify: verified={str(verified).lower()} => exit {exit_code}")
-    emit(inputs, verify_report(inputs, checks, verified, exit_code), lines)
+    return verify_report(inputs, checks, verified, exit_code, inputs.runtime_endpoint()), lines, exit_code
+
+
+async def run(
+    inputs: Inputs,
+    *,
+    mcp_transport: httpx.AsyncBaseTransport | None = None,
+) -> int:
+    """Execute the verify sequence; exit 0 only when every check passed or was not applicable."""
+
+    report, lines, exit_code = await collect(inputs, mcp_transport=mcp_transport)
+    emit(inputs, report, lines)
     return exit_code

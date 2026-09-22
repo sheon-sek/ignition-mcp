@@ -19,8 +19,14 @@ from pathlib import Path
 from typing import Any, NoReturn, Sequence
 from urllib.parse import urlsplit
 
-COMMANDS = ("doctor", "plan", "verify")
+COMMANDS = ("doctor", "plan", "verify", "apply")
 PROFILE_NAMES = ("readonly", "operator", "configurator", "full")
+
+#: The Resource type and collection ``apply`` writes the MCP Server Config through
+#: (D20: Native REST only, never the filesystem). D30 §5 refuses that type to the
+#: generic config Mutations, which is why ``apply`` has its own curated writer.
+SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
+CONFIG_COLLECTION = "core"
 
 ENV_GATEWAY_URL = "IGNITION_MCP_SETUP_GATEWAY_URL"
 ENV_MCP_URL = "IGNITION_MCP_SETUP_MCP_URL"
@@ -79,14 +85,15 @@ COMPATIBILITY_STATUSES = frozenset({"SUPPORTED", "UNTESTED", "INCOMPATIBLE", "UN
 _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 _SHA40 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+#: A resource, project or Server Config name this CLI is willing to address.
+NAME_TOKEN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 EXIT_CODE_DOC = """\
 exit codes:
   0  command completed with no FAIL (doctor/verify) and no BLOCKED (plan)
   1  a check failed or a transport error occurred
   2  usage error: bad flags, unreadable/invalid manifest, credential file rejected
-  3  plan reports at least one BLOCKED action
+  3  plan reports at least one BLOCKED action (apply writes nothing and exits 3)
 """
 
 ENV_DOC = f"""\
@@ -97,9 +104,10 @@ environment fallbacks (flags win):
   {ENV_MCP_TOKEN}      bearer token for a secured/static-auth MCP endpoint
 
 Token files must be regular, non-symlink files readable only by their owner
-(mode 0600) holding exactly one non-empty line.  No command in this group
-mutates a Gateway: ``apply`` (Phase 4) and ``install-module`` (Phase 6) do not
-exist yet, so ``plan`` only ever reports intentions.
+(mode 0600) holding exactly one non-empty line.  ``apply`` writes the bundle
+project, the Server Config and the Runtime Target Policy through documented
+Native REST routes and stops before it writes while any plan line is BLOCKED;
+``install-module`` (Phase 6) does not exist yet.
 """
 
 
@@ -150,6 +158,12 @@ class Inputs:
     timeout_seconds: float
     allow_insecure_authorize: bool
     as_json: bool
+    #: ``apply`` inputs (D20). The two documents are loaded and validated by the
+    #: command that needs them, so ``plan`` can run without them.
+    policy_file: Path | None = None
+    permissions_file: Path | None = None
+    acknowledge_upgrade: bool = False
+    backup_dir: Path | None = None
 
     @property
     def bundle_version(self) -> str:
@@ -162,6 +176,21 @@ class Inputs:
 
     def tested_tuples(self) -> list[dict[str, Any]]:
         return tested_tuples(self.manifest)
+
+    def runtime_endpoint(self) -> Endpoint | None:
+        """The Runtime MCP endpoint to verify: ``--mcp-url``, else the Server Config path."""
+
+        if self.mcp_url is not None:
+            return self.mcp_url
+        if self.server_config_name is None:
+            return None
+        base = self.gateway_url
+        return Endpoint(
+            url=f"{base.url}/data/mcp/{self.server_config_name}",
+            scheme=base.scheme,
+            host=base.host,
+            port=base.port,
+        )
 
 
 def manifest_inventory(manifest: dict[str, Any], profile: str, key: str) -> list[str]:
@@ -204,6 +233,14 @@ def build_base_parser() -> UsageParser:
                        help="expected MCP server-config resource name (presence check only)")
     flags.add_argument("--timeout-seconds", type=float, default=DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS",
                        help=f"per-request HTTP budget ({DEFAULT_TIMEOUT_SECONDS:g}s; MCP initialize {MCP_TIMEOUT_SECONDS:g}s)")
+    flags.add_argument("--policy-file", metavar="PATH",
+                       help="Runtime Target Policy JSON document apply writes to the reserved Tag provider")
+    flags.add_argument("--server-config-permissions-file", metavar="PATH",
+                       help="permissions tree for a Server Config this run creates (never invented by the CLI)")
+    flags.add_argument("--acknowledge-upgrade", action="store_true",
+                       help="accept a MAJOR or downgrade bundle change (plan marks those lines)")
+    flags.add_argument("--backup-dir", metavar="PATH",
+                       help="before overwriting a managed bundle project, export the deployed one into this directory")
     flags.add_argument("--allow-insecure-authorize", action="store_true",
                        help="send the API token over plain HTTP to a non-loopback Gateway")
     flags.add_argument("--json", action="store_true", dest="as_json", help="machine-readable report on stdout")
@@ -229,6 +266,7 @@ _COMMAND_HELP = {
     "doctor": "Read-only diagnosis of a Runtime Bundle deployment (never mutates anything).",
     "plan": "Report the CREATE / UPDATE / NO CHANGE / BLOCKED intentions for a deployment.",
     "verify": "Verify a provisioned deployment: exact inventories, resource/prompt smokes, bundle_info.",
+    "apply": "Apply the planned bundle project, Server Config and Runtime Target Policy, then verify.",
 }
 
 
@@ -292,6 +330,30 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
     if not 0.0 < timeout <= MAX_TIMEOUT_SECONDS:
         raise UsageError(f"--timeout-seconds must be in (0, {MAX_TIMEOUT_SECONDS:g}]")
 
+    server_config_name = (
+        None
+        if namespace.server_config_name is None
+        else _require_name(_text(namespace.server_config_name, "--server-config-name"), "--server-config-name")
+    )
+    policy_file = _optional_path(_text_or_none(namespace.policy_file), "--policy-file")
+    permissions_file = _optional_path(
+        _text_or_none(namespace.server_config_permissions_file), "--server-config-permissions-file",
+    )
+    backup_dir = _optional_path(_text_or_none(namespace.backup_dir), "--backup-dir")
+    if command == "apply":
+        missing = [
+            flag for flag, value in (
+                ("--server-config-name", server_config_name),
+                ("--bundle-zip", bundle_zip),
+                ("--policy-file", policy_file),
+            ) if value is None
+        ]
+        if missing:
+            raise UsageError(
+                f"apply needs {', '.join(missing)}: it writes that Server Config, that project "
+                "archive and that Runtime Target Policy document"
+            )
+
     return Inputs(
         command=command,
         manifest_path=manifest_path,
@@ -301,15 +363,23 @@ def load_inputs(argv: Sequence[str], command: str) -> Inputs:
         bundle_zip=bundle_zip,
         profile=profile,
         bundle_project=_require_name(_text_or_none(namespace.bundle_project) or DEFAULT_BUNDLE_PROJECT, "--bundle-project"),
-        server_config_name=(None if namespace.server_config_name is None
-                            else _require_name(_text(namespace.server_config_name, "--server-config-name"),
-                                               "--server-config-name")),
+        server_config_name=server_config_name,
         gateway_token=gateway_token,
         mcp_token=mcp_token,
         timeout_seconds=timeout,
         allow_insecure_authorize=bool(namespace.allow_insecure_authorize),
         as_json=bool(namespace.as_json),
+        policy_file=policy_file,
+        permissions_file=permissions_file,
+        acknowledge_upgrade=bool(namespace.acknowledge_upgrade),
+        backup_dir=backup_dir,
     )
+
+
+def _optional_path(value: str | None, flag: str) -> Path | None:
+    if value is None or not value.strip():
+        return None
+    return _require_path(value.strip(), flag)
 
 
 def validate_manifest(document: Any) -> dict[str, Any]:
@@ -485,7 +555,7 @@ def _require_path(raw: str, flag: str) -> Path:
 
 def _require_name(value: str, flag: str) -> str:
     name = value.strip()
-    if _NAME_TOKEN.fullmatch(name) is None:
+    if NAME_TOKEN.fullmatch(name) is None:
         raise UsageError(f"{flag}: {value!r} must match [A-Za-z0-9][A-Za-z0-9._-]{{0,63}}")
     return name
 

@@ -13,6 +13,7 @@ from pathlib import Path
 import threading
 from typing import Any
 import urllib.parse
+import re
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,6 +36,10 @@ _OPENAPI_OPERATIONS = (
     # read its verification uses.
     ("delete", "/data/alarm-notification/api/v1/pipeline"),
     ("get", "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"),
+    # Ticket #21: the Server Config create and modify routes `setup-native apply`
+    # writes through (never `config_resource_*`, which refuses the type by design).
+    ("post", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
+    ("put", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
     ("get", "/data/api/v1/resources/type/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/names/ignition.gateway/idp-links"),
     ("get", "/data/api/v1/resources/list/ignition.gateway/idp-links"),
@@ -96,6 +101,17 @@ _RENAME_ROUTE_PREFIX = "/data/api/v1/resources/rename/"
 #: parameter's own example says (``core``). D30's owner ruling 5 pins generic config
 #: Mutations to it explicitly, so every request a Mutation makes names it.
 DEFAULT_COLLECTION = "core"
+
+#: The D20 ownership marker a managed Runtime Bundle Project carries in the last line
+#: of its description. Ticket #21 models what the Module reports: a Project that was
+#: *imported* carries its own bundle version, so `bundle_info` follows it.
+_MANAGED_MARKER_RE = re.compile(r"^ignition-mcp-managed:\s*product=(\S+)\s*;\s*bundle=(\S+)\s*$")
+MANAGED_PRODUCT = "ignition-runtime-bundle"
+
+#: The MCP Module's own Server Config resource type. ``setup-native apply`` writes it
+#: through the type's collection routes; D30 §5 refuses it to the generic config
+#: Mutations, which is exactly why apply has its own curated path.
+SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
 
 
 def _resource_type_segment(path: str) -> str | None:
@@ -454,14 +470,19 @@ def _record_tag_import(server: Any, body: bytes) -> None:
         return
     if not isinstance(document, dict):
         return
-    for entry in document.get("tags") or []:
-        if not isinstance(entry, dict):
-            continue
+    entries = [entry for entry in document.get("tags") or [] if isinstance(entry, dict)]
+    for entry in entries:
         value = entry.get("value")
         if entry.get("name") == "RuntimeTargetPolicy" and isinstance(value, str):
             server.policy_value = value
         if isinstance(value, str) and "WriteProbe" == entry.get("name"):
             server.write_probe_value = value
+    if entries:
+        # Ticket #21: what the provider *serves* is what was imported, so
+        # `setup-native apply`'s read-back (and its declared-length companion) can be
+        # compared with the document it wrote. Before the first import the recorded
+        # provider export fixture answers instead.
+        server.served_policy_tags = entries
 
 
 def _tag_read_replay(server: Any, arguments: dict[str, Any]) -> dict[str, Any] | None:
@@ -1217,9 +1238,9 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 return
             self._json(200, _fixture("phase4/tag-provider-find.json"))
             return
-        if path.startswith("/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/"):
-            self._json(200, {"name": "phase3-runtime"})
-            return
+        # Ticket #21: the Server Config find answers from the modelled resource state
+        # (``server.resources``), exactly as every other config-resource read does, so
+        # a config apply created is readable and a config that is not there is a 404.
         if path.startswith("/data/api/v1/resources/"):
             payload = server.read_resource(
                 path,
@@ -1237,9 +1258,13 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 if not server.policy_provider_created:
                     self._json(404, {"message": "No tag provider", "status": "404"})
                     return
-                self._send(200, json.dumps(
-                    _fixture("phase4/tag-export.json"), separators=(",", ":"),
-                ).encode("utf-8"), "application/octet-stream")
+                served = server.served_policy_tags
+                document = (
+                    {"name": "", "tagType": "Provider", "tags": served}
+                    if served else _fixture("phase4/tag-export.json")
+                )
+                self._send(200, json.dumps(document, separators=(",", ":")).encode("utf-8"),
+                           "application/octet-stream")
                 return
             if provider in server.tags:
                 # Phase 4 ticket #17: a modelled provider exports its own state, so an
@@ -1364,7 +1389,7 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                         "content": [{"type": "text", "text": "recorded replay"}],
                         "isError": False,
                         "structuredContent": {
-                            "bundleVersion": server.bundle_version,
+                            "bundleVersion": server.deployed_bundle_version(),
                             "bundleSourceRevision": server.source_revision,
                             "gatewayVersion": "8.3.8 (b2026071409)",
                             "mcpModuleVersion": "1.3.5-SNAPSHOT",
@@ -1723,6 +1748,9 @@ class _Server(http.server.ThreadingHTTPServer):
         #: from the configuration the fake serves.
         self.tag_state_provider = "default"
         self.policy_value = ""
+        #: Ticket #21: the Tags the reserved provider currently serves (the last
+        #: imported document), so an apply read-back sees what it wrote.
+        self.served_policy_tags: list[dict[str, Any]] = []
         self.write_probe_value = "phase4-write-probe-value"
         #: Ticket #10: the Tag configuration the fake serves, keyed by exact path.
         #: `tag_get_config` answers from it and `tag_update` merges into it, so a
@@ -1769,6 +1797,65 @@ class _Server(http.server.ThreadingHTTPServer):
         #: A and the D16 pre-import re-export A').
         self.exports_served = 0
         self.project_change_after: tuple[str, int, dict[str, bytes]] | None = None
+        self._seed_server_config(runtime_tools, bundle_version)
+
+    def deployed_bundle_version(self) -> str:
+        """The bundle version the served Project reports, as the Module's handler reads it.
+
+        Ticket #21: ``setup-native apply`` imports the Project, so the bundle a
+        deployment now serves is the imported one. A Project that was seeded without
+        an import (the harness deploys by copying) keeps the configured version.
+        """
+
+        for name in reversed(self.imports):
+            archive = self.projects.get(name)
+            if archive is None:
+                continue
+            try:
+                document = json.loads(_zip_entries(archive)["project.json"])
+            except (KeyError, ValueError, zipfile.BadZipFile):
+                continue
+            description = document.get("description")
+            if not isinstance(description, str) or not description.strip():
+                continue
+            match = _MANAGED_MARKER_RE.fullmatch(description.rstrip().splitlines()[-1].strip())
+            if match is not None and match.group(1) == MANAGED_PRODUCT:
+                return match.group(2)
+        return self.bundle_version
+
+    def _seed_server_config(self, runtime_tools: tuple[str, ...], bundle_version: str) -> None:
+        """Publish the deployed MCP Server Config the harness workflows deploy by hand.
+
+        Ticket #21: an explicit Tool list and a permissions tree, so ``setup-native
+        plan``/``apply`` read and reconcile the same document shape the live harness
+        copies onto the Gateway. A config apply creates lands in the same state
+        through the modelled collection routes.
+        """
+
+        self.resources[SERVER_CONFIG_TYPE] = {
+            ("phase3-runtime", DEFAULT_COLLECTION): {
+                "type": "server-config",
+                "name": "phase3-runtime",
+                "enabled": True,
+                "description": "",
+                "collection": DEFAULT_COLLECTION,
+                "signature": self.next_signature(),
+                "config": {
+                    "title": "Phase 3 Runtime Readonly",
+                    "version": bundle_version,
+                    "permissions": {
+                        "type": "AllOf",
+                        "securityLevels": [{
+                            "name": "Authenticated",
+                            "children": [{"name": "IgnitionMcpCi", "children": []}],
+                        }],
+                    },
+                    "tools": {"project/ignition_runtime": list(runtime_tools)},
+                    "resources": {"project/ignition_runtime": "*"},
+                    "prompts": {"project/ignition_runtime": "*"},
+                },
+            },
+        }
 
     # ------------------------------------------------------- projects
 
@@ -2605,6 +2692,15 @@ class RecordedGateway:
         """The Project archive the Gateway currently serves for ``name``."""
 
         return self._server.projects.get(name)
+
+    def served_policy_tags(self) -> list[dict[str, Any]]:
+        """The Tags the reserved policy provider currently serves.
+
+        Ticket #21: the provider's own state after the last import, so a case can
+        assert what ``setup-native apply`` left in it without a second HTTP read.
+        """
+
+        return list(self._server.served_policy_tags)
 
     def change_project_out_of_band(self, name: str, entries: dict[str, bytes]) -> None:
         """Change a Project without the MCP server, as another operator would; a

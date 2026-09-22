@@ -1434,6 +1434,96 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     rows** (attempt 2, same run id, artifacts re-read). Recorded rather than hidden; nothing
     in this ticket touches the Project-import path.
 
+### Ticket #21 — `setup-native apply`: bundle project, Server Config and Runtime Target Policy (milestone 4d)
+
+- **The command exists and is plan-driven.** `ignition-mcp setup-native apply` observes
+  the Gateway exactly as `plan` does, refuses to write while any line is `BLOCKED`, and
+  then executes the printed intentions in order: the bundle Project (`CREATE`, or
+  `UPDATE` of a MANAGED project), the MCP Server Config for the selected profile, the
+  Runtime Target Policy in the reserved provider. It ends by running the D20 `verify`
+  sequence and embeds that report in its own (`--json`), so one run yields one document.
+- **The write path is curated and separate from `config_resource_*`.** `writer.py` holds
+  one method per documented route — `POST /projects/import/{name}`,
+  `GET /projects/export/{name}`, the `com.inductiveautomation.mcp/server-config`
+  collection routes, `POST /resources/ignition/tag-provider` and
+  `POST /tags/import` — with every path built from a module constant. Guards run before
+  dispatch: a name must match the CLI's name grammar, a Tool list must be explicit
+  (never `*`), the reserved provider name is a constant, and a Server Config is never
+  written without a permissions tree. Every response is size-bounded and every error
+  message is scrubbed of the API token.
+- **The policy is the operator's document, capped and read back.** `--policy-file` is
+  validated against `contracts/shared/runtime-target-policy.schema.json`, canonicalized
+  (sorted keys, compact separators) and refused above the product-enforced 32 KiB cap,
+  before anything is written. The write is the policy Tag plus its declared-length
+  companion; the import keeps D30 owner ruling 1's shape — `Abort` on a fresh provider,
+  retries idempotent with `MergeOverwrite` under a bounded deadline (ticket #6 recorded a
+  freshly created provider answering the first import with `Bad 776`), and the served
+  document is confirmed by a `/tags/export` read-back, repaired once if it disagrees.
+- **The Server Config carries the profile's explicit Tool list.** A `CREATE` writes the
+  config disabled, reads it back, then enables it with the signature the read-back
+  returned (D20's recommended order); an `UPDATE` reconciles the Tool list in one write
+  and preserves the observed `enabled` and every other operator-held field. The
+  permissions tree is either the operator's `--server-config-permissions-file` or the
+  deployed one, and a create without either is a `BLOCKED` line — this CLI never opens
+  an unauthenticated MCP endpoint (Security Level provisioning stays issue #22).
+- **Fixture-first coverage.** `tests/harness/recorded_gateway.py` now models the Server
+  Config collection routes and find from resource state, and serves the policy provider's
+  Tags from the last import, so a read-back sees what was written; `bundle_info` reports
+  the bundle version of the *imported* Project. 14 cases in
+  `packages/ignition-rest-mcp/tests/test_phase4_setup_native_apply.py` drive the command
+  end to end against that fake: plan CREATEs, apply writes all three and verifies, a
+  second plan is `NO CHANGE` and a second apply writes nothing, a `BLOCKED` line stops
+  apply before any write, a create without permissions is refused, a `*` Tool list can
+  never be written, a drifted config is reconciled with the operator's fields preserved,
+  a Gateway refusal stops the sequence and still verifies, the cap and the policy schema
+  are enforced before any write, a MAJOR change needs `--acknowledge-upgrade`, and the
+  token never reaches the output. The Phase 3 pins that asserted `apply` was absent were
+  updated (deliberately), and the CLI structural scan gained a pin for the curated route
+  set and the single write chokepoint.
+- **Local rehearsal.** `tests/harness/phase4-live/rehearse_apply.py` builds the release
+  into a temporary directory, starts the recorded Gateway fake and runs the live stage
+  against it: `plan` → `apply` (three CREATES) → `verify`, then a second `plan`/`apply`
+  pair that is `NO CHANGE` on all three lines and writes nothing. Green before the live
+  run, and it is a step of the workflow as well.
+- **Live.** Workflow `Phase 4 Live Gateway apply`
+  (`.github/workflows/phase4-live-apply.yml`), its own Gateway row for milestone 4d so
+  the 4a/4b Mutation evidence keeps its own Gateways: run <RUN_ID>, both rows green on
+  8.3.8 `2026071409` (required) and 8.3.9 `2026082511` (candidate), with the stage
+  evidence in `phase4-apply-<version>-<run>/setup-native-apply.json`.
+- **Frozen gates** green on the same head: CI and the Phase 0/1/2/3 rows.
+
+- **Ticket #21 — the harness's test-only policy provisioning is not replaced yet.**
+  The 4a/4b driver stages still call `install_policy`/`install_tag_*_policy` (the
+  ticket #6 sanctioned test-only path), because moving them onto `apply` would mean
+  re-driving the milestone 4a/4b Mutation stages through the CLI inside the same
+  Gateway row they already ran on, and that risks the frozen G4a/G4b evidence for no
+  new fact. The live proof of the apply write path is the dedicated milestone-4d row
+  (`.github/workflows/phase4-live-apply.yml`), which writes the same provider and
+  document through `apply` and reads it back. **Follow-up:** once the apply row has
+  proven stable, switch the 4a/4b `*-setup` stages to `apply` so there is exactly one
+  provisioning path. Recorded here per the ticket's "replace it where practical" clause.
+- **Ticket #21 — `apply` confirms the policy write with a REST read-back, not a
+  handler-scope read.** The CLI has no Runtime Tool to read the policy through, so it
+  compares the exported Tag value and declared length with the document it wrote, and
+  repairs once by re-importing. The handler-scope read of the same provider is what the
+  ticket #7/#8/#10 live stages exercise, and the module serves the same bytes. A
+  `setup-native` handler-scope confirmation would need either a shipped read Tool or a
+  probe Tool, and neither belongs to the product. **For the owner:** accept the REST
+  read-back as apply's confirmation, or name the Tool that should confirm it.
+- **Ticket #21 — the create path disables and then enables the Server Config, the
+  update path does not touch enablement.** D20's recommended order is "create disabled
+  → validate → enable", which is what a `CREATE` does here (four bounded calls,
+  read-back included); an `UPDATE` reconciles the Tool list in one write and preserves
+  the observed `enabled`, because re-enabling a config an operator deliberately disabled
+  would be a change `plan` never showed. **For the owner:** confirm that reading, or ask
+  for an update to end enabled as well.
+- **Ticket #21 — apply keeps no local backup unless asked.** D20's transaction model
+  lists a snapshot before a replace; the CLI does it with `--backup-dir`, which exports
+  the deployed Project before an overwrite and fails the run if the export or the write
+  fails. Without the flag there is no local copy and no rollback (the ticket's rule),
+  and the Gateway's own configuration backup remains the operator's safety net.
+  **For the owner:** confirm the opt-in shape, or make the backup mandatory.
+
 ## Open questions
 
 - **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
