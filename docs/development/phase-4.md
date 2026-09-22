@@ -679,6 +679,15 @@ only, and records the rest as deferred work rather than doing it now.
   native call answers a Bad collision, and the post-failure check answers true. Both fail on
   `a3ab3fc` and pass after the change.
 
+**Live.** All six `pull_request` workflows are green on the merge head `e427ec3` (PR #27 is
+`MERGEABLE`/`CLEAN`): G4b [35705276982](https://github.com/sheon-sek/ignition-mcp/actions/runs/35705276982)
+on both rows, CI 35705277083, G0 35705277092, G3 35705277142, G4a 35705276988. The REST mutation
+row [35705276983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35705276983) first failed
+its 8.3.8 `fault` group on `fault-import-after-full-body-{commits,reports-the-dispatch,content-lands,reached-the-gateway}`
+(`{"forwarded": true, "bodyComplete": false}`) while `class-enabled` and `class-disabled` were rc 0
+and the 8.3.9 row was green — the REST lane's timing-sensitive #16/#20 import-fault group, not this
+ticket. Rerun once, as the brief allows: **green on both rows.**
+
 **Deferred by the owner's scope cut (S1, S2, S3, S5's live case, and the review's P1 nit).** These
 are real gaps the reviewer named and they are **not** fixed in this round:
 
