@@ -404,8 +404,8 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   D28-null and escaped-reserved-key cases.
 - **Fixture-first coverage.** 9 recorded-Jython tests
   (`tooling/native/jython_runner/tests/test_tag_fingerprint.py`) over five golden
-  vectors; 74 tests for `tag_update`
-  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 68 fixtures; and 5
+  vectors; 75 tests for `tag_update`
+  (`tooling/native/jython_runner/tests/test_tag_update.py`) over 69 fixtures; and 5
   tests for the `tag_get_config` definition read
   (`tooling/native/jython_runner/tests/test_tag_get_config.py`) over 8 fixtures.
   Together they cover: the policy gate (missing, oversize, length mismatch, malformed,
@@ -647,6 +647,25 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     child, and the aggregate refusal fires where the budget is spent instead of after the whole batch
     is rescanned: the six-item `input-over-byte-budget` fixture reports a count just past 65536
     (`requested - limit < 4096`) rather than its full 72714 bytes.
+- **Review round 5 fix — the D29 launcher is a union of both lanes' value markers.** Round 4's
+  report recorded this lane's `_recorded_value` as a superset of the other lane's, citing `0570760`
+  where the #7 lane knew only `Dataset`. That went stale: the #7 lane's round-4 response
+  (`b7df979`, tip `72ae477`) records `JavaArray`, `JythonLong`, `BigInteger` and `BigDecimal`, and
+  five `tag_write` fixtures use them, so a resolver following the old note kept a decoder that
+  raised `unsupported recorded native value` for all four names. `_recorded_value` now decodes
+  every marker either lane records: `JavaArray` shares the `java-array` `Object[]` builder,
+  `JythonLong` is the interpreter `long` of the recorded text, `BigInteger` and `BigDecimal` are
+  the Java numbers of it, and `Dataset`/`TagPath`/`iteritems-object`/`native-object` are unchanged.
+  A throwaway trial merge of `origin/p4/runtime-fix` into a scratch worktree of this branch
+  (`git worktree add --detach`, `git merge --no-commit`, never committed or pushed) proved it and
+  recorded what a resolver must know: git reports only the import block as conflicted and silently
+  keeps **both** definitions of `_recorded_value`, `_recorded_java_array` and `_RecordedDataset`;
+  `_Tag.copy` is #7-only and its `tag_copy` fixtures need it; and the resolved trial tree — the
+  union decoder plus `_Tag.copy` — ran the full `tooling/native/jython_runner/tests` suite under
+  Java 11 with both lanes' fixtures green (**319 passed**). A merge resolver must union this
+  function rather than keep either side. The owner's scope ruling defers review-4's byte-accounting
+  nits 1–4 and review-5's D28 single-pass exactness requirement to a follow-up issue; this round
+  ships the merge-blocking fix only, and no handler changed.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 

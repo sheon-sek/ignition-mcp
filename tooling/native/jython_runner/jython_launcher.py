@@ -32,8 +32,9 @@ that, and ``_recorded_value`` decodes it recursively:
 
     {"nativeType": "Dataset", "columns": [...], "rows": [[...]]}
     {"nativeType": "big-integer" | "java-big-decimal", "digits": 20000}
+    {"nativeType": "JythonLong" | "BigInteger" | "BigDecimal", "text": "..."}
     {"nativeType": "iteritems-object", "entries": [[key, value], ...]}
-    {"nativeType": "java-array", "items": [...]}
+    {"nativeType": "java-array" | "JavaArray", "items": [...]}
     {"nativeType": "native-object", "class": "com.example.Native", "text": "...",
      "repeat": 4}
     {"nativeType": "TagPath", "text": "[default]a/b", "type": "native-object"}
@@ -41,6 +42,14 @@ that, and ``_recorded_value`` decodes it recursively:
 ``repeat`` multiplies a recorded rendering, so a fixture that bounds a long text
 stays readable. Every other JSON object and array becomes the Jython dict or list
 the Gateway would return.
+
+The vocabulary is the union of the two Runtime lanes' recordings, so either
+lane's fixtures run in the merged tree: ``JavaArray``, ``JythonLong``,
+``BigInteger`` and ``BigDecimal`` are the `tag_write` fix's names for the same
+recorded shapes this lane records as ``java-array``, ``big-integer`` and
+``java-big-decimal`` (``big-integer`` is the interpreter's own ``long``, which is
+what Jython really hands a handler for a Java integer; ``JythonLong`` and
+``BigInteger`` record that number's text as a ``long`` or as the Java number).
 """
 
 from __future__ import print_function
@@ -49,7 +58,7 @@ import json
 import sys
 
 from java.lang import Object, RuntimeException
-from java.math import BigDecimal
+from java.math import BigDecimal, BigInteger
 from java.lang.reflect import Array as ReflectionArray
 from java.util import ArrayList, LinkedHashMap
 
@@ -229,6 +238,18 @@ def _recorded_value(value):
     ``nativeType`` is therefore reserved in recorded values. Every other JSON
     container becomes the Jython dict or list the Gateway would hand back, and an
     unknown marker fails the run rather than silently replaying a plain dict.
+
+    Every name either lane records decodes here, so no lane's fixture can fail in
+    the merged tree: ``JavaArray``/``JythonLong``/``BigInteger``/``BigDecimal`` are
+    the `tag_write` fix's names, ``java-array``/``big-integer``/``java-big-decimal``
+    this lane's, and each name keeps the shape its own lane's recordings carry.
+
+    A mapping is copied with its children decoded, not regex-replaced, and any other
+    JSON object -- one whose ``nativeType`` is not a string, say -- is returned
+    unchanged, so no recorded mapping is rewritten into a shape a fixture did not
+    ask for. No recorded marker builds a Jython dict that carries ``$ignition``:
+    that key is reserved for the D28 forms, and a test that needs a reserved-key
+    mapping builds it from the handler's own published candidate.
     """
     if isinstance(value, dict):
         marker = value.get("nativeType")
@@ -238,18 +259,24 @@ def _recorded_value(value):
             # A Jython long with `digits` decimal digits: a handler has to count its
             # digits rather than copy its text.
             return long("1" * int(value["digits"]))  # noqa: F821 - Jython 2.7 built-in
+        if marker == "JythonLong":
+            # The #7 lane's name for that same interpreter long, recorded as its text.
+            return long(value["text"].encode("ascii"))  # noqa: F821 - Jython 2.7 built-in
         if marker == "java-big-decimal":
             return BigDecimal("1" * int(value["digits"]) + ".5")
+        if marker == "BigInteger":
+            # The #7 lane's recorded Java number: its decimal text is not the JSON
+            # number a fixture would otherwise carry.
+            return BigInteger(value["text"].encode("ascii"))
+        if marker == "BigDecimal":
+            return BigDecimal(value["text"].encode("ascii"))
         if marker == "TagPath":
             return _RecordedTagPath(value)
         if marker == "iteritems-object":
             return _RecordedIteritems([(key, _recorded_value(child)) for key, child in value["entries"]])
-        if marker == "java-array":
-            items = [_recorded_value(child) for child in value["items"]]
-            array = ReflectionArray.newInstance(Object, len(items))
-            for index in range(len(items)):
-                array[index] = items[index]
-            return array
+        if marker in ("java-array", "JavaArray"):
+            # One builder for both names, so the two lanes cannot drift apart.
+            return _recorded_java_array(value)
         if marker == "native-object":
             return _RecordedNativeObject(value)
         if marker is None:
@@ -258,6 +285,19 @@ def _recorded_value(value):
     if isinstance(value, list):
         return [_recorded_value(child) for child in value]
     return value
+
+
+def _recorded_java_array(recorded):
+    """A recorded Java array: an ``Object[]`` whose elements are decoded too.
+
+    Jython hands a handler a Java array as an ``array.array``-typed PyArray, so this
+    replays the shape a Gateway returns for an array Tag value.
+    """
+    items = [_recorded_value(child) for child in recorded.get("items") or []]
+    array = ReflectionArray.newInstance(Object, len(items))
+    for index in range(len(items)):
+        array[index] = items[index]
+    return array
 
 
 class _QualifiedValues(ArrayList):
