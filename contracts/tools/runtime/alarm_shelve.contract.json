@@ -1,0 +1,76 @@
+{
+  "schemaVersion": 1,
+  "name": "alarm_shelve",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONTROL",
+  "mutationClass": "CONTROL_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "parameters": {
+    "paths": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "itemType": "string",
+      "itemMinLength": 1,
+      "itemMaxLength": 2048,
+      "exactAlarmPathsOnly": true
+    },
+    "timeoutSeconds": {
+      "type": "integer",
+      "required": true,
+      "minimum": 1,
+      "hardMaximum": 86400,
+      "policyCapField": "alarmShelveMaxSeconds"
+    }
+  },
+  "inputBounds": {
+    "itemsParameter": "paths",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "alarmMaxPaths",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxChars": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": ["requested", "limit"],
+    "observedStateMaxBytes": 65536,
+    "observedUserMaxChars": 256,
+    "observedExpirationMaxChars": 64,
+    "outputMaxBytes": 262144
+  },
+  "outputSchema": "contracts/schemas/alarm-shelve.output.schema.json",
+  "nativeRequirements": ["system.tag.readBlocking", "system.alarm.shelve", "system.alarm.getShelvedPaths", "system.util.audit"],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "system.alarm.shelve reports no per-item result, so the item's own dispatch is its outcome; alarm_shelved_list state for the exact paths is the Observed state and never decides success",
+  "alarmPathForm": "rendered alarm path: provider-qualified with no * (for example prov:default:/tag:Folder/Tag:/alm:AlarmName); a pattern without * matches only the source it spells out, so an exact path cannot widen to a subtree",
+  "duration": {
+    "required": true,
+    "minimumSeconds": 1,
+    "hardMaximumSeconds": 86400,
+    "policyCapField": "alarmShelveMaxSeconds",
+    "policyCapRule": "a deployment may lower the maximum and never raise it",
+    "overCapCode": "invalid_argument"
+  },
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "alarm_shelve",
+    "allowlistMatch": "provider-qualified alarm path prefix matched at a segment boundary (/ or :); an explicit * allows every alarm path",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "any alarm path whose prov:<provider>: component is the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *; a later Tag or Alarm segment that spells the name is not the provider and stays an allowlist-checked target",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "deniedMutationAudit": "after a usable Policy is read, a refused target produces one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item outcomes whatever the Observed-state budget or the serializer does; an Observed entry that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes",
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "itemOutcomeUnknownScope": "only items whose own dispatch did not report back",
+  "nullEncoding": "ignition-null-v1"
+}

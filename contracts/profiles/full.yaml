@@ -19,6 +19,15 @@
     "historian_query_series",
     "historian_query_aggregate",
     "database_query_list",
-    "database_query"
+    "database_query",
+    "tag_write",
+    "alarm_shelve",
+    "alarm_unshelve",
+    "tag_update",
+    "tag_create",
+    "tag_copy",
+    "tag_delete",
+    "tag_move",
+    "tag_rename"
   ]
 }

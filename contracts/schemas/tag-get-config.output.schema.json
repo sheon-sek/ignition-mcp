@@ -4,24 +4,148 @@
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "path": {"type": "string", "minLength": 3},
-    "recursive": {"type": "boolean"},
-    "overridesOnly": {"type": "boolean"},
-    "configuration": {"type": "array", "items": {"$ref": "#/$defs/value"}},
-    "summary": {"$ref": "#/$defs/summary"},
-    "meta": {"$ref": "#/$defs/meta"}
+    "path": {
+      "type": "string",
+      "minLength": 3
+    },
+    "recursive": {
+      "type": "boolean"
+    },
+    "overridesOnly": {
+      "type": "boolean"
+    },
+    "fingerprint": {
+      "description": "The Tag config fingerprint (D30 2) of the configuration this read returned: `tcf1:` plus the SHA-256 of the canonical JSON text of `configuration`. This is the Precondition token a Tag CONFIG Mutation compares, so it is taken from the value the caller reads here, never from the Gateway.",
+      "type": "string",
+      "pattern": "^tcf1:[0-9a-f]{64}$"
+    },
+    "configuration": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/value"
+      }
+    },
+    "summary": {
+      "$ref": "#/$defs/summary"
+    },
+    "meta": {
+      "$ref": "#/$defs/meta"
+    }
   },
-  "required": ["path", "recursive", "overridesOnly", "configuration", "summary", "meta"],
+  "required": [
+    "path",
+    "recursive",
+    "overridesOnly",
+    "fingerprint",
+    "configuration",
+    "summary",
+    "meta"
+  ],
   "$defs": {
-    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
-    "value": {"oneOf": [
-      {"type": ["string", "number", "boolean"]},
-      {"$ref": "#/$defs/null"},
-      {"type": "array", "items": {"$ref": "#/$defs/value"}},
-      {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}},
-      {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false}
-    ]},
-    "summary": {"type": "object", "additionalProperties": false, "properties": {"returned": {"type": "integer", "minimum": 0, "maximum": 200}, "limit": {"type": "integer", "minimum": 1, "maximum": 200}}, "required": ["returned", "limit"]},
-    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+    "null": {
+      "type": "object",
+      "properties": {
+        "$ignition": {
+          "const": "null"
+        }
+      },
+      "required": [
+        "$ignition"
+      ],
+      "additionalProperties": false
+    },
+    "value": {
+      "oneOf": [
+        {
+          "type": [
+            "string",
+            "number",
+            "boolean"
+          ]
+        },
+        {
+          "$ref": "#/$defs/null"
+        },
+        {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        {
+          "type": "object",
+          "propertyNames": {
+            "not": {
+              "const": "$ignition"
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/value"
+          }
+        },
+        {
+          "type": "object",
+          "properties": {
+            "$ignition": {
+              "const": "object"
+            },
+            "entries": {
+              "type": "array",
+              "items": {
+                "type": "array",
+                "prefixItems": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "$ref": "#/$defs/value"
+                  }
+                ],
+                "minItems": 2,
+                "maxItems": 2
+              }
+            }
+          },
+          "required": [
+            "$ignition",
+            "entries"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "summary": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "returned": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        }
+      },
+      "required": [
+        "returned",
+        "limit"
+      ]
+    },
+    "meta": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "correlationId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "correlationId"
+      ]
+    }
   }
 }

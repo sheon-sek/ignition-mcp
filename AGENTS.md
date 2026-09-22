@@ -11,7 +11,7 @@ Language-neutral Tool contracts, shared taxonomies, and output schemas live unde
 
 ## Governance: Decisions and Phase Gates
 
-- `docs/decisions/D01–D29` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
+- `docs/decisions/D01–D30` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
 - Delivery is phase-gated (D26). Phases 0–3 (G0/G1/G2/G3) are closed and frozen; see `docs/development/phase-{0,1,2,3}.md`. **Phase 4 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
 - Key rules that cut across files:
   - No duplicate equivalent operation across the two servers. Native REST owns an operation whenever a semantically complete official REST endpoint exists. Runtime MCP owns everything else (D02).

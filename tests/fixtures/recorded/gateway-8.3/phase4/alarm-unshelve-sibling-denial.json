@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"permission_denied\", \"correlationId\": \"be970107-7590-436c-8728-0537fa4fa13b\", \"details\": {\"allowlistKey\": \"alarm_unshelve\", \"items\": [{\"code\": \"permission_denied\", \"index\": 0, \"path\": \"prov:default:/tag:__ALARM_ROOT___sibling/Exact:/alm:ProbeHi\", \"reason\": \"targetNotAllowlisted\"}], \"reason\": \"preflightTargetRefused\"}, \"message\": \"Every target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no path was unshelved.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

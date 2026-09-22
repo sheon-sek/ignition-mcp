@@ -62,6 +62,8 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 				count += countNodes(children)
 		return count
 
+	UDT_NAMESPACE = "_types_"
+
 	def validPath(value):
 		if not isinstance(value, basestring) or not value.strip():
 			return False
@@ -71,13 +73,73 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		closing = value.find("]")
 		if closing <= 1 or value.startswith("[.]") or value.startswith("[~]") or value.startswith("[]"):
 			return False
-		body = value[closing + 1:]
-		return "_types_" not in [segment for segment in body.split("/") if segment]
+		return True
+
+	def isUdtDefinitionPath(value):
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# path, and reading it recursively stays an ordinary read.
+		closing = value.find("]")
+		if closing <= 0:
+			return False
+		segments = [segment for segment in value[closing + 1:].split("/") if segment]
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
+
+	# D30 2: the Tag config fingerprint. Repo-defined, versioned `tcf1` and
+	# deterministic: SHA-256 over the canonical JSON text of the D28-encoded
+	# configuration this read returns. The rule and its golden vectors are the
+	# shared contract contracts/shared/tag-config-fingerprint.json, and tag_update
+	# recomputes it over its own default read of one exact target path.
+	FINGERPRINT_PREFIX = "tcf1:"
+
+	def quoteJsonString(value):
+		# Only " and \ are escaped, and a control character is always the
+		# six-character \u00xx form, so the Python copy of this rule agrees with
+		# this one byte for byte.
+		parts = ['"']
+		for character in value:
+			if character == '"':
+				parts.append('\\"')
+			elif character == "\\":
+				parts.append("\\\\")
+			elif character < " ":
+				parts.append("\\u%04x" % ord(character))
+			else:
+				parts.append(character)
+		parts.append('"')
+		return "".join(parts)
+
+	def canonicalJson(value):
+		# Object keys sort by code point; an integer keeps its exact decimal
+		# form and a float its shortest round-trip form.
+		if value is None:
+			return "null"
+		if isinstance(value, bool):
+			return "true" if value else "false"
+		if isinstance(value, basestring):
+			return quoteJsonString(value)
+		if isinstance(value, (int, long)):
+			return unicode(value)
+		if isinstance(value, float):
+			return repr(value)
+		if isinstance(value, (list, tuple)):
+			return "[" + ",".join([canonicalJson(child) for child in value]) + "]"
+		if isinstance(value, dict):
+			keys = sorted(value.keys())
+			return "{" + ",".join([quoteJsonString(unicode(key)) + ":" + canonicalJson(value[key]) for key in keys]) + "}"
+		raise TypeError("Unsupported canonical JSON value: " + unicode(type(value)))
+
+	def tagConfigFingerprint(value):
+		from java.security import MessageDigest
+		digest = MessageDigest.getInstance("SHA-256")
+		digest.update(canonicalJson(value).encode("utf-8"))
+		return FINGERPRINT_PREFIX + digest.digest().tostring().encode("hex")
 
 	stage = "validation"
 	try:
 		if not validPath(path):
-			return toolError("invalid_argument", "path must be an absolute provider-qualified Tag path outside the internal UDT definition namespace.")
+			return toolError("invalid_argument", "path must be an absolute provider-qualified Tag path.")
 		path = path.strip()
 		if recursive is None:
 			recursive = False
@@ -85,6 +147,11 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 			overridesOnly = False
 		if not isinstance(recursive, bool) or not isinstance(overridesOnly, bool):
 			return toolError("invalid_argument", "recursive and overridesOnly must be boolean.")
+		if isUdtDefinitionPath(path) and recursive:
+			# D30 6: an exact definition read is what publishes the Tag config
+			# fingerprint a Tag CONFIG Mutation compares, so it is allowed; the
+			# subtree view of the definition namespace stays udt_type_get's.
+			return toolError("invalid_argument", "a UDT definition is read one exact definition at a time: set recursive=false, or use udt_type_get for the subtree view.")
 		if maxResults is None:
 			maxResults = 50
 		if isinstance(maxResults, bool) or not isinstance(maxResults, (int, long)) or maxResults < 1 or maxResults > 200:
@@ -93,11 +160,13 @@ def onToolCalled(builder, path, recursive, overridesOnly, maxResults):
 		nativeConfiguration = system.tag.getConfiguration(path, bool(recursive), bool(overridesOnly))
 		stage = "result_normalization"
 		configuration = jsonValue(nativeConfiguration)
+		stage = "fingerprint"
+		fingerprint = tagConfigFingerprint(encodeNulls(configuration))
 		stage = "result_count"
 		count = countNodes(configuration)
 		if count > maxResults:
 			return toolError("limit_exceeded", "Tag configuration exceeds maxResults; use a narrower path or disable recursive retrieval.")
-		domain = {"path": path, "recursive": bool(recursive), "overridesOnly": bool(overridesOnly), "configuration": configuration, "summary": {"returned": count, "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
+		domain = {"path": path, "recursive": bool(recursive), "overridesOnly": bool(overridesOnly), "fingerprint": fingerprint, "configuration": configuration, "summary": {"returned": count, "limit": int(maxResults)}, "meta": {"correlationId": correlationId}}
 		domain = encodeNulls(domain)
 		stage = "serialization"
 		encoded = system.util.jsonEncode(domain)

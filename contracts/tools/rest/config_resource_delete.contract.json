@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_delete",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": true,
+  "budgetClass": "FAST",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "expectedSignature": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "source": "config_resource_get.signature"
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 512,
+      "note": "required for a named resourceType, empty for a singleton"
+    },
+    "collection": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 128,
+      "note": "the core collection: an omitted or empty value means core, and the Tool sends collection=core on every Gateway read and write it makes; any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)"
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-delete.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/find/<catalog-resourceType>/{name}",
+    "GET /data/api/v1/resources/singleton/<catalog-resourceType>",
+    "DELETE /data/api/v1/resources/<catalog-resourceType>/{name}/{signature}",
+    "DELETE /data/api/v1/resources/<catalog-resourceType>/{signature}"
+  ],
+  "capabilityId": "config_resource_delete",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "resource_signature",
+    "parameter": "expectedSignature",
+    "source": "config_resource_get.signature",
+    "enforcedBy": "gateway",
+    "nativeLocation": "the DELETE path itself: the signature is the route's last path parameter",
+    "alsoReadComparedBeforeDispatch": true,
+    "raceWindowDocumented": true
+  },
+  "targetId": {
+    "form": "<resourceType>/<name>, or <resourceType> for a singleton",
+    "collection": "the core collection only: the reads and the documented DELETE route name it as the collection query parameter (the route's path carries the Target and the signature, and it takes no request body), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "refusedResourceTypes": {
+    "contract": "contracts/shared/refused-resource-types.json",
+    "errorCode": "permission_denied",
+    "unclassified": "refused"
+  },
+  "reservedResourceNames": {
+    "resourceType": "ignition/tag-provider",
+    "collection": "core",
+    "names": [
+      "IgnitionMCPPolicy"
+    ],
+    "match": "the whole name, trimmed and compared case-insensitively, never a substring: `IgnitionMCPPolicyStaging` is a different resource and stays manageable. Fail-closed on case because Ignition documents no rule for how two config resource names compare, and the refusal names the *reserved* spelling however the caller wrote it.",
+    "targets": [
+      "name"
+    ],
+    "denialCode": "permission_denied",
+    "layer": "target-class",
+    "rule": "D30 owner ruling 4: this resource is the Tag provider that holds the Runtime Target Policy, and a generic config Mutation refuses it **by name** before the Target allowlist is consulted — even under an explicit `*` — because `ignition/tag-provider` is an allowed type and nothing else would stop a delete or a reconfiguration of the policy's storage provider. It is a refusal by name *within* an allowed type, not an entry in the Refused resource types set (D30 §5): the type stays allowed and every other Tag provider stays manageable through this Tool. The refusal is Mutation-only, so `config_resource_get` still serves the resource.",
+    "source": "D30 owner ruling 4 (2026-09-22); issue #36"
+  },
+  "fixedKnobs": {
+    "confirm": "never sent",
+    "collection": "core"
+  },
+  "fixedKnobsNote": "The documented DELETE route takes an optional `confirm` flag for a delete the Gateway says would affect other resources. The caller cannot choose it: it is never sent, so such a delete is refused like any other rejection and no call can authorize a cascade outside its Targets. The route's `collection` query parameter is the other fixed knob: it is always `core` (D30 owner ruling 5).",
+  "boundedInputBytes": 262144,
+  "requestSchemaValidation": {
+    "source": "gateway-openapi-capability-snapshot",
+    "schema": "not applicable: the documented DELETE route takes no request body, and nothing but the path is sent",
+    "appliesTo": "the Target identity and the Resource signature, validated and percent-encoded before dispatch",
+    "unavailableDisposition": "a documented delete route whose Target cannot be read back exposes no delete route, so the Tool refuses the resource type with unsupported_capability",
+    "errorCode": "invalid_argument"
+  },
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit Gateway rejection is the result of the attempt — a 4xx (including 409 for a stale signature, which D30 §7 maps to `conflict`) or a 2xx carrying success=false with a problem. No read-back may turn it into a success: a Target that is gone may have been deleted by another writer.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (2xx with no refusal)"
+    ],
+    "ambiguousAttribution": "a competing writer cannot be ruled out for an ambiguous dispatch, so a read-back that shows the Target gone is outcome_unknown, never a success; the Target still holding the caller's signature is not_applied",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "bounded re-read of the Target: the claimed success is confirmed only when no resource exists at it, and the absence is reported as the Observed state"
+}

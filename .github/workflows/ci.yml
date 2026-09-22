@@ -11,7 +11,10 @@ permissions:
 jobs:
   static-unit-build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # The merged Runtime lane's recorded-Jython fixture suites are the union of the
+    # #7/#8, #10 and #11 tickets, and each fixture starts a JVM: the unit step alone
+    # runs past 15 minutes, which is a job timeout and therefore a cancelled run.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,7 +37,7 @@ jobs:
       - name: Mypy
         run: uv run --locked --package ignition-rest-mcp --with mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
       - name: Unit and contract tests
-        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest -q -n auto --dist loadfile tooling packages/ignition-rest-mcp/tests
       - name: Build external Python distribution
         run: uv build --package ignition-rest-mcp
       - name: Validate Runtime Designer project

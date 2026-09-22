@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"operation_disabled\", \"correlationId\": \"50dcc414-9661-4459-adb7-22cdc9d66624\", \"details\": {\"policyPath\": \"[IgnitionMCPPolicy]RuntimeTargetPolicy\", \"reason\": \"declaredLengthUnavailable\"}, \"message\": \"The Runtime Target Policy is missing or unusable; Runtime Mutations stay disabled.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

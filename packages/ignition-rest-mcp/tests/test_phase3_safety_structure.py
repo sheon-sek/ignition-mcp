@@ -1,9 +1,9 @@
 """Slice 6 (Phase 3 / G3): static structural invariants of the D08 safety chain.
 
 These scans prove the *shape* of the mutation boundary in production code only:
-one write primitive, one auth-minted principal, one guarded executor, no
-destructive Tool registration and a zero-mutation effective Tool inventory in
-every gate configuration.
+one write primitive, one auth-minted principal, one guarded executor, destructive
+registrations that match their contracts and a zero-mutation effective Tool
+inventory in every gate configuration.
 """
 
 from __future__ import annotations
@@ -200,22 +200,143 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
-# ------------------------------------------------------------------ 4. no destructive tools
+def test_cli_write_routes_are_the_curated_set_of_ticket_21() -> None:
+    """Ticket #21: ``apply`` writes through one guarded module with named routes.
 
-def test_no_server_tool_registration_invokes_destructive_true() -> None:
+    The CLI is excluded from the write-transport scan above (D25 code separation),
+    so its write half is pinned here instead: the route constants are exactly the
+    documented operations ``apply`` needs, every write dispatch goes through the
+    single ``_write`` chokepoint, and no other module in the package issues a
+    non-GET transport call. The only GET-shaped transport call in ``writer.py`` is
+    the bounded Project export.
+    """
+
+    cli_dir = SRC_ROOT / "cli" / "setup_native"
+    writer = cli_dir / "writer.py"
+    tree = _parse(writer)
+
+    routes: dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id.endswith("_PATH"):
+                    routes[target.id] = str(node.value.value)
+    assert routes == {
+        "PROJECT_IMPORT_PATH": "/data/api/v1/projects/import/{name}",
+        "PROJECT_EXPORT_PATH": "/data/api/v1/projects/export/{name}",
+        "RESOURCE_COLLECTION_PATH": "/data/api/v1/resources/{resource_type}",
+        "TAG_IMPORT_PATH": "/data/api/v1/tags/import",
+        # Ticket #22's opt-in credential: the Gateway's own key/hash generator.
+        "API_TOKEN_GENERATE_PATH": "/data/api/v1/api-token/generate",
+    }, sorted(routes)
+
+    chokepoints = {"_write": {"POST", "PUT"}, "_archive": {"GET"}}
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.FunctionDef) and node.name in chokepoints):
+            continue
+        for call in ast.walk(node):
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)):
+                continue
+            if call.func.attr not in WRITE_METHOD_CALLS | {"stream"}:
+                continue
+            method = call.args[0] if call.args else None
+            if isinstance(method, ast.Constant):
+                allowed = chokepoints[node.name]
+                assert method.value in allowed, f"{node.name} issues {method.value}"
+            else:
+                # A non-literal method may only be the parameter the chokepoint received.
+                assert isinstance(method, ast.Name) and method.id == "method", (
+                    f"{node.name}:{call.lineno} dispatches an unvetted method"
+                )
+
+    for path in sorted(cli_dir.glob("*.py")):
+        if path.name in ("writer.py", "mcp_http.py"):
+            continue
+        assert not any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr in WRITE_METHOD_CALLS
+            for node in ast.walk(_parse(path))
+        ), f"{path.name} issues a write-shaped transport call"
+
+
+# ------------------------------------------------------------------ 4. destructive declarations
+
+def test_destructive_registrations_match_the_tool_contracts() -> None:
+    """A Tool's ``_invoke`` declaration must be the one its contract publishes.
+
+    Phase 3 registered no destructive Tool at all; Phase 4 adds
+    ``config_resource_delete`` and ``project_import`` (D26). Rather than weakening that
+    invariant, the scan ties every registration to the contract it ships with, so a
+    destructive Tool can never be registered as harmless — or the reverse — anywhere.
+    """
+
+    repo_root = SRC_ROOT.parents[3]
+    contracts = {
+        path.name[: -len(".contract.json")]: json.loads(
+            path.read_text(encoding="utf-8"),
+        ).get("destructive", False)
+        for path in sorted((repo_root / "contracts" / "tools" / "rest").glob("*.contract.json"))
+    }
     tree = _parse(SRC_ROOT / "server.py")
     create = next(
         node for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "create_server"
     )
-    offenders: list[int] = []
+    registered: dict[str, bool] = {}
     for node in ast.walk(create):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_invoke":
-            for keyword in node.keywords:
-                if keyword.arg == "destructive" and isinstance(keyword.value, ast.Constant) \
-                        and keyword.value.value is True:
-                    offenders.append(node.lineno)
-    assert offenders == [], f"_invoke(destructive=True) found at lines {offenders}"
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_invoke"):
+            continue
+        name = node.args[0] if node.args else None
+        assert isinstance(name, ast.Constant) and isinstance(name.value, str), (
+            "every _invoke call must name its Tool with a literal"
+        )
+        declared = next(
+            (keyword.value.value for keyword in node.keywords if keyword.arg == "destructive"),
+            False,
+        )
+        assert isinstance(declared, bool)
+        registered[name.value] = declared
+
+    assert registered, "_invoke call sites must be discoverable in create_server"
+    mismatched = {
+        name: declared for name, declared in registered.items()
+        if contracts.get(name) is not declared
+    }
+    assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
+    assert [name for name, declared in registered.items() if declared] == [
+        "config_resource_delete", "project_import", "alarm_pipeline_cancel", "artifact_delete",
+    ]
+
+
+def test_only_the_local_artifact_mutation_declares_itself_not_gateway_backed() -> None:
+    """D08's capability layer must keep asking the D04 registry for every Gateway
+    write. Exactly one production operation may turn that layer into a local
+    subsystem: `artifact_delete`, whose HTTP route D30 drops, so it has no route to
+    check and dispatches nothing (the write boundary scan above keeps that true).
+    """
+
+    local_operations: list[str] = []
+    for path in _production_files():
+        rel = _relative(path)
+        for node in ast.walk(_parse(path)):
+            if not (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "MutationOperation"
+            ):
+                continue
+            declared = [
+                keyword.value.value for keyword in node.keywords
+                if keyword.arg == "gateway_backed" and isinstance(keyword.value, ast.Constant)
+            ]
+            if declared == [False]:
+                local_operations.append(f"{rel}:{node.lineno}")
+
+    assert [site.split(":")[0] for site in local_operations] == ["services/artifact_delete.py"], (
+        f"only the D30 routeless artifact Mutation may skip the Gateway capability layer: "
+        f"{local_operations}"
+    )
 
 
 # ------------------------------------------------------------------ 5. zero-mutation inventory

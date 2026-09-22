@@ -1,0 +1,85 @@
+# Ignition MCP
+
+Two MCP servers that let AI agents read and, under layered safety rules, change an Inductive Automation Ignition Gateway. `ignition-rest` wraps Native REST; `ignition-runtime` is a bundle of Jython Tools hosted by the official MCP Module.
+
+## Language
+
+### Planes and delivery
+
+**Plane**:
+One of the two capability surfaces: the REST plane (`ignition-rest`) or the Runtime plane (`ignition-runtime`). An operation belongs to exactly one plane.
+_Avoid_: server side, backend
+
+**Gate**:
+A binding phase exit (G0–G6) that needs live-Gateway evidence before the next phase may start.
+_Avoid_: milestone (when binding is meant)
+
+**Milestone**:
+A non-binding checkpoint inside a phase that produces its own live evidence but does not open or close a Gate.
+_Avoid_: sub-gate, G4a
+
+### Mutation safety
+
+**Mutation**:
+A Tool call that can change Gateway state. Every Mutation has exactly one Mutation class.
+_Avoid_: write (except for `tag_write`), action
+
+**Mutation class**:
+The effect category of a Mutation: `CONFIG`, `CONTROL` or `ADMIN`. It decides which scope and which deployment enablement the Mutation needs.
+_Avoid_: permission level, mutation type
+
+**Target allowlist**:
+The deployment-owned list of targets (projects, Tag paths, Alarm paths, config resources) a Mutation may touch. Empty means none; allowing all needs an explicit `*`.
+_Avoid_: whitelist, target filter
+
+**Refused resource type**:
+A Gateway config resource type that generic config Mutations never touch, whatever the Target allowlist says. Types not yet classified are treated as refused.
+_Avoid_: blacklist, admin type
+
+**Preflight**:
+The check of every item in a Mutation batch (input, Target allowlist, Precondition token) before any of them executes. If any item fails, none executes.
+_Avoid_: dry run, validation pass
+
+**Runtime Target Policy**:
+The deployment-owned document on the Gateway, outside the Runtime bundle, that holds the Runtime plane's Target allowlists. A Runtime Mutation fails closed when it is missing or malformed.
+_Avoid_: bundle config, runtime allowlist file
+
+**Precondition token**:
+The value a caller passes with a Mutation that is valid only for the target state the caller last read. On a mismatch the Mutation is refused with `conflict`. There are three kinds: Resource signature, Tag config fingerprint and Project fingerprint.
+_Avoid_: version, ETag, revision
+
+**Resource signature**:
+Ignition's own Precondition token for a Gateway config resource. The Gateway enforces it itself.
+_Avoid_: hash, checksum
+
+**Tag config fingerprint**:
+A repo-defined Precondition token computed over a Tag's configuration. Because Ignition does not enforce it, a small race window remains between the check and the change.
+_Avoid_: tag hash, tag version
+
+**Project fingerprint**:
+The repo-defined `pcf1` Precondition token over a Project's logical content (D16).
+_Avoid_: ZIP hash, project checksum
+
+**Service identity**:
+The configured, non-human identity a Runtime Mutation is attributed to when the Module exposes no verified caller. It is never supplied by the caller.
+_Avoid_: service account, ack user
+
+**Mutation principal**:
+The verified caller identity a Mutation is attributed to and authorized against. A `jwt` subject or a named static token can be a Mutation principal; an `auth=none` caller never is.
+_Avoid_: user, actor, caller identity
+
+**Named static token**:
+A deployment-configured `static-token` credential with its own name and scope set (D07 Phase 4 amendment). Its name is its Mutation principal; its value is a secret that never leaves the authentication module.
+_Avoid_: API key, shared secret
+
+**Native outcome**:
+The per-item result Ignition itself reports for a Mutation, such as a Tag write QualityCode. For `tag_write` it is the item's outcome.
+_Avoid_: result code, status
+
+**Observed state**:
+A bounded read-back taken after a Mutation and reported as data. It does not by itself decide success, because live values may legitimately differ from what was written.
+_Avoid_: verification result, confirmed value
+
+**Outcome unknown**:
+The outcome of a Mutation that may have executed but whose final state could not be established. It is never automatically replayed.
+_Avoid_: timeout, failed

@@ -4,7 +4,9 @@ import json
 from pathlib import Path
 
 from ignition_rest_mcp.models import (
+    AlarmPipelineCancelResult,
     AlarmPipelineListResult,
+    ArtifactDeleteResult,
     ArtifactInfoResult,
     ArtifactListResult,
     OperationDiagnoseResult,
@@ -15,11 +17,14 @@ from ignition_rest_mcp.models import (
     ConfigResourceListResult,
     ConfigResourceNamesResult,
     ConfigResourceSearchResult,
+    ConfigResourceUpdateResult,
     GatewayDiagnoseResult,
     GatewayInfoResult,
     ProjectListResult,
     ProjectExportResult,
+    ProjectImportResult,
     TagConfigExportResult,
+    TagConfigImportResult,
 )
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -48,13 +53,18 @@ def test_external_models_match_contract_top_level_shapes() -> None:
         (ConfigResourceNamesResult, "config-resource-names.output.schema.json"),
         (ConfigResourceListResult, "config-resource-list.output.schema.json"),
         (ConfigResourceGetResult, "config-resource-get.output.schema.json"),
+        (ConfigResourceUpdateResult, "config-resource-update.output.schema.json"),
         (AuditQueryResult, "audit-query.output.schema.json"),
         (AlarmPipelineListResult, "alarm-pipeline-list.output.schema.json"),
         (AlarmPipelineStatusResult, "alarm-pipeline-status.output.schema.json"),
+        (AlarmPipelineCancelResult, "alarm-pipeline-cancel.output.schema.json"),
         (ProjectExportResult, "project-export.output.schema.json"),
+        (ProjectImportResult, "project-import.output.schema.json"),
         (TagConfigExportResult, "tag-config-export.output.schema.json"),
+        (TagConfigImportResult, "tag-config-import.output.schema.json"),
         (ArtifactListResult, "artifact-list.output.schema.json"),
         (ArtifactInfoResult, "artifact-info.output.schema.json"),
+        (ArtifactDeleteResult, "artifact-delete.output.schema.json"),
         (OperationDiagnoseResult, "operation-diagnose.output.schema.json"),
     )
     for model, schema_name in cases:

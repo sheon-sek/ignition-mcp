@@ -10,6 +10,10 @@ import json
 from types import MappingProxyType
 from typing import Any, Mapping
 
+from ignition_rest_mcp.capabilities.request_schema import (
+    bundle_collection_item_schema,
+    bundle_operation_body_schema,
+)
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 
@@ -18,12 +22,18 @@ PROJECT_LIST_PATH = "/data/api/v1/projects/list"
 AUDIT_QUERY_PATH = "/data/api/v1/audit/log/{name}"
 ALARM_PIPELINE_LIST_PATH = "/data/alarm-notification/api/v1/pipelines"
 ALARM_PIPELINE_STATUS_PATH = "/data/alarm-notification/api/v1/pipeline"
+#: D26 ticket #18: the cancel is the same documented path as the status read, addressed
+#: with ``DELETE``. The `alarm_pipeline_cancel` capability requires both routes, because
+#: the bounded status read *is* the Tool's verification (D30 §6).
+ALARM_PIPELINE_CANCEL_PATH = ALARM_PIPELINE_STATUS_PATH
 PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
 TAG_CONFIG_EXPORT_PATH = "/data/api/v1/tags/export"
+TAG_CONFIG_IMPORT_PATH = "/data/api/v1/tags/import"
 PROJECT_IMPORT_PATH = "/data/api/v1/projects/import/{name}"
 DESIGNERS_PATH = "/data/api/v1/designers"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
 RESOURCE_TYPE_PREFIX = "/data/api/v1/resources/type/"
+RESOURCE_COLLECTION_PREFIX = "/data/api/v1/resources/"
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,6 +46,25 @@ class ConfigResourceCapability:
     list_path: str | None
     find_path_template: str | None
     singleton_path: str | None
+    #: The collection path an update is dispatched to, present only when the
+    #: Gateway both documents ``PUT`` for this type *and* documents the request
+    #: schema D03 requires: an update route without a schema is never dispatched.
+    update_path: str | None = None
+    #: The self-contained JSON Schema one PUT change item must satisfy.
+    update_request_schema: Mapping[str, Any] | None = None
+    #: The collection path a create is dispatched to, present only when the Gateway
+    #: documents ``POST`` for this type *and* its documented item schema is usable.
+    create_path: str | None = None
+    create_request_schema: Mapping[str, Any] | None = None
+    #: The documented ``DELETE`` route, whose *path* carries the Resource signature:
+    #: ``<collection>/{name}/{signature}`` for a named resource and
+    #: ``<collection>/{signature}`` for a singleton.
+    delete_path_template: str | None = None
+    #: The documented rename route ``.../rename/<resourceType>/{name}`` and its
+    #: request-body schema (D03): the endpoint takes no signature, so the Precondition
+    #: token is enforced by a server-side read-compare (D30 §2).
+    rename_path_template: str | None = None
+    rename_request_schema: Mapping[str, Any] | None = None
 
     @property
     def singleton(self) -> bool:
@@ -126,7 +155,7 @@ class CapabilityRegistry:
                 if not isinstance(openapi, dict) or not isinstance(openapi.get("paths"), dict):
                     raise ValueError("OpenAPI paths missing")
                 endpoints = _endpoint_inventory(openapi["paths"])
-                resource_types = _resource_type_inventory(endpoints)
+                resource_types = _resource_type_inventory(endpoints, openapi)
                 semantic = _semantic_capabilities(endpoints, resource_types)
                 module_versions = _module_versions(modules)
                 fingerprint = _fingerprint(gateway_info, module_versions)
@@ -204,7 +233,7 @@ def _endpoint_inventory(paths: dict[str, Any]) -> set[tuple[str, str]]:
 
 
 def _resource_type_inventory(
-    endpoints: set[tuple[str, str]],
+    endpoints: set[tuple[str, str]], openapi: Mapping[str, Any],
 ) -> dict[str, ConfigResourceCapability]:
     result: dict[str, ConfigResourceCapability] = {}
     for method, path in endpoints:
@@ -219,6 +248,33 @@ def _resource_type_inventory(
         list_path = f"/data/api/v1/resources/list/{resource_type}"
         find_path = f"/data/api/v1/resources/find/{resource_type}/{{name}}"
         singleton_path = f"/data/api/v1/resources/singleton/{resource_type}"
+        collection_path = f"{RESOURCE_COLLECTION_PREFIX}{resource_type}"
+        rename_path = f"{RESOURCE_COLLECTION_PREFIX}rename/{resource_type}/{{name}}"
+        # D30 §2: every config write needs the Precondition token's read source, so a
+        # write route is exposed only for a type the caller can also read back exactly.
+        lookup_available = ("GET", find_path) in endpoints or ("GET", singleton_path) in endpoints
+        delete_path = (
+            f"{collection_path}/{{name}}/{{signature}}"
+            if ("DELETE", f"{collection_path}/{{name}}/{{signature}}") in endpoints
+            else f"{collection_path}/{{signature}}"
+            if ("DELETE", f"{collection_path}/{{signature}}") in endpoints
+            else None
+        )
+        update_schema = (
+            bundle_collection_item_schema(dict(openapi), resource_type, "put")
+            if ("PUT", collection_path) in endpoints
+            else None
+        )
+        create_schema = (
+            bundle_collection_item_schema(dict(openapi), resource_type, "post")
+            if ("POST", collection_path) in endpoints
+            else None
+        )
+        rename_schema = (
+            bundle_operation_body_schema(dict(openapi), rename_path, "post")
+            if ("POST", rename_path) in endpoints
+            else None
+        )
         result[resource_type] = ConfigResourceCapability(
             resource_type=resource_type,
             module=module,
@@ -228,6 +284,15 @@ def _resource_type_inventory(
             list_path=list_path if ("GET", list_path) in endpoints else None,
             find_path_template=find_path if ("GET", find_path) in endpoints else None,
             singleton_path=singleton_path if ("GET", singleton_path) in endpoints else None,
+            update_path=collection_path if update_schema is not None and lookup_available else None,
+            update_request_schema=update_schema,
+            create_path=collection_path if create_schema is not None and lookup_available else None,
+            create_request_schema=create_schema,
+            delete_path_template=delete_path if lookup_available else None,
+            rename_path_template=(
+                rename_path if rename_schema is not None and lookup_available else None
+            ),
+            rename_request_schema=rename_schema,
         )
     return dict(sorted(result.items()))
 
@@ -261,11 +326,33 @@ def _semantic_capabilities(
         for item in resource_types.values()
     ):
         semantic.add("config_resource_get")
+    if any(item.update_path is not None for item in resource_types.values()):
+        semantic.add("config_resource_update")
+    if any(item.create_path is not None for item in resource_types.values()):
+        semantic.add("config_resource_create")
+    if any(item.delete_path_template is not None for item in resource_types.values()):
+        semantic.add("config_resource_delete")
+    if any(item.rename_path_template is not None for item in resource_types.values()):
+        semantic.add("config_resource_rename")
     # Write-side and auxiliary capabilities exist exactly when the method+path pair
-    # is in the OpenAPI inventory. Phase 3 never dispatches the import; the
-    # capability only gates internal machinery and future Phase 4 exposure (D08/D26).
+    # is in the OpenAPI inventory. Phase 3 never dispatched the import; Phase 4's
+    # `project_import` Tool is gated on this capability (D08/D26).
     if ("POST", PROJECT_IMPORT_PATH) in endpoints:
         semantic.add("project_import")
+    # `tag_config_import` (D26 ticket #17) creates Tags from a JSON Tag export. Its
+    # route is the only thing that decides whether the Tool is exposed: the import it
+    # sends is the documented one, and the export it verifies against is separately
+    # gated by `tag_config_export`.
+    if ("POST", TAG_CONFIG_IMPORT_PATH) in endpoints:
+        semantic.add("tag_config_import")
+    # `alarm_pipeline_cancel` (D26 ticket #18) stops one Alarm Notification Pipeline run.
+    # The route that decides it is the documented DELETE, but the bounded status read
+    # D30 §6 makes its verification has to be there too: without it the Tool could never
+    # establish whether a cancel landed, so it is not exposed at all.
+    if ("DELETE", ALARM_PIPELINE_CANCEL_PATH) in endpoints and (
+        "GET", ALARM_PIPELINE_STATUS_PATH
+    ) in endpoints:
+        semantic.add("alarm_pipeline_cancel")
     if ("GET", DESIGNERS_PATH) in endpoints:
         semantic.add("designer_sessions")
     if ("GET", PROJECT_FIND_PATH) in endpoints:

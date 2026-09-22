@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"limit_exceeded\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"limit\": \"__POLICY_LIMIT__\", \"reason\": \"itemsOverPolicyLimit\", \"requested\": \"__ITEM_COUNT__\"}, \"message\": \"items exceeds the deployment's limit of __POLICY_LIMIT__ targets; split the batch or raise tagCopyMaxItems in the Runtime Target Policy.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

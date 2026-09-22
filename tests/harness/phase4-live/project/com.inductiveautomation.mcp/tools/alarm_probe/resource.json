@@ -1,0 +1,55 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": ["onToolCalled.py"],
+  "attributes": {
+    "title": "phase4_alarm_probe",
+    "description": "CI-only Phase 4 characterization probe. Builds a disposable Alarm fixture, activates it, and measures system.alarm.queryStatus matching semantics, cardinality and cost for exact Alarm paths.",
+    "parameters": [
+      {
+        "name": "providerRoot",
+        "description": "Tag provider root that owns the disposable Alarm fixture, for example [default].",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "rootName",
+        "description": "Run-unique folder created under the provider root for the Alarm fixture.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "provider",
+        "description": "Provider name used when building qualified source-path patterns.",
+        "type": "string",
+        "required": true
+      },
+      {
+        "name": "noiseCount",
+        "description": "Number of additional active Alarms created outside the measured paths.",
+        "type": "integer",
+        "required": true
+      },
+      {
+        "name": "cycles",
+        "description": "Number of activate/clear cycles run against one exact Alarm path without acknowledgement.",
+        "type": "integer",
+        "required": true
+      },
+      {
+        "name": "repeats",
+        "description": "Number of timed repetitions per query form.",
+        "type": "integer",
+        "required": true
+      },
+      {
+        "name": "ackUsername",
+        "description": "Explicit Gateway-scope acknowledgement username used by the acknowledge measurement.",
+        "type": "string",
+        "required": true
+      }
+    ]
+  }
+}

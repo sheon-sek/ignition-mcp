@@ -22,6 +22,7 @@ D27_DIR = "g2-8.3.8-mcp-2026021307"
 NON_D27_DIR = "g2-8.3.9-mcp-2026021307"
 G3_D27_DIR = "g3-8.3.8-mcp-2026021307"
 G3_NON_D27_DIR = "g3-8.3.9-mcp-2026021307"
+G4_DIRS = ("g4-8.3.8-mcp-2026021307", "g4-8.3.9-mcp-2026021307")
 
 
 def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
@@ -37,8 +38,8 @@ def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
 class EvidenceTest(unittest.TestCase):
     def test_repository_evidence_passes_readonly(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3"})
-        self.assertEqual(len(rows), 6)
+        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4"})
+        self.assertEqual(len(rows), 8)
         d27 = next(row for row in rows if row.directory == D27_DIR)
         self.assertTrue(d27.is_d27_tuple and d27.d27_exception_applied)
         g3_d27 = next(row for row in rows if row.directory == G3_D27_DIR)
@@ -46,6 +47,11 @@ class EvidenceTest(unittest.TestCase):
         g3_candidate = next(row for row in rows if row.directory == G3_NON_D27_DIR)
         self.assertFalse(g3_candidate.d27_exception_applied)
         self.assertEqual(g3_candidate.native_response_binding, "UNVERIFIED_LIMITATION")
+        for directory in G4_DIRS:
+            g4 = next(row for row in rows if row.directory == directory)
+            self.assertEqual(g4.gate, "G4")
+            self.assertEqual(g4.compatibility_status, "UNTESTED")
+            self.assertEqual(g4.d27_exception_applied, g4.is_d27_tuple)
         legacy_g0 = next(row for row in rows if row.gate == "G0")
         self.assertTrue(legacy_g0.d27_exception_applied)  # d27OutputSchemaExceptionApplied alias
         legacy_g1 = next(row for row in rows if row.gate == "G1")

@@ -75,3 +75,32 @@ class FixtureBoundaryTest(unittest.TestCase):
         size = COMMITTED.stat().st_size
         assert size <= runner.MAX_FIXTURE_BYTES
         assert COMMITTED.resolve().is_relative_to(FIXTURES)
+
+    def test_an_unused_recorded_call_fails_the_run(self) -> None:
+        """Every other fixture's negative half depends on this: a recorded call the
+        handler never makes means the handler diverged from the recording."""
+        fixture = FIXTURES / ".unused-call-control.json"
+        fixture.write_text(json.dumps({
+            "schemaVersion": 2,
+            "tool": "tag_write",
+            "parameterOrder": ["writes", "timeout"],
+            "arguments": {"writes": [{"path": "[default]AHU/PV", "value": 1}], "timeout": 5000},
+            "calls": [
+                {"target": "system.tag.readBlocking",
+                 "args": [["[IgnitionMCPPolicy]RuntimeTargetPolicyLength"], 5000],
+                 "result": {"kind": "qualified-values", "items": [
+                     {"quality": {"code": 260, "name": "Bad_NotFound", "level": "Error",
+                                  "good": False, "diagnosticMessage": "no policy"},
+                      "value": None}]}},
+                # The handler refuses after the failed gate read, so this recorded
+                # write is never dispatched.
+                {"target": "system.tag.writeBlocking",
+                 "result": {"kind": "quality-codes", "items": []}},
+            ],
+        }), encoding="utf-8")
+        try:
+            with pytest.raises(JythonRunnerError) as caught:
+                run_recorded_tool("tag_write", fixture)
+        finally:
+            fixture.unlink()
+        assert "recorded calls the handler never made" in str(caught.value)

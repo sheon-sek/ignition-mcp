@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "{\"code\":\"permission_denied\",\"message\":\"Every write target must be inside the Runtime Target Policy allowlist and outside the reserved policy provider; no item was executed.\",\"correlationId\":\"0f6c0a52-0000-4000-8000-00000000c0de\",\"details\":{\"reason\":\"preflightTargetRefused\",\"allowlistKey\":\"tag_write\",\"items\":[{\"index\":0,\"path\":\"[IgnitionMCPPolicy]WriteProbe\",\"reason\":\"reservedProvider\",\"code\":\"permission_denied\"}]}}"
+    }
+  ],
+  "isError": true
+}

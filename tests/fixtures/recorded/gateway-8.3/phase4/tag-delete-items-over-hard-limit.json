@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"limit_exceeded\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"limit\": 100, \"reason\": \"itemsOverHardLimit\", \"requested\": \"__ITEM_COUNT__\"}, \"message\": \"items exceeds the hard limit of 100 targets.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

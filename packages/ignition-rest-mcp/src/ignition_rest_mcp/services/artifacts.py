@@ -13,7 +13,8 @@ from datetime import datetime, timezone
 from ignition_rest_mcp.artifacts.local import LocalArtifactStore
 from ignition_rest_mcp.artifacts.model import Artifact
 from ignition_rest_mcp.audit.sink import AuditRow, AuditWriteError, SqliteAuditSink
-from ignition_rest_mcp.auth import ADMIN_SCOPE, Principal
+from ignition_rest_mcp.auth import Principal
+from ignition_rest_mcp.config import ADMIN_SCOPE
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.models import (
     ArtifactInfoResult,
@@ -29,7 +30,12 @@ from ignition_rest_mcp.storage.records import OperationRecord, OperationRecordSt
 RESTRICTED = "RESTRICTED"
 
 
-def _visible(principal: Principal, owner_key: str) -> bool:
+def artifact_visible(principal: Principal, owner_key: str) -> bool:
+    """D17/D19 visibility for one artifact: its owning principal, or any holder of
+    ``ignition.admin``. A caller that cannot see an artifact is answered exactly as if
+    it did not exist (no existence oracle), which is why the ``project_import`` Tool
+    resolves its input artifact through this rule too."""
+
     return owner_key == principal.key or principal.has_scope(ADMIN_SCOPE)
 
 
@@ -65,7 +71,7 @@ async def artifact_info(
         artifact = await store.stat(artifact_id)
     except GatewayError:
         raise
-    if not _visible(principal, artifact.owner):
+    if not artifact_visible(principal, artifact.owner):
         # Not visible behaves exactly like non-existent (no existence oracle).
         raise GatewayError("not_found", "Artifact not found")
     if artifact.sensitivity == RESTRICTED:
@@ -113,6 +119,6 @@ async def operation_diagnose(
     if not is_uuid7(correlation_id):
         raise GatewayError("invalid_argument", "correlationId must be an exact UUIDv7 identifier")
     record = await records.fetch(correlation_id)
-    if record is None or not _visible(principal, record.principal_key):
+    if record is None or not artifact_visible(principal, record.principal_key):
         raise GatewayError("not_found", "No operation record exists for that correlationId")
     return _diagnose_projection(record)

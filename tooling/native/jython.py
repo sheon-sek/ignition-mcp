@@ -111,6 +111,12 @@ def validate_handler(
     except UnicodeError as error:
         raise ValidationError(f"{location}: handler must be UTF-8") from error
 
+    # Jython 2.7 refuses non-ASCII source without a PEP 263 coding declaration,
+    # and the bundle declares none, so a stray character (a section sign in a
+    # comment) is a runtime syntax error the static checks must catch.
+    if any(ord(character) > 127 for character in source):
+        raise ValidationError(f"{location}: handler source must be ASCII (Jython 2.7 without an encoding declaration)")
+
     lines = source.split("\n")
     header = r"def[ \t]+" + re.escape(entrypoint) + r"[ \t]*\([^\r\n]*\)[ \t]*:[ \t]*(?:#.*)?"
     require(

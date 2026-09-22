@@ -191,6 +191,34 @@ class FakeGateway:
         }[self.module]
         return json.dumps({"total": len(items), "items": items}).encode()
 
+    def _server_config_document(self) -> dict[str, Any]:
+        """The documented ``find`` answer: the resource document including its config.
+
+        The knobs model what a deployment can really hold: a config whose Tool list
+        matches the manifest profile, one that has drifted, and one that carries no
+        permissions tree at all.
+        """
+
+        permissions = {
+            "type": "AllOf",
+            "securityLevels": [{"name": "Authenticated", "children": [{"name": "IgnitionMcpCi", "children": []}]}],
+        }
+        config: dict[str, Any] = {"version": BUNDLE_VERSION}
+        if "no_permissions" not in self.server_config:
+            config["permissions"] = permissions
+        tools = list(TOOLS)
+        if "drift" in self.server_config:
+            tools = [TOOLS[0]]
+        config["tools"] = {"project/ignition_runtime": tools}
+        return {
+            "name": "production",
+            "type": "server-config",
+            "collection": "core",
+            "enabled": True,
+            "signature": "sig-production",
+            "config": config,
+        }
+
     def handle(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
         if self.offline:
@@ -217,7 +245,7 @@ class FakeGateway:
                 return httpx.Response(404, json={"message": "not found"})
             if self.server_config == "error":
                 return httpx.Response(500, content=b"backend failure while reading the configuration")
-            return httpx.Response(200, json={"name": "production", "attributes": {"tools": TOOLS}})
+            return httpx.Response(200, json=self._server_config_document())
         return httpx.Response(404, json={"message": f"unexpected probe path {path}"})
 
 
@@ -366,6 +394,7 @@ def make_inputs(
     server_config_name: str | None = "production",
     as_json: bool = True,
     bundle_zip: Path | None = None,
+    permissions_file: Path | None = None,
 ) -> Inputs:
     return Inputs(
         command=command,
@@ -382,6 +411,7 @@ def make_inputs(
         timeout_seconds=5.0,
         allow_insecure_authorize=False,
         as_json=as_json,
+        permissions_file=permissions_file,
     )
 
 
@@ -822,10 +852,41 @@ def test_plan_blocked_on_missing_server_config_capability(runner: Runner) -> Non
     assert "SKIP runtime-token" in text
 
 
-def test_plan_creates_an_absent_server_config(runner: Runner) -> None:
+def test_plan_creates_an_absent_server_config(runner: Runner, tmp_path: Path) -> None:
+    # Without a permissions tree this CLI refuses to create an unauthenticated MCP
+    # endpoint (Security Level provisioning is issue #22), so the line is BLOCKED.
     code, _, text = runner("plan", make_manifest(), gateway_fake=FakeGateway(server_config="absent"), as_json=False)
+    assert code == 3
+    assert ("BLOCKED server-config production: refusing to create an unauthenticated MCP Server Config: "
+            "pass --server-config-permissions-file (Security Level provisioning is issue #22)") in text
+
+    permissions = tmp_path / "permissions.json"
+    permissions.write_text(json.dumps({"type": "AllOf", "securityLevels": [{"name": "Authenticated"}]}))
+    code, _, text = runner("plan", make_manifest(), gateway_fake=FakeGateway(server_config="absent"),
+                           as_json=False, permissions_file=permissions)
     assert code == 0
     assert "CREATE server-config production: explicit Tool inventory (never *)" in text
+
+
+def test_plan_reports_server_config_drift(runner: Runner) -> None:
+    code, _, text = runner("plan", make_manifest(), gateway_fake=FakeGateway(server_config="drift"), as_json=False)
+    assert code == 0
+    assert ("UPDATE server-config production: explicit Tool inventory (never *), profile readonly, 3 Tools; "
+            "current state: adds [beta, bundle_info]") in text
+
+
+def test_plan_blocks_a_drifted_config_that_carries_no_permissions(runner: Runner) -> None:
+    # A config whose Tools already match needs no write, so its missing permissions
+    # tree is irrelevant; a config that must be rewritten does need one.
+    code, _, text = runner("plan", make_manifest(), gateway_fake=FakeGateway(server_config="no_permissions"),
+                           as_json=False)
+    assert code == 0
+    assert "NO CHANGE server-config production: explicit Tool inventory managed by apply" in text
+
+    code, _, text = runner("plan", make_manifest(),
+                           gateway_fake=FakeGateway(server_config="drift_no_permissions"), as_json=False)
+    assert code == 3
+    assert "the deployed Server Config carries no permissions tree to preserve" in text
 
 
 def test_plan_blocked_when_module_state_is_unreadable(runner: Runner) -> None:
@@ -864,8 +925,11 @@ def test_plan_json_reports_applied_false(runner: Runner) -> None:
     assert payload["applied"] is False
     assert payload["exitCode"] == 3
     assert {action["kind"] for action in actions_of(payload)} == {
-        "mcp-module", "bundle-project", "server-config", "security-level", "runtime-token",
+        "mcp-module", "bundle-project", "server-config", "runtime-policy", "security-level",
+        "runtime-token",
     }
+    policy_line = next(item for item in actions_of(payload) if item["kind"] == "runtime-policy")
+    assert policy_line["action"] == "SKIP" and "--policy-file" in policy_line["reason"]
     assert text.rstrip().endswith(plan.PLAN_SENTINEL)
 
 
@@ -1200,11 +1264,10 @@ def test_console_script_help_documents_the_exit_codes() -> None:
     assert "IGNITION_MCP_SETUP_GATEWAY_TOKEN" in out
 
 
-def test_group_help_offers_exactly_three_subcommands() -> None:
+def test_group_help_offers_exactly_four_subcommands() -> None:
     code, out, _ = run_main(["setup-native", "--help"])
     assert code == 0
-    assert "{doctor,plan,verify}" in out
-    assert "\n  apply" not in out
+    assert "{doctor,plan,verify,apply}" in out
     assert "install-module" in out and "(Phase 6)" in out
 
 
@@ -1215,11 +1278,10 @@ def test_bare_invocation_and_unknown_group_are_usage_errors() -> None:
     assert code == 2 and "unknown command group" in err and "deliberately absent" in err
 
 
-@pytest.mark.parametrize("command", ["apply", "install-module"])
-def test_mutation_commands_are_absent_with_an_explained_refusal(command: str) -> None:
-    code, _, err = run_main(["setup-native", command, "--bundle-manifest", "x"])
+def test_install_module_is_absent_with_an_explained_refusal() -> None:
+    code, _, err = run_main(["setup-native", "install-module", "--bundle-manifest", "x"])
     assert code == 2
-    assert "not implemented" in err and "Phase 4" in err
+    assert "not implemented" in err and "Phase 6" in err
 
 
 def test_unknown_subcommand_is_a_usage_error(tmp_path: Path) -> None:
@@ -1436,8 +1498,8 @@ def test_keyboard_interrupt_exits_two(tmp_path: Path, monkeypatch: pytest.Monkey
 
 ALLOWED_IMPORT_ROOTS = frozenset(
     {
-        "__future__", "argparse", "asyncio", "collections", "dataclasses", "hashlib", "httpx",
-        "ipaddress", "json", "os", "pathlib", "re", "stat", "sys", "typing", "urllib",
+        "__future__", "argparse", "asyncio", "base64", "collections", "dataclasses", "hashlib", "httpx",
+        "ipaddress", "json", "os", "pathlib", "re", "stat", "sys", "time", "typing", "urllib",
     }
 )
 

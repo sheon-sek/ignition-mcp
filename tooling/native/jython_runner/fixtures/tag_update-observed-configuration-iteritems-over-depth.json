@@ -1,0 +1,482 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_update",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "expectedFingerprint": "tcf1:e8e52cd42f2a89b94ca1621cd5107070db9cd346e3b31fda9ba85c8a28b757c3",
+        "config": {
+          "documentation": "phase4-updated",
+          "engUnits": "kPa"
+        }
+      }
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 172
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"allowlists\":{\"tag_update\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.exists",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget"
+      ],
+      "result": {
+        "kind": "boolean",
+        "value": true
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "enabled": true,
+            "name": "WriteTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_update",
+        "actionTarget": "[default]IgnitionMCP_CI/WriteTarget",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.configure",
+      "args": [
+        "[default]IgnitionMCP_CI",
+        [
+          {
+            "documentation": "phase4-updated",
+            "engUnits": "kPa",
+            "name": "WriteTarget"
+          }
+        ],
+        "MergeOverwrite"
+      ],
+      "result": {
+        "kind": "quality-codes",
+        "items": [
+          {
+            "code": 192,
+            "name": "Good",
+            "level": "Good",
+            "good": true,
+            "diagnosticMessage": null
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_update",
+        "actionTarget": "[default]IgnitionMCP_CI/WriteTarget",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.tag.getConfiguration",
+      "args": [
+        "[default]IgnitionMCP_CI/WriteTarget",
+        false,
+        false
+      ],
+      "result": {
+        "kind": "configurations",
+        "items": [
+          {
+            "dataType": "Int4",
+            "defaultValue": 0,
+            "documentation": "phase4-updated",
+            "enabled": true,
+            "engUnits": "kPa",
+            "name": "WriteTarget",
+            "path": {
+              "class": "com.inductiveautomation.ignition.common.tags.paths.BasicTagPath",
+              "text": "[default]IgnitionMCP_CI/WriteTarget",
+              "type": "native-object"
+            },
+            "tagType": "AtomicTag",
+            "value": 0,
+            "valueSource": "memory",
+            "properties": {
+              "nativeType": "iteritems-object",
+              "entries": [
+                [
+                  "level01",
+                  {
+                    "nativeType": "iteritems-object",
+                    "entries": [
+                      [
+                        "level02",
+                        {
+                          "nativeType": "iteritems-object",
+                          "entries": [
+                            [
+                              "level03",
+                              {
+                                "nativeType": "iteritems-object",
+                                "entries": [
+                                  [
+                                    "level04",
+                                    {
+                                      "nativeType": "iteritems-object",
+                                      "entries": [
+                                        [
+                                          "level05",
+                                          {
+                                            "nativeType": "iteritems-object",
+                                            "entries": [
+                                              [
+                                                "level06",
+                                                {
+                                                  "nativeType": "iteritems-object",
+                                                  "entries": [
+                                                    [
+                                                      "level07",
+                                                      {
+                                                        "nativeType": "iteritems-object",
+                                                        "entries": [
+                                                          [
+                                                            "level08",
+                                                            {
+                                                              "nativeType": "iteritems-object",
+                                                              "entries": [
+                                                                [
+                                                                  "level09",
+                                                                  {
+                                                                    "nativeType": "iteritems-object",
+                                                                    "entries": [
+                                                                      [
+                                                                        "level10",
+                                                                        {
+                                                                          "nativeType": "iteritems-object",
+                                                                          "entries": [
+                                                                            [
+                                                                              "level11",
+                                                                              {
+                                                                                "nativeType": "iteritems-object",
+                                                                                "entries": [
+                                                                                  [
+                                                                                    "level12",
+                                                                                    {
+                                                                                      "nativeType": "iteritems-object",
+                                                                                      "entries": [
+                                                                                        [
+                                                                                          "level13",
+                                                                                          {
+                                                                                            "nativeType": "iteritems-object",
+                                                                                            "entries": [
+                                                                                              [
+                                                                                                "level14",
+                                                                                                {
+                                                                                                  "nativeType": "iteritems-object",
+                                                                                                  "entries": [
+                                                                                                    [
+                                                                                                      "level15",
+                                                                                                      {
+                                                                                                        "nativeType": "iteritems-object",
+                                                                                                        "entries": [
+                                                                                                          [
+                                                                                                            "level16",
+                                                                                                            {
+                                                                                                              "nativeType": "iteritems-object",
+                                                                                                              "entries": [
+                                                                                                                [
+                                                                                                                  "level17",
+                                                                                                                  {
+                                                                                                                    "nativeType": "iteritems-object",
+                                                                                                                    "entries": [
+                                                                                                                      [
+                                                                                                                        "level18",
+                                                                                                                        {
+                                                                                                                          "nativeType": "iteritems-object",
+                                                                                                                          "entries": [
+                                                                                                                            [
+                                                                                                                              "level19",
+                                                                                                                              {
+                                                                                                                                "nativeType": "iteritems-object",
+                                                                                                                                "entries": [
+                                                                                                                                  [
+                                                                                                                                    "level20",
+                                                                                                                                    {
+                                                                                                                                      "nativeType": "iteritems-object",
+                                                                                                                                      "entries": [
+                                                                                                                                        [
+                                                                                                                                          "level21",
+                                                                                                                                          {
+                                                                                                                                            "nativeType": "iteritems-object",
+                                                                                                                                            "entries": [
+                                                                                                                                              [
+                                                                                                                                                "level22",
+                                                                                                                                                {
+                                                                                                                                                  "nativeType": "iteritems-object",
+                                                                                                                                                  "entries": [
+                                                                                                                                                    [
+                                                                                                                                                      "level23",
+                                                                                                                                                      {
+                                                                                                                                                        "nativeType": "iteritems-object",
+                                                                                                                                                        "entries": [
+                                                                                                                                                          [
+                                                                                                                                                            "level24",
+                                                                                                                                                            {
+                                                                                                                                                              "nativeType": "iteritems-object",
+                                                                                                                                                              "entries": [
+                                                                                                                                                                [
+                                                                                                                                                                  "level25",
+                                                                                                                                                                  {
+                                                                                                                                                                    "nativeType": "iteritems-object",
+                                                                                                                                                                    "entries": [
+                                                                                                                                                                      [
+                                                                                                                                                                        "level26",
+                                                                                                                                                                        {
+                                                                                                                                                                          "nativeType": "iteritems-object",
+                                                                                                                                                                          "entries": [
+                                                                                                                                                                            [
+                                                                                                                                                                              "level27",
+                                                                                                                                                                              {
+                                                                                                                                                                                "nativeType": "iteritems-object",
+                                                                                                                                                                                "entries": [
+                                                                                                                                                                                  [
+                                                                                                                                                                                    "level28",
+                                                                                                                                                                                    {
+                                                                                                                                                                                      "nativeType": "iteritems-object",
+                                                                                                                                                                                      "entries": [
+                                                                                                                                                                                        [
+                                                                                                                                                                                          "level29",
+                                                                                                                                                                                          {
+                                                                                                                                                                                            "nativeType": "iteritems-object",
+                                                                                                                                                                                            "entries": [
+                                                                                                                                                                                              [
+                                                                                                                                                                                                "level30",
+                                                                                                                                                                                                {
+                                                                                                                                                                                                  "nativeType": "iteritems-object",
+                                                                                                                                                                                                  "entries": [
+                                                                                                                                                                                                    [
+                                                                                                                                                                                                      "level31",
+                                                                                                                                                                                                      {
+                                                                                                                                                                                                        "nativeType": "iteritems-object",
+                                                                                                                                                                                                        "entries": [
+                                                                                                                                                                                                          [
+                                                                                                                                                                                                            "level32",
+                                                                                                                                                                                                            {
+                                                                                                                                                                                                              "nativeType": "iteritems-object",
+                                                                                                                                                                                                              "entries": [
+                                                                                                                                                                                                                [
+                                                                                                                                                                                                                  "level33",
+                                                                                                                                                                                                                  {
+                                                                                                                                                                                                                    "nativeType": "iteritems-object",
+                                                                                                                                                                                                                    "entries": [
+                                                                                                                                                                                                                      [
+                                                                                                                                                                                                                        "level34",
+                                                                                                                                                                                                                        {
+                                                                                                                                                                                                                          "nativeType": "iteritems-object",
+                                                                                                                                                                                                                          "entries": [
+                                                                                                                                                                                                                            [
+                                                                                                                                                                                                                              "level35",
+                                                                                                                                                                                                                              {
+                                                                                                                                                                                                                                "nativeType": "iteritems-object",
+                                                                                                                                                                                                                                "entries": [
+                                                                                                                                                                                                                                  [
+                                                                                                                                                                                                                                    "level36",
+                                                                                                                                                                                                                                    {
+                                                                                                                                                                                                                                      "nativeType": "iteritems-object",
+                                                                                                                                                                                                                                      "entries": [
+                                                                                                                                                                                                                                        [
+                                                                                                                                                                                                                                          "leaf",
+                                                                                                                                                                                                                                          "done"
+                                                                                                                                                                                                                                        ]
+                                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                                    }
+                                                                                                                                                                                                                                  ]
+                                                                                                                                                                                                                                ]
+                                                                                                                                                                                                                              }
+                                                                                                                                                                                                                            ]
+                                                                                                                                                                                                                          ]
+                                                                                                                                                                                                                        }
+                                                                                                                                                                                                                      ]
+                                                                                                                                                                                                                    ]
+                                                                                                                                                                                                                  }
+                                                                                                                                                                                                                ]
+                                                                                                                                                                                                              ]
+                                                                                                                                                                                                            }
+                                                                                                                                                                                                          ]
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                      }
+                                                                                                                                                                                                    ]
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                }
+                                                                                                                                                                                              ]
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          }
+                                                                                                                                                                                        ]
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    }
+                                                                                                                                                                                  ]
+                                                                                                                                                                                ]
+                                                                                                                                                                              }
+                                                                                                                                                                            ]
+                                                                                                                                                                          ]
+                                                                                                                                                                        }
+                                                                                                                                                                      ]
+                                                                                                                                                                    ]
+                                                                                                                                                                  }
+                                                                                                                                                                ]
+                                                                                                                                                              ]
+                                                                                                                                                            }
+                                                                                                                                                          ]
+                                                                                                                                                        ]
+                                                                                                                                                      }
+                                                                                                                                                    ]
+                                                                                                                                                  ]
+                                                                                                                                                }
+                                                                                                                                              ]
+                                                                                                                                            ]
+                                                                                                                                          }
+                                                                                                                                        ]
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ]
+                                                                                                                                ]
+                                                                                                                              }
+                                                                                                                            ]
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ]
+                                                                                                                    ]
+                                                                                                                  }
+                                                                                                                ]
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ]
+                                                                                                        ]
+                                                                                                      }
+                                                                                                    ]
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            ]
+                                                                                          }
+                                                                                        ]
+                                                                                      ]
+                                                                                    }
+                                                                                  ]
+                                                                                ]
+                                                                              }
+                                                                            ]
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    ]
+                                                                  }
+                                                                ]
+                                                              ]
+                                                            }
+                                                          ]
+                                                        ]
+                                                      }
+                                                    ]
+                                                  ]
+                                                }
+                                              ]
+                                            ]
+                                          }
+                                        ]
+                                      ]
+                                    }
+                                  ]
+                                ]
+                              }
+                            ]
+                          ]
+                        }
+                      ]
+                    ]
+                  }
+                ]
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

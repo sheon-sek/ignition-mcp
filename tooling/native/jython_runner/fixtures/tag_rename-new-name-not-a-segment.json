@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_rename",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "path": "[default]IgnitionMCP_CI/WriteTarget",
+        "newName": "Nested/Renamed",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "calls": []
+}

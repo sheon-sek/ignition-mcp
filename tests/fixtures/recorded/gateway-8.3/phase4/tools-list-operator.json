@@ -1,0 +1,68 @@
+{
+  "tools": [
+    {
+      "name": "alarm_shelve",
+      "description": "recorded replay"
+    },
+    {
+      "name": "alarm_shelved_list",
+      "description": "recorded replay"
+    },
+    {
+      "name": "alarm_unshelve",
+      "description": "recorded replay"
+    },
+    {
+      "name": "bundle_info",
+      "description": "recorded replay"
+    },
+    {
+      "name": "database_query",
+      "description": "recorded replay"
+    },
+    {
+      "name": "database_query_list",
+      "description": "recorded replay"
+    },
+    {
+      "name": "historian_browse",
+      "description": "recorded replay"
+    },
+    {
+      "name": "historian_query_aggregate",
+      "description": "recorded replay"
+    },
+    {
+      "name": "historian_query_series",
+      "description": "recorded replay"
+    },
+    {
+      "name": "tag_browse",
+      "description": "recorded replay"
+    },
+    {
+      "name": "tag_get_config",
+      "description": "recorded replay"
+    },
+    {
+      "name": "tag_query",
+      "description": "recorded replay"
+    },
+    {
+      "name": "tag_read",
+      "description": "recorded replay"
+    },
+    {
+      "name": "tag_write",
+      "description": "recorded replay"
+    },
+    {
+      "name": "udt_type_get",
+      "description": "recorded replay"
+    },
+    {
+      "name": "udt_type_list",
+      "description": "recorded replay"
+    }
+  ]
+}

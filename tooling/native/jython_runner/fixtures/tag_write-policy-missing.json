@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_write",
+  "parameterOrder": [
+    "writes",
+    "timeout"
+  ],
+  "arguments": {
+    "writes": [
+      {
+        "path": "[default]AHU/Setpoint",
+        "value": 1
+      }
+    ],
+    "timeout": 5000
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 260,
+              "name": "Bad_NotFound",
+              "level": "Error",
+              "good": false,
+              "diagnosticMessage": "Path '[default]AHU/Missing' not found."
+            },
+            "value": 189
+          }
+        ]
+      }
+    }
+  ]
+}

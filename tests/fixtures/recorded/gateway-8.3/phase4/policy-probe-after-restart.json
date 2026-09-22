@@ -1,0 +1,297 @@
+{
+  "configResource": "ignition/tag-provider/IgnitionMCPPolicy",
+  "maxPolicyBytes": 32768,
+  "measurements": [
+    {
+      "count": 1,
+      "elapsedMs": 27,
+      "items": [
+        {
+          "quality": "Good",
+          "valueByteLength": 283,
+          "valueLength": 283,
+          "valuePrefix": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"",
+          "valueSha256": "b98bedf5a697fcf178dfad7cdcbae1e40c4be57071d57674f6cdf11487ba58f6",
+          "valueText": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"tag_write\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}",
+          "valueType": "unicode"
+        }
+      ],
+      "jsonKeys": [
+        "alarmShelveMaxSeconds",
+        "allowlists",
+        "auditMode",
+        "schemaVersion",
+        "serviceIdentity"
+      ],
+      "jsonKind": "dict",
+      "name": "tag.readBlocking.policy",
+      "ok": true,
+      "path": "[IgnitionMCPPolicy]RuntimeTargetPolicy",
+      "valueText": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"tag_write\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+    },
+    {
+      "count": 1,
+      "elapsedMs": 3,
+      "items": [
+        {
+          "quality": "Bad_NotFound(\"Path '[IgnitionMCPPolicy]MissingPolicy' not found.\")",
+          "valueByteLength": 0,
+          "valueLength": 0,
+          "valuePrefix": "",
+          "valueSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "valueText": "",
+          "valueType": "NoneType"
+        }
+      ],
+      "name": "tag.readBlocking.missing",
+      "ok": true,
+      "path": "[IgnitionMCPPolicy]MissingPolicy"
+    },
+    {
+      "cap": 32768,
+      "declaredLength": 283,
+      "elapsedMs": 6,
+      "gate": "served",
+      "label": "policy",
+      "lengthMatchesValue": true,
+      "lengthQuality": "Good",
+      "materialized": true,
+      "name": "tag.gatedRead.policy",
+      "ok": true,
+      "quality": "Good",
+      "valueByteLength": 283,
+      "valueLength": 283,
+      "valueSha256": "b98bedf5a697fcf178dfad7cdcbae1e40c4be57071d57674f6cdf11487ba58f6",
+      "valueText": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_acknowledge\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"alarm_shelve\":[\"prov:default:/tag:IgnitionMCP_CI/*\"],\"tag_write\":[\"[default]IgnitionMCP_CI\"]},\"auditMode\":\"best_effort\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+    },
+    {
+      "cap": 32768,
+      "declaredLength": 39967,
+      "elapsedMs": 2,
+      "gate": "oversize",
+      "label": "oversize",
+      "lengthQuality": "Good",
+      "materialized": false,
+      "name": "tag.gatedRead.oversize",
+      "ok": true,
+      "reason": "declared length exceeds the configured maximum"
+    },
+    {
+      "count": 1,
+      "elapsedMs": 16,
+      "entries": [
+        {
+          "keys": [
+            "name",
+            "path",
+            "tagType"
+          ],
+          "valueLength": 0
+        }
+      ],
+      "name": "tag.getConfiguration.providerRoot",
+      "ok": true,
+      "path": "[IgnitionMCPPolicy]"
+    },
+    {
+      "count": 1,
+      "elapsedMs": 7,
+      "entries": [
+        {
+          "keys": [
+            "dataType",
+            "defaultValue",
+            "enabled",
+            "name",
+            "path",
+            "tagType",
+            "value",
+            "valueSource"
+          ],
+          "valueLength": 283
+        }
+      ],
+      "name": "tag.getConfiguration.policy",
+      "ok": true,
+      "path": "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+    },
+    {
+      "afterWrite": {
+        "count": 1,
+        "items": [
+          {
+            "quality": "Good",
+            "valueByteLength": 24,
+            "valueLength": 24,
+            "valuePrefix": "phase4-write-probe-value",
+            "valueSha256": "47a18ab0702c45e956aac1fc7c2bb8162259662c79f85343f0dc2c250741ac39",
+            "valueText": "phase4-write-probe-value",
+            "valueType": "unicode"
+          }
+        ],
+        "path": "[IgnitionMCPPolicy]WriteProbe"
+      },
+      "beforeWrite": {
+        "count": 1,
+        "items": [
+          {
+            "quality": "Good",
+            "valueByteLength": 24,
+            "valueLength": 24,
+            "valuePrefix": "phase4-write-probe-value",
+            "valueSha256": "47a18ab0702c45e956aac1fc7c2bb8162259662c79f85343f0dc2c250741ac39",
+            "valueText": "phase4-write-probe-value",
+            "valueType": "unicode"
+          }
+        ],
+        "path": "[IgnitionMCPPolicy]WriteProbe"
+      },
+      "elapsedMs": 6,
+      "name": "tag.writeBlocking.probe",
+      "ok": true,
+      "writeQualityCodes": [
+        "Good"
+      ]
+    },
+    {
+      "configKeys": [
+        "profile",
+        "settings"
+      ],
+      "elapsedMs": 3,
+      "name": "system.config.getResource",
+      "ok": true,
+      "resourceClass": "PyResource",
+      "resourceCollection": "local",
+      "resourceDescription": "",
+      "resourceEnabled": "True",
+      "resourceName": "IgnitionMCPPolicy",
+      "resourceSignature": "8c2f889f7bdf3bd5ba1f9256cedf0742fc57663efd2f9b1e0e8c26baf365d088",
+      "resourceText": "<PyResource: ResourceId{resourcePath=ignition/tag-provider/IgnitionMCPPolicy, collectionName=local}>"
+    },
+    {
+      "count": 35,
+      "elapsedMs": 3,
+      "items": [
+        "(u'com.inductiveautomation.mcp', u'server-config')",
+        "(u'ignition', u'alarm-journal')",
+        "(u'ignition', u'api-token')",
+        "(u'ignition', u'audit-profile')",
+        "(u'ignition', u'cobranding')",
+        "(u'ignition', u'database-connection')",
+        "(u'ignition', u'database-driver')",
+        "(u'ignition', u'database-translator')",
+        "(u'ignition', u'edge-system-properties')",
+        "(u'ignition', u'email-profile')",
+        "(u'ignition', u'gateway-network-incoming')",
+        "(u'ignition', u'gateway-network-outgoing')",
+        "(u'ignition', u'gateway-network-proxy-rules')",
+        "(u'ignition', u'gateway-network-queue-settings')",
+        "(u'ignition', u'gateway-network-settings')",
+        "(u'ignition', u'general-alarm-settings')",
+        "(u'ignition', u'holiday')",
+        "(u'ignition', u'identity-provider')",
+        "(u'ignition', u'keyboard_layout')",
+        "(u'ignition', u'local-system-properties')",
+        "(u'ignition', u'metrics-dashboard')",
+        "(u'ignition', u'oauth2-client')",
+        "(u'ignition', u'opc-connection')",
+        "(u'ignition', u'quickstart')",
+        "(u'ignition', u'schedule')",
+        "(u'ignition', u'secret-provider')",
+        "(u'ignition', u'security-levels')",
+        "(u'ignition', u'security-properties')",
+        "(u'ignition', u'security-zone')",
+        "(u'ignition', u'service-connector')",
+        "(u'ignition', u'store-and-forward-engine')",
+        "(u'ignition', u'system-properties')",
+        "(u'ignition', u'tag-provider')",
+        "(u'ignition', u'translations')",
+        "(u'ignition', u'user-source')"
+      ],
+      "name": "system.config.getResourceTypes",
+      "ok": true
+    },
+    {
+      "available": true,
+      "elapsedMs": 0,
+      "name": "java.lang.System.getenv",
+      "ok": true,
+      "present": false
+    },
+    {
+      "elapsedMs": 2,
+      "hasAlarm": true,
+      "hasConfig": true,
+      "hasFile": true,
+      "hasTag": true,
+      "hasUtil": true,
+      "name": "system.namespaces",
+      "namespaces": [
+        "__class__",
+        "__delattr__",
+        "__dict__",
+        "__doc__",
+        "__ensure_finalizer__",
+        "__findattr_ex__",
+        "__finditem__",
+        "__format__",
+        "__getattribute__",
+        "__hash__",
+        "__init__",
+        "__name__",
+        "__new__",
+        "__reduce__",
+        "__reduce_ex__",
+        "__repr__",
+        "__setattr__",
+        "__setitem__",
+        "__str__",
+        "__subclasshook__",
+        "alarm",
+        "alert",
+        "clear",
+        "config",
+        "dataset",
+        "date",
+        "db",
+        "dict",
+        "file",
+        "getDict",
+        "getName",
+        "math",
+        "name",
+        "net",
+        "opc",
+        "print",
+        "project",
+        "secrets",
+        "security",
+        "serial",
+        "setDict",
+        "setName",
+        "system",
+        "tag",
+        "toString",
+        "user",
+        "util"
+      ],
+      "ok": true
+    },
+    {
+      "elapsedMs": 0,
+      "name": "system.util.getProjectName",
+      "ok": true,
+      "projectName": "mcp_p4_probe"
+    }
+  ],
+  "missingPath": "[IgnitionMCPPolicy]MissingPolicy",
+  "oversizeLengthPath": "[IgnitionMCPPolicy]OversizePolicyProbeLength",
+  "oversizePolicyPath": "[IgnitionMCPPolicy]OversizePolicyProbe",
+  "policyLengthPath": "[IgnitionMCPPolicy]RuntimeTargetPolicyLength",
+  "policyPath": "[IgnitionMCPPolicy]RuntimeTargetPolicy",
+  "probe": "policy_probe",
+  "providerName": "IgnitionMCPPolicy",
+  "schemaVersion": 2,
+  "writeProbePath": "[IgnitionMCPPolicy]WriteProbe"
+}

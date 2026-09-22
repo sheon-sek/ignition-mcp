@@ -162,7 +162,15 @@ jobs:
 
           rm -rf artifacts/runtime-install
           mkdir -p artifacts/runtime-install
-          uv run --no-sync python -m zipfile -e "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.zip" artifacts/runtime-install
+          # Resolve the release ZIP from the directory instead of pinning the
+          # bundle version: a D21 MINOR bump renames the artifact, and this row
+          # deploys whatever the release step just built.
+          release_zip="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.zip' -print -quit)"
+          release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
+          test -n "$release_zip" && test -n "$release_manifest"
+          echo "RELEASE_ZIP=$release_zip" >> "$GITHUB_ENV"
+          echo "RELEASE_MANIFEST=$release_manifest" >> "$GITHUB_ENV"
+          uv run --no-sync python -m zipfile -e "$release_zip" artifacts/runtime-install
           docker cp artifacts/runtime-install "$cid:/usr/local/bin/ignition/data/projects/ignition_runtime"
           docker cp tests/harness/phase3-live/fixture-project "$cid:/usr/local/bin/ignition/data/projects/$DISPOSABLE_PROJECT"
           docker cp tests/harness/phase3-live/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
@@ -269,8 +277,8 @@ jobs:
           IGNITION_MCP_MUTATION_TARGETS="{\"project_import\":[\"$DISPOSABLE_PROJECT\"]}" \
           uv run --locked --package ignition-rest-mcp python tests/harness/phase3-live/driver.py \
             --ci-marker artifacts/ci-marker.json \
-            --release-manifest "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.manifest.json" \
-            --release-zip "$RELEASE_DIR/ignition-runtime-bundle-0.2.0.zip" \
+            --release-manifest "$RELEASE_MANIFEST" \
+            --release-zip "$RELEASE_ZIP" \
             --jwt-private-key artifacts/jwt/private.pem \
             --observations "$EVIDENCE_DIR/observations.json" \
             --raw-dir "$EVIDENCE_DIR/raw" \

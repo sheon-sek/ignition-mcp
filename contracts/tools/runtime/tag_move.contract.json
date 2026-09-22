@@ -1,0 +1,130 @@
+{
+  "schemaVersion": 1,
+  "name": "tag_move",
+  "server": "ignition-runtime",
+  "owner": "runtime",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": true,
+  "budgetClass": "FAST",
+  "parameters": {
+    "items": {
+      "type": "array",
+      "required": true,
+      "minItems": 1,
+      "maxItems": 100,
+      "default": 20,
+      "itemRequired": [
+        "sourcePath",
+        "destinationPath",
+        "expectedFingerprint"
+      ],
+      "itemProperties": {
+        "sourcePath": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "readable": "the source must exist and its configuration must be readable, and its fingerprint is the item's Precondition token"
+        },
+        "destinationPath": {
+          "type": "string",
+          "providerQualified": true,
+          "configPath": true,
+          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "leaf": "the destination's last segment must equal the source's, because one system.tag.move call moves into a destination folder under the source's own name",
+          "absent": "the destination must not exist before the item runs: an occupied destination is conflict and nothing is dispatched"
+        },
+        "expectedFingerprint": {
+          "type": "string",
+          "pattern": "^tcf1:[0-9a-f]{64}$",
+          "source": "tag_get_config.fingerprint"
+        }
+      }
+    }
+  },
+  "outputSchema": "contracts/schemas/tag-move.output.schema.json",
+  "nativeRequirements": [
+    "system.tag.readBlocking",
+    "system.tag.exists",
+    "system.tag.getConfiguration",
+    "system.tag.move",
+    "system.util.audit"
+  ],
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "nativeOutputSchema": "UNAVAILABLE_ON_D27_BASELINE",
+  "nativeOutcome": "one system.tag.move call per item, with the source as a one-element path list, the destination's parent folder as the native destination and Abort as the collision policy; its single QualityCode is that item's outcome, and Observed state never decides success",
+  "preconditionToken": {
+    "kind": "tag_config_fingerprint",
+    "definition": "contracts/shared/tag-config-fingerprint.json",
+    "definitionVersion": "tcf1",
+    "parameter": "items[].expectedFingerprint",
+    "source": "tag_get_config.fingerprint",
+    "enforcedBy": "handler_read_compare",
+    "comparedRead": "system.tag.exists(sourcePath), then system.tag.getConfiguration(sourcePath, false, false), then system.tag.exists(destinationPath) for every item, before any item executes",
+    "mismatchCode": "conflict",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 2: the compare and the change are two steps, so a competing writer can rewrite the source, remove it, or take the destination between the Preflight read and system.tag.move. The handler narrows what it can (every source fingerprint and every free destination is read before any dispatch, a source the Preflight read found missing is refused with not_found, and a destination it found occupied is refused with conflict) and claims no atomicity. A destination that appears inside the window is refused by the Gateway's own Abort and reported as that item's conflict, so the race never costs a node; a source rewritten inside the window moves with content the caller never saw, and a caller that needs a narrower window re-reads with tag_get_config and retries the whole batch."
+  },
+  "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "runtimeTargetPolicy": {
+    "required": true,
+    "missingOrMalformed": "operation_disabled",
+    "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
+    "allowlistKey": "tag_move",
+    "allowlistMatch": "both ends, each a provider-qualified config path prefix at segment boundaries: the source and the destination must both match, and explicit * allows every provider but never a UDT definition (D30 6 measures a move at both ends)",
+    "reservedProvider": "IgnitionMCPPolicy",
+    "reservedProviderRefusal": "permission_denied before Preflight for the source and the destination, whatever the allowlist says, including an explicit *: a move into the provider would place a node beside the policy document, and a move out of it would remove one (owner ruling 1)",
+    "reservedProviderRefusalCode": "permission_denied"
+  },
+  "targetPath": {
+    "form": "<provider>Tag, <provider>Folder or <provider>Folder/Tag, and <provider>_types_/... for a UDT definition",
+    "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
+    "leaf": "the destination's last segment must equal the source's, because system.tag.move moves a path list into one destination folder under each source's own leaf name; a move that renames would be tag_rename's (which checks the new path), so a differing leaf is invalid_argument"
+  },
+  "sourcePath": {
+    "readable": "system.tag.exists(sourcePath) must answer true (not_found, details.items[].reason = sourceMissing) and system.tag.getConfiguration(sourcePath, false, false) must answer a node (upstream_error, reasons sourceReadFailed / configurationUnavailable) before any item executes",
+    "allowlistChecked": "D30 6 measures a move at both ends, so unlike a copy the source itself is checked against the tag_move allowlist (permission_denied, reason targetNotAllowlisted), and a source whose first post-provider segment is _types_ needs an entry that itself names _types_ the same positional way",
+    "reservedProvider": "a source inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
+  },
+  "udtDefinitionTargets": "an explicit _types_ allowlist entry only, and the rule is positional: D30 6 names [provider]_types_/..., so only the first post-provider segment selects the definition namespace. A source or a destination inside it is refused with permission_denied unless an entry that itself names _types_ that way matches it, so a bare * does not cover a UDT definition; a folder that merely happens to be called _types_ deeper in the path is an ordinary target (D30 6)",
+  "collisionPolicy": "Abort",
+  "existingTargetFails": "conflict (details.items[].reason = destinationExists): the move lands at a path that already holds something, and D11 forbids replacing it",
+  "neverOverwrites": "the handler sends collisionPolicy=Abort, so a destination that appears between the Preflight existence check and the dispatch is never overwritten: the call either raises or answers a non-Good QualityCode, and one bounded system.tag.exists check for that item's own destination decides it - a destination the Gateway answers as present is that item's conflict (details.items[].reason = destinationExists, the same reason the Preflight refusal uses) with the provider's own Native outcome still attached, and the source is left in place either way",
+  "fixedKnobs": {
+    "collisionPolicy": "Abort"
+  },
+  "automaticRetryAfterAmbiguousOutcome": false,
+  "ambiguousOutcomeScope": "an item whose own dispatch raised and whose destination the Gateway does not answer as present is outcome_unknown and ends the batch (later items are not_executed); a raised dispatch whose destination has appeared is that item's conflict, and an item whose dispatch answered an unattributable QualityCode is outcome_unknown, so the batch continues in both cases. Nothing is replayed",
+  "nullEncoding": "ignition-null-v1",
+  "existenceCheck": {
+    "call": "system.tag.exists(sourcePath) and system.tag.exists(destinationPath) for every item, before any item executes",
+    "why": "a Gateway answers system.tag.getConfiguration for a path that is not there with a synthesized default node, so neither the source's presence nor the destination's absence can be read from a configuration read; the ticket #10 live run recorded the same synthesized node on 8.3.8 and 8.3.9",
+    "sourceMissing": "not_found (details.items[].reason = sourceMissing), and nothing is dispatched",
+    "destinationPresent": "conflict (details.items[].reason = destinationExists), and nothing is dispatched",
+    "unanswered": "upstream_error (reasons existenceCheckFailed / existenceCheckIndeterminate): a Gateway that raises or answers something that is not a boolean is never read as present or as absent",
+    "observedReadBacks": "the provider export is the independent presence check the harness uses for both ends"
+  },
+  "inputBounds": {
+    "itemsParameter": "items",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "tagMoveMaxItems",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxBytes": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "observedConfigurationMaxBytes": 16384,
+    "observedStateMaxBytes": 65536,
+    "outputMaxBytes": 262144
+  },
+  "observedState": "two paths per item: the destination's own tag_get_config read, `system.tag.getConfiguration(destinationPath, false, false)`, published with the D30 2 fingerprint of that read, and the source's absence, read back with `system.tag.exists(sourcePath)`. Both are Observed state and never decide success, and the destination's fingerprint is the token the caller's next tag_update/tag_delete on the moved node would use",
+  "deniedMutationAudit": "after a usable Policy is read, a refused Target and a refused Precondition each produce one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item Native outcomes whatever the Observed-state budget or the serializer does; an Observed configuration that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes"
+}

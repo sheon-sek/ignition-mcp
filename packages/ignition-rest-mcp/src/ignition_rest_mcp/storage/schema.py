@@ -83,6 +83,13 @@ STATE_DDL: list[str] = [
     );
     CREATE INDEX IF NOT EXISTS project_transactions_state ON project_transactions(state);
     """,
+    # 4: D16 restart reconciliation reads the durable dispatch classification (#16).
+    # The guarded executor classifies every answer the moment it exists and the
+    # transaction writes it down before any read-back, so a restart never has to
+    # reinterpret an answer that was already known (D30 §2: a refusal is final).
+    """
+    ALTER TABLE project_transactions ADD COLUMN dispatch_boundary TEXT;
+    """,
 ]
 
 AUDIT_DDL: list[str] = [

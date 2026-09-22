@@ -69,6 +69,7 @@ class GatewayObservation:
     module_error: str = ""
     project: gw.ProjectState | None = None
     server_config_exists: bool | None = None
+    server_config: dict[str, Any] | None = None
     server_config_error: str = ""
     error: str = ""
 
@@ -114,10 +115,11 @@ def make_gateway(inputs: Inputs, transport: httpx.AsyncBaseTransport | None = No
 
 
 def make_mcp(inputs: Inputs, transport: httpx.AsyncBaseTransport | None = None) -> McpHttpClient:
-    if inputs.mcp_url is None:  # pragma: no cover - load_inputs requires it for doctor/verify
-        raise UsageError("this command needs --mcp-url")
+    endpoint = inputs.runtime_endpoint()
+    if endpoint is None:  # pragma: no cover - load_inputs requires one for doctor/verify
+        raise UsageError("this command needs --mcp-url (or --server-config-name to derive it)")
     return McpHttpClient(
-        endpoint=inputs.mcp_url,
+        endpoint=endpoint,
         token=inputs.mcp_token,
         timeout_seconds=inputs.timeout_seconds,
         transport=transport,
@@ -331,12 +333,13 @@ async def _server_config_check(
             "Gateway does not document the server-config find route; nothing to probe",
         )
     try:
-        exists = await client.server_config_exists(inputs.server_config_name)
+        document = await client.server_config_document(inputs.server_config_name)
     except gw.GatewayProbeError as error:
         observation.server_config_error = str(error)
         return Check(name, UNKNOWN, f"server-config {inputs.server_config_name}: {error}")
-    observation.server_config_exists = exists
-    if exists:
+    observation.server_config = document
+    observation.server_config_exists = document is not None
+    if document is not None:
         return Check(name, PASS, f"server-config {inputs.server_config_name} exists")
     return Check(
         name,

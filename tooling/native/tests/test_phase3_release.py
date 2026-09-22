@@ -19,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PROJECT = REPO_ROOT / "packages/ignition-runtime-bundle/project"
 EVIDENCE = REPO_ROOT / "tests/compatibility/evidence"
 HANDLER_MEMBER = "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
+#: D21 makes `BUNDLE_VERSION` the single identity source, so the tests read it
+#: rather than pinning a version: a D21 MINOR bump per released milestone would
+#: otherwise churn every assertion here.
+BUNDLE_VERSION = (PROJECT.parent / "BUNDLE_VERSION").read_text(encoding="utf-8").strip()
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 
@@ -47,27 +51,26 @@ class ReleaseTest(unittest.TestCase):
         out = Path(tempfile.mkdtemp())
         paths = release(project_dir=PROJECT, out_dir=out, source_revision=SHA_B,
                         evidence_dir=EVIDENCE, repo_root=REPO_ROOT)
-        self.assertEqual(paths["zip"].name, "ignition-runtime-bundle-0.2.0.zip")
+        self.assertEqual(paths["zip"].name, f"ignition-runtime-bundle-{BUNDLE_VERSION}.zip")
         digest = paths["sha256"].read_text(encoding="ascii")
         import hashlib
 
         expected = hashlib.sha256(paths["zip"].read_bytes()).hexdigest()
-        self.assertEqual(digest, f"{expected}  ignition-runtime-bundle-0.2.0.zip\n")
+        self.assertEqual(digest, f"{expected}  ignition-runtime-bundle-{BUNDLE_VERSION}.zip\n")
         manifest = json.loads(paths["manifest"].read_text(encoding="utf-8"))
         self.assertEqual(manifest["sourceRevision"], SHA_B)
         self.assertEqual(manifest["artifact"]["sha256"], expected)
-        self.assertEqual(manifest["bundleVersion"], "0.2.0")
+        self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
+        # The G4 close-out rows certify this bundle, so a Phase 4 release carries
+        # one exact G4 tuple per Gateway row — D21 exact tuples, and the status
+        # stays UNTESTED (an evidence row never promotes a deployment).
         self.assertEqual(
-            [
-                (item["gate"], item["gatewayVersion"], item["nativeResponseBinding"])
-                for item in manifest["testedTuples"]
-            ],
-            [
-                ("G3", "8.3.8", "VERIFIED_WITH_LIMITATION"),
-                ("G3", "8.3.9", "UNVERIFIED_LIMITATION"),
-            ],
+            [(item["gate"], item["gatewayVersion"], item["compatibilityStatus"],
+              item["nativeResponseBinding"]) for item in manifest["testedTuples"]],
+            [("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+             ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION")],
         )
         handler = zipfile.ZipFile(paths["zip"]).read(HANDLER_MEMBER).decode("utf-8")
         self.assertIn(SHA_B, handler)
@@ -98,7 +101,7 @@ class ReleaseTest(unittest.TestCase):
         manifest["testedTuples"] = [{
             "gate": "G3", "gatewayVersion": "8.3.8", "gatewayBuild": "2026071409",
             "mcpModuleVersion": "1.3.5-SNAPSHOT", "mcpModuleBuild": "2026021307",
-            "mcpModuleSha256": "b" * 64, "bundleVersion": "0.2.0",
+            "mcpModuleSha256": "b" * 64, "bundleVersion": "0.3.0",
             "compatibilityStatus": "SUPPORTED", "nativeResponseBinding": "VERIFIED",
         }]
         with self.assertRaises(ValidationError):
@@ -121,7 +124,7 @@ class ReleaseTest(unittest.TestCase):
         project = _copy_project(parent)
         manifest_path = project / "project.json"
         doc = json.loads(manifest_path.read_text(encoding="utf-8"))
-        doc["description"] = doc["description"].replace("bundle=0.2.0", "bundle=0.1.0")
+        doc["description"] = doc["description"].replace(f"bundle={BUNDLE_VERSION}", "bundle=0.1.0")
         manifest_path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
         with self.assertRaises(ValidationError) as caught:
             validate_project(project)
@@ -160,7 +163,7 @@ class ReleaseTest(unittest.TestCase):
         # the stamped project.json/BUNDLE_VERSION siblings must exist for validation
         shutil.copy(PROJECT.parent / "BUNDLE_VERSION", unpacked.parent / "BUNDLE_VERSION")
         validate_project(unpacked)
-        self.assertEqual(len(files), 33)
+        self.assertEqual(len(files), 51)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": 1,
+  "name": "config_resource_rename",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "mutation",
+  "permissionClass": "CONFIG",
+  "requiredScope": "ignition.config",
+  "mutationClass": "CONFIG_MUTATION",
+  "destructive": false,
+  "budgetClass": "FAST",
+  "deploymentGate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+  "audited": true,
+  "parameters": {
+    "resourceType": {
+      "type": "string",
+      "required": true,
+      "source": "openapi-capability-registry"
+    },
+    "expectedSignature": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512,
+      "source": "config_resource_get.signature"
+    },
+    "newName": {
+      "type": "string",
+      "required": true,
+      "maxLength": 512
+    },
+    "name": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 512,
+      "note": "the resource's current name"
+    },
+    "collection": {
+      "type": "string",
+      "required": false,
+      "default": "",
+      "maxLength": 128,
+      "note": "the core collection: an omitted or empty value means core, and the Tool sends collection=core on every Gateway read and write it makes; any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)"
+    }
+  },
+  "outputSchema": "contracts/schemas/config-resource-rename.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/resources/find/<catalog-resourceType>/{name}",
+    "POST /data/api/v1/resources/rename/<catalog-resourceType>/{name}"
+  ],
+  "capabilityId": "config_resource_rename",
+  "callerSuppliedRestPath": false,
+  "embeddedSecretsRedacted": true,
+  "preconditionToken": {
+    "kind": "resource_signature",
+    "parameter": "expectedSignature",
+    "source": "config_resource_get.signature",
+    "enforcedBy": "server_read_compare",
+    "nativeLocation": "none: the documented rename route takes no signature parameter",
+    "raceWindowDocumented": true,
+    "raceWindow": "D30 §2: the read-compare cannot be atomic with the dispatch, so a competing writer inside the window changes the resource the rename applies to. Nothing here claims otherwise."
+  },
+  "targetId": {
+    "form": "<resourceType>/<name>, or <resourceType> for a singleton",
+    "collection": "the core collection only: the reads and the documented rename route name it as the collection query parameter (the request body carries the new name and the fixed references, never a collection), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
+    "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
+    "wildcard": "*",
+    "denyByDefault": true,
+    "denialCode": "permission_denied",
+    "denialCodeSource": "D30 §7, Tool-scoped; the Phase 3 machinery keeps operation_disabled"
+  },
+  "targetIds": {
+    "targets": [
+      "<resourceType>/<name>: the resource being renamed, whose state the rename changes",
+      "<resourceType>/<newName>: the resource the rename produces"
+    ],
+    "rule": "D30 §3 Preflight: every Target a call changes is checked before anything executes, so both are checked and both must be allowlisted. A rename never applies to a singleton (its type has no documented rename route).",
+    "openQuestion": "D30 does not state the Target rule for a *config* rename. The Runtime rule for `tag_rename` names only the new path; the more conservative reading is taken here, and the runbook records it as an open question for the owner."
+  },
+  "refusedResourceTypes": {
+    "contract": "contracts/shared/refused-resource-types.json",
+    "errorCode": "permission_denied",
+    "unclassified": "refused"
+  },
+  "reservedResourceNames": {
+    "resourceType": "ignition/tag-provider",
+    "collection": "core",
+    "names": [
+      "IgnitionMCPPolicy"
+    ],
+    "match": "the whole name, trimmed and compared case-insensitively, never a substring: `IgnitionMCPPolicyStaging` is a different resource and stays manageable. Fail-closed on case because Ignition documents no rule for how two config resource names compare, and the refusal names the *reserved* spelling however the caller wrote it.",
+    "targets": [
+      "name",
+      "newName"
+    ],
+    "denialCode": "permission_denied",
+    "layer": "target-class",
+    "rule": "D30 owner ruling 4: this resource is the Tag provider that holds the Runtime Target Policy, and a generic config Mutation refuses it **by name** before the Target allowlist is consulted — even under an explicit `*` — because `ignition/tag-provider` is an allowed type and nothing else would stop a delete or a reconfiguration of the policy's storage provider. It is a refusal by name *within* an allowed type, not an entry in the Refused resource types set (D30 §5): the type stays allowed and every other Tag provider stays manageable through this Tool. The refusal is Mutation-only, so `config_resource_get` still serves the resource.",
+    "source": "D30 owner ruling 4 (2026-09-22); issue #36",
+    "renameRule": "Both names of a rename are Targets (D30 §3), so renaming another provider *into* the reserved name and renaming the reserved provider *away* are both refused. The audited reason names the reserved resource; the Target the recorded decision is attributed to is the call's first Target, which for a refused destination is the source."
+  },
+  "fixedKnobs": {
+    "references": "ABORT",
+    "collection": "core"
+  },
+  "boundedInputBytes": 262144,
+  "requestSchemaValidation": {
+    "source": "gateway-openapi-capability-snapshot",
+    "schema": "the documented rename request body, bundled into a self-contained JSON Schema (internal $refs hoisted to $defs) at capability refresh time",
+    "appliesTo": "the complete rename body, before dispatch",
+    "unavailableDisposition": "a documented rename route without a usable request schema exposes no rename route, so the Tool refuses the resource type with unsupported_capability",
+    "errorCode": "invalid_argument"
+  },
+  "collisionPolicy": "D11: an occupied destination is a `conflict`. It is checked against the Gateway before dispatch, so a collision never consumes the caller's Resource signature, and a destination that appears in the race window is refused by the Gateway itself.",
+  "rejectionPolicy": {
+    "rule": "D30 §2: an explicit Gateway rejection is the result of the attempt — a 4xx (including 409 for an occupied destination, which D30 §7 maps to `conflict`) or a 2xx carrying success=false with a problem. No read-back may turn it into a success: a resource may have been moved by another writer.",
+    "verificationMaySucceedWhen": [
+      "the Gateway claimed success (2xx with no refusal)"
+    ],
+    "ambiguousAttribution": "a competing writer cannot be ruled out for an ambiguous dispatch, so a read-back that shows the resource at the new name is outcome_unknown, never a success; the old name still holding the caller's signature is not_applied",
+    "recoveredSuccess": "unreachable for this Tool"
+  },
+  "verification": "bounded re-read of both names: the claimed success is confirmed only when the old name is vacant *and* the new name holds the resource, whose read-back is reported as Observed state"
+}

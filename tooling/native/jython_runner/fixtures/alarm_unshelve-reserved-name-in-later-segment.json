@@ -1,0 +1,117 @@
+{
+  "schemaVersion": 2,
+  "tool": "alarm_unshelve",
+  "parameterOrder": [
+    "paths"
+  ],
+  "arguments": {
+    "paths": [
+      "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High",
+      "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+    ]
+  },
+  "calls": [
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicyLength"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": 204
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.tag.readBlocking",
+      "args": [
+        [
+          "[IgnitionMCPPolicy]RuntimeTargetPolicy"
+        ],
+        5000
+      ],
+      "result": {
+        "kind": "qualified-values",
+        "items": [
+          {
+            "quality": {
+              "code": 192,
+              "name": "Good",
+              "level": "Good",
+              "good": true,
+              "diagnosticMessage": null
+            },
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"*\"],\"alarm_unshelve\":[\"*\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+          }
+        ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_unshelve",
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High,prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.unshelve",
+      "args": [
+        [
+          "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High"
+        ]
+      ],
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.unshelve",
+      "args": [
+        [
+          "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+        ]
+      ],
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_unshelve",
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High,prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.getShelvedPaths",
+      "args": [],
+      "result": {
+        "kind": "shelved-paths",
+        "items": []
+      }
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_move",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Nested/TextTarget",
+        "expectedFingerprint": "tcf1:0000000000000000000000000000000000000000000000000000000000000000"
+      }
+    ]
+  },
+  "calls": []
+}

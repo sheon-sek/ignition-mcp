@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "decision": "D30",
+  "rule": "Every resource type in a supported OpenAPI document is classified as allowed or refused. A resource type in neither list is refused. A refused type is refused whatever the Target allowlist says, including '*', with permission_denied.",
+  "documents": [
+    {
+      "gatewayVersion": "8.3.8",
+      "path": "docs/ignition-8.3.8-openapi/openapi.min.json",
+      "source": "Ignition HTTP API specification exported from a real 8.3.8 Gateway",
+      "resourceTypes": 57
+    },
+    {
+      "gatewayVersion": "8.3.9",
+      "path": "docs/ignition-8.3.9-openapi/resource-types.json",
+      "source": "Resource-type inventory derived from a live 8.3.9 candidate Gateway's /openapi.json (document sha256 1f466e5084a0d45dcb6de2535059a555676b55838609e87354c6552cfca0d71a, build 2026082511, run 35640169826). The full document is not committed: it is 12.7 MB and its module composition depends on the harness image. The candidate exposes 56 resource types, a strict subset of the 8.3.8 document's 57.",
+      "resourceTypes": 56
+    }
+  ],
+  "allowed": [
+    "com.inductiveautomation.alarm-notification/alarm-notification-profile",
+    "com.inductiveautomation.eam/agent-group",
+    "com.inductiveautomation.eam/agent-management",
+    "com.inductiveautomation.eam/eam-tasks",
+    "com.inductiveautomation.eam/event-thresholds",
+    "com.inductiveautomation.historian/historian-provider",
+    "com.inductiveautomation.opcua.drivers.bacnet/BacnetIpLocalDeviceConfig",
+    "com.inductiveautomation.opcua/access-control",
+    "com.inductiveautomation.opcua/device",
+    "com.inductiveautomation.opcua/server-config",
+    "com.inductiveautomation.perspective/fonts",
+    "com.inductiveautomation.perspective/icons",
+    "com.inductiveautomation.perspective/themes",
+    "com.inductiveautomation.sfc/chart-settings",
+    "com.inductiveautomation.sip-notification/script-settings",
+    "ignition/alarm-journal",
+    "ignition/audit-profile",
+    "ignition/cobranding",
+    "ignition/database-connection",
+    "ignition/database-driver",
+    "ignition/database-translator",
+    "ignition/email-profile",
+    "ignition/gateway-network-incoming",
+    "ignition/gateway-network-outgoing",
+    "ignition/gateway-network-proxy-rules",
+    "ignition/gateway-network-queue-settings",
+    "ignition/gateway-network-settings",
+    "ignition/general-alarm-settings",
+    "ignition/holiday",
+    "ignition/keyboard_layout",
+    "ignition/metrics-dashboard",
+    "ignition/opc-connection",
+    "ignition/quickstart",
+    "ignition/roster-config",
+    "ignition/schedule",
+    "ignition/service-connector",
+    "ignition/store-and-forward-engine",
+    "ignition/tag-provider",
+    "ignition/translations"
+  ],
+  "refused": [
+    {
+      "resourceType": "com.inductiveautomation.eam/hw-license-management",
+      "category": "EAM licenses"
+    },
+    {
+      "resourceType": "com.inductiveautomation.eam/leased-license-management",
+      "category": "EAM licenses"
+    },
+    {
+      "resourceType": "com.inductiveautomation.eam/module-certificates",
+      "category": "module administration"
+    },
+    {
+      "resourceType": "com.inductiveautomation.eam/module-eulas",
+      "category": "module administration"
+    },
+    {
+      "resourceType": "com.inductiveautomation.eam/module-settings",
+      "category": "module administration"
+    },
+    {
+      "resourceType": "com.inductiveautomation.eam/remote-upgrade",
+      "category": "module administration"
+    },
+    {
+      "resourceType": "com.inductiveautomation.mcp/server-config",
+      "category": "the MCP Module's own Tool inventory"
+    },
+    {
+      "resourceType": "ignition/api-token",
+      "category": "API tokens"
+    },
+    {
+      "resourceType": "ignition/edge-system-properties",
+      "category": "system properties (Edge)"
+    },
+    {
+      "resourceType": "ignition/identity-provider",
+      "category": "identity providers"
+    },
+    {
+      "resourceType": "ignition/local-system-properties",
+      "category": "local system properties"
+    },
+    {
+      "resourceType": "ignition/oauth2-client",
+      "category": "OAuth2 clients"
+    },
+    {
+      "resourceType": "ignition/secret-provider",
+      "category": "secret providers"
+    },
+    {
+      "resourceType": "ignition/security-levels",
+      "category": "security levels"
+    },
+    {
+      "resourceType": "ignition/security-properties",
+      "category": "security properties"
+    },
+    {
+      "resourceType": "ignition/security-zone",
+      "category": "security zones"
+    },
+    {
+      "resourceType": "ignition/system-properties",
+      "category": "system properties"
+    },
+    {
+      "resourceType": "ignition/user-source",
+      "category": "user sources"
+    }
+  ]
+}

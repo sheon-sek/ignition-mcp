@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 2,
+  "tool": "tag_copy",
+  "parameterOrder": [
+    "items"
+  ],
+  "arguments": {
+    "items": [
+      "not-an-object",
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget"
+      },
+      {
+        "sourcePath": "IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/Copied/WriteTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "IgnitionMCP_CI/CopiedTarget"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]*"
+      },
+      {
+        "sourcePath": "[default]IgnitionMCP_CI/WriteTarget",
+        "destinationPath": "[default]IgnitionMCP_CI/RenamedCopy"
+      }
+    ]
+  },
+  "calls": []
+}

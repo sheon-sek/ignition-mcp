@@ -20,14 +20,17 @@ from ignition_rest_mcp.projects.locks import SINGLE_WRITER_LIMITATION
 from ignition_rest_mcp.projects.locks import ProcessWriterGuard, ProjectLockRegistry
 from ignition_rest_mcp.projects.transactions import ProjectTransactionService
 from ignition_rest_mcp.auth import build_auth, current_principal
+from ignition_rest_mcp.authorization import ScopeAuthorizationMiddleware
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry, CapabilitySnapshot
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.invocation.lifecycle import enforce_output_budget, invoke_tool
 from ignition_rest_mcp.models import (
+    AlarmPipelineCancelResult,
     AlarmPipelineListResult,
     AlarmPipelineStatusResult,
+    ArtifactDeleteResult,
     ArtifactInfoResult,
     ArtifactListResult,
     AuditQueryResult,
@@ -38,13 +41,19 @@ from ignition_rest_mcp.models import (
     ConfigResourceListResult,
     ConfigResourceNamesResult,
     ConfigResourceSearchResult,
+    ConfigResourceUpdateResult,
+    ConfigResourceCreateResult,
+    ConfigResourceDeleteResult,
+    ConfigResourceRenameResult,
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
     ProjectListResult,
     ProjectExportResult,
+    ProjectImportResult,
     StorageDiagnostics,
     TagConfigExportResult,
+    TagConfigImportResult,
 )
 from ignition_rest_mcp.observability.logging import configure_logging
 from ignition_rest_mcp.observability.metrics import Metrics
@@ -54,16 +63,34 @@ from ignition_rest_mcp.services.exports import (
     project_export as project_export_service,
     tag_config_export as tag_config_export_service,
 )
+from ignition_rest_mcp.services.alarm_pipeline_cancel import (
+    alarm_pipeline_cancel as alarm_pipeline_cancel_service,
+)
+from ignition_rest_mcp.services.artifact_delete import (
+    artifact_delete as artifact_delete_service,
+)
 from ignition_rest_mcp.services.artifacts import (
     artifact_info as artifact_info_service,
     artifact_list as artifact_list_service,
     operation_diagnose as operation_diagnose_service,
+)
+from ignition_rest_mcp.services.config_mutation import (
+    config_resource_create as config_resource_create_service,
+    config_resource_delete as config_resource_delete_service,
+    config_resource_rename as config_resource_rename_service,
+    config_resource_update as config_resource_update_service,
 )
 from ignition_rest_mcp.services.gateway import (
     capabilities_resource,
     gateway_diagnose as diagnose_service,
     gateway_info as info_service,
     openapi_info_resource,
+)
+from ignition_rest_mcp.services.project_import import (
+    project_import as project_import_service,
+)
+from ignition_rest_mcp.services.tag_config_import import (
+    tag_config_import as tag_config_import_service,
 )
 from ignition_rest_mcp.services.readonly import (
     alarm_pipeline_list as alarm_pipeline_list_service,
@@ -195,6 +222,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="ignition-rest",
         version="0.1.0a0",
         auth=build_auth(settings),
+        middleware=[ScopeAuthorizationMiddleware(settings, state)],
         lifespan=lifespan,
         mask_error_details=True,
     )
@@ -224,7 +252,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway_info",
         description="Return a bounded identity summary for the connected Ignition Gateway.",
         output_schema=GatewayInfoResult.model_json_schema(),
-        tags={"read", "capability:gateway_info"},
+        tags={"read", "scope:ignition.read", "capability:gateway_info"},
     )
     async def gateway_info() -> GatewayInfoResult:
         async def flow(context: OperationContext) -> GatewayInfoResult:
@@ -236,7 +264,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway_diagnose",
         description="Run low-cost connectivity, authentication, and capability-registry diagnostics.",
         output_schema=GatewayDiagnoseResult.model_json_schema(),
-        tags={"read", "diagnostic"},
+        tags={"read", "scope:ignition.read", "diagnostic"},
     )
     async def gateway_diagnose() -> GatewayDiagnoseResult:
         async def flow(context: OperationContext) -> GatewayDiagnoseResult:
@@ -254,7 +282,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="project_list",
         description="List Ignition Projects through the bounded Native REST collection endpoint.",
         output_schema=ProjectListResult.model_json_schema(),
-        tags={"read", "capability:project_list"},
+        tags={"read", "scope:ignition.read", "capability:project_list"},
     )
     async def project_list(search: str = "", limit: int = 100, offset: int = 0) -> ProjectListResult:
         return await _invoke(
@@ -269,7 +297,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_search",
         description="Search OpenAPI-discovered Gateway configuration resource types. No REST path is caller-controlled.",
         output_schema=ConfigResourceSearchResult.model_json_schema(),
-        tags={"read", "capability:config_resource_search"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_search"},
     )
     async def config_resource_search(
         query: str = "", limit: int = 100, offset: int = 0,
@@ -285,7 +313,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_describe",
         description="Describe one exact OpenAPI-discovered Gateway configuration resource type.",
         output_schema=ConfigResourceDescribeResult.model_json_schema(),
-        tags={"read", "capability:config_resource_describe"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_describe"},
     )
     async def config_resource_describe(resourceType: str) -> ConfigResourceDescribeResult:
         return await _invoke(
@@ -299,7 +327,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_names",
         description="List bounded names for a non-singleton OpenAPI-discovered configuration resource type.",
         output_schema=ConfigResourceNamesResult.model_json_schema(),
-        tags={"read", "capability:config_resource_names"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_names"},
     )
     async def config_resource_names(
         resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
@@ -316,7 +344,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_list",
         description="List bounded, redacted configuration resources for one OpenAPI-discovered non-singleton type.",
         output_schema=ConfigResourceListResult.model_json_schema(),
-        tags={"read", "capability:config_resource_list"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_list"},
     )
     async def config_resource_list(
         resourceType: str, search: str = "", limit: int = 100, offset: int = 0,
@@ -333,7 +361,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="config_resource_get",
         description="Read one exact or singleton configuration resource selected only through the OpenAPI capability catalog.",
         output_schema=ConfigResourceGetResult.model_json_schema(),
-        tags={"read", "capability:config_resource_get"},
+        tags={"read", "scope:ignition.read", "capability:config_resource_get"},
     )
     async def config_resource_get(
         resourceType: str, name: str = "", collection: str = "", defaultIfUndefined: bool = False,
@@ -348,10 +376,252 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="config_resource_update",
+        description=(
+            "Modify one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused resource "
+            "types)."
+        ),
+        output_schema=ConfigResourceUpdateResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_update"},
+    )
+    async def config_resource_update(
+        resourceType: str,
+        expectedSignature: str,
+        name: str = "",
+        collection: str = "",
+        config: dict[str, Any] | None = None,
+        enabled: bool | None = None,
+        description: str | None = None,
+    ) -> ConfigResourceUpdateResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceUpdateResult:
+            return await config_resource_update_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                expected_signature=expectedSignature, config=config, enabled=enabled,
+                description=description,
+            )
+
+        return await _invoke(
+            "config_resource_update", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_create",
+        description=(
+            "Create one Gateway configuration resource through Native REST (deployment-gated; "
+            "refuses Refused resource types; an existing target is a conflict)."
+        ),
+        output_schema=ConfigResourceCreateResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_create"},
+    )
+    async def config_resource_create(
+        resourceType: str,
+        name: str = "",
+        collection: str = "",
+        config: dict[str, Any] | None = None,
+        enabled: bool | None = None,
+        description: str | None = None,
+    ) -> ConfigResourceCreateResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceCreateResult:
+            return await config_resource_create_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                config=config, enabled=enabled, description=description,
+            )
+
+        return await _invoke(
+            "config_resource_create", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_delete",
+        description=(
+            "Delete one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused "
+            "resource types)."
+        ),
+        output_schema=ConfigResourceDeleteResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.config", "capability:config_resource_delete",
+        },
+    )
+    async def config_resource_delete(
+        resourceType: str,
+        expectedSignature: str,
+        name: str = "",
+        collection: str = "",
+    ) -> ConfigResourceDeleteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceDeleteResult:
+            return await config_resource_delete_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, collection=collection,
+                expected_signature=expectedSignature,
+            )
+
+        return await _invoke(
+            "config_resource_delete", "FAST", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="config_resource_rename",
+        description=(
+            "Rename one Gateway configuration resource through Native REST, preconditioned on the "
+            "Resource signature from config_resource_get (deployment-gated; refuses Refused "
+            "resource types; an occupied destination is a conflict)."
+        ),
+        output_schema=ConfigResourceRenameResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:config_resource_rename"},
+    )
+    async def config_resource_rename(
+        resourceType: str,
+        expectedSignature: str,
+        newName: str,
+        name: str = "",
+        collection: str = "",
+    ) -> ConfigResourceRenameResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ConfigResourceRenameResult:
+            return await config_resource_rename_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal,
+                resource_type=resourceType, name=name, new_name=newName, collection=collection,
+                expected_signature=expectedSignature,
+            )
+
+        return await _invoke(
+            "config_resource_rename", "FAST", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="project_import",
+        description=(
+            "Import a Project archive artifact into an existing Project through Native REST, "
+            "preconditioned on the fingerprint project_export reported and reconciled by the D16 "
+            "Project transaction (deployment-gated; destructive)."
+        ),
+        output_schema=ProjectImportResult.model_json_schema(),
+        tags={"mutation", "destructive", "scope:ignition.config", "capability:project_import"},
+    )
+    async def project_import(
+        projectName: str, artifactId: str, expectedFingerprint: str,
+    ) -> ProjectImportResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ProjectImportResult:
+            return await project_import_service(
+                state.require_transactions(), state.require_artifacts(), state.require_registry(),
+                settings, state.require_records(), context,
+                principal=principal, project_name=projectName, artifact_id=artifactId,
+                expected_fingerprint=expectedFingerprint, metrics=state.metrics,
+            )
+
+        return await _invoke(
+            "project_import", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="tag_config_import",
+        description=(
+            "Import a JSON Tag export artifact under a provider-qualified path through Native "
+            "REST, creating Tags only (the collision policy is always Abort), and verify it with "
+            "a bounded re-export of the same provider and path (deployment-gated)."
+        ),
+        output_schema=TagConfigImportResult.model_json_schema(),
+        tags={"mutation", "scope:ignition.config", "capability:tag_config_import"},
+    )
+    async def tag_config_import(
+        artifactId: str, provider: str, path: str = "",
+    ) -> TagConfigImportResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> TagConfigImportResult:
+            return await tag_config_import_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(),
+                settings, context,
+                principal=principal, artifact_id=artifactId, provider=provider, path=path,
+            )
+
+        return await _invoke(
+            "tag_config_import", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=False, audited=True,
+        )
+
+    @mcp.tool(
+        name="alarm_pipeline_cancel",
+        description=(
+            "Cancel one Alarm Notification Pipeline run — an exact pipeline path plus the "
+            "Alarm Event it is running for — through Native REST, verified by a bounded "
+            "pipeline status re-read (deployment-gated; destructive; the Alarm Event "
+            "itself is never acknowledged or cleared)."
+        ),
+        output_schema=AlarmPipelineCancelResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.control",
+            "capability:alarm_pipeline_cancel",
+        },
+    )
+    async def alarm_pipeline_cancel(path: str, alarmEventId: str) -> AlarmPipelineCancelResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> AlarmPipelineCancelResult:
+            return await alarm_pipeline_cancel_service(
+                state.require_client(), state.require_registry(), settings, context,
+                principal=principal, path=path, alarm_event_id=alarmEventId,
+            )
+
+        return await _invoke(
+            "alarm_pipeline_cancel", "FAST", flow,
+            permission_class="CONTROL", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
+        name="artifact_delete",
+        description=(
+            "Delete one server-held artifact through the D17 ArtifactStore — the only delete "
+            "path, because D30 drops the artifact HTTP route — verified by a bounded read-back "
+            "of the same identifier (deployment-gated; destructive; only the owning principal "
+            "or ignition.admin; a retention-locked artifact is a conflict)."
+        ),
+        output_schema=ArtifactDeleteResult.model_json_schema(),
+        tags={
+            "mutation", "destructive", "scope:ignition.config", "storage", "principal-scoped",
+        },
+    )
+    async def artifact_delete(artifactId: str) -> ArtifactDeleteResult:
+        principal = current_principal(settings)
+
+        async def flow(context: OperationContext) -> ArtifactDeleteResult:
+            return await artifact_delete_service(
+                state.require_artifacts(), settings, context,
+                principal=principal, artifact_id=artifactId,
+            )
+
+        return await _invoke(
+            "artifact_delete", "ARTIFACT", flow,
+            permission_class="CONFIG", destructive=True, audited=True,
+        )
+
+    @mcp.tool(
         name="audit_query",
         description="Query one Ignition Gateway audit profile with bounded pagination and optional native filters.",
         output_schema=AuditQueryResult.model_json_schema(),
-        tags={"read", "capability:audit_query"},
+        tags={"read", "scope:ignition.read", "capability:audit_query"},
     )
     async def audit_query(
         profile: str,
@@ -380,7 +650,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="alarm_pipeline_list",
         description="List bounded Alarm Notification Pipeline runtime overview records through Native REST.",
         output_schema=AlarmPipelineListResult.model_json_schema(),
-        tags={"read", "capability:alarm_pipeline_list"},
+        tags={"read", "scope:ignition.read", "capability:alarm_pipeline_list"},
     )
     async def alarm_pipeline_list(
         search: str = "", limit: int = 100, offset: int = 0,
@@ -397,7 +667,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="alarm_pipeline_status",
         description="Read bounded runtime instances for one exact Alarm Notification Pipeline path.",
         output_schema=AlarmPipelineStatusResult.model_json_schema(),
-        tags={"read", "capability:alarm_pipeline_status"},
+        tags={"read", "scope:ignition.read", "capability:alarm_pipeline_status"},
     )
     async def alarm_pipeline_status(
         path: str, limit: int = 100, offset: int = 0,
@@ -414,7 +684,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="project_export",
         description="Export one Ignition Project into a server-held artifact (sensitive export; deployment-gated).",
         output_schema=ProjectExportResult.model_json_schema(),
-        tags={"read", "capability:project_export", "sensitive-export"},
+        tags={"read", "scope:ignition.read", "capability:project_export", "sensitive-export"},
     )
     async def project_export(projectName: str) -> ProjectExportResult:
         return await _invoke(
@@ -435,7 +705,7 @@ def create_server(settings: Settings) -> FastMCP:
             "(sensitive export; deployment-gated)."
         ),
         output_schema=TagConfigExportResult.model_json_schema(),
-        tags={"read", "capability:tag_config_export", "sensitive-export"},
+        tags={"read", "scope:ignition.read", "capability:tag_config_export", "sensitive-export"},
     )
     async def tag_config_export(
         provider: str, path: str = "", recursive: bool = True, includeUdts: bool = False,
@@ -455,7 +725,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="artifact_list",
         description="List READY artifact metadata visible to the calling principal (bounded, paginated).",
         output_schema=ArtifactListResult.model_json_schema(),
-        tags={"read", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "storage", "principal-scoped"},
     )
     async def artifact_list(kind: str = "", limit: int = 100, offset: int = 0) -> ArtifactListResult:
         principal = current_principal(settings)
@@ -470,7 +740,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="artifact_info",
         description="Read the metadata of one READY artifact visible to the calling principal.",
         output_schema=ArtifactInfoResult.model_json_schema(),
-        tags={"read", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "storage", "principal-scoped"},
     )
     async def artifact_info(artifactId: str) -> ArtifactInfoResult:
         principal = current_principal(settings)
@@ -486,7 +756,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="operation_diagnose",
         description="Diagnose one prior operation by its exact UUIDv7 correlationId (D19, principal-scoped).",
         output_schema=OperationDiagnoseResult.model_json_schema(),
-        tags={"read", "diagnostic", "storage", "principal-scoped"},
+        tags={"read", "scope:ignition.read", "diagnostic", "storage", "principal-scoped"},
     )
     async def operation_diagnose(correlationId: str) -> OperationDiagnoseResult:
         principal = current_principal(settings)
@@ -502,6 +772,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway-capabilities",
         description="Bounded metadata for the current immutable Gateway capability snapshot.",
         mime_type="application/json",
+        tags={"read", "scope:ignition.read"},
     )
     async def gateway_capabilities() -> str:
         value: CapabilitiesResource = capabilities_resource(state.require_registry())
@@ -516,6 +787,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="gateway-openapi-info",
         description="OpenAPI fingerprint and registry metadata; does not expose the full OpenAPI document.",
         mime_type="application/json",
+        tags={"read", "scope:ignition.read"},
     )
     async def gateway_openapi_info() -> str:
         value: OpenApiInfoResource = openapi_info_resource(state.require_registry())
@@ -703,9 +975,6 @@ async def _storage_diagnostics(state: RuntimeState, settings: Settings) -> Stora
     )
 
 
-SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
-
-
 async def _transaction_reconcile_loop(service: ProjectTransactionService, settings: Settings) -> None:
     # Startup catch-up first, then an interval loop; reconciliation never replays
     # an import (bounded read-only comparison inside the service).
@@ -729,8 +998,32 @@ async def _transaction_reconcile_loop(service: ProjectTransactionService, settin
             LOGGER.exception("Transaction reconciliation failed", extra={"event": "txn_reconcile"})
 
 
+#: D08 deny-by-default deployment gates: a Tool is hidden from discovery unless the
+#: deployment enables its gate, even when the Gateway advertises the capability. The
+#: Tool repeats the gate at call time (the guarded executor for mutation classes, the
+#: service for sensitive exports), so a stale ``tools/list`` can never bypass it.
+DEPLOYMENT_GATED_TOOLS = {
+    "project_export": "sensitive_exports_enabled",
+    "tag_config_export": "sensitive_exports_enabled",
+    "config_resource_update": "config_mutation_enabled",
+    "config_resource_create": "config_mutation_enabled",
+    "config_resource_delete": "config_mutation_enabled",
+    "config_resource_rename": "config_mutation_enabled",
+    "project_import": "config_mutation_enabled",
+    "tag_config_import": "config_mutation_enabled",
+    "artifact_delete": "config_mutation_enabled",
+    "alarm_pipeline_cancel": "control_mutation_enabled",
+}
+
+
 def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Settings) -> None:
-    gated = {
+    #: ``capability`` is the D04 semantic capability a Tool needs, or ``None`` for a
+    #: Tool with no Gateway route at all. A storage-backed Mutation (`artifact_delete`,
+    #: whose HTTP route D30 drops) has none to check, so its discovery is decided by
+    #: its deployment gate alone: an unreachable Gateway must not hide the one path a
+    #: deployment has for collecting its own artifacts, and the D08 chain still repeats
+    #: the class, operation and Target checks at call time.
+    gated: dict[str, str | None] = {
         "gateway_info": "gateway_info",
         "project_list": "project_list",
         "config_resource_search": "config_resource_search",
@@ -738,19 +1031,26 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "config_resource_names": "config_resource_names",
         "config_resource_list": "config_resource_list",
         "config_resource_get": "config_resource_get",
+        "config_resource_update": "config_resource_update",
+        "config_resource_create": "config_resource_create",
+        "config_resource_delete": "config_resource_delete",
+        "config_resource_rename": "config_resource_rename",
+        "project_import": "project_import",
+        "tag_config_import": "tag_config_import",
         "audit_query": "audit_query",
         "alarm_pipeline_list": "alarm_pipeline_list",
         "alarm_pipeline_status": "alarm_pipeline_status",
+        "alarm_pipeline_cancel": "alarm_pipeline_cancel",
         "project_export": "project_export",
         "tag_config_export": "tag_config_export",
+        "artifact_delete": None,
     }
     usable = snapshot.state in {"READY", "STALE"}
     for tool_name, capability in gated.items():
-        # Sensitive exports (D08 deny-by-default; D17): discovery requires BOTH the
-        # Gateway capability and the deployment gate; the service repeats the gate
-        # at call time so a stale tools/list can never bypass it.
-        gate_blocks = tool_name in SENSITIVE_EXPORT_TOOLS and not settings.sensitive_exports_enabled
-        if usable and not gate_blocks and capability in snapshot.semantic_capabilities:
+        gate = DEPLOYMENT_GATED_TOOLS.get(tool_name)
+        gate_blocks = gate is not None and not bool(getattr(settings, gate))
+        routed = capability is None or (usable and capability in snapshot.semantic_capabilities)
+        if routed and not gate_blocks:
             mcp.enable(names={tool_name}, components={"tool"})
         else:
             mcp.disable(names={tool_name}, components={"tool"})

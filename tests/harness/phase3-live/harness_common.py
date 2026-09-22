@@ -168,6 +168,43 @@ class McpHttp:
         """Returns the raw tools/call result object (never raises on isError)."""
         return await self.request("tools/call", {"name": name, "arguments": arguments})
 
+    @property
+    def last_request_id(self) -> int:
+        """The id of the most recent request this session sent.
+
+        A caller that cancels an in-flight call needs it: the D23 cancellation case
+        sends ``notifications/cancelled`` for the request the peer is still working on.
+        """
+
+        return self._request_id
+
+    async def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        """Send one JSON-RPC notification; the peer answers a notification with no body."""
+
+        payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
+        if params is not None:
+            payload["params"] = params
+        await self._post(payload)
+
+    async def call_raw(
+        self, name: str, arguments: dict[str, Any],
+    ) -> tuple[int, dict[str, Any]]:
+        """``tools/call`` that also returns the request id.
+
+        Unlike ``request``, a JSON-RPC error object is returned rather than raised: the
+        cancellation case asserts the peer's own error code for a request it cancelled.
+        """
+
+        self._request_id += 1
+        payload = {
+            "jsonrpc": "2.0", "id": self._request_id, "method": "tools/call",
+            "params": {"name": name, "arguments": arguments},
+        }
+        decoded, _ = await self._post(payload)
+        if decoded is None:
+            raise ProbeError("tools/call returned an empty response")
+        return self._request_id, decoded
+
     async def call_structured(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         """Success path only: structuredContent of a non-error tool result."""
         result = await self.tool_call(name, arguments)

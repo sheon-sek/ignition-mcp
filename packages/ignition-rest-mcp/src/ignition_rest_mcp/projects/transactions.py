@@ -4,6 +4,8 @@ Protocol (canonical order, D16 / plan slice 7):
 
     writer lock (per Gateway ID + project) -> Designer-session policy
     -> export baseline A (EPHEMERAL, pcf1 fingerprint)
+    -> caller's expected fingerprint (D30 §2 Precondition token) != fingerprint(A)
+       =>  CONFLICTED (nothing staged, nothing dispatched)
     -> build candidate B (EPHEMERAL, streamed through the ArtifactStore)
     -> fingerprint(B) == fingerprint(A)  =>  NO_CHANGE (no backup, no import)
     -> validate/promote A to locked RECOVERY (failure => FAILED_PRE_IMPORT)
@@ -20,14 +22,20 @@ Protocol (canonical order, D16 / plan slice 7):
        locked RECOVERY artifacts.
 
 There is no automatic rollback, merge or replay. Restart reconciliation never
-re-imports: rows in IMPORT_SENT/VERIFYING are resolved by a bounded read-only
-re-export comparison. Every row transition is persisted with timestamps.
+re-imports: a row that carries the durable dispatch classification the guarded
+executor produced (``dispatch_boundary``) is resolved from it — a recorded refusal the
+operation makes final is ``NOT_APPLIED`` with no read-back (D30 §2), a recorded
+non-attempt sent nothing, and a recorded claim is confirmed only by C == B. A row
+without a recorded answer is resolved by D16's bounded read-only re-export comparison
+(C == B recovers a commit, C == A is ``NOT_APPLIED``), except for an operation whose
+refusals are final: there an unrecorded answer may be a refusal, so it may never be
+reconciled into a success. Every row transition is persisted with timestamps.
 """
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 import logging
 from typing import Any, AsyncIterator
@@ -46,6 +54,8 @@ from ignition_rest_mcp.projects.designers import active_sessions_for_project, en
 from ignition_rest_mcp.projects.identity import GatewayIdentity
 from ignition_rest_mcp.projects.locks import ProjectLockRegistry
 from ignition_rest_mcp.safety.executor import (
+    DispatchBoundary,
+    DispatchClassification,
     MutationRequest,
     MutationResult,
     MutationState,
@@ -53,7 +63,7 @@ from ignition_rest_mcp.safety.executor import (
     execute_mutation,
 )
 from ignition_rest_mcp.safety.policy import CONFIG_MUTATION, MutationOperation
-from ignition_rest_mcp.storage.database import Database, transaction
+from ignition_rest_mcp.storage.database import Database, StorageUnavailable, transaction
 from ignition_rest_mcp.storage.records import iso_utc, utc_now
 
 LOGGER = logging.getLogger("ignition_rest_mcp.projects")
@@ -63,6 +73,22 @@ PROJECT_IMPORT_OPERATION = MutationOperation(
     mutation_class=CONFIG_MUTATION,
     capability="project_import",
     destructive=True,
+)
+
+#: The Phase 4 Tool's declaration of the same operation (D30 §7 and §2).
+#:
+#: D30 §7 decides ``permission_denied`` for a Target outside a Phase 4 Mutation's
+#: Target allowlist, and D30 §2 makes an explicit Gateway rejection the result of the
+#: attempt. The Phase 3 machinery shipped before that decision: the frozen G3 driver
+#: and its evidence record ``operation_disabled`` for a refused Target, and a rejected
+#: dispatch there may still be reconciled to a recovered success. Both are per
+#: operation, so the Tool declares its own policy rather than changing what the frozen
+#: harness drives (``operation_disabled`` stays in `tests/harness/phase3-live` and in
+#: the committed G3 evidence).
+PROJECT_IMPORT_TOOL_OPERATION = replace(
+    PROJECT_IMPORT_OPERATION,
+    target_denial_code="permission_denied",
+    rejection_is_final=True,
 )
 
 
@@ -122,6 +148,32 @@ class CandidateBuilder:
         raise NotImplementedError
 
 
+class ArtifactCandidateBuilder(CandidateBuilder):
+    """Candidate B from a caller-supplied Project archive (the ``project_import`` Tool).
+
+    It authors nothing: it streams an already READY artifact into the transaction's own
+    EPHEMERAL candidate, so the archive the transaction fingerprints is the archive it
+    dispatches, and the caller cannot swap the artifact between the two steps. The
+    bytes are validated on the way (the fingerprint pass enforces the D15 ZIP gate), so
+    an unsafe archive fails with ``invalid_argument`` before any backup or dispatch.
+    """
+
+    def __init__(self, store: LocalArtifactStore, artifact_id: str) -> None:
+        self._store = store
+        self._artifact_id = artifact_id
+
+    async def build(self, baseline: ArtifactReader, out: ArtifactWriter) -> None:
+        reader = await self._store.open_read(self._artifact_id)
+        try:
+            while True:
+                chunk = await reader.read_chunk()
+                if chunk is None:
+                    return
+                await out.write(chunk)
+        finally:
+            await reader.close()
+
+
 class ProjectTransactionService:
     def __init__(
         self, *, client: GatewayClient, registry: CapabilityRegistry, store: LocalArtifactStore,
@@ -163,6 +215,7 @@ class ProjectTransactionService:
             "precheck_artifact": "precheck_artifact_id", "result_artifact": "result_artifact_id",
             "result_fingerprint": "result_fingerprint", "import_dispatched": "import_dispatched",
             "import_outcome": "import_outcome", "import_status": "import_status",
+            "dispatch_boundary": "dispatch_boundary",
             "external_drift": "external_drift_detected", "designer_warning": "designer_warning",
             "error_code": "error_code",
         }
@@ -191,7 +244,8 @@ class ProjectTransactionService:
 
     async def execute(
         self, *, project_name: str, builder: CandidateBuilder, context: OperationContext,
-        principal: VerifiedPrincipal,
+        principal: VerifiedPrincipal, operation: MutationOperation = PROJECT_IMPORT_OPERATION,
+        expected_fingerprint: str | None = None,
     ) -> TransactionResult:
         if not self._settings.project_writer_enabled:
             raise GatewayError(
@@ -205,11 +259,15 @@ class ProjectTransactionService:
         async with self._locks.acquire(lock_key, name):
             txn_id = uuid7()
             await self._insert(txn_id, context, name)
-            return await self._run_locked(txn_id, name, builder, context, principal)
+            return await self._run_locked(
+                txn_id, name, builder, context, principal, operation, expected_fingerprint,
+            )
 
     async def _run_locked(
         self, txn_id: str, name: str, builder: CandidateBuilder,
         context: OperationContext, principal: VerifiedPrincipal,
+        operation: MutationOperation = PROJECT_IMPORT_OPERATION,
+        expected_fingerprint: str | None = None,
     ) -> TransactionResult:
         baseline: CapturedProject | None = None
         candidate: CapturedProject | None = None
@@ -250,6 +308,27 @@ class ProjectTransactionService:
                 txn_id, TransactionState.BASELINE_CAPTURED,
                 baseline_artifact=baseline.artifact.artifact_id, baseline_fingerprint=baseline.fingerprint,
             )
+
+            # D30 §2 Precondition: the caller's Project fingerprint must equal baseline A.
+            # A mismatch is `conflict` before anything is dispatched: the agent's plan was
+            # built on a Project state that is no longer current. The transaction ends
+            # CONFLICTED (`concurrent modification, importAttempted=false`, D16) and no
+            # candidate is staged from the stale plan.
+            if expected_fingerprint is not None and baseline.fingerprint != expected_fingerprint:
+                await cleanup_ephemerals(baseline.artifact.artifact_id)
+                stale = GatewayError(
+                    "conflict",
+                    f"project {name!r} is at {baseline.fingerprint}, not the fingerprint the caller "
+                    f"read ({expected_fingerprint}); the project changed after that read and the "
+                    "import was not attempted",
+                )
+                await self._update(
+                    txn_id, TransactionState.CONFLICTED, error_code="conflict", import_dispatched=False,
+                )
+                return self._result(
+                    txn_id, TransactionState.CONFLICTED, name, baseline, None, None, error=stale,
+                    designer_warning=designer_warning,
+                )
 
             # Candidate B through the bounded builder contract only.
             candidate_writer = await self._store.create(
@@ -321,7 +400,10 @@ class ProjectTransactionService:
                                precheck_artifact=precheck.artifact.artifact_id)
 
             # Exactly-once import through the guarded executor.
-            await self._update(txn_id, TransactionState.IMPORT_SENT, import_dispatched=True)
+            await self._update(
+                txn_id, TransactionState.IMPORT_SENT, import_dispatched=True,
+                dispatch_boundary=self._pre_dispatch_boundary(operation).value,
+            )
             verify_state: dict[str, Any] = {}
 
             async def verify(_dispatch: WriteDispatchResult) -> VerificationOutcome:
@@ -346,7 +428,7 @@ class ProjectTransactionService:
             mutation: MutationResult = await execute_mutation(
                 client=self._client, registry=self._registry, settings=self._settings, context=context,
                 request=MutationRequest(
-                    operation=PROJECT_IMPORT_OPERATION, principal=principal, target_id=name,
+                    operation=operation, principal=principal, target_id=name,
                     request_path=f"/data/api/v1/projects/import/{quote(name, safe='')}",
                     params={"overwrite": "true"},
                     body_chunks=_artifact_chunks(self._store, candidate_artifact.artifact_id),
@@ -355,6 +437,10 @@ class ProjectTransactionService:
                     verification_deadline_seconds=self._settings.project_verification_timeout_seconds,
                     verify=verify, precondition=None,
                     audit_fields={"projectName": name}, target_type="project",
+                    rejection=_gateway_rejection,
+                    on_dispatch_boundary=lambda classification: self._record_boundary(
+                        txn_id, classification,
+                    ),
                 ),
             )
             dispatch = mutation.dispatch
@@ -486,6 +572,49 @@ class ProjectTransactionService:
 
         return await asyncio.to_thread(project_fingerprint, self._store.staged_path(writer))
 
+    # ------------------------------------------------------------------ dispatch boundary
+
+    @staticmethod
+    def _pre_dispatch_boundary(operation: MutationOperation) -> DispatchBoundary:
+        """What the durable row may conclude *before* the Gateway has answered.
+
+        For an operation whose refusals are final (D30 §2) that is "unattributable": an
+        answer may be on its way back that refuses this import, so a restart that finds
+        no recorded answer may not attribute a success to the attempt. Every other
+        operation keeps D16's ambiguous-boundary reading, which is exactly what a
+        pre-Phase-4 row recorded.
+        """
+
+        return (
+            DispatchBoundary.UNATTRIBUTABLE if operation.rejection_is_final
+            else DispatchBoundary.ATTRIBUTABLE
+        )
+
+    async def _record_boundary(self, txn_id: str, classification: DispatchClassification) -> None:
+        """Persist what the Gateway answered, the moment the executor classified it.
+
+        This is the write that has to survive a crash: a restart reconciles the row from
+        it instead of reinterpreting a dispatch that already produced an answer. A
+        storage failure leaves the pre-dispatch value in place — the fail-closed reading
+        of an unrecorded answer — so the call itself continues; the terminal write
+        reports the same failure if storage is still unavailable.
+        """
+
+        try:
+            await self._update(
+                txn_id, TransactionState.IMPORT_SENT,
+                dispatch_boundary=classification.boundary.value,
+                error_code=classification.error.code if classification.error else None,
+                import_outcome=classification.dispatch.outcome.value,
+                import_status=classification.dispatch.status,
+            )
+        except StorageUnavailable:
+            LOGGER.error(
+                "Transaction could not record its dispatch classification; a restart will "
+                "treat the attempt's answer as unrecorded",
+                extra={"event": "txn_boundary", "outcome": "error", "errorCode": "storage_unavailable"},
+            )
+
     def _map_mutation(self, mutation: MutationResult) -> tuple[TransactionState, GatewayError | None]:
         state = mutation.state
         if state is MutationState.SUCCEEDED:
@@ -555,12 +684,14 @@ class ProjectTransactionService:
             placeholders = ",".join("?" for _ in NON_TERMINAL)
             curs = conn.execute(
                 f"SELECT transaction_id, gateway_id, project_name, state, principal_key,"
-                f" baseline_artifact_id, baseline_fingerprint, candidate_artifact_id, candidate_fingerprint"
+                f" baseline_artifact_id, baseline_fingerprint, candidate_artifact_id, candidate_fingerprint,"
+                f" dispatch_boundary, error_code"
                 f" FROM project_transactions WHERE state IN ({placeholders}) ORDER BY updated_at LIMIT ?",
                 (*[s.value for s in sorted(NON_TERMINAL, key=lambda item: item.value)], batch),
             )
             keys = ("transaction_id", "gateway_id", "project_name", "state", "principal_key",
-                    "baseline_artifact_id", "baseline_fingerprint", "candidate_artifact_id", "candidate_fingerprint")
+                    "baseline_artifact_id", "baseline_fingerprint", "candidate_artifact_id",
+                    "candidate_fingerprint", "dispatch_boundary", "error_code")
             return [dict(zip(keys, row, strict=True)) for row in curs.fetchall()]
 
         rows = await self._db.run(_rows)
@@ -589,6 +720,8 @@ class ProjectTransactionService:
         baseline_fp = row["baseline_fingerprint"]
         candidate_id = row["candidate_artifact_id"]
         candidate_fp = row["candidate_fingerprint"]
+        boundary = _read_boundary(row["dispatch_boundary"])
+        stored_error = None if row["error_code"] is None else str(row["error_code"])
 
         if state in PRE_IMPORT_STATES:
             if baseline_id:
@@ -605,7 +738,28 @@ class ProjectTransactionService:
                                error_code="interrupted", import_dispatched=False)
             return
 
-        # IMPORT_SENT / VERIFYING: possibly dispatched -> bounded read-only compare.
+        # An answer that was recorded needs no read-back. A refusal the operation makes
+        # final is the result (D30 §2) and a known non-attempt sent nothing, so in both
+        # cases the Project showing the candidate is another writer's work, and exporting
+        # it could only be misread as this attempt's success.
+        if boundary is DispatchBoundary.REFUSED or boundary is DispatchBoundary.NOT_SENT:
+            await self._reconcile_not_applied(
+                txn_id, baseline_id=baseline_id, candidate_id=candidate_id,
+                error_code=stored_error or (
+                    "conflict" if boundary is DispatchBoundary.REFUSED else "gateway_unavailable"
+                ),
+                import_dispatched=boundary is DispatchBoundary.REFUSED,
+            )
+            LOGGER.warning(
+                "Reconciled an interrupted transaction from its recorded dispatch answer "
+                "(never replayed, never re-read): %s",
+                boundary.value,
+                extra={"event": "txn_reconcile", "outcome": "recorded_boundary"},
+            )
+            return
+
+        # IMPORT_SENT / VERIFYING without a recorded answer: possibly dispatched ->
+        # bounded read-only compare.
         lock_key = self._identity.key
         async with self._locks.acquire(lock_key, name):
             context = OperationContext.start("project_import", str(row["principal_key"]), "ARTIFACT")
@@ -618,6 +772,24 @@ class ProjectTransactionService:
                 )
             except GatewayError:
                 await self._preserve_unknown(txn_id, state, baseline_id, candidate_id)
+                return
+            unchanged = bool(baseline_fp) and current.fingerprint == baseline_fp
+            if boundary is DispatchBoundary.UNATTRIBUTABLE:
+                # D30 §2 over D16's attribution: the attempt may have been refused and its
+                # answer never written down, and an unrecorded refusal is indistinguishable
+                # from an ambiguous boundary — so a re-export equal to the candidate proves
+                # nothing about this call. Only "the Project is unchanged" can be stated.
+                if unchanged:
+                    await self._reconcile_not_applied(
+                        txn_id, baseline_id=baseline_id, candidate_id=candidate_id,
+                        error_code=stored_error or "conflict", import_dispatched=True,
+                        current=current,
+                    )
+                else:
+                    await self._store.release_retention(current.artifact.artifact_id)
+                    await self._preserve_unknown(txn_id, state, baseline_id, candidate_id,
+                                                 extra_artifact=current.artifact.artifact_id,
+                                                 extra_fingerprint=current.fingerprint)
                 return
             if candidate_fp and current.fingerprint == candidate_fp:
                 if baseline_id:
@@ -636,37 +808,111 @@ class ProjectTransactionService:
                     "Recovered committed transaction from an interrupted process (never replayed)",
                     extra={"event": "txn_reconcile", "outcome": "recovered_committed"},
                 )
-            elif baseline_fp and current.fingerprint == baseline_fp:
-                if baseline_id:
-                    await self._store.release_retention(str(baseline_id))
-                for artifact_id in (str(candidate_id) if candidate_id else None, current.artifact.artifact_id):
-                    if artifact_id:
-                        try:
-                            await self._store.delete_internal(artifact_id)
-                        except GatewayError:
-                            pass
-                await self._update(txn_id, TransactionState.NOT_APPLIED, error_code="conflict",
-                                   result_artifact=current.artifact.artifact_id,
-                                   result_fingerprint=current.fingerprint)
+            elif boundary is DispatchBoundary.CLAIMED:
+                # The Gateway answered with a claim this call never confirmed: a Project
+                # that matches neither the candidate nor the baseline is not a
+                # non-application, it is an unconfirmed claim (RECOVERY_REQUIRED).
+                await self._store.release_retention(current.artifact.artifact_id)
+                await self._preserve_unknown(
+                    txn_id, state, baseline_id, candidate_id,
+                    extra_artifact=current.artifact.artifact_id,
+                    extra_fingerprint=current.fingerprint,
+                    target=TransactionState.RECOVERY_REQUIRED,
+                )
+            elif unchanged:
+                await self._reconcile_not_applied(
+                    txn_id, baseline_id=baseline_id, candidate_id=candidate_id,
+                    error_code=stored_error or "conflict", import_dispatched=True,
+                    current=current,
+                )
             else:
                 await self._store.release_retention(current.artifact.artifact_id)
                 await self._preserve_unknown(txn_id, state, baseline_id, candidate_id,
                                              extra_artifact=current.artifact.artifact_id,
                                              extra_fingerprint=current.fingerprint)
 
+    async def _reconcile_not_applied(
+        self, txn_id: str, *, baseline_id: Any, candidate_id: Any, error_code: str,
+        import_dispatched: bool, current: CapturedProject | None = None,
+    ) -> None:
+        """End a reconciled attempt NOT_APPLIED: release the snapshot, drop the candidate."""
+
+        if baseline_id:
+            await self._store.release_retention(str(baseline_id))
+        if candidate_id:
+            try:
+                await self._store.delete_internal(str(candidate_id))
+            except GatewayError:
+                pass
+        if current is not None:
+            try:
+                await self._store.delete_internal(current.artifact.artifact_id)
+            except GatewayError:
+                pass
+        await self._update(
+            txn_id, TransactionState.NOT_APPLIED, error_code=error_code,
+            import_dispatched=import_dispatched,
+            result_artifact=current.artifact.artifact_id if current is not None else None,
+            result_fingerprint=current.fingerprint if current is not None else None,
+        )
+
     async def _preserve_unknown(
         self, txn_id: str, state: TransactionState, baseline_id: Any, candidate_id: Any,
         extra_artifact: str | None = None, extra_fingerprint: str | None = None,
+        target: TransactionState | None = None,
     ) -> None:
         await self._preserve_for_recovery(txn_id, *[
             str(item) for item in (candidate_id,) if item
         ])
-        target = (
-            TransactionState.RECOVERY_REQUIRED if state is TransactionState.VERIFYING
-            else TransactionState.OUTCOME_UNKNOWN
-        )
+        if target is None:
+            target = (
+                TransactionState.RECOVERY_REQUIRED if state is TransactionState.VERIFYING
+                else TransactionState.OUTCOME_UNKNOWN
+            )
         await self._update(txn_id, target, error_code="outcome_unknown",
                            result_artifact=extra_artifact, result_fingerprint=extra_fingerprint)
+
+
+def _read_boundary(value: Any) -> DispatchBoundary | None:
+    """The durable dispatch class of one row, as a restart may act on it.
+
+    ``None`` is a row with no recorded class: one written before the column existed, or
+    by a harness. It is reconciled by D16's read-only comparison, exactly as Phase 3 did.
+    A value this build does not know fails closed — it is treated as an answer that was
+    never recorded, which can never be reconciled into a success.
+    """
+
+    if value is None:
+        return None
+    try:
+        return DispatchBoundary(str(value))
+    except ValueError:
+        LOGGER.error(
+            "Unknown durable dispatch boundary; its answer counts as unrecorded",
+            extra={"event": "txn_reconcile", "outcome": "unknown_boundary"},
+        )
+        return DispatchBoundary.UNATTRIBUTABLE
+
+
+def _gateway_rejection(dispatch: WriteDispatchResult) -> GatewayError | None:
+    """The Gateway's own refusal of one Project import, inside the 2xx the route documents.
+
+    A refused import is reported as ``{"success": false, "problem": {...}}`` — the shape
+    the resource routes use and the recorded Gateway models — so it is read exactly like a
+    4xx: the Gateway answered and refused, and D30 §2/§7 makes that answer the result
+    (``conflict``). The Gateway's own problem text never reaches the caller, and any other
+    body is not read as a refusal: an import this reader cannot interpret stays a claim,
+    and the bounded re-export is what has to confirm it.
+    """
+
+    body = dispatch.body
+    if not isinstance(body, dict):
+        return None
+    if body.get("success") is not False and not isinstance(body.get("problem"), dict):
+        return None
+    return GatewayError(
+        "conflict", "Ignition refused the Project import; nothing was replayed",
+    )
 
 
 async def _artifact_chunks(store: LocalArtifactStore, artifact_id: str) -> AsyncIterator[bytes]:

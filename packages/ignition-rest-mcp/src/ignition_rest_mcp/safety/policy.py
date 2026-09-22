@@ -7,7 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from ignition_rest_mcp.auth import VerifiedPrincipal
-from ignition_rest_mcp.config import Settings
+from ignition_rest_mcp.config import ADMIN_SCOPE, CONFIG_SCOPE, CONTROL_SCOPE, Settings
 
 CONFIG_MUTATION = "CONFIG_MUTATION"
 CONTROL_MUTATION = "CONTROL_MUTATION"
@@ -16,12 +16,32 @@ MUTATION_CLASSES = (CONFIG_MUTATION, CONTROL_MUTATION, ADMIN_MUTATION)
 
 # D07: scope by operation effect, not module/domain.
 CLASS_SCOPE = {
-    CONFIG_MUTATION: "ignition.config",
-    CONTROL_MUTATION: "ignition.control",
-    ADMIN_MUTATION: "ignition.admin",
+    CONFIG_MUTATION: CONFIG_SCOPE,
+    CONTROL_MUTATION: CONTROL_SCOPE,
+    ADMIN_MUTATION: ADMIN_SCOPE,
 }
 
 WILDCARD = "*"
+
+#: D08's capability layer answers "can this operation run here?". For a Gateway-backed
+#: Mutation that is the D04 registry's answer about the OpenAPI route the operation
+#: needs. `artifact_delete` (D30) has no Gateway route at all — the artifact HTTP data
+#: plane exposes GET, HEAD and POST only — so its capability is the server's own
+#: subsystem, named here instead of an imaginary route. The set is closed so a
+#: Gateway-backed operation can never claim a local capability to skip the check.
+LOCAL_CAPABILITIES = frozenset({"artifact_store"})
+
+#: How a Target allowlist entry matches a Target (D08/D30 §1). ``exact`` is D08's
+#: membership rule; ``provider_prefix`` is the provider-qualified path prefix the Tag
+#: Mutations allowlist, which matches only at segment boundaries.
+TARGET_MATCH_EXACT = "exact"
+TARGET_MATCH_PROVIDER_PREFIX = "provider_prefix"
+TARGET_MATCH_MODES = (TARGET_MATCH_EXACT, TARGET_MATCH_PROVIDER_PREFIX)
+
+#: D06 codes a Target-allowlist denial may carry: D30 §7 decides
+#: ``permission_denied`` for the Phase 4 Mutations, and the Phase 3 machinery that
+#: predates that decision records ``operation_disabled``.
+TARGET_DENIAL_CODES = ("operation_disabled", "permission_denied")
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,10 +50,48 @@ class MutationOperation:
     mutation_class: str
     capability: str
     destructive: bool
+    #: The D06 code a Target-allowlist denial carries for this operation. D30 §7
+    #: decides `permission_denied` for the Phase 4 Mutations; the Phase 3 machinery
+    #: that shipped before that decision keeps its recorded `operation_disabled`,
+    #: and its frozen G3 evidence stays valid because the code is per operation.
+    target_denial_code: str = "operation_disabled"
+    #: Whether an explicit Gateway rejection (4xx, or 2xx carrying a refusal) is the
+    #: final result of the attempt. D30 §2 decides this for the Phase 4 Mutations: a
+    #: read-back cannot attribute a change to a rejected call, so it must never be
+    #: turned into a success. The Phase 3 machinery shipped with the opposite
+    #: behaviour (a rejected dispatch whose observed state matched the intent was
+    #: recorded as a recovered success), and its frozen tests and G3 evidence pin
+    #: that, so the policy is per operation.
+    rejection_is_final: bool = False
+    #: False for an operation whose effect never reaches the Gateway. ``capability``
+    #: then names a ``LOCAL_CAPABILITIES`` entry instead of a D04 route capability, and
+    #: D08's capability layer is satisfied by the local subsystem the Tool resolved
+    #: before the chain ran (a failure there is an `internal_error`, never a policy
+    #: denial). Only `artifact_delete` is of that shape: D30 drops the artifact HTTP
+    #: route, so there is no route to check and no Gateway call to make.
+    gateway_backed: bool = True
+
+    #: How this operation's Target allowlist entries match a Target (D08/D30 §1).
+    #: ``exact`` is D08's membership rule; ``provider_prefix`` is the rule for a Target
+    #: that is a provider-qualified Tag path, where an entry authorizes the subtree
+    #: below it but only at a segment boundary.
+    target_match: str = TARGET_MATCH_EXACT
 
     def __post_init__(self) -> None:
         if self.mutation_class not in MUTATION_CLASSES:
             raise ValueError("mutation operations must declare a real D08 mutation class")
+        if self.target_denial_code not in TARGET_DENIAL_CODES:
+            raise ValueError(f"unknown Target denial code: {self.target_denial_code}")
+        if self.gateway_backed and self.capability in LOCAL_CAPABILITIES:
+            raise ValueError(
+                "a Gateway-backed mutation must name a Gateway capability, not a local one"
+            )
+        if not self.gateway_backed and self.capability not in LOCAL_CAPABILITIES:
+            raise ValueError(
+                "a local-effect mutation must name a declared local capability"
+            )
+        if self.target_match not in TARGET_MATCH_MODES:
+            raise ValueError(f"unknown Target match mode: {self.target_match}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,9 +116,54 @@ def authorize_scope(principal: VerifiedPrincipal, operation: MutationOperation) 
     return PolicyDecision.allow()
 
 
+def _provider_qualified(target_id: str) -> tuple[str, str] | None:
+    """The ``(provider, path)`` of a provider-qualified Target, or ``None``."""
+
+    if not target_id.startswith("["):
+        return None
+    end = target_id.find("]")
+    if end < 0:
+        return None
+    return target_id[1:end], target_id[end + 1:]
+
+
+def matches_target(entry: str, target_id: str, mode: str) -> bool:
+    """Whether one Target allowlist entry authorizes one Target (D08/D30 §1).
+
+    ``exact`` is membership. ``provider_prefix`` matches a provider-qualified path
+    prefix only at a segment boundary: ``[default]AHU`` authorizes ``[default]AHU/Temp``
+    and never ``[default]AHU2``. The provider qualifier is compared in full, so
+    ``[default]`` does not reach ``[default2]x``; an entry with no path is the provider
+    root and covers everything inside that provider.
+    """
+
+    if entry == target_id:
+        return True
+    if mode != TARGET_MATCH_PROVIDER_PREFIX:
+        return False
+    allowed = _provider_qualified(entry)
+    requested = _provider_qualified(target_id)
+    if allowed is None or requested is None or allowed[0] != requested[0]:
+        return False
+    prefix = allowed[1]
+    return not prefix or requested[1].startswith(f"{prefix}/")
+
+
 def evaluate_deployment_policy(
     settings: Settings, operation: MutationOperation, target_id: str, capability_present: bool,
+    *,
+    target_class: PolicyDecision | None = None,
 ) -> PolicyDecision:
+    """The deployment-side checks, in D08's order.
+
+    Class enablement, then the operation allowlist, then the operation's own
+    Target-class rule (D30 §5 Refused resource types — evaluated *before* the
+    Target allowlist, so a refused type is denied even under ``*``), then the
+    Target allowlist, then the capability. A Target allowlist entry matches by
+    membership (D08), or — for an operation whose Target is a provider-qualified Tag
+    path — as a prefix at a segment boundary (D30 §1).
+    """
+
     class_enabled = {
         CONFIG_MUTATION: settings.config_mutation_enabled,
         CONTROL_MUTATION: settings.control_mutation_enabled,
@@ -77,11 +180,15 @@ def evaluate_deployment_policy(
             allowed=False, layer="operation-allowlist", reason="operation-not-allowlisted",
             error_code="operation_disabled",
         )
+    if target_class is not None and not target_class.allowed:
+        return target_class
     targets = settings.mutation_targets.get(operation.op_id, ())
-    if WILDCARD not in targets and target_id not in targets:
+    if WILDCARD not in targets and not any(
+        matches_target(entry, target_id, operation.target_match) for entry in targets
+    ):
         return PolicyDecision(
             allowed=False, layer="target-allowlist", reason="target-not-allowlisted",
-            error_code="operation_disabled",
+            error_code=operation.target_denial_code,
         )
     if not capability_present:
         return PolicyDecision(

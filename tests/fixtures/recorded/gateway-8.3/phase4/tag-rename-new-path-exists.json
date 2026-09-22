@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"conflict\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_rename\", \"auditRecorded\": true, \"items\": [{\"code\": \"conflict\", \"index\": 0, \"newPath\": \"__OCCUPIED_NEW_PATH__\", \"path\": \"__OCCUPIED_SOURCE__\", \"reason\": \"newPathExists\", \"refusedPath\": \"__OCCUPIED_NEW_PATH__\"}], \"reason\": \"preflightPreconditionFailed\"}, \"message\": \"Every target must exist with the fingerprint of its own tag_get_config read, and the new path must be free: an occupied new path is conflict and a target that is not there is not_found; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

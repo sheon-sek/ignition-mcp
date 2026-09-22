@@ -1,0 +1,21 @@
+{
+  "scope": "G",
+  "version": 1,
+  "restricted": false,
+  "overridable": false,
+  "files": [
+    "onToolCalled.py"
+  ],
+  "attributes": {
+    "title": "tag_delete",
+    "description": "Delete Tags and Folders via system.tag.deleteTags, with the D30 2 Tag config fingerprint as the per-target Precondition token. Each item carries the target path and the tcf1 fingerprint of that target's own tag_get_config read. This Tool is CONFIG and destructive: a Folder target takes everything beneath it, so the fingerprint of the exact target is what the caller reasons about. Reads the Runtime Target Policy first and fails closed with operation_disabled when it is missing or unusable; a target outside the tag_delete Target allowlist, inside the reserved IgnitionMCPPolicy provider (whatever the allowlist says, including an explicit *), or a UDT definition without an explicit _types_ allowlist entry fails with permission_denied before anything executes. Preflight validates every item's input, Target and token before any item executes: a stale token is conflict, a target that is not there is not_found, and no item is ever created. After Preflight the items execute one at a time with no rollback, and the Native QualityCode of each system.tag.deleteTags call is that item's outcome. Observed state is the target's absence. Runtime audit follows the policy's auditMode; a failed post-Mutation audit write gives auditRecorded=false, never a failure. Every request is bounded (D10): 20 targets by default up to the 100-target hard maximum, and the deployment may raise the default through tagDeleteMaxItems in the Runtime Target Policy; the path and the batch as a whole have finite ceilings, and an over-budget request is a limit_exceeded refusal before any native call. A refused Target or Precondition writes one Runtime audit decision row (none in off mode, fail-closed in required mode).",
+    "parameters": [
+      {
+        "name": "items",
+        "description": "1..100 delete items: {\"path\": provider-qualified Tag or Folder path to delete, \"expectedFingerprint\": the tcf1 fingerprint from tag_get_config for that exact path}. A Folder takes everything beneath it. The target must exist and its fingerprint must match, or the whole batch is refused before anything is deleted. Default 20 (D10), hard maximum 100.",
+        "type": "array",
+        "required": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,458 @@
+{
+  "bundleSha256": "d5382418c0d1b3f28ce89bc789373f9ee5020ba9daac9fe6f8bd158b3459ffd5",
+  "bundleVersion": "0.7.0",
+  "d27ExceptionApplied": false,
+  "gateResult": "VERIFIED_WITH_LIMITATION",
+  "gatewayBuild": "2026082511",
+  "gatewayImage": "inductiveautomation/ignition:8.3.9",
+  "gatewayImageDigest": "sha256:28bd6b320157ec8dbbe465d0cd7c9f0ababfda4ff01c0bab982c0522a7b4eba2",
+  "gatewayVersion": "8.3.9",
+  "inventories": {
+    "rest": {
+      "bothClassesEnabledTools": 24,
+      "bothClassesEnabledVerifiedBy": "contract + lint only (16 read + 8 mutation): no live row enables both classes",
+      "classDisabled": [
+        "alarm_pipeline_list",
+        "alarm_pipeline_status",
+        "artifact_info",
+        "artifact_list",
+        "audit_query",
+        "config_resource_describe",
+        "config_resource_get",
+        "config_resource_list",
+        "config_resource_names",
+        "config_resource_search",
+        "gateway_diagnose",
+        "gateway_info",
+        "operation_diagnose",
+        "project_export",
+        "project_list",
+        "tag_config_export"
+      ],
+      "classEnabled": [
+        "alarm_pipeline_list",
+        "alarm_pipeline_status",
+        "artifact_delete",
+        "artifact_info",
+        "artifact_list",
+        "audit_query",
+        "config_resource_create",
+        "config_resource_delete",
+        "config_resource_describe",
+        "config_resource_get",
+        "config_resource_list",
+        "config_resource_names",
+        "config_resource_rename",
+        "config_resource_search",
+        "config_resource_update",
+        "gateway_diagnose",
+        "gateway_info",
+        "operation_diagnose",
+        "project_export",
+        "project_import",
+        "project_list",
+        "tag_config_export",
+        "tag_config_import"
+      ],
+      "classEnabledControl": [
+        "alarm_pipeline_cancel",
+        "alarm_pipeline_list",
+        "alarm_pipeline_status",
+        "artifact_info",
+        "artifact_list",
+        "audit_query",
+        "config_resource_describe",
+        "config_resource_get",
+        "config_resource_list",
+        "config_resource_names",
+        "config_resource_search",
+        "gateway_diagnose",
+        "gateway_info",
+        "operation_diagnose",
+        "project_export",
+        "project_list",
+        "tag_config_export"
+      ],
+      "sensitiveExportsDisabled": [
+        "alarm_pipeline_list",
+        "alarm_pipeline_status",
+        "artifact_info",
+        "artifact_list",
+        "audit_query",
+        "config_resource_describe",
+        "config_resource_get",
+        "config_resource_list",
+        "config_resource_names",
+        "config_resource_search",
+        "gateway_diagnose",
+        "gateway_info",
+        "operation_diagnose",
+        "project_list"
+      ],
+      "sensitiveExportsEnabled": true,
+      "verifiedBy": "live: 35687123699 (inventory-agent-exact 23 Tools, inventory-operator-exact 17, inventory-reader-exact 16, inventory-gate-off-exact 16) on both Gateway rows; sensitiveExportsDisabled is the G3 rows' gateOffInventory (14 Tools)"
+    },
+    "runtime": {
+      "configurator": {
+        "tools": [
+          "bundle_info",
+          "tag_browse",
+          "tag_query",
+          "tag_read",
+          "tag_get_config",
+          "udt_type_list",
+          "udt_type_get",
+          "alarm_shelved_list",
+          "historian_browse",
+          "historian_query_series",
+          "historian_query_aggregate",
+          "database_query_list",
+          "database_query",
+          "tag_update",
+          "tag_create",
+          "tag_copy",
+          "tag_delete",
+          "tag_move",
+          "tag_rename"
+        ],
+        "verifiedBy": "live: 35707687810 (tagCreateConfiguratorInventoryMatchesProfile, tagUpdateConfiguratorInventoryMatchesProfile)"
+      },
+      "full": {
+        "tools": [
+          "bundle_info",
+          "tag_browse",
+          "tag_query",
+          "tag_read",
+          "tag_get_config",
+          "udt_type_list",
+          "udt_type_get",
+          "alarm_shelved_list",
+          "historian_browse",
+          "historian_query_series",
+          "historian_query_aggregate",
+          "database_query_list",
+          "database_query",
+          "tag_write",
+          "alarm_shelve",
+          "alarm_unshelve",
+          "tag_update",
+          "tag_create",
+          "tag_copy",
+          "tag_delete",
+          "tag_move",
+          "tag_rename"
+        ],
+        "verifiedBy": "contract + lint only: contracts/profiles/full.yaml equals tooling/contracts/lint.py EXPECTED_PROFILE_TOOLS['full']; no harness deploys it"
+      },
+      "operator": {
+        "tools": [
+          "bundle_info",
+          "tag_browse",
+          "tag_query",
+          "tag_read",
+          "tag_get_config",
+          "udt_type_list",
+          "udt_type_get",
+          "alarm_shelved_list",
+          "historian_browse",
+          "historian_query_series",
+          "historian_query_aggregate",
+          "database_query_list",
+          "database_query",
+          "tag_write",
+          "alarm_shelve",
+          "alarm_unshelve"
+        ],
+        "verifiedBy": "live: 35710377211 (tagWriteOperatorInventoryMatchesProfile, alarmShelveOperatorInventoryMatchesProfile)"
+      },
+      "readonly": {
+        "tools": [
+          "bundle_info",
+          "tag_browse",
+          "tag_query",
+          "tag_read",
+          "tag_get_config",
+          "udt_type_list",
+          "udt_type_get",
+          "alarm_shelved_list",
+          "historian_browse",
+          "historian_query_series",
+          "historian_query_aggregate",
+          "database_query_list",
+          "database_query"
+        ],
+        "verifiedBy": "live: the G1-G3 rows (unchanged by Phase 4)"
+      }
+    }
+  },
+  "l5": {
+    "ambiguous outcome": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "fault-after-full-body-{is-ambiguous,reaches-the-gateway,was-answered-before-the-drop,is-never-a-success,audits-an-unresolved-outcome} (rest_driver.py:1834) and the D16 import variants fault-import-{mid-body,after-full-body}-* (rest_driver.py:2338)",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "limitation": "D30's Consequences make the Runtime ambiguous-outcome case fixture-only. The live Runtime stages assert only that no ambiguity occurred (tagWriteBatchOutcomeUnknown=0, tagDeletePartialBatchRetriedNothing, alarmShelveOutcomeUnknown=0); no stage induces one.",
+        "source": "recorded-Jython fixtures *-native-outcome-indeterminate.json, tag_write-native-outcome-count-mismatch.json, *-dispatch-raises.json (14 files) under tooling/native/jython_runner/fixtures/",
+        "verdict": "FIXTURE"
+      }
+    },
+    "audit failure": {
+      "rest": {
+        "limitation": "No live case exists: the fault proxy injects transport faults only, so the D18 fail-closed branch is proven by unit tests that raise AuditWriteError from the audit sink. Live proves the audit trail of every fault outcome instead (13 fault-*-audits-* cases read from the server's own audit.db).",
+        "source": "test_phase3_safety_executor.py::test_failed_decision_audit_fails_closed_before_dispatch, test_phase3_invocation.py::{test_decision_failure_fails_closed_before_dispatch,test_attempt_failure_prevents_dispatch,test_missing_result_marks_record_not_outcome}, test_phase4_scope_enforcement.py::test_a_denial_survives_an_unwritable_audit_sink (packages/ignition-rest-mcp/tests/)",
+        "verdict": "FIXTURE"
+      },
+      "runtime": {
+        "limitation": "Every live Runtime stage installs its policy with auditMode=best_effort (driver.py:1105, :1386, :1950, :1967, :2834) and verifies the success pair only, so the required-mode failure branch is not live. D26's G4 acceptance text asks for audit failure (required mode) to be proven live on both Planes; it is not, on either Plane, and this row records that rather than claiming it.",
+        "source": "recorded-Jython fixtures *-audit-required-attempt-fails.json, *-audit-required-profile-missing.json, *-audit-result-fails.json and *-decision-audit-required-write-fails.json for tag_write, tag_update, tag_create, tag_copy, alarm_shelve and alarm_unshelve",
+        "verdict": "FIXTURE"
+      }
+    },
+    "cancellation": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "fault-cancellation-{answers-request-cancelled,cancels-the-request-it-sent,never-retries,audits-a-cancelled-dispatch,leaves-the-change-in-place} (rest_driver.py:1928) and fault-import-cancellation-* (:2417): the caller cancels its own in-flight request and the Tool answers JSON-RPC -32800",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "limitation": "There is no live case and no recorded fixture: `grep -ri cancel` matches nothing under tests/harness/phase4-live/, packages/ignition-runtime-bundle/project/ or tooling/native/jython_runner/, and the handlers have no cancellation path to observe (a blocking Jython call cannot be interrupted). D30's Consequences say the three cases are 'proven with recorded fixtures only' on the Runtime plane; that sentence is not satisfied for cancellation, and this row does not claim it.",
+        "source": "none",
+        "verdict": "NONE"
+      }
+    },
+    "concurrent modification": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "the stale signature on update/delete/rename, the occupied destination on create/rename, the stale Project fingerprint and the occupied Tag-import destination (rest_driver.py:1066, :1183, :1240, :1296, :1309, :546, :710)",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "runIds": [
+          "35710377243",
+          "35707687810"
+        ],
+        "source": "the stale Tag config fingerprint -> conflict / fingerprintMismatch with the target unchanged (driver.py:1646, :3057, :3330, :3586) and the raced collision (tag_create existing target, tag_copy occupied destination)",
+        "verdict": "LIVE"
+      }
+    },
+    "oversize": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "pipeline-cancel-oversize-{path,event}-is-limit-exceeded (rest_driver.py:833), artifact-delete-oversize-identifier-is-invalid-argument (:958), pipeline-cancel-blank-path-is-invalid-argument (:841)",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "runIds": [
+          "35710377211",
+          "35707687810"
+        ],
+        "source": "the policy size gate (oversizePolicyDeclaredLength=39967 over the 32 KiB cap, oversizePolicyGateState=oversize, oversizePolicyMaterialized=false: the document is never read) and each Tool's D10 ceilings (pathOverLength, itemsOverPolicyLimit, itemsOverHardLimit, the value and byte budgets)",
+        "verdict": "LIVE"
+      }
+    },
+    "partial failure": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "the transport partial write: fault-mid-body-is-not-attributed-to-this-call, fault-mid-body-never-reaches-the-gateway, fault-mid-body-attempts-the-write-once, fault-mid-body-changes-nothing, fault-mid-body-audits-not-applied (tests/harness/phase4-live-rest/rest_driver.py:1806, :1824). Per-item batch partial reporting has no REST live case because every REST Mutation Tool is single-resource; the one batch-shaped Tool pins its partial rule as recovery_required in packages/ignition-rest-mcp/tests/test_phase4_tag_config_import.py",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "runIds": [
+          "35707687810"
+        ],
+        "source": "the tag_delete stage's partial-failure batch after Preflight: tagDeletePartialBatchSucceeded=1, tagDeletePartialBatchFailed=1, tagDeletePartialBatchFirstOutcome=Good, tagDeletePartialBatchSecondOutcome=Bad_NotFound, tagDeletePartialBatchRetriedNothing=true (tests/harness/phase4-live/driver.py:3504); fixture tag_write-allowlisted-batch.json",
+        "verdict": "LIVE"
+      }
+    },
+    "permission denied": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "the refused resource types, the Target-allowlist denials for all eight Tools, the reserved IgnitionMCPPolicy provider (update/delete/create/rename-into/rename-away), the read-only credential on artifact_delete and the disabled-class calls - 30 case ids including refused-resource-type-is-permission-denied (rest_driver.py:1076) and reserved-provider-update-is-permission-denied (:2105)",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "runIds": [
+          "35710377211",
+          "35707687810"
+        ],
+        "source": "every Mutation Tool's segment-boundary sibling denial and reserved-provider refusal under an explicit *, plus the whole-batch Preflight refusal and the fail-closed operation_disabled with no policy at all (driver.py:1292, :1336, :3738)",
+        "verdict": "LIVE"
+      }
+    },
+    "timeout": {
+      "rest": {
+        "runIds": [
+          "35687123699"
+        ],
+        "source": "fault-deadline-is-a-timeout, fault-deadline-fires-at-the-deployment-deadline, fault-deadline-never-retries, fault-deadline-audits-a-cancelled-dispatch, fault-deadline-left-a-possibly-applied-change (rest_driver.py:1868), through the delay_response proxy fault",
+        "verdict": "LIVE"
+      },
+      "runtime": {
+        "limitation": "D30's Consequences (owner ruling) make the Runtime timeout case fixture-only: blocking Jython calls cannot be interrupted, so a live fault injection would only test the harness. The live stage proves the input-range refusals instead (alarmShelveCapRefusalReason=durationOverPolicyCap, alarmShelveHardMaxRefusalReason=durationOutOfRange).",
+        "source": "recorded-Jython fixtures tag_write-timeout-out-of-range.json and alarm_shelve-duration-{out-of-range,over-hard-max,over-policy-cap,null}.json (tooling/native/jython_runner/), replayed by tests/test_tag_write.py and tests/test_alarm_shelve.py",
+        "verdict": "FIXTURE"
+      }
+    }
+  },
+  "limitations": [
+    {
+      "case": "timeout",
+      "kind": "fixture-only",
+      "plane": "runtime",
+      "reason": "D30's Consequences make the Runtime timeout/ambiguous-outcome cases fixture-only; the record is the recorded-Jython fixture set, not a live run.",
+      "ruled": "D30 phase 4 amendments, owner-approved 2026-09-22"
+    },
+    {
+      "case": "ambiguous outcome",
+      "kind": "fixture-only",
+      "plane": "runtime",
+      "reason": "same D30 ruling as timeout.",
+      "ruled": "D30 phase 4 amendments, owner-approved 2026-09-22"
+    },
+    {
+      "case": "cancellation",
+      "kind": "unproven",
+      "plane": "runtime",
+      "reason": "Neither live nor fixture-proven: no cancellation case exists on the Runtime plane at all, and D30's 'proven with recorded fixtures only' sentence is not satisfied for this case. Recorded for the owner because the phase-4 runbook cannot make it true without a new decision or a new case.",
+      "ruled": "pending owner answer (Phase 4 Open questions)"
+    },
+    {
+      "case": "audit failure",
+      "kind": "fixture-only",
+      "plane": "runtime",
+      "reason": "The live Runtime stages run auditMode=best_effort only; the required-mode failure branch is fixture-proven. D26's G4 acceptance asks for this case live on both Planes.",
+      "ruled": "pending owner answer (Phase 4 Open questions)"
+    },
+    {
+      "case": "audit failure",
+      "kind": "unit-only",
+      "plane": "rest",
+      "reason": "The fault proxy injects transport faults only; the D18 pre-dispatch fail-closed branch is proven by unit tests raising AuditWriteError. D26's G4 acceptance asks for this case live on both Planes.",
+      "ruled": "pending owner answer (Phase 4 Open questions)"
+    },
+    {
+      "case": "setup-native apply live verification",
+      "kind": "product-limitation",
+      "plane": "rest",
+      "reason": "Resolved by the #21 fix 4b5b0df and live run 35715927983 (green on both rows, 0 refreshes and 0 verify retries needed), but the hazard underneath is the pinned Module's and is recorded here: the Module resolves a Server Config's Tool list from its provider registry when the resource is written, and it registers a Project's provider on the Project collection's notification queue (an ExecutionQueue turn that can land after that write), so a Server Config created live could build a server that answers initialize with no capabilities at all until a resource update rebuilt it (live run 35714215320). apply now probes the endpoint it announced and re-announces the same document while that endpoint serves no Tool inventory at all (bounded: 3 attempts, 2 s apart, recorded as refreshes[]), and the apply stage keeps its one Gateway reload as a last-resort fallback. A config_resource_* or file-copied deployment has the same window, so the hazard is recorded rather than closed.",
+      "ruled": "recorded for the owner: the hazard is the Module's, not the CLI's (Phase 4, ticket #21)"
+    }
+  ],
+  "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+  "mcpModuleBuild": "2026021307",
+  "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+  "mcpModuleVersion": "1.3.5-SNAPSHOT",
+  "mutationsDisabledByDefault": true,
+  "nativeResponseBinding": "UNVERIFIED_LIMITATION",
+  "ownerAcceptedDeviations": [
+    "phase4-live-environment-protection"
+  ],
+  "runs": [
+    {
+      "bundleSha256": "d8d6c794dca0516116ecefb9ec87a8a82cb358ede12f9959652bb65a95d2b208",
+      "bundleVersion": "0.6.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "ca27b4b86758dce3d95f9ca488e5b6875b59c5b2",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4a: the Runtime Target Policy gate, tag_write, alarm_shelve/alarm_unshelve, the operator inventory and the policy size gate",
+      "runId": "35710377211",
+      "workflow": "Phase 4 Live Gateway G4a"
+    },
+    {
+      "bundleSha256": "d8d6c794dca0516116ecefb9ec87a8a82cb358ede12f9959652bb65a95d2b208",
+      "bundleVersion": "0.6.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "ca27b4b86758dce3d95f9ca488e5b6875b59c5b2",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4b: the Tag config fingerprint, tag_update, tag_create and tag_copy, the configurator inventory",
+      "runId": "35710377243",
+      "workflow": "Phase 4 Live Gateway G4b"
+    },
+    {
+      "bundleSha256": "5cdca831b1a421ecf83a86d2ad889a76f757da9ed2451e8a11b51e8dacd743a6",
+      "bundleVersion": "0.7.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "dfa4d08",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4b complete (ticket #12): tag_delete, tag_move and tag_rename, the partial-failure batch, the full configurator inventory",
+      "runId": "35707687810",
+      "workflow": "Phase 4 Live Gateway G4b"
+    },
+    {
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "98f8f74",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4c: the exact REST inventories, every REST Mutation Tool's allowlist/precondition refusals, the fault proxy's timeout / ambiguous-outcome / cancellation cases",
+      "runId": "35687123699",
+      "workflow": "Phase 4 Live Gateway REST mutation"
+    },
+    {
+      "bundleSha256": "d5382418c0d1b3f28ce89bc789373f9ee5020ba9daac9fe6f8bd158b3459ffd5",
+      "bundleVersion": "0.7.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "0801e51a935fc44d13e01aa2cb23b1fe35911999",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4b on the final integration head 0801e51 (4238653 + #22 + the CI-only change): the fingerprint, tag_update, tag_create, tag_copy, tag_delete, tag_move, tag_rename and the 19-Tool configurator inventory, plus the configurator/operator inventory split",
+      "runId": "35713927291",
+      "workflow": "Phase 4 Live Gateway G4b"
+    },
+    {
+      "bundleSha256": "c95bd02e2f0fe7e3a4fa98d2503c360876f948ed48b9aeeac97f045d06d85ac0",
+      "bundleVersion": "0.7.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "head": "4b5b0df2b3521627756c29fce6f876c60d0343c5",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4d on the integration head: the D20 acceptance sequence on a disposable Gateway - plan, then apply (bundle Project, Server Config with the profile's Tools, Runtime Target Policy) and verify, with the applied endpoint serving the inventory",
+      "runId": "35715927983",
+      "workflow": "Phase 4 Live Gateway apply"
+    }
+  ],
+  "schemaVersion": 1,
+  "sourceRevision": "7875bb698022153e0eb06290bc8952024dde0219",
+  "status": "FAILED_NATIVE_BINDING",
+  "unsafeAutomaticRetryAbsent": true
+}

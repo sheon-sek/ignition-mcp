@@ -1,0 +1,44 @@
+{
+  "title": "Phase 4 Runtime Operator",
+  "version": "0.7.0",
+  "permissions": {
+    "type": "AllOf",
+    "securityLevels": [
+      {
+        "children": [
+          {
+            "children": [],
+            "name": "IgnitionMcpCi"
+          }
+        ],
+        "name": "Authenticated"
+      }
+    ]
+  },
+  "tools": {
+    "project/ignition_runtime": [
+      "bundle_info",
+      "tag_browse",
+      "tag_query",
+      "tag_read",
+      "tag_get_config",
+      "udt_type_list",
+      "udt_type_get",
+      "alarm_shelved_list",
+      "historian_browse",
+      "historian_query_series",
+      "historian_query_aggregate",
+      "database_query_list",
+      "database_query",
+      "tag_write",
+      "alarm_shelve",
+      "alarm_unshelve"
+    ]
+  },
+  "resources": {
+    "project/ignition_runtime": "*"
+  },
+  "prompts": {
+    "project/ignition_runtime": "*"
+  }
+}

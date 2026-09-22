@@ -1,0 +1,393 @@
+name: Phase 4 Live Gateway G4a
+
+# Ticket #6 (milestone 4a) characterization — Runtime Target Policy storage and
+# the exact-path system.alarm.queryStatus bound — plus the live verification of
+# the shipped Runtime Bundle deployed with the `operator` profile: an allowlisted
+# Tag write, the Target allowlist refusals, the reserved policy provider under an
+# explicit `*`, the missing-policy fail-closed case and the exact operator
+# inventory (ticket #7), and the Alarm Mutations: an allowlisted shelve and
+# unshelve confirmed through alarm_shelved_list, the deployment shelve cap and the
+# D12 hard maximum, the wildcard and segment-boundary refusals, a Preflight that
+# shelves nothing, and the Runtime audit rows (ticket #8). Runs only from pull
+# requests in the trusted repository (no fork execution) and only under the
+# dedicated `phase4-live` GitHub environment. The environment exists WITHOUT
+# protection rules, reusing the owner-accepted deviation recorded for
+# `phase3-live`; the compensating controls are the trusted-repo guard, no
+# repository or environment secrets in this job, localhost/compose-only Gateway
+# endpoints, run-unique Tag and Alarm paths and the driver-enforced CI marker plus
+# expected-Gateway-identity check that fails closed before any probe call.
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/phase4-live-g4a.yml"
+      - "tests/harness/phase4-live/**"
+      - "tests/harness/recorded_gateway.py"
+      - "tests/harness/runtime-binding/prepare_ci_security.py"
+      - "tests/fixtures/recorded/gateway-8.3/phase4/**"
+      - "tests/fixtures/modules/**"
+      - "tooling/native/**"
+      - "docs/research/**"
+      - "contracts/**"
+      - "packages/ignition-runtime-bundle/**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phase4-g4a-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  live-gateway-g4a:
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    environment: phase4-live
+    timeout-minutes: 60
+    continue-on-error: ${{ !matrix.required }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - gateway_version: "8.3.8"
+            gateway_image: inductiveautomation/ignition:8.3.8
+            expected_build: "2026071409"
+            required: true
+          - gateway_version: "8.3.9"
+            gateway_image: inductiveautomation/ignition:8.3.9
+            expected_build: ""
+            required: false
+    env:
+      COMPOSE_FILE: tests/harness/phase4-live/docker-compose.yml
+      GATEWAY_IMAGE: ${{ matrix.gateway_image }}
+      GATEWAY_VERSION: ${{ matrix.gateway_version }}
+      EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
+      P4_BASE_URL: http://127.0.0.1:8093
+      MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
+      MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
+      MCP_MODULE_BUILD: "2026021307"
+      MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
+      PROBE_PROJECT: mcp_p4_probe
+      FIXTURE_ZIP: dist/phase4-probe.zip
+      RUNTIME_PROJECT: ignition_runtime
+      RUNTIME_ZIP: dist/runtime-operator.zip
+      P4_OPERATOR_MCP_URL: http://127.0.0.1:8093/data/mcp/phase4-operator
+      P4_RUNTIME_PROJECT: ignition_runtime
+      P4_AUDIT_PROFILE: MCP_CI_AUDIT
+      EVIDENCE_DIR: artifacts/g4a-${{ matrix.gateway_version }}
+      P4_ALARM_ROOT: mcp_p4_${{ github.run_id }}
+      P4_NOISE_COUNT: "60"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+        with:
+          version: "0.12.17"
+          enable-cache: true
+
+      - name: Validate the repository and build the probe fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv lock --check
+          echo "$MCP_MODULE_SHA256  $MODULE_FILE" | sha256sum -c -
+          uv sync --locked --package ignition-rest-mcp
+          uv run --no-sync python -m tooling.native.cli validate --project-dir tests/harness/phase4-live/project
+          uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+          mkdir -p "$EVIDENCE_DIR"
+          uv run --no-sync python -m tooling.native.cli build \
+            --project-dir tests/harness/phase4-live/project --output "$FIXTURE_ZIP"
+          # The shipped Runtime Bundle is deployed with the operator profile, so
+          # its deterministic ZIP is what the tag_write cases run against.
+          uv run --no-sync python -m tooling.native.cli build \
+            --project-dir packages/ignition-runtime-bundle/project --output "$RUNTIME_ZIP"
+          rm -rf artifacts/runtime-install
+          mkdir -p artifacts/runtime-install
+          uv run --no-sync python -m zipfile -e "$RUNTIME_ZIP" artifacts/runtime-install
+          (cd "$(dirname "$FIXTURE_ZIP")" && sha256sum "$(basename "$FIXTURE_ZIP")" > "$OLDPWD/$EVIDENCE_DIR/fixture.sha256")
+          (cd "$(dirname "$RUNTIME_ZIP")" && sha256sum "$(basename "$RUNTIME_ZIP")" > "$OLDPWD/$EVIDENCE_DIR/runtime.sha256")
+          cat "$EVIDENCE_DIR/fixture.sha256" "$EVIDENCE_DIR/runtime.sha256"
+          echo "FIXTURE_SHA256=$(cut -d' ' -f1 "$EVIDENCE_DIR/fixture.sha256")" >> "$GITHUB_ENV"
+          echo "RUNTIME_SHA256=$(cut -d' ' -f1 "$EVIDENCE_DIR/runtime.sha256")" >> "$GITHUB_ENV"
+          echo "SOURCE_REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - name: Rehearse the driver against the recorded Gateway
+        shell: bash
+        run: |
+          # Exit 3 means the recorded fixtures characterise a fact differently
+          # than tests/harness/phase4-live/characterization.json expects, and the
+          # committed recordings are current, so a drift here is a real failure.
+          set +e
+          uv run --no-sync python tests/harness/phase4-live/rehearse_local.py | tee "$EVIDENCE_DIR/driver-rehearsal.log"
+          rc=${PIPESTATUS[0]}
+          set -e
+          if [[ "$rc" != "0" ]]; then
+            echo "the rehearsal drifted from the committed fixtures (exit $rc)" >&2
+            exit "$rc"
+          fi
+
+      - name: Pull the exact Gateway image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$GATEWAY_IMAGE"
+          IMAGE_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$GATEWAY_IMAGE")"
+          IMAGE_DIGEST="${IMAGE_REF##*@}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Start a fresh Gateway
+        run: docker compose -f "$COMPOSE_FILE" up -d --no-build
+
+      - name: Wait for initial Gateway commissioning
+        shell: bash
+        run: |
+          set -euo pipefail
+          deadline=$((SECONDS + 480))
+          while (( SECONDS < deadline )); do
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+            if grep -Fq "ContextState = FAULTED" "$EVIDENCE_DIR/gateway.log"; then
+              tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+              exit 1
+            fi
+            if grep -Eq "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" \
+              && grep -Fq "ContextState = RUNNING" "$EVIDENCE_DIR/gateway.log" \
+              && curl --fail --silent --max-time 3 "$P4_BASE_URL/StatusPing" >/dev/null; then
+              GATEWAY_BUILD="$(grep -Eo "Starting Ignition ${GATEWAY_VERSION} \(b[0-9]+\)" "$EVIDENCE_DIR/gateway.log" | tail -1 | sed -E 's/.*\(b([0-9]+)\)/\1/')"
+              [[ "$GATEWAY_BUILD" =~ ^[0-9]+$ ]]
+              if [[ -n "$EXPECTED_GATEWAY_BUILD" && "$GATEWAY_BUILD" != "$EXPECTED_GATEWAY_BUILD" ]]; then
+                echo "Unexpected Gateway build: $GATEWAY_BUILD != $EXPECTED_GATEWAY_BUILD" >&2
+                exit 1
+              fi
+              echo "GATEWAY_BUILD=$GATEWAY_BUILD" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "Gateway commissioning deadline exceeded" >&2
+          tail -n 250 "$EVIDENCE_DIR/gateway.log" >&2
+          exit 1
+
+      - name: Prepare CI security resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          rm -rf artifacts/security-bootstrap
+          mkdir -p artifacts/security-bootstrap "$EVIDENCE_DIR"
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels" artifacts/security-bootstrap/security-levels
+          docker cp "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties" artifacts/security-bootstrap/security-properties
+          uv run --no-sync python tests/harness/runtime-binding/prepare_ci_security.py \
+            --root artifacts/security-bootstrap \
+            --evidence "$EVIDENCE_DIR/ci-security-bootstrap.json" \
+            --github-env "$GITHUB_ENV"
+
+      - name: Install the probe project, MCP config and CI security
+        shell: bash
+        run: |
+          set -euo pipefail
+          cid="$(docker compose -f "$COMPOSE_FILE" ps -q gateway)"
+          data_owner="$(docker exec "$cid" stat -c '%u:%g' /usr/local/bin/ignition/data)"
+          docker exec "$cid" mkdir -p /usr/local/bin/ignition/data/config/resources/core/ignition/api-token
+          docker compose -f "$COMPOSE_FILE" stop -t 30 gateway
+
+          docker cp tests/harness/phase4-live/project "$cid:/usr/local/bin/ignition/data/projects/$PROBE_PROJECT"
+          docker cp artifacts/runtime-install "$cid:/usr/local/bin/ignition/data/projects/$RUNTIME_PROJECT"
+          docker cp tests/harness/phase4-live/gateway-config/com.inductiveautomation.mcp "$cid:/usr/local/bin/ignition/data/config/resources/core/"
+          docker cp artifacts/security-bootstrap/security-levels/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-levels/"
+          docker cp artifacts/security-bootstrap/security-properties/. "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/security-properties/"
+          docker cp artifacts/security-bootstrap/api-token/ignition-mcp-ci "$cid:/usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+
+          docker run --rm --volumes-from "$cid" --entrypoint /bin/sh --user 0:0 "$GATEWAY_IMAGE" \
+            -c "chown -R '$data_owner' \
+              /usr/local/bin/ignition/data/projects/$PROBE_PROJECT \
+              /usr/local/bin/ignition/data/projects/$RUNTIME_PROJECT \
+              /usr/local/bin/ignition/data/config/resources/core/com.inductiveautomation.mcp \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-levels \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/security-properties \
+              /usr/local/bin/ignition/data/config/resources/core/ignition/api-token/ignition-mcp-ci"
+          docker compose -f "$COMPOSE_FILE" start gateway
+
+      - name: Write the L5 CI marker
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > artifacts/ci-marker.json <<EOF
+          {
+            "marker": "ignition-mcp-phase4-live",
+            "environment": "phase4-live",
+            "runId": "${GITHUB_RUN_ID}",
+            "gatewayVersion": "${GATEWAY_VERSION}",
+            "gatewayBuild": "${GATEWAY_BUILD}",
+            "gatewayId": "phase4-g4a-${GATEWAY_VERSION}-${GITHUB_RUN_ID}",
+            "trustedRepo": "${GITHUB_REPOSITORY}",
+            "policyProvider": "IgnitionMCPPolicy",
+            "alarmRoot": "${P4_ALARM_ROOT}",
+            "probeProject": "${PROBE_PROJECT}",
+            "runtimeProject": "${RUNTIME_PROJECT}",
+            "auditProfile": "${P4_AUDIT_PROFILE}"
+          }
+          EOF
+          cat artifacts/ci-marker.json
+
+      - name: Wait for authenticated Native REST and the MCP endpoint
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+            --base-url "$P4_BASE_URL" \
+            --api-token "$CI_API_TOKEN" \
+            --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+            --mcp-url "$P4_OPERATOR_MCP_URL" \
+            --timeout 300 \
+            --evidence-dir "$EVIDENCE_DIR"
+
+      - name: Refuse a Tag write while no Runtime Target Policy exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-no-policy \
+            | tee "$EVIDENCE_DIR/driver-tag-write-no-policy.log"
+
+      - name: Refuse the Alarm Mutations while no Runtime Target Policy exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py alarm-no-policy \
+            | tee "$EVIDENCE_DIR/driver-alarm-no-policy.log"
+
+      - name: Provision the Runtime Target Policy through Native REST
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py policy-provision \
+            | tee "$EVIDENCE_DIR/driver-provision.log"
+
+      - name: Read the policy from a live handler
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart \
+            | tee "$EVIDENCE_DIR/driver-policy-read.log"; then
+            # Ticket #6 recorded two provider-startup hazards, and the second one
+            # was hit live: an accepted policy import whose Tag the *running*
+            # provider never serves. `Phase 4 Live Gateway G4a` run 35654626095
+            # (8.3.9) lost the row to it, because the driver can only re-import at
+            # the config plane and cannot restart the Gateway. Give the stage the
+            # one recorded heal — a restart, then the same assertion — before
+            # failing the job; a second failure is the job's failure.
+            echo "the policy-read stage failed; restarting the Gateway once and re-running the same assertion" >&2
+            docker compose -f "$COMPOSE_FILE" restart gateway
+            uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+              --base-url "$P4_BASE_URL" \
+              --api-token "$CI_API_TOKEN" \
+              --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+              --mcp-url "$P4_OPERATOR_MCP_URL" \
+              --timeout 480
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway-after-policy-read-restart.log" 2>&1 || true
+            uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart \
+              | tee "$EVIDENCE_DIR/driver-policy-read-retry.log"
+          fi
+
+      - name: Restart the Gateway and re-read the policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker compose -f "$COMPOSE_FILE" restart gateway
+          uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+            --base-url "$P4_BASE_URL" \
+            --api-token "$CI_API_TOKEN" \
+            --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+            --mcp-url "$P4_OPERATOR_MCP_URL" \
+            --timeout 480
+          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway-after-restart.log" 2>&1 || true
+          uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label after-restart \
+            | tee "$EVIDENCE_DIR/driver-policy-read-after-restart.log"
+
+      - name: Characterize the exact-path alarm query
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py alarm \
+            | tee "$EVIDENCE_DIR/driver-alarm.log"
+
+      - name: Provision the tag_write fixtures, audit profile and policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-write-setup \
+            | tee "$EVIDENCE_DIR/driver-tag-write-setup.log"
+
+      - name: Verify tag_write live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py tag-write \
+            | tee "$EVIDENCE_DIR/driver-tag-write.log"
+
+      - name: Verify alarm_shelve and alarm_unshelve live
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --no-sync python tests/harness/phase4-live/driver.py alarm-shelve \
+            | tee "$EVIDENCE_DIR/driver-alarm-shelve.log"
+
+      - name: Summarize the characterization
+        id: summarize
+        if: always()
+        shell: bash
+        run: |
+          set +e
+          uv run --no-sync python tests/harness/phase4-live/driver.py summarize > "$EVIDENCE_DIR/driver-summarize.log" 2>&1
+          rc=$?
+          set -e
+          cat "$EVIDENCE_DIR/driver-summarize.log"
+          echo "summarize_exit=$rc" >> "$GITHUB_OUTPUT"
+
+      - name: Refresh diagnostics
+        if: always()
+        shell: bash
+        run: |
+          mkdir -p "$EVIDENCE_DIR"
+          docker compose -f "$COMPOSE_FILE" ps --all > "$EVIDENCE_DIR/docker-compose-ps.txt" 2>&1 || true
+          docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway.log" 2>&1 || true
+          docker image inspect "$GATEWAY_IMAGE" > "$EVIDENCE_DIR/gateway-image-inspect.json" 2>&1 || true
+          sha256sum "$MODULE_FILE" > "$EVIDENCE_DIR/mcp-module.sha256" 2>&1 || true
+
+      - name: Upload G4a characterization evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: phase4-g4a-${{ matrix.gateway_version }}-${{ github.run_id }}
+          path: artifacts/g4a-${{ matrix.gateway_version }}
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Destroy the disposable Gateway
+        if: always()
+        shell: bash
+        run: docker compose -f "$COMPOSE_FILE" down -v --remove-orphans || true
+
+      - name: Enforce the characterization result
+        if: always()
+        shell: bash
+        run: |
+          rc="${{ steps.summarize.outputs.summarize_exit }}"
+          if [[ -z "$rc" ]]; then
+            echo "the summarize stage produced no exit code" >&2
+            exit 1
+          fi
+          # 0 = characterized as expected, 3 = characterized but drifted from
+          # tests/harness/phase4-live/characterization.json, 2 = a stage could not
+          # be characterized. Expectations are frozen, so drift fails the job: a
+          # green run that quietly contradicts the research note is worse than a
+          # red one.
+          if [[ "$rc" == "3" ]]; then
+            echo "characterization drifted from the committed expectations; see evidence.json" >&2
+            exit 3
+          fi
+          if [[ "$rc" != "0" ]]; then
+            echo "Phase 4 milestone 4a characterization failed (exit $rc)" >&2
+            exit "$rc"
+          fi

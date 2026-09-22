@@ -1,0 +1,38 @@
+{
+  "content": [
+    {
+      "text": "recorded replay",
+      "type": "text"
+    }
+  ],
+  "isError": false,
+  "structuredContent": {
+    "items": [
+      {
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "status": "executed"
+      }
+    ],
+    "meta": {
+      "correlationId": "a803589c-9d68-476a-8e27-6333055d8d83"
+    },
+    "observed": [
+      {
+        "expiration": "2026-09-21T22:59:59.881Z",
+        "expired": false,
+        "path": "prov:default:/tag:__ALARM_ROOT__/Exact:/alm:ProbeHi",
+        "shelved": true,
+        "status": "ok",
+        "user": "usr:gateway-script"
+      }
+    ],
+    "summary": {
+      "auditMode": "best_effort",
+      "auditRecorded": true,
+      "executed": 1,
+      "outcomeUnknown": 0,
+      "requested": 1,
+      "timeoutSeconds": 3600
+    }
+  }
+}

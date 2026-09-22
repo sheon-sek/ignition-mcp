@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:ignition-mcp:runtime:tag-write:output",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "items": {"type": "array", "maxItems": 100, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "executed"}, "quality": {"$ref": "#/$defs/quality"}}, "required": ["path", "status", "quality"]},
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "outcome_unknown"}}, "required": ["path", "status"]}
+    ]}},
+    "observed": {"type": "array", "maxItems": 100, "items": {"oneOf": [
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "ok"}, "value": {"$ref": "#/$defs/value"}, "quality": {"$ref": "#/$defs/quality"}, "timestamp": {"oneOf": [{"type": "string"}, {"type": "integer"}, {"$ref": "#/$defs/null"}]}}, "required": ["path", "status", "value", "quality", "timestamp"]},
+      {"type": "object", "additionalProperties": false, "properties": {"path": {"type": "string", "minLength": 1}, "status": {"const": "error"}, "error": {"$ref": "#/$defs/observed_error"}}, "required": ["path", "status", "error"]}
+    ]}},
+    "summary": {"type": "object", "additionalProperties": false, "properties": {"requested": {"type": "integer", "minimum": 1, "maximum": 100}, "succeeded": {"type": "integer", "minimum": 0}, "failed": {"type": "integer", "minimum": 0}, "outcomeUnknown": {"type": "integer", "minimum": 0}, "auditMode": {"enum": ["best_effort", "required", "off"]}, "auditRecorded": {"type": "boolean"}}, "required": ["requested", "succeeded", "failed", "outcomeUnknown", "auditMode", "auditRecorded"]},
+    "meta": {"type": "object", "additionalProperties": false, "properties": {"correlationId": {"type": "string", "minLength": 1}}, "required": ["correlationId"]}
+  },
+  "required": ["items", "observed", "summary", "meta"],
+  "$defs": {
+    "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
+    "value": {"oneOf": [
+      {"type": ["string", "number", "boolean"]},
+      {"$ref": "#/$defs/null"},
+      {"type": "array", "items": {"$ref": "#/$defs/value"}},
+      {"type": "object", "propertyNames": {"not": {"const": "$ignition"}}, "additionalProperties": {"$ref": "#/$defs/value"}},
+      {"type": "object", "properties": {"$ignition": {"const": "object"}, "entries": {"type": "array", "items": {"type": "array", "prefixItems": [{"type": "string"}, {"$ref": "#/$defs/value"}], "minItems": 2, "maxItems": 2}}}, "required": ["$ignition", "entries"], "additionalProperties": false}
+    ]},
+    "quality": {"type": "object", "additionalProperties": false, "description": "One Native outcome. `code` and `good` are always exact. `name` and `level` are null when the provider's identifier was over its ceiling, and then the matching `*OverLimitBytes` field carries the size that was counted (exact up to the counting budget, a lower bound beyond it); a truncated identifier is never reported as the provider's. `diagnosticMessage` is free text rather than an identifier, so an over-ceiling one keeps a bounded 512-byte prefix and `diagnosticMessageOverLimitBytes` carries the counted size; it is never truncated without that marker.", "properties": {"code": {"type": "integer"}, "name": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/null"}]}, "level": {"oneOf": [{"type": "string", "minLength": 1}, {"$ref": "#/$defs/null"}]}, "good": {"type": "boolean"}, "diagnosticMessage": {"oneOf": [{"type": "string"}, {"$ref": "#/$defs/null"}]}, "nameOverLimitBytes": {"type": "integer", "minimum": 129}, "levelOverLimitBytes": {"type": "integer", "minimum": 129}, "diagnosticMessageOverLimitBytes": {"type": "integer", "minimum": 513}}, "required": ["code", "name", "level", "good", "diagnosticMessage"]},
+    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error", "limit_exceeded"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
+  }
+}
