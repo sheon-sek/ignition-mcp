@@ -542,6 +542,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   of Gateway-side provider-startup flake the ticket #6 evidence recorded and that
   `phase4/tag-import-provider-not-ready.json` already documents. **For the owner:** no decision;
   recorded because a G4a or G4b row can fail this way on an unmodified head and needs a rerun.
+- **Ticket #10 — GitHub Actions stopped creating `pull_request` runs for the lane head.** After
+  the `p4/runtime-fix` batch created its six runs at 23:49:41Z, no workflow run was created for the
+  repository at all: three pushes to `p4/runtime` (`25c8516`, `b5dde77`, `8593cb8`), a close/reopen
+  of draft PR #27 and a rerun of an older G4a row produced no new `github-actions` check suites for
+  those heads (only the `claude` app's suite appears), while the platform had accepted the same
+  repository's runs minutes earlier. The lesson for the coordinator: the head's live row is
+  outstanding for that reason, not for a red result. Everything the head changes *after* the last
+  live row is either documentation or the harness's own batch-case expectation; the shipped
+  `tag_update` handler the live row exercised (`system.tag.exists` included) is byte-identical on
+  the head, and the local rehearsal plus the D29 and lint suites cover the rest. **For the owner:**
+  re-trigger the `phase4-live-g4b` workflow on the head when Actions accepts runs again, and confirm
+  whether the account's Actions limit was the cause.
 - **Ticket #10 — `tag_update` refuses three configuration keys beyond D30's text.** D30 §6
   says nothing about which properties a Tag CONFIG Mutation may merge, so the shipped handler
   refuses, with `invalid_argument`, the three keys that would leave its class or its target:
