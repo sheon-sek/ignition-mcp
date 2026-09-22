@@ -862,7 +862,14 @@ async def _reverify_after_reload(
 
     if not args.compose_file:
         return attempts
-    command = ["docker", "compose", "-f", str(args.compose_file), "restart", "gateway"]
+    # The workflow's COMPOSE_FILE may name several files separated by the path
+    # separator (the module-install stage lists the base file and its override);
+    # docker compose accepts that list in the environment variable, not as one -f
+    # argument, so the reload splits it the way docker itself does.
+    compose_files = str(args.compose_file).split(os.pathsep)
+    command = ["docker", "compose", *(
+        flag for file in compose_files for flag in ("-f", file)
+    ), "restart", "gateway"]
     completed = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
     evidence["gatewayReload"] = {
         "command": " ".join(command),
