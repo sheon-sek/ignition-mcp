@@ -82,8 +82,8 @@ async def project_list(
     limit: int,
     offset: int,
 ) -> ProjectListResult:
-    _require(registry, "project_list")
-    limit, offset = _page_request(limit, offset)
+    require_capability(registry, "project_list")
+    limit, offset = bounded_page_request(limit, offset)
     params = _collection_params(search, limit, offset)
     payload = await _get(client, "/data/api/v1/projects/list", context, params=params)
     items, page = _collection_response(payload, requested_limit=limit, requested_offset=offset)
@@ -118,8 +118,8 @@ def config_resource_search(
     limit: int,
     offset: int,
 ) -> ConfigResourceSearchResult:
-    _require(registry, "config_resource_search")
-    limit, offset = _page_request(limit, offset)
+    require_capability(registry, "config_resource_search")
+    limit, offset = bounded_page_request(limit, offset)
     query = bounded_text(query, "query", MAX_SEARCH_LENGTH, allow_empty=True).lower()
     all_items = [
         ConfigResourceTypeSummary(
@@ -155,7 +155,7 @@ async def config_resource_describe(
     *,
     resource_type: str,
 ) -> ConfigResourceDescribeResult:
-    _require(registry, "config_resource_describe")
+    require_capability(registry, "config_resource_describe")
     capability = catalog_resource_type(registry, resource_type)
     payload = await _get(client, capability.describe_path, context)
     return ConfigResourceDescribeResult(
@@ -176,11 +176,11 @@ async def config_resource_names(
     limit: int,
     offset: int,
 ) -> ConfigResourceNamesResult:
-    _require(registry, "config_resource_names")
+    require_capability(registry, "config_resource_names")
     capability = catalog_resource_type(registry, resource_type)
     if capability.names_path is None:
         raise GatewayError("unsupported_capability", "This resourceType is singleton and has no names collection")
-    limit, offset = _page_request(limit, offset)
+    limit, offset = bounded_page_request(limit, offset)
     payload = await _get(
         client,
         capability.names_path,
@@ -207,11 +207,11 @@ async def config_resource_list(
     limit: int,
     offset: int,
 ) -> ConfigResourceListResult:
-    _require(registry, "config_resource_list")
+    require_capability(registry, "config_resource_list")
     capability = catalog_resource_type(registry, resource_type)
     if capability.list_path is None:
         raise GatewayError("unsupported_capability", "This resourceType is singleton and has no list collection")
-    limit, offset = _page_request(limit, offset)
+    limit, offset = bounded_page_request(limit, offset)
     payload = await _get(
         client,
         capability.list_path,
@@ -239,7 +239,7 @@ async def config_resource_get(
     collection: str,
     default_if_undefined: bool,
 ) -> ConfigResourceGetResult:
-    _require(registry, "config_resource_get")
+    require_capability(registry, "config_resource_get")
     capability = catalog_resource_type(registry, resource_type)
     collection = bounded_text(collection, "collection", 128, allow_empty=True)
     params: dict[str, Any] = {}
@@ -286,9 +286,9 @@ async def audit_query(
     limit: int,
     offset: int,
 ) -> AuditQueryResult:
-    _require(registry, "audit_query")
+    require_capability(registry, "audit_query")
     profile = bounded_text(profile, "profile", 256, allow_empty=False)
-    limit, offset = _page_request(limit, offset)
+    limit, offset = bounded_page_request(limit, offset)
     params: dict[str, Any] = {"limit": limit, "offset": offset, "maxRecordLimit": HARD_PAGE_SIZE}
     filters = {
         "actorFilter": actor,
@@ -343,8 +343,8 @@ async def alarm_pipeline_list(
     limit: int,
     offset: int,
 ) -> AlarmPipelineListResult:
-    _require(registry, "alarm_pipeline_list")
-    limit, offset = _page_request(limit, offset)
+    require_capability(registry, "alarm_pipeline_list")
+    limit, offset = bounded_page_request(limit, offset)
     payload = await _get(
         client,
         "/data/alarm-notification/api/v1/pipelines",
@@ -378,9 +378,9 @@ async def alarm_pipeline_status(
     limit: int,
     offset: int,
 ) -> AlarmPipelineStatusResult:
-    _require(registry, "alarm_pipeline_status")
+    require_capability(registry, "alarm_pipeline_status")
     path = bounded_text(path, "path", MAX_IDENTIFIER_LENGTH, allow_empty=False)
-    limit, offset = _page_request(limit, offset)
+    limit, offset = bounded_page_request(limit, offset)
     payload = await _get(
         client,
         "/data/alarm-notification/api/v1/pipeline",
@@ -417,7 +417,7 @@ async def _get(
     return await client.get_json(path, params=params, context=context)
 
 
-def _require(registry: CapabilityRegistry, capability: str) -> None:
+def require_capability(registry: CapabilityRegistry, capability: str) -> None:
     if not registry.supports(capability):
         raise GatewayError(
             "unsupported_capability",
@@ -425,7 +425,7 @@ def _require(registry: CapabilityRegistry, capability: str) -> None:
         )
 
 
-def _page_request(limit: int, offset: int) -> tuple[int, int]:
+def bounded_page_request(limit: int, offset: int) -> tuple[int, int]:
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1 or limit > HARD_PAGE_SIZE:
         raise GatewayError("invalid_argument", f"limit must be an integer from 1 to {HARD_PAGE_SIZE}")
     if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0 or offset > MAX_OFFSET:

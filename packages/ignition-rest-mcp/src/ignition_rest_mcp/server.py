@@ -48,6 +48,11 @@ from ignition_rest_mcp.models import (
     GatewayDiagnoseResult,
     GatewayInfoResult,
     OpenApiInfoResource,
+    PerspectivePageConfigGetResult,
+    PerspectiveSessionPropsGetResult,
+    PerspectiveViewGetResult,
+    PerspectiveViewListResult,
+    PerspectiveViewValidateResult,
     ProjectListResult,
     ProjectExportResult,
     ProjectImportResult,
@@ -88,6 +93,13 @@ from ignition_rest_mcp.services.gateway import (
 )
 from ignition_rest_mcp.services.project_import import (
     project_import as project_import_service,
+)
+from ignition_rest_mcp.services.perspective import (
+    perspective_page_config_get as perspective_page_config_get_service,
+    perspective_session_props_get as perspective_session_props_get_service,
+    perspective_view_get as perspective_view_get_service,
+    perspective_view_list as perspective_view_list_service,
+    perspective_view_validate as perspective_view_validate_service,
 )
 from ignition_rest_mcp.services.tag_config_import import (
     tag_config_import as tag_config_import_service,
@@ -722,6 +734,99 @@ def create_server(settings: Settings) -> FastMCP:
         )
 
     @mcp.tool(
+        name="perspective_view_list",
+        description=(
+            "List the Local Perspective Views of one Project by Logical resource path "
+            "(bounded, paginated)."
+        ),
+        output_schema=PerspectiveViewListResult.model_json_schema(),
+        tags={"read", "scope:ignition.read", "capability:project_export"},
+    )
+    async def perspective_view_list(
+        projectName: str, limit: int = 100, offset: int = 0,
+    ) -> PerspectiveViewListResult:
+        return await _invoke(
+            "perspective_view_list", "ARTIFACT",
+            lambda context: perspective_view_list_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                project_name=projectName, limit=limit, offset=offset,
+                deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+        )
+
+    @mcp.tool(
+        name="perspective_view_get",
+        description=(
+            "Read one Local Perspective View document from a Project export, with the Project "
+            "fingerprint a write to it must present."
+        ),
+        output_schema=PerspectiveViewGetResult.model_json_schema(),
+        tags={"read", "scope:ignition.read", "capability:project_export"},
+    )
+    async def perspective_view_get(projectName: str, path: str) -> PerspectiveViewGetResult:
+        return await _invoke(
+            "perspective_view_get", "ARTIFACT",
+            lambda context: perspective_view_get_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                project_name=projectName, path=path,
+                deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+        )
+
+    @mcp.tool(
+        name="perspective_view_validate",
+        description=(
+            "Validate a Perspective View document offline: a JSON object whose root.type is a "
+            "string, within the size and depth budgets. No Gateway call."
+        ),
+        output_schema=PerspectiveViewValidateResult.model_json_schema(),
+        tags={"read", "scope:ignition.read", "capability:project_export"},
+    )
+    async def perspective_view_validate(view: dict[str, Any]) -> PerspectiveViewValidateResult:
+        async def flow(context: OperationContext) -> PerspectiveViewValidateResult:
+            return perspective_view_validate_service(context, view=view)
+
+        return await _invoke("perspective_view_validate", "FAST", flow)
+
+    @mcp.tool(
+        name="perspective_page_config_get",
+        description=(
+            "Read a Project's Local Perspective Page configuration document, with the Project "
+            "fingerprint a write to it must present."
+        ),
+        output_schema=PerspectivePageConfigGetResult.model_json_schema(),
+        tags={"read", "scope:ignition.read", "capability:project_export"},
+    )
+    async def perspective_page_config_get(projectName: str) -> PerspectivePageConfigGetResult:
+        return await _invoke(
+            "perspective_page_config_get", "ARTIFACT",
+            lambda context: perspective_page_config_get_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                project_name=projectName,
+                deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+        )
+
+    @mcp.tool(
+        name="perspective_session_props_get",
+        description=(
+            "Read a Project's Local Perspective Session properties document, with the Project "
+            "fingerprint a write to it must present."
+        ),
+        output_schema=PerspectiveSessionPropsGetResult.model_json_schema(),
+        tags={"read", "scope:ignition.read", "capability:project_export"},
+    )
+    async def perspective_session_props_get(projectName: str) -> PerspectiveSessionPropsGetResult:
+        return await _invoke(
+            "perspective_session_props_get", "ARTIFACT",
+            lambda context: perspective_session_props_get_service(
+                state.require_client(), state.require_registry(), state.require_artifacts(), context,
+                project_name=projectName,
+                deadline_seconds=settings.budget_deadline_seconds("ARTIFACT"),
+            ),
+        )
+
+    @mcp.tool(
         name="artifact_list",
         description="List READY artifact metadata visible to the calling principal (bounded, paginated).",
         output_schema=ArtifactListResult.model_json_schema(),
@@ -1043,6 +1148,11 @@ def _apply_visibility(mcp: FastMCP, snapshot: CapabilitySnapshot, settings: Sett
         "alarm_pipeline_cancel": "alarm_pipeline_cancel",
         "project_export": "project_export",
         "tag_config_export": "tag_config_export",
+        "perspective_view_list": "project_export",
+        "perspective_view_get": "project_export",
+        "perspective_view_validate": "project_export",
+        "perspective_page_config_get": "project_export",
+        "perspective_session_props_get": "project_export",
         "artifact_delete": None,
     }
     usable = snapshot.state in {"READY", "STALE"}

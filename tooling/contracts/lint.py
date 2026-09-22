@@ -38,6 +38,11 @@ CURRENT_REST_READ_TOOLS = [
     "project_export",
     "tag_config_export",
     "operation_diagnose",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 ]
 CURRENT_REST_STORAGE_TOOLS = frozenset({"artifact_list", "artifact_info", "operation_diagnose"})
 CURRENT_REST_SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})

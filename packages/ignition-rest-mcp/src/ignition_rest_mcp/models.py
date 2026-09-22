@@ -208,6 +208,55 @@ class ProjectImportResult(StrictModel):
     designerWarning: bool
 
 
+class PerspectiveViewListResult(StrictModel):
+    """D15: the Local Views of one Project, one bounded page per call."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    #: Logical resource paths, each one acceptable as the `path` of a View Tool.
+    items: list[str] = Field(max_length=500)
+    page: PageMetadata
+
+
+class PerspectiveViewGetResult(StrictModel):
+    """D15: one View document plus the Project fingerprint of the export it came from."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    path: str = Field(min_length=1, max_length=512)
+    view: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
+class PerspectiveViewValidateResult(StrictModel):
+    """D15 offline validation: no Gateway call, and no claim that an import accepts it."""
+
+    correlationId: str
+    valid: bool
+    #: Serialized document size, measured against the byte ceiling.
+    bytes: int = Field(ge=0)
+    #: Container nesting levels, measured against the depth ceiling.
+    depth: int = Field(ge=0)
+
+
+class PerspectivePageConfigGetResult(StrictModel):
+    """D15: the Project's Page configuration document and the Project fingerprint."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    config: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
+class PerspectiveSessionPropsGetResult(StrictModel):
+    """D15: the Project's Session properties document and the Project fingerprint."""
+
+    correlationId: str
+    projectName: str = Field(min_length=1, max_length=256)
+    props: dict[str, Any]
+    fingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+
+
 class AuditRecord(StrictModel):
     action: str
     actionTarget: str

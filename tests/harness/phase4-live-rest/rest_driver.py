@@ -201,6 +201,11 @@ READ_INVENTORY = frozenset({
     "operation_diagnose",
     "project_export",
     "tag_config_export",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 })
 GATE_ON_INVENTORY = READ_INVENTORY | set(CONFIG_MUTATION_TOOLS)
 #: The CONTROL credential's inventory: the cancel Tool appears for it and none of the

@@ -58,6 +58,11 @@ READ_INVENTORY = frozenset({
     "artifact_list",
     "artifact_info",
     "operation_diagnose",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 })
 
 

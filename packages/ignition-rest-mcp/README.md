@@ -241,6 +241,34 @@ Common rules for all four: a Target outside the allowlist is `permission_denied`
 class gate is enforced in discovery and again at call time, and an explicit Gateway rejection is
 final — no read-back may turn it into a success.
 
+**Perspective reads** (D15, Phase 5) return a Project's Local resources and change nothing.
+`perspective_view_list` lists the Local View paths of one Project (bounded, paginated by
+`limit`/`offset`), `perspective_view_get` returns one View document, and
+`perspective_page_config_get` and `perspective_session_props_get` return the Project's Page
+configuration and Session properties documents, answering `not_found` when the Project has
+none locally. The three document reads also return the `pcf1` Project fingerprint of the
+export they were read from, which is the Precondition token a later write presents. Views are
+addressed by Logical resource path (`Pages/Overview`), never by an archive path: a leading
+`/`, a backslash, an empty, `.` or `..` segment, a control character, or a character Ignition
+refuses in a resource name is `invalid_argument` before anything is exported. All four are
+gated on the `project_export` capability, and each exports the Project through the same
+bounded capture `project_export` and the D16 transaction use, reads the document from the
+private staging copy, and then deletes that copy. A read therefore publishes no artifact,
+never returns the archive, and leaves every other entry untouched. Reads return Local
+resources only: a View the Project inherits from an ancestor is not in the export and answers
+`not_found` rather than being resolved through the inheritance chain.
+
+`perspective_view_validate` (D15) dispatches nothing. It takes the View document as a JSON
+object, requires a `root` object whose `type` is a string, and applies the D10 budgets: at most
+1 MiB, measured on the document's compact re-serialization, and at most 64 JSON levels.
+Unknown component types are accepted, and a passing validation does not promise that an
+Ignition import accepts the document.
+
+Every document a Perspective read returns passes through the same `redact()` the
+`config_resource_*` reads use, so a field named `password`, `apiKey`, `accessToken`,
+`clientSecret`, `privateKey` or the like, and an embedded protected credential blob, is
+reported as `<redacted>` rather than echoed.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

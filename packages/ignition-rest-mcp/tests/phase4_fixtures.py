@@ -86,6 +86,9 @@ ACCEPT = "application/json, text/event-stream"
 PROTOCOL_VERSION = "2025-06-18"
 
 #: The effective REST inventory with every mutation class disabled (D07 discovery).
+#: The Perspective reads are gated on the project_export capability and on no
+#: deployment gate, so a Gateway advertising the export route exposes them even
+#: while the sensitive-export gate keeps the export Tools themselves hidden.
 READ_INVENTORY = frozenset({
     "gateway_info",
     "gateway_diagnose",
@@ -101,6 +104,11 @@ READ_INVENTORY = frozenset({
     "artifact_list",
     "artifact_info",
     "operation_diagnose",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 })
 
 

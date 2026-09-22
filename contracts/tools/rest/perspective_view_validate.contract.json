@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "name": "perspective_view_validate",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "FAST",
+  "parameters": {
+    "view": {
+      "type": "object",
+      "required": true,
+      "maxBytes": 1048576
+    }
+  },
+  "inputBounds": {
+    "documentParameter": "view",
+    "documentMaxBytes": 1048576,
+    "documentMaxDepth": 64,
+    "documentForm": "the parsed View document as a JSON object; the server measures the byte ceiling on its compact re-serialization (separators (\",\", \":\"), ensure_ascii=false), so the measurement does not depend on how the client spaced its request",
+    "documentSerialization": "compact JSON, separators (\",\", \":\"), ensure_ascii=false, NaN and Infinity refused",
+    "requiredStructure": "a JSON object with a 'root' object whose 'type' is a string",
+    "unknownComponentTypes": "accepted: this validator checks structure and budget, never the component inventory of a particular Ignition patch",
+    "checkOrder": "structure, then depth, then bytes, so no document reaches the serializer deep enough to exhaust its recursion",
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": [
+      "requested",
+      "limit"
+    ],
+    "invalidCode": "invalid_argument"
+  },
+  "outputSchema": "contracts/schemas/perspective-view-validate.output.schema.json",
+  "nativeRequirements": [],
+  "capabilityId": "project_export",
+  "dispatchesNativeRequest": false,
+  "localResourcesOnly": true,
+  "inheritanceLookup": false,
+  "offlineValidationIsNotAcceptance": "a passing validation does not promise that an Ignition import accepts the document (D15)",
+  "silentTruncation": false
+}
