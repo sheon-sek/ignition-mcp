@@ -1104,6 +1104,14 @@ def lint_contracts(root: str | Path) -> None:
                             f"{tool_name}: the rule must say what happens to metadata the baseline "
                             "already holds"
                         )
+                    # The D16 verification is byte-exact and the Gateway rewrites this document
+                    # on import, so the serialization is part of the rule, not a detail.
+                    shape = str(metadata.get("shape", ""))
+                    if "indent=2" not in shape or "newline" not in shape:
+                        raise ContractError(
+                            f"{tool_name}: the created metadata shape must state the serialization "
+                            "the Gateway rewrites to (indent=2, and its trailing-newline rule)"
+                        )
                 elif "createdResourceMetadata" in tool:
                     raise ContractError(
                         f"{tool_name}: this Tool creates no Perspective resource, so it declares no "

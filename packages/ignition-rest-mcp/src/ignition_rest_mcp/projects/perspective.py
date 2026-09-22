@@ -560,7 +560,22 @@ def designer_resource_metadata(document_name: str) -> dict[str, Any]:
         "restricted": False,
         "overridable": True,
         "files": [document_name],
+        "attributes": {},
     }
+
+
+def resource_metadata_bytes(document_name: str) -> bytes:
+    """The exact bytes one created resource's Designer metadata is written as.
+
+    The Gateway rewrites a new resource's metadata into its own form on import, and the
+    D16 verification compares the re-export C with the candidate B byte-exactly, so this
+    server has to write that very form instead of a compact one. It is
+    ``json.dumps(..., indent=2)`` of the key order :func:`designer_resource_metadata`
+    returns, with no trailing newline, and the G5 run recorded it as byte-identical on
+    8.3.8 and 8.3.9. A View document is not rewritten, so it keeps the caller's bytes.
+    """
+
+    return json.dumps(designer_resource_metadata(document_name), indent=2).encode("utf-8")
 
 
 def _resource_metadata(patch: ResourcePatch) -> tuple[str, bytes] | None:
@@ -570,20 +585,11 @@ def _resource_metadata(patch: ResourcePatch) -> tuple[str, bytes] | None:
     """
 
     if patch.kind is PatchKind.VIEW_REPLACE:
-        return (
-            view_resource_entry(patch.logical_path),
-            document_bytes(designer_resource_metadata(VIEW_DOCUMENT_NAME)),
-        )
+        return view_resource_entry(patch.logical_path), resource_metadata_bytes(VIEW_DOCUMENT_NAME)
     if patch.kind is PatchKind.PAGE_CONFIG_REPLACE:
-        return (
-            PAGE_CONFIG_RESOURCE_ENTRY,
-            document_bytes(designer_resource_metadata(PAGE_CONFIG_DOCUMENT_NAME)),
-        )
+        return PAGE_CONFIG_RESOURCE_ENTRY, resource_metadata_bytes(PAGE_CONFIG_DOCUMENT_NAME)
     if patch.kind is PatchKind.SESSION_PROPS_REPLACE:
-        return (
-            SESSION_PROPS_RESOURCE_ENTRY,
-            document_bytes(designer_resource_metadata(SESSION_PROPS_DOCUMENT_NAME)),
-        )
+        return SESSION_PROPS_RESOURCE_ENTRY, resource_metadata_bytes(SESSION_PROPS_DOCUMENT_NAME)
     return None
 
 

@@ -95,14 +95,22 @@ def _compact(document: dict[str, Any]) -> bytes:
 
 
 def _metadata(document_name: str) -> bytes:
-    """The `resource.json` an import needs to keep a resource, as P5-3 confirmed it on a
-    live 8.3.8 Gateway. Written out rather than built from the adapter, so a change to
-    the shape the server writes fails these tests."""
+    """The `resource.json` bytes the Gateway itself writes for a new resource.
 
-    return (
-        '{"scope":"G","version":1,"restricted":false,"overridable":true,"files":["'
-        f'{document_name}"]}}'
-    ).encode("utf-8")
+    The G5 run recorded them on 8.3.8 and 8.3.9: `json.dumps(..., indent=2)` in the
+    Gateway's key order, no trailing newline. Built here from an explicit document
+    literal rather than from the adapter, so a change to the shape or the
+    serialization the server writes fails these tests.
+    """
+
+    return json.dumps({
+        "scope": "G",
+        "version": 1,
+        "restricted": False,
+        "overridable": True,
+        "files": [document_name],
+        "attributes": {},
+    }, indent=2).encode("utf-8")
 
 def _view_document(label: str = "overview") -> dict[str, Any]:
     return {"root": {"type": "ia.container.coord", "children": []}, "custom": {"label": label}}
@@ -353,6 +361,37 @@ def test_a_created_resource_gains_the_designer_metadata_ignition_requires(
 
     assert entries[resource_entry] == _metadata(document_name)
     assert entries[document_entry] == _compact(patch.document or {})
+
+
+def test_the_created_metadata_bytes_are_the_form_the_gateway_rewrites_to() -> None:
+    """The serialization itself is the contract.
+
+    The Gateway rewrites a new resource's metadata into its own form on import, and the
+    D16 verification compares the re-export with the candidate byte-exactly, so a
+    compact or differently ordered document ends the transaction RECOVERY_REQUIRED even
+    though the write landed. The G5 run recorded this exact form on 8.3.8 and 8.3.9.
+    """
+
+    payload = perspective.resource_metadata_bytes(perspective.VIEW_DOCUMENT_NAME)
+
+    assert payload == (
+        b"{\n"
+        b'  "scope": "G",\n'
+        b'  "version": 1,\n'
+        b'  "restricted": false,\n'
+        b'  "overridable": true,\n'
+        b'  "files": [\n'
+        b'    "view.json"\n'
+        b"  ],\n"
+        b'  "attributes": {}\n'
+        b"}"
+    )
+    assert perspective.resource_metadata_bytes(perspective.PAGE_CONFIG_DOCUMENT_NAME) == _metadata(
+        "config.json"
+    )
+    assert perspective.resource_metadata_bytes(perspective.SESSION_PROPS_DOCUMENT_NAME) == _metadata(
+        "props.json"
+    )
 
 
 def test_an_existing_resource_keeps_its_own_metadata() -> None:
