@@ -25,28 +25,19 @@ HANDLER_MEMBER = "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
 BUNDLE_VERSION = (PROJECT.parent / "BUNDLE_VERSION").read_text(encoding="utf-8").strip()
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-#: The G6 rows (ticket #56) are composed from the live run's artifacts after it goes
-#: green, so this pin accepts the gate the moment its rows land: the release then
-#: carries one exact G6 tuple per Gateway row alongside the G4/G5 ones (D21).
-G6_DIRS = ("g6-8.3.8-mcp-2026021307", "g6-8.3.9-mcp-2026021307")
 
 
 def _expected_tuples() -> list[tuple[str, str, str, str]]:
-    from tooling.compat.evidence import load_evidence
+    """One exact tuple per Gateway row per committed gate (D21)."""
 
-    tuples = [
+    return sorted([
         ("G4", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
         ("G4", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
         ("G5", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
         ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
-    ]
-    if all((EVIDENCE / directory / "evidence.json").is_file() for directory in G6_DIRS):
-        rows = [row for row in load_evidence(EVIDENCE) if row.gate == "G6"]
-        tuples.extend(
-            ("G6", row.gateway_version, row.compatibility_status, row.native_response_binding)
-            for row in rows
-        )
-    return sorted(tuples, key=lambda item: (item[0], item[1]))
+        ("G6", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G6", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+    ], key=lambda item: (item[0], item[1]))
 
 
 def _copy_project(target_parent: Path) -> Path:
