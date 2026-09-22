@@ -264,6 +264,11 @@ object, requires a `root` object whose `type` is a string, and applies the D10 b
 Unknown component types are accepted, and a passing validation does not promise that an
 Ignition import accepts the document.
 
+Every document a Perspective read returns passes through the same `redact()` the
+`config_resource_*` reads use, so a field named `password`, `apiKey`, `accessToken`,
+`clientSecret`, `privateKey` or the like, and an embedded protected credential blob, is
+reported as `<redacted>` rather than echoed.
+
 **Project writer** (D16, internal): `IGNITION_MCP_PROJECT_WRITER_ENABLED` (false) + mandatory
 `IGNITION_MCP_GATEWAY_ID` (≤128 chars `[A-Za-z0-9._:-]`, one stable operator-chosen ID per Gateway,
 identical across replicas pointing at the same Gateway) + `IGNITION_MCP_PROJECT_LOCK_TIMEOUT_SECONDS`

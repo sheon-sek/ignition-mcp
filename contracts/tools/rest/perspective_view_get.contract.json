@@ -38,6 +38,7 @@
   "localResourcesOnly": true,
   "inheritanceLookup": false,
   "preconditionTokenReturned": "the D16 pcf1 Project fingerprint of the export this document was read from",
+  "embeddedSecretsRedacted": true,
   "exportHandling": "the export is streamed into private staging, read in place and never published as an artifact or passed through the MCP body (D15/D17)",
   "missingView": "not_found",
   "silentTruncation": false
