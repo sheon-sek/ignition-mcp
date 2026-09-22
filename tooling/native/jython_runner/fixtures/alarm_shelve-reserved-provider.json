@@ -7,7 +7,7 @@
   ],
   "arguments": {
     "paths": [
-      "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+      "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
     ],
     "timeoutSeconds": 60
   },
@@ -64,7 +64,7 @@
       "target": "system.util.audit",
       "kwargs": {
         "action": "ignition-mcp.alarm_shelve",
-        "actionTarget": "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actionTarget": "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi",
         "actor": "ignition-mcp-service"
       },
       "result": {

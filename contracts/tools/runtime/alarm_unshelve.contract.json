@@ -50,7 +50,7 @@
     "allowlistKey": "alarm_unshelve",
     "allowlistMatch": "provider-qualified alarm path prefix matched at a segment boundary (/ or :); an explicit * allows every alarm path",
     "reservedProvider": "IgnitionMCPPolicy",
-    "reservedProviderRefusal": "any alarm path that names the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *",
+    "reservedProviderRefusal": "any alarm path whose prov:<provider>: component is the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *; a later Tag or Alarm segment that spells the name is not the provider and stays an allowlist-checked target",
     "reservedProviderRefusalCode": "permission_denied"
   },
   "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",

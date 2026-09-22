@@ -1,13 +1,15 @@
 {
   "schemaVersion": 2,
-  "tool": "alarm_unshelve",
+  "tool": "alarm_shelve",
   "parameterOrder": [
-    "paths"
+    "paths",
+    "timeoutSeconds"
   ],
   "arguments": {
     "paths": [
-      "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
-    ]
+      "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High"
+    ],
+    "timeoutSeconds": 60
   },
   "calls": [
     {
@@ -29,7 +31,7 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": 204
+            "value": 260
           }
         ]
       }
@@ -53,7 +55,7 @@
               "good": true,
               "diagnosticMessage": null
             },
-            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"*\"],\"alarm_unshelve\":[\"*\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
+            "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"prov:default:/tag:MCP_P4_1/Exact\"],\"alarm_unshelve\":[\"prov:default:/tag:MCP_P4_1\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
           }
         ]
       }
@@ -61,8 +63,8 @@
     {
       "target": "system.util.audit",
       "kwargs": {
-        "action": "ignition-mcp.alarm_unshelve",
-        "actionTarget": "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi",
+        "action": "ignition-mcp.alarm_shelve",
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High",
         "actor": "ignition-mcp-service"
       },
       "result": {

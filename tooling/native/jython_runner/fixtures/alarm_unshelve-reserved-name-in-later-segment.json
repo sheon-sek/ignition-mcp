@@ -6,7 +6,8 @@
   ],
   "arguments": {
     "paths": [
-      "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
+      "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High",
+      "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
     ]
   },
   "calls": [
@@ -62,11 +63,54 @@
       "target": "system.util.audit",
       "kwargs": {
         "action": "ignition-mcp.alarm_unshelve",
-        "actionTarget": "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi",
-        "actor": "ignition-mcp-service"
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High,prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
       },
       "result": {
         "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.unshelve",
+      "args": [
+        [
+          "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High"
+        ]
+      ],
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.unshelve",
+      "args": [
+        [
+          "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+        ]
+      ],
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_unshelve",
+        "actionTarget": "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High,prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service",
+        "auditProfile": "MCP_CI_AUDIT"
+      },
+      "result": {
+        "kind": "none"
+      }
+    },
+    {
+      "target": "system.alarm.getShelvedPaths",
+      "args": [],
+      "result": {
+        "kind": "shelved-paths",
+        "items": []
       }
     }
   ]

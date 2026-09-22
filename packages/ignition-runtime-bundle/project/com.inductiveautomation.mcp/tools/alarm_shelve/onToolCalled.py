@@ -14,8 +14,10 @@ def onToolCalled(builder, paths, timeoutSeconds):
 	POLICY_MAX_BYTES = 32768
 	POLICY_READ_TIMEOUT_MS = 5000
 	# D30 1 (#6 recommendation): the Runtime plane cannot write the policy, and
-	# that is a product rule. An Alarm path that names the reserved provider is
+	# that is a product rule. An Alarm path whose *provider* is the reserved one is
 	# refused by the same rule, before Preflight, whatever the allowlist says.
+	# The owner ruling matches the provider component only, never a later segment
+	# that happens to spell the name (see pathProvider below).
 	RESERVED_PROVIDER = "IgnitionMCPPolicy"
 	ALLOWLIST_KEY = "alarm_shelve"
 	WILDCARD = "*"
@@ -152,6 +154,20 @@ def onToolCalled(builder, paths, timeoutSeconds):
 		if remainder == "" or remainder.startswith(":") or remainder.startswith("/"):
 			return "pathNotProviderQualified"
 		return None
+
+	def pathProvider(value):
+		# D30 1 owner ruling (reserved_provider_match: provider_component_only): the
+		# rendered Alarm path is prov:<provider>:<Tag path>:/alm:<name>, so its
+		# provider is the component between the scheme and the next separator.
+		# Comparing that component is what keeps a Tag or Alarm segment that merely
+		# spells the reserved name an ordinary, allowlist-checked target.
+		if not isinstance(value, basestring) or not value.startswith("prov:"):
+			return ""
+		remainder = value[len("prov:"):]
+		separator = remainder.find(":")
+		if separator < 0:
+			return remainder
+		return remainder[:separator]
 
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified alarm path prefixes
@@ -366,9 +382,11 @@ def onToolCalled(builder, paths, timeoutSeconds):
 		policyProblems = []
 		for index in range(len(exactPaths)):
 			path = exactPaths[index]
-			if path.lower().find(RESERVED_PROVIDER.lower()) >= 0:
-				# Refused before the allowlist is consulted, so an explicit *
-				# cannot reach the document's provider.
+			if pathProvider(path).lower() == RESERVED_PROVIDER.lower():
+				# Refused by provider before the allowlist is consulted, so an
+				# explicit * cannot reach the policy document; the provider
+				# component is the only thing compared, so an allowed provider is
+				# never refused for a later segment's name.
 				policyProblems.append({"index": index, "path": path, "reason": "reservedProvider", "code": "permission_denied"})
 				continue
 			if not matchesAllowlist(path, entries):

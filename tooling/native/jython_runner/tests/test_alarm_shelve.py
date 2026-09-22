@@ -28,7 +28,14 @@ EXACT = "prov:default:/tag:MCP_P4_1/Exact:/alm:ProbeHi"
 SIBLING = "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi"
 NESTED = "prov:default:/tag:MCP_P4_1/Fold/ChildA:/alm:ProbeHi"
 WILDCARD_PATH = "prov:default:/tag:MCP_P4_1/*"
-RESERVED_PATH = "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+#: A target *inside* the reserved provider: the `prov:` component is the reserved
+#: name, which is the only thing D30's owner ruling reserves.
+RESERVED_PATH = "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
+#: Targets whose *provider* is `default` while a later Tag segment spells the
+#: reserved name. `RESERVED_NAME_PATH` is the sibling the review named; the two
+#: must never be refused as `reservedProvider`.
+RESERVED_NAME_PATH = "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High"
+RESERVED_SEGMENT_PATH = "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
 
 
 def _fixture(name: str) -> Path:
@@ -184,6 +191,31 @@ def test_reserved_policy_provider_is_refused_even_under_an_explicit_wildcard() -
     allowed = run_recorded_tool("alarm_shelve", _fixture("wildcard-allows-target"))["structuredContent"]
     assert allowed["items"][0]["status"] == "executed"
     assert allowed["summary"]["executed"] == 1
+
+
+def test_a_later_segment_that_spells_the_reserved_name_is_not_the_reserved_provider() -> None:
+    """D30's owner ruling matches the provider component only, so a target under an
+    allowed provider is never refused for a Tag or Alarm segment that spells the
+    reserved name (the review's `IgnitionMCPPolicyPump` sibling)."""
+    structured = run_recorded_tool(
+        "alarm_shelve", _fixture("reserved-name-in-later-segment")
+    )["structuredContent"]
+
+    assert structured["items"] == [
+        {"path": RESERVED_NAME_PATH, "status": "executed"},
+        {"path": RESERVED_SEGMENT_PATH, "status": "executed"},
+    ]
+    assert structured["summary"]["executed"] == 2
+    assert [entry["shelved"] for entry in structured["observed"]] == [True, True]
+
+
+def test_a_reserved_name_outside_the_allowlist_is_refused_as_unallowlisted() -> None:
+    """The refusals stay distinct: a target outside the allowlist answers for that
+    reason, even when a later segment spells the reserved name, so a refusal is
+    never misattributed to the provider."""
+    error = _error("reserved-name-not-allowlisted", "permission_denied")
+
+    assert _item_reasons(error) == [(RESERVED_NAME_PATH, "targetNotAllowlisted")]
 
 
 def test_one_bad_item_rejects_the_whole_batch_before_anything_executes() -> None:
@@ -389,6 +421,8 @@ VALID_POLICY_FIXTURES = (
     "alarm_shelve-duration-over-policy-cap",
     "alarm_shelve-target-not-allowlisted",
     "alarm_shelve-reserved-provider",
+    "alarm_shelve-reserved-name-in-later-segment",
+    "alarm_shelve-reserved-name-not-allowlisted",
     "alarm_shelve-wildcard-allows-target",
     "alarm_shelve-preflight-refuses-whole-batch",
     "alarm_shelve-audit-required-profile-missing",
