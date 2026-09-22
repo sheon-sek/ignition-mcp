@@ -749,7 +749,42 @@ are real gaps the reviewer named and they are **not** fixed in this round:
 - Live: the harness stages `tag-move`, `tag-rename` and `tag-delete` in
   `.github/workflows/phase4-live-g4b.yml`, on the `configurator` deployment, in that order because a
   move borrows `tag_create`'s node, a rename creates the occupied name a later case reads, and a
-  delete takes a Folder with everything beneath it.
+  delete takes a Folder with everything beneath it. Run
+  [35707687810](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687810) is green on both
+  rows with `drift: {}` — 8.3.8 `2026071409` (required) and 8.3.9 `2026082511` (candidate), at the
+  head's merge revision `d95a2d2e` — with CI
+  [35707687767](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687767), G0
+  [35707687771](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687771) and G3
+  [35707687805](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687805) green on the same
+  head:
+  - the deployed `configurator` inventory carries all three Tools, and each stage's own log is
+    evidence;
+  - the allowlisted move landed: the destination is present and the source is gone, both read
+    independently through the provider's own export at the two exact paths, and the Observed
+    destination fingerprint is that re-read's;
+  - an occupied destination is `conflict` / `destinationExists` and changed neither end; a stale
+    token is `conflict` / `fingerprintMismatch`; a source that is not there is `not_found` /
+    `sourceMissing`;
+  - the segment-boundary sibling is refused at the *source* end (`targetNotAllowlisted`), a UDT
+    definition or its destination is refused under a plain prefix and under a bare `*`, and an
+    explicit `_types_` entry lifts that refusal (the batch then lists only its sibling);
+  - the reserved `IgnitionMCPPolicy` provider is refused at the source end *and* at the destination
+    end under an explicit `*`, with the probe Tag and the policy document both unchanged;
+  - D10's hard item ceiling, path ceiling, 20-target project default and the deployment's own
+    `tagMoveMaxItems=1` each refuse with their own reason;
+  - the rename landed with the new path present and the old path absent, again through the export at
+    both exact paths; an occupied new path is `conflict` / `newPathExists`, a multi-segment `newName`
+    is `invalid_argument` / `newNameNotASingleSegment`, a missing target is `not_found`, and the
+    sibling, `_types_` and reserved-provider rules (plus the same four ceilings) hold;
+  - the delete's partial-failure batch after Preflight behaved exactly as D30 §3 says: the Folder
+    item executed Good (taking its descendants with it), the second item — a Tag inside that Folder,
+    which Preflight had checked and whose token had matched — answered its own `Bad_NotFound`, the
+    summary is `succeeded: 1`, `failed: 1`, `outcomeUnknown: 0`, nothing was retried or rolled back,
+    both paths are observed absent, and the Folder is gone from the export; a stale token changed
+    nothing, a missing target is `not_found`, the input-key rule refuses, and the sibling, `_types_`,
+    reserved-provider and ceiling cases all hold;
+  - every dispatched stage wrote its attempt and result audit rows for the call's correlation ID
+    under the policy's Service identity (2 rows each, `best_effort`).
 
 ### Ticket #16 — REST `project_import` (milestone 4c)
 
