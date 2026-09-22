@@ -1057,10 +1057,16 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Both names of a rename.** A rename changes its source and produces a resource at its
   destination (D30 §3), so the rule covers both: renaming another provider *into* the
   reserved name is refused as well as renaming the reserved provider *away*. The denial's
-  message and the audited reason name `ignition/tag-provider/IgnitionMCPPolicy`; the
-  Target the recorded `decision` row is attributed to is the call's first Target, which for
-  a refused destination is the source — the reason is what names the reserved resource, and
-  the contract says so.
+  message and the audited reason name `ignition/tag-provider/IgnitionMCPPolicy`.
+- **Where the refusal is recorded.** The denial is the operation's Target-class rule, so it
+  runs inside the D08 chain exactly where D30 §5's Refused resource types run: the D18
+  `decision` row carries `denied:target-class:reserved-config-resource:<resourceType>/<name>`
+  and nothing else is written (no `attempt`, no `result`), under the same audit-mode rules as
+  every other denial. The executor evaluates an operation's Target-class rule once and applies
+  its verdict to every Target of the call, so for a rename whose *destination* is the refused
+  resource the recorded row's Target is the call's first Target (the source) while the
+  **reason** names the reserved resource — the reason is the accurate part, and the rename
+  contract says so explicitly.
 - **Exact name, and fail-closed on case.** The whole name is compared, never a substring,
   so `IgnitionMCPPolicyStaging` is a different resource and stays manageable — the same
   reading D30 §1 gives the reserved Tag provider, which matches its provider component and
@@ -1113,14 +1119,54 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   reserved-provider section, which runs after the `#20` fault cases and after ticket #35's
   wire case, exactly as the brief requires, because the fault instance's tool budget makes
   those timing-sensitive).
-- **The live form of the rule.** Live evidence is recorded in the ticket report
-  (`36-impl.md`) and cited here once the runs settle: the reserved-name cases live in
-  `--mode fault` after the `#20` cases, where the proxy's own record of the hop is what
-  proves a refused call sent the Gateway **no config-resource request at all**, while an
-  accepted call beside it shows exactly one `PUT`. Every one of those Targets — the
-  reserved one included — is in the deployment's Target allowlist, and one rename is aimed
-  at an *occupied* destination, so neither an allowlist denial nor the D11 collision could
-  be mistaken for the name rule.
+- **Live** (workflow `Phase 4 Live Gateway REST mutation`, run
+  [35685817474](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817474), the code
+  head `df77733`; the documentation head after it re-ran the same four workflows and is
+  recorded in the ticket report): **both rows green, 217/217 live cases on 8.3.8
+  (`2026071409`, required) and 217/217 on 8.3.9 (`2026082511`, candidate)** — 194 before this
+  ticket, so all 23 new cases pass on both Gateway versions. What the artifacts record:
+  - the five refusals — update, delete, create, rename *into* the reserved name and rename
+    *away* from it — answer `permission_denied`, and the refusal message names
+    `ignition/tag-provider/IgnitionMCPPolicy`; every one of those Targets is in the
+    deployment's Target allowlist, and the rename-away destination is occupied, so neither
+    an allowlist denial nor the D11 collision can be mistaken for the name rule;
+  - the hop's own record (`observations.json` → `reserved*Hop`) holds **zero** config-resource
+    requests for all five refusals on both rows: a refused Target is decided from its
+    identity, so no read and no write left the server, and the reserved provider's Resource
+    signature is unchanged. The accepted calls beside them show exactly what a real change
+    costs (`otherProviderHop`: one `GET`, one `PUT` to
+    `/data/api/v1/resources/ignition/tag-provider?allowInvalidReferences=false`, one `GET`);
+  - `reserved-provider-config-resource-is-readable` — the reserved provider's configuration
+    is served by `config_resource_get`, with its `STANDARD` profile and its `core`
+    collection, which is the Mutation-only scope of the rule;
+  - `another-provider-update-applies` and
+    `a-name-that-begins-with-the-reserved-name-update-applies` — an ordinary Tag provider and
+    the longer `IgnitionMCPPolicyStaging` are both updated through the same Tool, so the rule
+    refuses a name and not the type (D30 §5's classification is unchanged);
+  - `provision.json` → `policyProviders` records the three fixtures created in `core`
+    (HTTP 200 each) with their signatures, and the **case measurement**:
+    `caseFoldedLookup.status` is **404 on both 8.3.8 and 8.3.9**, i.e. neither Gateway
+    treats `ignitionmcppolicy` as the reserved resource's name. That is the evidence the open
+    question below needs — the Tool's fail-closed case folding only ever over-refuses here.
+  - **One rerun, and why.** The 8.3.8 row's first attempt failed *before any live stage*: the
+    unit suite's Jython runner could not fetch the pinned
+    `jython-standalone-2.7.4.jar` (`HTTP Error 429: Too Many Requests` from
+    `repo.maven.apache.org`). The 8.3.9 row passed 217/217 in the same attempt, no case ever
+    ran on the failed row, and nothing in this ticket touches the Jython runner. Rerunning the
+    failed job was green: **217/217 on both rows** (attempt 2, same run id, artifact
+    `10676439117` re-read). Recorded rather than hidden.
+  - **Frozen gates on the same head (`df77733`), all green**: CI
+    [35685817487](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817487),
+    Phase 3 Live Gateway G3
+    [35685817497](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817497), and
+    Phase 4 Live Gateway G4a
+    [35685817529](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817529).
+- **The live form of the rule.** The refusal is invisible on the Gateway — nothing is read or
+  written — so the hop's record is what proves it, which is why these cases live in
+  `--mode fault` **after** the `#20` cases and after ticket #35's wire case: the fault
+  instance runs a deliberately small tool budget and the `#20` cases are timing-sensitive
+  (issue #39). Every Target the cases address is provisioned by `provision.py`, so the
+  reserved provider they refuse really exists and "changed nothing" is observable.
 
 ## Open questions
 
@@ -1137,10 +1183,15 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   Ignition turns out to treat the two names as one. The live harness records the measurement
   that would settle it in every run: `provision.json` → `policyProviders.caseFoldedLookup`
   reads the reserved provider's name with its case folded through the Gateway's own REST
-  API and records the status (200 = this Gateway treats the two names as one resource, 404
-  = it does not). **For the owner:** if the recorded status is 404 on both supported
-  Gateway versions, the rule may be narrowed to an exact, case-sensitive comparison without
-  weakening D30 §1; the harness measurement is the evidence for that amendment.
+  API and records the status. **Recorded: `status: 404` on both 8.3.8 and 8.3.9** (run
+  35685817474, `provision.json`) — neither Gateway treats `ignitionmcppolicy` as the
+  reserved resource's name, so on the supported tuples the folded refusal only ever
+  over-refuses and never weakens D30 §1. **For the owner:** with that measurement in hand the
+  rule may be narrowed to an exact, case-sensitive comparison; that is a decision, not a bug
+  fix, and the shipped behaviour stays fail-closed until the owner says otherwise. (The same
+  measurement is why the wording above says "could address the same resource" rather than
+  "does": Ignition documents no rule, one live sample says it does not fold, and a future
+  Gateway version is not bound by it.)
 
 - **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
   evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
