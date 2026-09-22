@@ -23,10 +23,18 @@ Three rules decide the wire item:
   update and a delete, and a refusal it reports itself is mapped to the caller's
   error as well. A read-compare narrows the race window but does not remove it.
 - **Target identity.** A Target is the exact ``<resourceType>/<name>`` in the
-  default configuration collection. A caller-supplied collection is refused, because
-  the Target allowlist cannot name one unambiguously; see ``resource_target_id`` and
-  the runbook's open question. A rename changes its source *and* produces a resource
-  at its destination, so both are Targets and both must be allowlisted (D30 §3).
+  ``core`` configuration collection (D30 owner ruling 5), and every Gateway read and
+  write this module makes names that collection: the reads send
+  ``collection=core`` as a query parameter, a change item always carries it as the
+  field its documented request schema declares, and the ``DELETE`` and rename routes
+  send it as a query parameter. A type whose documented item schema cannot carry that
+  field, or cannot accept ``core``, has no way to address a Target here and is refused
+  before anything is dispatched — an item is never sent for the Gateway's own default
+  to place. A caller-supplied collection is accepted only when it *is* ``core``;
+  anything else is refused before anything is read or dispatched, because the Target
+  allowlist names a resource and not a collection. A rename changes its source *and*
+  produces a resource at its destination, so both are Targets and both must be
+  allowlisted (D30 §3).
 
 Because an explicit Gateway rejection is final for these Tools (D30 §2), every
 operation is declared ``rejection_is_final``: the caller either gets the Gateway's
@@ -134,6 +142,10 @@ SIGNATURE_DISPLAY_LENGTH = 64
 ALLOW_INVALID_REFERENCES = "false"
 REFERENCES_ABORT = "ABORT"
 
+#: D30 owner ruling 5: generic config Mutations always target the ``core`` collection,
+#: and the Gateway is told so on every read and every write.
+CORE_COLLECTION = "core"
+
 
 async def config_resource_update(
     client: GatewayClient,
@@ -159,7 +171,7 @@ async def config_resource_update(
             "this resourceType has no documented update route on the connected Gateway",
         )
     name = _requested_name(capability, name)
-    collection = _default_collection(collection)
+    collection = _core_collection(collection)
     expected_signature = _required_signature(expected_signature)
     fields = _change_fields(config, enabled, description, required=True)
     item = _write_item(
@@ -173,11 +185,11 @@ async def config_resource_update(
 
     async def precondition() -> None:
         read_state["resource"] = await _preconditioned_read(
-            client, context, capability, name, collection, expected_signature,
+            client, context, capability, name, expected_signature,
         )
 
     async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
-        current = await _read_resource(client, context, capability, name, collection)
+        current = await _read_resource(client, context, capability, name)
         before = read_state["resource"]
         # D30 §6 (Observed state): the bounded read-back is reported as data and
         # decides success by answering "is the intended change visible?".
@@ -198,6 +210,8 @@ async def config_resource_update(
             target_id=resource_target_id(capability, name),
             request_path=capability.update_path,
             method="PUT",
+            # D30 owner ruling 5: this route documents no collection query parameter, so
+            # the collection travels in the change item, which names `core`.
             params={"allowInvalidReferences": ALLOW_INVALID_REFERENCES},
             body_chunks=_chunked(body),
             content_type="application/json",
@@ -257,7 +271,7 @@ async def config_resource_create(
             "this resourceType has no documented create route on the connected Gateway",
         )
     name = _requested_name(capability, name)
-    collection = _default_collection(collection)
+    collection = _core_collection(collection)
     fields = _change_fields(config, enabled, description, required=False)
     item = _write_item(capability, capability.create_request_schema, name, None, fields)
     body = _wire_body(item)
@@ -265,7 +279,7 @@ async def config_resource_create(
     read_state: dict[str, Any] = {}
 
     async def precondition() -> None:
-        if await _probe_resource(client, context, capability, name, collection) is not None:
+        if await _probe_resource(client, context, capability, name) is not None:
             # D11 collision policy: the target exists, so this call has nothing to
             # create. Nothing was dispatched and the caller keeps its read.
             raise GatewayError(
@@ -274,7 +288,7 @@ async def config_resource_create(
             )
 
     async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
-        current = await _probe_resource(client, context, capability, name, collection)
+        current = await _probe_resource(client, context, capability, name)
         read_state["observed"] = current
         return _verdict(
             claimed=_is_claimed_success(dispatch),
@@ -290,6 +304,8 @@ async def config_resource_create(
             target_id=resource_target_id(capability, name),
             request_path=capability.create_path,
             method="POST",
+            # D30 owner ruling 5: this route documents no collection query parameter, so
+            # the collection travels in the change item, which names `core`.
             params={"allowInvalidReferences": ALLOW_INVALID_REFERENCES},
             body_chunks=_chunked(body),
             content_type="application/json",
@@ -348,7 +364,7 @@ async def config_resource_delete(
             "this resourceType has no documented delete route on the connected Gateway",
         )
     name = _requested_name(capability, name)
-    collection = _default_collection(collection)
+    collection = _core_collection(collection)
     expected_signature = _required_signature(expected_signature)
     path = _delete_path(template, name, expected_signature)
 
@@ -356,11 +372,11 @@ async def config_resource_delete(
 
     async def precondition() -> None:
         read_state["resource"] = await _preconditioned_read(
-            client, context, capability, name, collection, expected_signature,
+            client, context, capability, name, expected_signature,
         )
 
     async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
-        current = await _probe_resource(client, context, capability, name, collection)
+        current = await _probe_resource(client, context, capability, name)
         read_state["observed"] = current
         return _verdict(
             claimed=_is_claimed_success(dispatch),
@@ -376,6 +392,9 @@ async def config_resource_delete(
             target_id=resource_target_id(capability, name),
             request_path=path,
             method="DELETE",
+            # D30 owner ruling 5: the documented DELETE route takes the collection as a
+            # query parameter, and the change is always made in `core`.
+            params={"collection": CORE_COLLECTION},
             body_chunks=_no_body(),
             content_type="application/json",
             dispatch_deadline_seconds=settings.budget_deadline_seconds("FAST"),
@@ -435,7 +454,7 @@ async def config_resource_rename(
             "this resourceType has no documented rename route on the connected Gateway",
         )
     name = _requested_name(capability, name)
-    collection = _default_collection(collection)
+    collection = _core_collection(collection)
     new_name = _new_name(name, new_name)
     expected_signature = _required_signature(expected_signature)
     body = _rename_body(capability, new_name)
@@ -445,9 +464,9 @@ async def config_resource_rename(
 
     async def precondition() -> None:
         read_state["resource"] = await _preconditioned_read(
-            client, context, capability, name, collection, expected_signature,
+            client, context, capability, name, expected_signature,
         )
-        if await _probe_resource(client, context, capability, new_name, collection) is not None:
+        if await _probe_resource(client, context, capability, new_name) is not None:
             # D11 collision policy: the rename destination is taken, so nothing may be
             # dispatched, and the caller's signature is not consumed.
             raise GatewayError(
@@ -456,8 +475,8 @@ async def config_resource_rename(
             )
 
     async def verify(dispatch: WriteDispatchResult) -> VerificationOutcome:
-        renamed = await _probe_resource(client, context, capability, new_name, collection)
-        source = await _probe_resource(client, context, capability, name, collection)
+        renamed = await _probe_resource(client, context, capability, new_name)
+        source = await _probe_resource(client, context, capability, name)
         read_state["observed"] = renamed
         return _verdict(
             claimed=_is_claimed_success(dispatch),
@@ -475,6 +494,9 @@ async def config_resource_rename(
             additional_target_ids=(resource_target_id(capability, new_name),),
             request_path=path,
             method="POST",
+            # D30 owner ruling 5: the documented rename route takes the collection as a
+            # query parameter (`references` travels in the body).
+            params={"collection": CORE_COLLECTION},
             body_chunks=_chunked(body),
             content_type="application/json",
             dispatch_deadline_seconds=settings.budget_deadline_seconds("FAST"),
@@ -588,25 +610,42 @@ def _new_name(current: str, value: str) -> str:
     return new_name
 
 
-def _default_collection(value: str) -> str:
-    """D30: a Target is a resource in the *default* collection.
+def _core_collection(value: str) -> str:
+    """The one collection a config Mutation may address (D30 owner ruling 5).
 
     The Gateway selects the resource a read or a change applies to by collection as
     well as by name, so a Target allowlist entry for ``<resourceType>/<name>`` would
-    otherwise authorize the same name in every collection. Until the Target policy can
-    name a collection unambiguously, a caller-supplied collection is refused
-    (fail closed) and only the default collection is addressable.
+    otherwise authorize the same name in every collection. The ruling therefore pins
+    every config Mutation to ``core``: an omitted (or empty) collection *means*
+    ``core`` and is sent explicitly, an explicit ``core`` is accepted, and any other
+    value is refused before anything is read or dispatched.
     """
 
     collection = bounded_text(value, "collection", 128, allow_empty=True)
-    if collection:
+    if collection and collection != CORE_COLLECTION:
         raise GatewayError(
             "invalid_argument",
-            "collection is not supported: a Target is the exact <resourceType>/<name> in the "
-            "default collection, and this deployment's Target allowlist cannot name a "
-            "collection, so a collection-qualified change is refused",
+            "collection must be core: a Target is the exact <resourceType>/<name> in the "
+            "core collection, which is the only collection this Tool addresses",
         )
-    return collection
+    return CORE_COLLECTION
+
+
+def _core_collection_refusal() -> GatewayError:
+    """D30 owner ruling 5: a write that cannot name the core collection has no Target.
+
+    The collection routes document no collection query parameter, so a change item is
+    the only place a ``PUT``/``POST`` can carry the collection. A type whose documented
+    item schema cannot carry the field — or cannot accept ``core`` — is a type this Tool
+    cannot address at all, and no change may be sent for it: the Gateway's own default
+    would otherwise choose the collection the write lands in.
+    """
+
+    return GatewayError(
+        "unsupported_capability",
+        "this resourceType's documented change item cannot name the core collection, which "
+        "is the only collection this Tool addresses; nothing was dispatched",
+    )
 
 
 def _write_item(
@@ -618,17 +657,24 @@ def _write_item(
 ) -> dict[str, Any]:
     """The complete Gateway-shaped change item, validated against the snapshot (D03).
 
-    The Resource signature is included when the operation's route carries one, and the
-    name exactly when the documented item schema declares one: a singleton's update
-    item requires only ``signature``, a create item takes no signature at all, and
-    sending an undeclared field is not what the Gateway documents.
+    The Resource signature is included when the operation's route carries one, the name
+    exactly when the documented item schema declares one, and the collection *always*:
+    a singleton's update item requires only ``signature``, a create item takes no
+    signature at all, and sending an undeclared field is not what the Gateway documents.
+    The collection is always ``core`` (D30 owner ruling 5), and the item always names it
+    — where the documented item schema cannot carry that field the write has no way to
+    address the Target, so it is refused here instead of being dispatched for the
+    Gateway's own default to place.
     """
 
+    if not _schema_declares(schema, "collection"):
+        raise _core_collection_refusal()
     item: dict[str, Any] = {}
     if expected_signature is not None:
         item["signature"] = expected_signature
     if _schema_declares(schema, "name"):
         item["name"] = name
+    item["collection"] = CORE_COLLECTION
     item.update(fields)
     _validate_against_gateway(capability, schema, item)
     return item
@@ -688,6 +734,12 @@ def _validate_against_gateway(
     if not errors:
         return
     first = errors[0]
+    if first.absolute_path and str(first.absolute_path[0]) == "collection":
+        # D30 owner ruling 5: `core` is the only value this module ever puts in the
+        # field, so a schema that refuses it describes a type this Tool cannot address
+        # — not anything the caller supplied, which is why this is not an
+        # `invalid_argument`.
+        raise _core_collection_refusal()
     location = "/" + "/".join(str(part) for part in first.absolute_path) if first.absolute_path else "/"
     raise GatewayError(
         "invalid_argument",
@@ -762,12 +814,15 @@ async def _read_resource(
     context: OperationContext,
     capability: ConfigResourceCapability,
     name: str,
-    collection: str,
 ) -> dict[str, Any]:
     """The bounded read that supplies the Precondition token and, for a singleton,
-    the wire identity."""
+    the wire identity.
 
-    params: dict[str, Any] = {"collection": collection} if collection else {}
+    The read names the ``core`` collection explicitly (D30 owner ruling 5), as every
+    read and write of a config Mutation does.
+    """
+
+    params: dict[str, Any] = {"collection": CORE_COLLECTION}
     if capability.singleton:
         path = capability.singleton_path
     else:
@@ -775,7 +830,7 @@ async def _read_resource(
         path = template.replace("{name}", quote(name, safe="")) if template else None
     if path is None:
         raise GatewayError("unsupported_capability", "This resourceType has no exact lookup route")
-    return await client.get_json(path, params=params or None, context=context)
+    return await client.get_json(path, params=params, context=context)
 
 
 async def _probe_resource(
@@ -783,7 +838,6 @@ async def _probe_resource(
     context: OperationContext,
     capability: ConfigResourceCapability,
     name: str,
-    collection: str,
 ) -> dict[str, Any] | None:
     """Whether one Target exists, as its document (``None`` = absent).
 
@@ -792,7 +846,7 @@ async def _probe_resource(
     """
 
     try:
-        return await _read_resource(client, context, capability, name, collection)
+        return await _read_resource(client, context, capability, name)
     except GatewayError as error:
         if error.code == "not_found":
             return None
@@ -804,7 +858,6 @@ async def _preconditioned_read(
     context: OperationContext,
     capability: ConfigResourceCapability,
     name: str,
-    collection: str,
     expected_signature: str,
 ) -> dict[str, Any]:
     """The bounded read that enforces the Precondition token before dispatch (D30 §2).
@@ -815,7 +868,7 @@ async def _preconditioned_read(
     later verification compares against.
     """
 
-    current = await _read_resource(client, context, capability, name, collection)
+    current = await _read_resource(client, context, capability, name)
     signature = resource_signature(current)
     if signature is None:
         raise GatewayError(

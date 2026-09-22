@@ -40,7 +40,8 @@
       "type": "string",
       "required": false,
       "default": "",
-      "maxLength": 128
+      "maxLength": 128,
+      "note": "the core collection: an omitted or empty value means core, and the Tool sends collection=core on every Gateway read and write it makes; any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)"
     }
   },
   "outputSchema": "contracts/schemas/config-resource-rename.output.schema.json",
@@ -62,7 +63,7 @@
   },
   "targetId": {
     "form": "<resourceType>/<name>, or <resourceType> for a singleton",
-    "collection": "the default configuration collection only: the Target allowlist names a resource, so a caller-supplied collection is refused with invalid_argument",
+    "collection": "the core collection only: the reads and the documented rename route name it as the collection query parameter (the request body carries the new name and the fixed references, never a collection), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,
@@ -83,7 +84,8 @@
     "unclassified": "refused"
   },
   "fixedKnobs": {
-    "references": "ABORT"
+    "references": "ABORT",
+    "collection": "core"
   },
   "boundedInputBytes": 262144,
   "requestSchemaValidation": {

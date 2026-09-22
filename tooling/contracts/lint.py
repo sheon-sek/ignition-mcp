@@ -51,7 +51,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
         "destructive": False,
         "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
-        "fixedKnobs": {"allowInvalidReferences": "false"},
+        #: D30 §4 plus owner ruling 5: the collection is a knob the caller cannot
+        #: choose either — every config Mutation is made in `core`.
+        "fixedKnobs": {"allowInvalidReferences": "false", "collection": "core"},
         "refusedResourceTypes": True,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
@@ -62,7 +64,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
         "destructive": False,
         "precondition": {"kind": "none"},
-        "fixedKnobs": {"allowInvalidReferences": "false"},
+        #: D30 §4 plus owner ruling 5: the collection is a knob the caller cannot
+        #: choose either — every config Mutation is made in `core`.
+        "fixedKnobs": {"allowInvalidReferences": "false", "collection": "core"},
         "refusedResourceTypes": True,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
@@ -73,7 +77,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
         "destructive": True,
         "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
-        "fixedKnobs": {"confirm": "never sent"},
+        #: D30 §4 plus owner ruling 5: the collection is a knob the caller cannot
+        #: choose either — every config Mutation is made in `core`.
+        "fixedKnobs": {"confirm": "never sent", "collection": "core"},
         "refusedResourceTypes": True,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
@@ -84,7 +90,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
         "destructive": False,
         "precondition": {"kind": "resource_signature", "enforcedBy": "server_read_compare"},
-        "fixedKnobs": {"references": "ABORT"},
+        #: D30 §4 plus owner ruling 5: the collection is a knob the caller cannot
+        #: choose either — every config Mutation is made in `core`.
+        "fixedKnobs": {"references": "ABORT", "collection": "core"},
         "refusedResourceTypes": True,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",

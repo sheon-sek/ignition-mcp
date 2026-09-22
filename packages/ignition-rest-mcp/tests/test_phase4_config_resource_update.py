@@ -24,6 +24,8 @@ from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
 from ignition_rest_mcp.services.config_mutation import CONFIG_RESOURCE_UPDATE
 from phase4_fixtures import (
     CONFIG,
+    CORE_COLLECTION,
+    OTHER_COLLECTION,
     PROFILE,
     READ_INVENTORY,
     RESOURCE,
@@ -34,6 +36,7 @@ from phase4_fixtures import (
     mutation_settings,
     operation_record,
     read_settings,
+    resource_route_requests,
     seed_config_resources,
     structured,
     write_requests,
@@ -44,7 +47,7 @@ from phase4_fixtures import CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
-from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
+from recorded_gateway import API_TOKEN, COMMITTED_OPENAPI, RecordedGateway  # noqa: E402
 
 
 # ------------------------------------------------------------------- fixtures
@@ -66,6 +69,27 @@ def _mutation_settings(**overrides: Any) -> Any:
         targets=targets or {UPDATE_TOOL: (f"{PROFILE}/{RESOURCE}",)},
         **overrides,
     )
+
+
+def _committed_document_with_collection_item(property_schema: dict[str, Any] | None) -> bytes:
+    """The committed Gateway document with the Target type's ``PUT`` change item
+    declaring ``property_schema`` for ``collection`` — or not declaring the field at
+    all (``None``).
+
+    Everything else in the document is left alone, so the item schema stays otherwise
+    valid: this is what a Gateway whose write cannot address the pinned collection
+    would serve, and the Tool's decision about it must not depend on the Gateway's own
+    default choosing the collection.
+    """
+
+    document = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
+    schema = document["paths"][f"/data/api/v1/resources/{PROFILE}"]["put"]
+    item = schema["requestBody"]["content"]["application/json"]["schema"]["items"]
+    if property_schema is None:
+        del item["properties"]["collection"]
+    else:
+        item["properties"]["collection"] = property_schema
+    return json.dumps(document).encode("utf-8")
 
 
 # --------------------------------------------------------------- signature read
@@ -211,15 +235,16 @@ def test_update_tool_is_hidden_when_the_update_route_has_no_request_schema(
 # ------------------------------------------------------------------- mutation
 
 
-def _put_requests(gateway: RecordedGateway) -> list[dict[str, Any]]:
-    return [request for request in gateway.requests if request["method"] == "PUT"]
-
-
 def test_an_allowlisted_update_changes_the_resource_and_reports_observed_state(
     tmp_path: Path,
 ) -> None:
     """The tracer bullet: read the signature, change the resource, prove the change
-    with a bounded re-read, and never send a caller-chosen knob."""
+    with a bounded re-read, and never send a caller-chosen knob.
+
+    D30's owner ruling 5 is asserted on the wire here and in every case that follows:
+    an omitted ``collection`` means ``core``, so the pre-dispatch read, the change item
+    and the verification read-back all name it.
+    """
 
     with RecordedGateway() as gateway:
         _seed(gateway)
@@ -239,6 +264,7 @@ def test_an_allowlisted_update_changes_the_resource_and_reports_observed_state(
             })
 
         puts = write_requests(gateway, "PUT")
+        reads = [request["path"] for request in resource_route_requests(gateway) if request["method"] == "GET"]
         stored = gateway.resource(PROFILE, RESOURCE)
 
     assert len(puts) == 1, puts
@@ -246,15 +272,20 @@ def test_an_allowlisted_update_changes_the_resource_and_reports_observed_state(
     assert json.loads(puts[0]["body"]) == [{
         "name": RESOURCE,
         "signature": before,
+        "collection": CORE_COLLECTION,
         "config": {"profile": {"type": "local", "retentionDays": 30}},
         "description": "CI audit profile (30 days)",
     }]
+    assert reads == [
+        f"/data/api/v1/resources/find/{PROFILE}/{RESOURCE}?collection={CORE_COLLECTION}",
+    ] * 2, "the pre-dispatch read and the read-back both name the core collection"
     assert stored["config"] == {"profile": {"type": "local", "retentionDays": 30}}
     assert stored["signature"] != before, "the Gateway must have moved the signature"
 
     body = structured(result)
     assert body["resourceType"] == PROFILE
     assert body["name"] == RESOURCE
+    assert body["collection"] == CORE_COLLECTION
     assert body["signature"] == stored["signature"]
     assert body["observedState"]["description"] == "CI audit profile (30 days)"
     assert body["observedState"]["config"]["profile"]["retentionDays"] == 30
@@ -287,9 +318,9 @@ def test_an_update_leaves_one_audited_decision_attempt_and_result(tmp_path: Path
         for row in rows
     ] == [
         ("decision", "allowed", "CONFIG", 0,
-         '{"collection":"","name":"MCP_CI_AUDIT","resourceType":"ignition/audit-profile"}'),
+         '{"collection":"core","name":"MCP_CI_AUDIT","resourceType":"ignition/audit-profile"}'),
         ("attempt", "attempted", "CONFIG", 0,
-         '{"collection":"","name":"MCP_CI_AUDIT","resourceType":"ignition/audit-profile"}'),
+         '{"collection":"core","name":"MCP_CI_AUDIT","resourceType":"ignition/audit-profile"}'),
         ("result", "completed", "CONFIG", 0, "{}"),
     ]
     assert rows[0]["actor_key"] == "static-token:config-agent"
@@ -568,14 +599,49 @@ def test_a_read_only_credential_cannot_see_or_call_the_update_tool(tmp_path: Pat
 # ------------------------------------------------------------ collections (D30)
 
 
-def test_a_non_default_collection_is_refused_and_dispatches_nothing(tmp_path: Path) -> None:
-    """The Target allowlist names a resource, not a collection, so a
-    collection-qualified change is refused rather than resolved to a look-alike."""
+def test_an_explicit_core_collection_is_accepted(tmp_path: Path) -> None:
+    """D30 owner ruling 5: a caller may name the collection the Mutations are pinned
+    to, and the Gateway sees the same request either way."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
-        default_signature = gateway.signature(PROFILE, RESOURCE)
-        other_signature = gateway.signature(PROFILE, RESOURCE, "custom")
+        before = gateway.signature(PROFILE, RESOURCE)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "collection": CORE_COLLECTION, "enabled": False,
+            })
+
+        puts = write_requests(gateway, "PUT")
+        reads = [
+            request["path"] for request in resource_route_requests(gateway)
+            if request["method"] == "GET"
+        ]
+
+    assert structured(result)["collection"] == CORE_COLLECTION
+    assert len(puts) == 1, puts
+    assert json.loads(puts[0]["body"]) == [{
+        "name": RESOURCE, "signature": before, "collection": CORE_COLLECTION, "enabled": False,
+    }]
+    assert reads == [
+        f"/data/api/v1/resources/find/{PROFILE}/{RESOURCE}?collection={CORE_COLLECTION}",
+    ] * 2
+    assert gateway.resource(PROFILE, RESOURCE)["enabled"] is False
+
+
+def test_a_non_core_collection_is_refused_and_dispatches_nothing(tmp_path: Path) -> None:
+    """The Target allowlist names a resource, not a collection, so a change into
+    another one is refused rather than resolved to a look-alike — and the refusal
+    happens before the resource is even read."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        core_signature = gateway.signature(PROFILE, RESOURCE, CORE_COLLECTION)
+        other_signature = gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION)
         settings = _mutation_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
             mutation_targets={UPDATE_TOOL: ("*",)},
@@ -584,24 +650,102 @@ def test_a_non_default_collection_is_refused_and_dispatches_nothing(tmp_path: Pa
         with TestClient(server_module.create_server(settings).http_app()) as http:
             result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
                 "resourceType": PROFILE, "expectedSignature": other_signature,
-                "name": RESOURCE, "collection": "custom", "enabled": False,
+                "name": RESOURCE, "collection": OTHER_COLLECTION, "enabled": False,
             })
 
-        puts = write_requests(gateway, "PUT")
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
 
     assert envelope(result)["code"] == "invalid_argument"
-    assert puts == [], "a collection-qualified change must not reach the Gateway"
-    assert gateway.signature(PROFILE, RESOURCE, "custom") == other_signature
-    assert gateway.signature(PROFILE, RESOURCE) == default_signature
+    assert requests == [], "a non-core collection must not reach the Gateway at all"
+    assert rows == [], "the refusal is input validation, before any audited decision"
+    assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == other_signature
+    assert gateway.signature(PROFILE, RESOURCE, CORE_COLLECTION) == core_signature
 
 
-def test_the_default_collection_resource_is_the_one_a_change_applies_to(tmp_path: Path) -> None:
-    """Two collections really are two resources: the refused collection change left
-    the other collection alone, and the default one still updates."""
+def test_a_type_whose_item_cannot_name_the_collection_has_no_update_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D30 owner ruling 5: a collection route documents no collection query parameter,
+    so a ``PUT`` can only name the collection in its change item. A Gateway whose item
+    schema does not declare that field leaves the write with no way to address `core`,
+    and the Tool refuses it — it must never dispatch an item that lets the Gateway's own
+    default choose the collection the change lands in."""
 
     with RecordedGateway() as gateway:
         _seed(gateway)
-        other_signature = gateway.signature(PROFILE, RESOURCE, "custom")
+        before = gateway.signature(PROFILE, RESOURCE)
+        document = _committed_document_with_collection_item(None)
+
+        async def collection_less_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", collection_less_openapi)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+        stored = gateway.resource(PROFILE, RESOURCE)
+
+    error = envelope(result)
+    assert error["code"] == "unsupported_capability"
+    assert requests == [], "a write that cannot name the collection must not reach the Gateway"
+    assert rows == [], "the refusal is a capability fact, before any audited decision"
+    assert stored["enabled"] is True, "the Target must be left exactly as it was"
+    assert stored["signature"] == before
+
+
+def test_a_type_whose_item_rejects_the_core_collection_has_no_update_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of ruling 5: an item schema that declares the field but will not
+    accept `core` cannot address this Tool's Target either. The refusal is the type's
+    capability, not the caller's input — the caller never supplies the value."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        document = _committed_document_with_collection_item(
+            {"type": "string", "enum": [OTHER_COLLECTION]},
+        )
+
+        async def core_rejecting_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", core_rejecting_openapi)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        stored = gateway.resource(PROFILE, RESOURCE)
+
+    assert envelope(result)["code"] == "unsupported_capability"
+    assert requests == [], "a write the type's own schema cannot address must not be sent"
+    assert stored["signature"] == before
+
+
+def test_the_core_collection_resource_is_the_one_a_change_applies_to(tmp_path: Path) -> None:
+    """Two collections really are two resources: the change applies to the core one
+    and leaves the same-named look-alike in the other collection untouched."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        other_signature = gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION)
         settings = _mutation_settings(
             data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
         )
@@ -610,26 +754,29 @@ def test_the_default_collection_resource_is_the_one_a_change_applies_to(tmp_path
             session = _Session(http, "cfg-secret")
             refused = session.call(UPDATE_TOOL, {
                 "resourceType": PROFILE,
-                "expectedSignature": gateway.signature(PROFILE, RESOURCE, "custom"),
-                "name": RESOURCE, "collection": "custom", "enabled": False,
+                "expectedSignature": gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION),
+                "name": RESOURCE, "collection": OTHER_COLLECTION, "enabled": False,
             })
             applied = session.call(UPDATE_TOOL, {
                 "resourceType": PROFILE,
                 "expectedSignature": gateway.signature(PROFILE, RESOURCE),
-                "name": RESOURCE, "description": "default collection only",
+                "name": RESOURCE, "description": "core collection only",
             })
 
         bodies = [json.loads(request["body"]) for request in write_requests(gateway, "PUT")]
 
     assert envelope(refused)["code"] == "invalid_argument"
-    assert structured(applied)["collection"] == ""
+    assert structured(applied)["collection"] == CORE_COLLECTION
     assert bodies == [[{
         "name": RESOURCE, "signature": bodies[0][0]["signature"],
-        "description": "default collection only",
+        "collection": CORE_COLLECTION,
+        "description": "core collection only",
     }]]
-    assert gateway.resource(PROFILE, RESOURCE)["description"] == "default collection only"
-    assert gateway.resource(PROFILE, RESOURCE, "custom")["enabled"] is True
-    assert gateway.signature(PROFILE, RESOURCE, "custom") == other_signature
+    assert gateway.resource(PROFILE, RESOURCE)["description"] == "core collection only"
+    assert gateway.resource(PROFILE, RESOURCE, OTHER_COLLECTION)["enabled"] is True
+    assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == other_signature
+    assert gateway.resource(PROFILE, RESOURCE)["collection"] == CORE_COLLECTION
+    assert gateway.resource(PROFILE, RESOURCE, OTHER_COLLECTION)["collection"] == OTHER_COLLECTION
 
 
 # ------------------------------------------------- D03 request schema (issue #14)
@@ -711,8 +858,9 @@ def test_a_singleton_change_item_carries_no_name_the_gateway_does_not_document(
 
     assert structured(result)["observedState"]["description"] == "after"
     assert bodies == [[{
-        "signature": bodies[0][0]["signature"], "description": "after",
-    }]]
+        "signature": bodies[0][0]["signature"], "collection": CORE_COLLECTION,
+        "description": "after",
+    }]], "a singleton's item carries no name, but it does name the core collection"
 
 
 def test_another_writer_winning_the_race_is_never_reported_as_our_success(
