@@ -148,6 +148,82 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
             "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
         ),
     },
+    #: Phase 5 (D15/D16): the four Perspective writes. They run the same D16 transaction
+    #: as `project_import` and take the same `pcf1` Project fingerprint as their
+    #: Precondition token, but they build their own candidate from a typed patch instead
+    #: of consuming a caller artifact (`consumesArtifact: False`), and each one walks the
+    #: ancestor chain first (`perspectiveTarget: True`) so a write can never create a
+    #: silent local override of an Inherited resource (D15).
+    "perspective_view_upsert": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        #: D08: replacing one document is not removing state; the delete Tool is separate.
+        "destructive": False,
+        "precondition": {"kind": "project_fingerprint", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"overwrite": "true"},
+        "refusedResourceTypes": False,
+        "requestSchemaValidation": False,
+        "consumesArtifact": False,
+        "perspectiveTarget": True,
+        #: The write dispatches the same import, so the same D16 reconcile rule applies.
+        "capabilityId": "project_import",
+        "recoveredSuccess": (
+            "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+        ),
+    },
+    "perspective_view_delete": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        #: D26: one View per call, and the View's content is destroyed.
+        "destructive": True,
+        "precondition": {"kind": "project_fingerprint", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"overwrite": "true"},
+        "refusedResourceTypes": False,
+        "requestSchemaValidation": False,
+        "consumesArtifact": False,
+        "perspectiveTarget": True,
+        #: D26: this Tool removes one View and creates nothing, so it declares no
+        #: created-resource metadata (the P5-3 live finding governs the other three).
+        "createsMetadata": False,
+        "capabilityId": "project_import",
+        "recoveredSuccess": (
+            "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+        ),
+    },
+    "perspective_page_config_update": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": False,
+        "precondition": {"kind": "project_fingerprint", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"overwrite": "true"},
+        "refusedResourceTypes": False,
+        "requestSchemaValidation": False,
+        "consumesArtifact": False,
+        "perspectiveTarget": True,
+        "capabilityId": "project_import",
+        "recoveredSuccess": (
+            "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+        ),
+    },
+    "perspective_session_props_update": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": False,
+        "precondition": {"kind": "project_fingerprint", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"overwrite": "true"},
+        "refusedResourceTypes": False,
+        "requestSchemaValidation": False,
+        "consumesArtifact": False,
+        "perspectiveTarget": True,
+        "capabilityId": "project_import",
+        "recoveredSuccess": (
+            "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+        ),
+    },
     "tag_config_import": {
         "mutationClass": "CONFIG_MUTATION",
         "scope": "ignition.config",
@@ -969,20 +1045,92 @@ def lint_contracts(root: str | Path) -> None:
         if precondition.get("kind") == "project_fingerprint":
             if precondition.get("mismatch") != "conflict":
                 raise ContractError(f"{tool_name}: a stale Project fingerprint must be a conflict (D30 §7)")
+            if spec.get("perspectiveTarget", False):
+                # D15: the whole point of this Tool family is that a write never creates
+                # a silent local override, so the rule and its refusal code are pinned.
+                inheritance = tool.get("inheritance")
+                if not isinstance(inheritance, dict):
+                    raise ContractError(
+                        f"{tool_name}: the D15 inheritance rule must be declared"
+                    )
+                if inheritance.get("inheritedTarget") != "invalid_argument":
+                    raise ContractError(
+                        f"{tool_name}: an Inherited target is invalid_argument (D15)"
+                    )
+                if inheritance.get("reason") != "inherited_resource":
+                    raise ContractError(
+                        f"{tool_name}: the Inherited-resource reason must be declared exactly (D15)"
+                    )
+                if inheritance.get("runsBefore") is None:
+                    raise ContractError(
+                        f"{tool_name}: the inheritance check must state where it runs relative "
+                        "to the transaction (D15)"
+                    )
+                # The two round-1 review findings: a stale token is a conflict before either
+                # refusal, and a chain the listing cannot account for fails closed rather than
+                # being read as "no ancestor defines this".
+                if inheritance.get("staleToken") != "conflict":
+                    raise ContractError(
+                        f"{tool_name}: a stale token must be a conflict before the not_found and "
+                        "inherited_resource refusals (D30 §2)"
+                    )
+                if inheritance.get("unreadableChain") != "upstream_error":
+                    raise ContractError(
+                        f"{tool_name}: an ancestor chain the listing cannot account for must fail "
+                        "closed with upstream_error (D15)"
+                    )
+                # P5-3's live 8.3.8 finding: the import keeps a Perspective resource only when
+                # a sibling resource.json declares it, so a Tool that creates one must write
+                # that metadata, and a Tool that creates nothing must not claim to.
+                metadata = tool.get("createdResourceMetadata")
+                if spec.get("createsMetadata", True):
+                    if not isinstance(metadata, dict):
+                        raise ContractError(
+                            f"{tool_name}: the created-resource metadata rule must be declared (D15)"
+                        )
+                    if metadata.get("sibling") != "resource.json":
+                        raise ContractError(
+                            f"{tool_name}: a created resource's metadata is its sibling resource.json"
+                        )
+                    if tuple(metadata.get("files", ())) not in (
+                        ("view.json",), ("config.json",), ("props.json",),
+                    ):
+                        raise ContractError(
+                            f"{tool_name}: a created resource's files list must name exactly the "
+                            "document written beside the metadata"
+                        )
+                    if not metadata.get("existingResource"):
+                        raise ContractError(
+                            f"{tool_name}: the rule must say what happens to metadata the baseline "
+                            "already holds"
+                        )
+                elif "createdResourceMetadata" in tool:
+                    raise ContractError(
+                        f"{tool_name}: this Tool creates no Perspective resource, so it declares no "
+                        "created-resource metadata"
+                    )
             # D30 §6/D17: the archive this Tool consumes is as much a contract as the
-            # Target is, so the declaration is required and checked.
+            # Target is, so the declaration is required and checked. A Tool of the Phase 5
+            # Perspective family authors its own candidate from a typed patch and consumes
+            # no caller artifact at all, so it declares none (`consumesArtifact: False`).
             consumed = tool.get("artifactInput")
-            if not isinstance(consumed, dict):
-                raise ContractError(f"{tool_name}: the consumed Project archive must be declared")
-            if consumed.get("state") != "READY":
-                raise ContractError(f"{tool_name}: only a READY artifact may be consumed")
-            kinds = consumed.get("kinds")
-            if not isinstance(kinds, list) or not kinds or not set(kinds) <= set(EXPECTED_ARTIFACT_KINDS):
-                raise ContractError(f"{tool_name}: the consumed archive kinds must be declared exactly")
-            if consumed.get("otherKindDisposition") != "invalid_argument":
-                raise ContractError(f"{tool_name}: a non-archive artifact must be refused")
-            if "not_found" not in str(consumed.get("visibility", "")):
-                raise ContractError(f"{tool_name}: a non-visible artifact must answer not_found (D30 §6)")
+            if spec.get("consumesArtifact", True):
+                if not isinstance(consumed, dict):
+                    raise ContractError(f"{tool_name}: the consumed Project archive must be declared")
+                if consumed.get("state") != "READY":
+                    raise ContractError(f"{tool_name}: only a READY artifact may be consumed")
+                kinds = consumed.get("kinds")
+                if not isinstance(kinds, list) or not kinds or not set(kinds) <= set(EXPECTED_ARTIFACT_KINDS):
+                    raise ContractError(f"{tool_name}: the consumed archive kinds must be declared exactly")
+                if consumed.get("otherKindDisposition") != "invalid_argument":
+                    raise ContractError(f"{tool_name}: a non-archive artifact must be refused")
+                if "not_found" not in str(consumed.get("visibility", "")):
+                    raise ContractError(f"{tool_name}: a non-visible artifact must answer not_found (D30 §6)")
+            elif "artifactInput" in tool:
+                raise ContractError(
+                    f"{tool_name}: this Tool builds its own candidate and consumes no caller "
+                    "artifact, so it may not declare one"
+                )
         if tool.get("fixedKnobs") != spec["fixedKnobs"]:
             raise ContractError(f"{tool_name}: the D30 §4 fixed knobs must be declared exactly")
         target = tool.get("targetId")

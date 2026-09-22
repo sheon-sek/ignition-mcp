@@ -72,12 +72,24 @@ ALARM_CANCEL_TOOL = "alarm_pipeline_cancel"
 #: has no Gateway route at all (D30 drops the artifact HTTP route), so its discovery
 #: follows the class gate alone.
 ARTIFACT_DELETE_TOOL = "artifact_delete"
-#: Every Phase 4 *CONFIG*-class REST Mutation Tool, in the order the milestone
-#: introduced them. The class decides discovery and scope, so the modules that pin an
-#: inventory use the lane they actually enable.
+#: Phase 5 (D15/D16): the four Perspective writes. They follow the same class gate as
+#: the Phase 4 CONFIG Mutations, and their D08 capability is the `project_import` route
+#: their D16 transaction dispatches.
+VIEW_UPSERT_TOOL = "perspective_view_upsert"
+VIEW_DELETE_TOOL = "perspective_view_delete"
+PAGE_CONFIG_UPDATE_TOOL = "perspective_page_config_update"
+SESSION_PROPS_UPDATE_TOOL = "perspective_session_props_update"
+#: Every *CONFIG*-class REST Mutation Tool, in the order the phases introduced them:
+#: the Phase 4 set, then the four Phase 5 Perspective writes. The class decides
+#: discovery and scope, so the modules that pin an inventory use the lane they
+#: actually enable.
 CONFIG_MUTATION_TOOLS = (
     UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL,
     ARTIFACT_DELETE_TOOL,
+    # Phase 5 (D15/D16): the Perspective writes are CONFIG Mutations too, gated on the
+    # class gate plus the `project_import` capability their D16 transaction dispatches, so
+    # the class-gate inventory pins below name them with the Phase 4 Tools.
+    VIEW_UPSERT_TOOL, VIEW_DELETE_TOOL, PAGE_CONFIG_UPDATE_TOOL, SESSION_PROPS_UPDATE_TOOL,
 )
 CONTROL_MUTATION_TOOLS = (ALARM_CANCEL_TOOL,)
 MUTATION_TOOLS = CONFIG_MUTATION_TOOLS + CONTROL_MUTATION_TOOLS

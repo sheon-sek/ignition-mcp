@@ -68,6 +68,10 @@ MUTATION_TOOLS = frozenset({
     "config_resource_delete",
     "config_resource_rename",
     "alarm_pipeline_cancel",
+    "perspective_view_upsert",
+    "perspective_view_delete",
+    "perspective_page_config_update",
+    "perspective_session_props_update",
 })
 
 
@@ -311,6 +315,7 @@ def test_destructive_registrations_match_the_tool_contracts() -> None:
     assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
     assert [name for name, declared in registered.items() if declared] == [
         "config_resource_delete", "project_import", "alarm_pipeline_cancel", "artifact_delete",
+        "perspective_view_delete",
     ]
 
 

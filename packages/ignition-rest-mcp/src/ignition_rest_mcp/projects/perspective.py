@@ -15,6 +15,16 @@ reuses :func:`view_directory`, :func:`view_document_entry`,
 :func:`view_resource_entry` and :func:`content_entries` instead of repeating the
 mapping.
 
+The write half is :class:`ResourcePatch` plus :func:`apply_patch`: one typed
+change to exactly one Perspective resource, written over a copy of the baseline
+archive with every other entry copied byte-identically (D15: never rebuild a
+Project from the resource types this server understands). A resource the baseline
+does not hold is created with the sibling ``resource.json`` Ignition needs to keep
+it, since an import drops a resource directory that holds only its document. A
+delete removes the View's own entries, and the folder's marker entries only when
+the View was all that folder held, so a folder that still holds other Views keeps
+them.
+
 Every caller-facing message names the Logical resource, never the archive entry:
 the layout stays server-side, and a message that echoed an entry would hand the
 caller the path the public API refuses to accept. Every read that needs to say
@@ -44,12 +54,17 @@ never touches an archive or a Gateway.
 
 from __future__ import annotations
 
-import json
-import zipfile
+import asyncio
 from dataclasses import dataclass
-from typing import Any
+from enum import Enum
+import json
+import tempfile
+from typing import Any, cast, Protocol
+import zipfile
 
+from ignition_rest_mcp.artifacts.model import ArtifactReader, ArtifactWriter
 from ignition_rest_mcp.errors import GatewayError
+from ignition_rest_mcp.projects.transactions import CandidateBuilder
 from ignition_rest_mcp.projects.zip_safety import is_directory_entry
 
 #: The Perspective module directory inside a Project export.
@@ -64,11 +79,25 @@ VIEW_DOCUMENT_NAME = "view.json"
 #: The Designer resource metadata beside it.
 VIEW_RESOURCE_NAME = "resource.json"
 
+#: The entry that marks a View directory as a View *folder*, so deleting the View a
+#: folder is named after can leave the folder and the Views inside it alone.
+VIEW_FOLDER_NAME = "folder.json"
+
 #: The Project's single Page configuration document.
-PAGE_CONFIG_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/config.json"
+PAGE_CONFIG_DOCUMENT_NAME = "config.json"
 
 #: The Project's single Session properties document.
-SESSION_PROPS_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/props.json"
+SESSION_PROPS_DOCUMENT_NAME = "props.json"
+
+#: The Project's single Page configuration entry.
+PAGE_CONFIG_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/{PAGE_CONFIG_DOCUMENT_NAME}"
+
+#: The Project's single Session properties entry.
+SESSION_PROPS_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/{SESSION_PROPS_DOCUMENT_NAME}"
+
+#: The Designer resource metadata beside each Project-wide document.
+PAGE_CONFIG_RESOURCE_ENTRY = f"{PERSPECTIVE_MODULE}/page-config/{VIEW_RESOURCE_NAME}"
+SESSION_PROPS_RESOURCE_ENTRY = f"{PERSPECTIVE_MODULE}/session-props/{VIEW_RESOURCE_NAME}"
 
 #: Longest Logical resource path accepted (D10: caller input is bounded).
 MAX_LOGICAL_PATH_BYTES = 512
@@ -331,16 +360,40 @@ def validate_view_document(document: Any, *, budget: ViewBudget | None = None) -
         raise GatewayError("invalid_argument", "a View document must have a 'root' object")
     if not isinstance(root.get("type"), str):
         raise GatewayError("invalid_argument", "a View document must have a string 'root.type'")
+    return _measured(document, limits)
+
+
+def validate_document(document: Any, *, budget: ViewBudget | None = None) -> ViewValidation:
+    """Validate a whole-document replacement that has no required structure (D15).
+
+    The Page configuration and the Session properties are whole-document
+    replacements whose content this server does not interpret, so they take the
+    same D10 ceilings as a View document and none of its ``root`` requirement.
+    Refused with ``invalid_argument``: a value that is not a JSON object, or a
+    value JSON cannot represent. Refused with ``limit_exceeded``: one over the
+    byte or depth ceiling.
+    """
+
+    if not isinstance(document, dict):
+        raise GatewayError("invalid_argument", "the document must be a JSON object")
+    return _measured(document, budget if budget is not None else DEFAULT_VIEW_BUDGET)
+
+
+def _measured(document: dict[str, Any], limits: ViewBudget) -> ViewValidation:
+    """The D10 measurements of one JSON object: depth first, then compact bytes.
+
+    The depth ceiling is checked before the serialization, so no document reaches
+    the serializer deep enough to exhaust its recursion.
+    """
+
     depth = _container_depth(document)
     if depth > limits.max_depth:
         raise GatewayError("limit_exceeded", _depth_message(depth, limits.max_depth))
     try:
-        measured = len(
-            json.dumps(document, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
-        )
+        measured = len(document_bytes(document))
     except (TypeError, ValueError) as error:
         raise GatewayError(
-            "invalid_argument", "view must be a JSON object that JSON can represent",
+            "invalid_argument", "the document must be JSON that JSON can represent",
         ) from error
     if measured > limits.max_bytes:
         raise GatewayError("limit_exceeded", _bytes_message(measured, limits.max_bytes))
@@ -380,3 +433,253 @@ def _container_depth(value: Any) -> int:
                 following.extend(item)
         current = following
     return levels
+
+
+# --------------------------------------------------------------------------- the patch half
+
+
+class PatchKind(str, Enum):
+    """Which Perspective resource one :class:`ResourcePatch` changes (D15)."""
+
+    VIEW_REPLACE = "view_replace"
+    VIEW_DELETE = "view_delete"
+    PAGE_CONFIG_REPLACE = "page_config_replace"
+    SESSION_PROPS_REPLACE = "session_props_replace"
+
+
+class SeekableBytes(Protocol):
+    """A byte container a ZIP archive is read from or written to.
+
+    Both directions of a patch need to seek, so the two spooled files the candidate
+    builder threads are stated as this rather than as a bare file object. An
+    ``io.BytesIO`` and a ``tempfile.SpooledTemporaryFile`` both qualify.
+    """
+
+    def read(self, size: int = -1) -> bytes: ...
+
+    def write(self, data: bytes) -> int: ...
+
+    def seek(self, offset: int, whence: int = 0) -> int: ...
+
+    def tell(self) -> int: ...
+
+    def flush(self) -> None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ResourcePatch:
+    """One typed change to exactly one Perspective resource (D15).
+
+    ``document`` is the whole replacement document, and is ``None`` only for a
+    delete. ``logical_path`` names the View for the two View kinds and is unused
+    by the two Project-wide documents.
+    """
+
+    kind: PatchKind
+    logical_path: str = ""
+    document: dict[str, Any] | None = None
+
+    def target_entry(self) -> str:
+        """The archive entry whose presence means a Project defines this target.
+
+        This is what the inheritance Preflight reads: a Project defines a
+        Perspective resource locally exactly when its own export holds the entry
+        the patch would replace or remove (D15).
+        """
+
+        if self.kind is PatchKind.PAGE_CONFIG_REPLACE:
+            return PAGE_CONFIG_ENTRY
+        if self.kind is PatchKind.SESSION_PROPS_REPLACE:
+            return SESSION_PROPS_ENTRY
+        return view_document_entry(self.logical_path)
+
+
+def document_bytes(document: dict[str, Any]) -> bytes:
+    """The exact bytes one replacement document is written as.
+
+    Compact JSON, which is the serialization the D10 byte ceiling is measured on
+    and what the D16 fingerprint hashes, so the ceiling and the archive agree.
+    """
+
+    return json.dumps(document, separators=(",", ":"), ensure_ascii=False, allow_nan=False).encode("utf-8")
+
+
+def defines_target(archive_path: str, patch: ResourcePatch) -> bool:
+    """Whether one Project archive defines the resource ``patch`` targets (D15)."""
+
+    return patch.target_entry() in content_entries(archive_path)
+
+
+def apply_patch(source: "SeekableBytes", patch: ResourcePatch, target: "SeekableBytes") -> None:
+    """Write the baseline archive with exactly one Perspective resource changed.
+
+    Every entry the patch does not name is copied byte-identically, in central
+    directory order, keeping its own ``ZipInfo``: the D16 fingerprint hashes the
+    uncompressed content of every entry, so nothing unrelated may move. The
+    replaced entry keeps its place and its header when the archive already has it,
+    and is appended with a fresh header when the patch creates it, together with the
+    sibling ``resource.json`` Ignition needs to keep that resource (see
+    :func:`designer_resource_metadata`).
+
+    ``source`` is an already D15-validated baseline, so entry names are read as
+    validated. Both streams are seekable ZIP containers.
+    """
+
+    payload = None if patch.document is None else document_bytes(patch.document)
+    replacement = {} if payload is None else {patch.target_entry(): payload}
+    # zipfile's stubs only accept their own file protocols; a seekable byte container is
+    # what it really needs, and that is what SeekableBytes states.
+    with zipfile.ZipFile(cast(Any, source)) as archive:
+        infos = archive.infolist()
+        names = [info.filename for info in infos]
+        additions = _created_entries(patch, replacement, names)
+        dropped = _patch_entries(names, patch) - set(replacement)
+        with zipfile.ZipFile(cast(Any, target), "w", zipfile.ZIP_DEFLATED) as out:
+            for info in infos:
+                if info.filename in dropped:
+                    continue
+                body = replacement.get(info.filename, archive.read(info))
+                out.writestr(info, body)
+            for name, body in additions.items():
+                out.writestr(_new_entry(name), body)
+
+
+def designer_resource_metadata(document_name: str) -> dict[str, Any]:
+    """The Designer resource metadata Ignition keeps beside one Perspective resource.
+
+    A Project import keeps a resource directory only when a sibling ``resource.json``
+    declares it: a directory holding only its document is dropped without an error, so
+    a resource this server creates would be reported committed and publish nothing
+    (confirmed on a live 8.3.8 Gateway). ``document_name`` is the declared file beside
+    the metadata, and the rest of the shape is the one the Gateway itself writes.
+    """
+
+    return {
+        "scope": "G",
+        "version": 1,
+        "restricted": False,
+        "overridable": True,
+        "files": [document_name],
+    }
+
+
+def _resource_metadata(patch: ResourcePatch) -> tuple[str, bytes] | None:
+    """The resource.json a created resource needs, with the entry it belongs in.
+
+    ``None`` for a delete, which creates nothing.
+    """
+
+    if patch.kind is PatchKind.VIEW_REPLACE:
+        return (
+            view_resource_entry(patch.logical_path),
+            document_bytes(designer_resource_metadata(VIEW_DOCUMENT_NAME)),
+        )
+    if patch.kind is PatchKind.PAGE_CONFIG_REPLACE:
+        return (
+            PAGE_CONFIG_RESOURCE_ENTRY,
+            document_bytes(designer_resource_metadata(PAGE_CONFIG_DOCUMENT_NAME)),
+        )
+    if patch.kind is PatchKind.SESSION_PROPS_REPLACE:
+        return (
+            SESSION_PROPS_RESOURCE_ENTRY,
+            document_bytes(designer_resource_metadata(SESSION_PROPS_DOCUMENT_NAME)),
+        )
+    return None
+
+
+def _created_entries(
+    patch: ResourcePatch, replacement: dict[str, bytes], names: list[str],
+) -> dict[str, bytes]:
+    """The entries one patch adds to the baseline archive.
+
+    A replacement document the archive does not hold, and the Designer resource
+    metadata beside it when the archive holds none: the import keeps a resource only
+    when that sibling declares it, so a created View, Page configuration or Session
+    properties document needs one written in the same patch. Metadata the archive
+    already holds is left exactly as it is, and the documented entry set of a resource
+    that already exists is never rewritten.
+    """
+
+    additions = {name: body for name, body in replacement.items() if name not in names}
+    metadata = _resource_metadata(patch)
+    if metadata is not None and metadata[0] not in names:
+        additions[metadata[0]] = metadata[1]
+    return additions
+
+
+def _patch_entries(names: list[str], patch: ResourcePatch) -> set[str]:
+    """The entries one patch removes from the baseline archive."""
+
+    if patch.kind is PatchKind.VIEW_DELETE:
+        return _view_delete_entries(names, patch.logical_path)
+    if patch.kind is PatchKind.PAGE_CONFIG_REPLACE:
+        return {PAGE_CONFIG_ENTRY}
+    if patch.kind is PatchKind.SESSION_PROPS_REPLACE:
+        return {SESSION_PROPS_ENTRY}
+    return {view_document_entry(patch.logical_path)}
+
+
+def _view_delete_entries(names: list[str], logical_path: str) -> set[str]:
+    """The entries deleting one View removes (D15, D26: one View, never a folder).
+
+    The View's own entries go, which are its View document, its Designer resource
+    metadata and the folder's directory marker. The folder's other entries, the
+    ``folder.json`` that marks the path as a View folder and any nested View inside
+    it, go only when the View was all that folder held, so a folder that also holds
+    other Views keeps every one of them.
+    """
+
+    prefix = f"{view_directory(logical_path)}/"
+    inside = {name for name in names if name.startswith(prefix)}
+    own = {view_document_entry(logical_path), view_resource_entry(logical_path), prefix}
+    markers = {prefix, f"{prefix}{VIEW_FOLDER_NAME}"}
+    return inside if inside - markers <= own else own
+
+
+def _new_entry(name: str) -> zipfile.ZipInfo:
+    """A fresh header for an entry a patch creates."""
+
+    info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+    info.compress_type = zipfile.ZIP_DEFLATED
+    return info
+
+
+#: Bytes of a baseline archive one builder threads in memory before the spool
+#: spills to a transaction-scoped temporary file (D10/D15 bound the scratch, not
+#: the caller's patience).
+SPOOL_MEMORY_BYTES = 4_194_304
+
+#: Bytes per chunk streamed out of the spooled candidate.
+PATCH_CHUNK_BYTES = 1_048_576
+
+
+class PerspectiveCandidateBuilder(CandidateBuilder):
+    """Candidate B: the baseline archive with one Perspective resource patched (D15).
+
+    It reads the baseline only as a bounded stream and writes the candidate only
+    through the transaction's own writer. The ZIP rewrite needs a seekable
+    container in both directions, so the baseline is spooled to a temporary file
+    that is scoped to this call and deleted with it, never to a Project artifact
+    (D15: temporary workspace resources are transaction-scoped and cleaned on
+    every exit path).
+    """
+
+    def __init__(self, patch: ResourcePatch) -> None:
+        self._patch = patch
+
+    async def build(self, baseline: ArtifactReader, out: ArtifactWriter) -> None:
+        with tempfile.SpooledTemporaryFile(max_size=SPOOL_MEMORY_BYTES) as source:
+            while True:
+                chunk = await baseline.read_chunk()
+                if chunk is None:
+                    break
+                source.write(chunk)
+            source.seek(0)
+            with tempfile.SpooledTemporaryFile(max_size=SPOOL_MEMORY_BYTES) as patched:
+                await asyncio.to_thread(apply_patch, source, self._patch, patched)
+                patched.seek(0)
+                while True:
+                    chunk = await asyncio.to_thread(patched.read, PATCH_CHUNK_BYTES)
+                    if not chunk:
+                        return
+                    await out.write(chunk)
