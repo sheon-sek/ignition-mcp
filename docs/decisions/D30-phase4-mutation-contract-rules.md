@@ -65,6 +65,7 @@ Each value keeps a Mutation's effects inside its named targets.
 `config_resource_create/update/delete/rename` refuse a repo-owned, contract-listed set of **Refused resource types** with `permission_denied`, whatever the Target allowlist says, even `*`. The set covers what D08 forbids generic mutation from administering: API tokens, security levels, security properties and zones, user sources, identity providers, OAuth2 clients, secret providers, system and local system properties, the EAM license and module types, and `com.inductiveautomation.mcp/server-config`.
 
 - Refusing `server-config` stops an agent from widening its own Tool inventory. `setup-native apply` writes the Server Config through its own curated path.
+- A resource can also be refused **by name within an allowed type**: the Tag-provider resource named `IgnitionMCPPolicy` is refused by `config_resource_*` before the Target allowlist check, even under `*` (owner ruling 4 below). Other Tag-provider resources stay manageable.
 - Every resource type in a supported OpenAPI document must be classified as allowed or refused. An unclassified type is refused, and a test fails when a new OpenAPI version adds one.
 
 ### 6. Other Tool-level rules
@@ -133,7 +134,8 @@ new_error_codes: false
    - The provider is matched by its provider component (`[IgnitionMCPPolicy]…` or `prov:IgnitionMCPPolicy:`), never as a substring of a later path segment.
 2. **`alarm_acknowledge` is parked.** Under the D12 Phase 4 amendment it needs proof of a bound, and an exact-path `queryStatus` accumulates unacknowledged events (1, 2, then 3 on both Gateway rows). It stays off the Phase 4 surface until there is a verified native bound or a new decision.
 3. **`phase4-live` environment.** The owner accepts that it has no protection rules. This is the same deviation, with the same compensating controls, as `phase3-live`.
-4. **Config resource collection.** Generic config Mutations always target the `core` collection. The server sends `collection=core` explicitly. A caller-supplied collection is accepted only when it is `core`; any other value fails with `invalid_argument`. A Target's identity is therefore `<resourceType>/<name>` in `core`.
+4. **The reserved provider's own config resource.** Generic config Mutations (`config_resource_create`, `config_resource_update`, `config_resource_delete`, `config_resource_rename`) refuse the Tag-provider config resource named `IgnitionMCPPolicy` — type `ignition/tag-provider`, collection `core`, name `IgnitionMCPPolicy` — before the Target allowlist check, with `permission_denied`, even under an explicit `*`. Other Tag-provider resources remain manageable through `config_resource_*`. This is a refusal by name within an allowed type, not a new entry in the Refused resource types set (§5). Tracked as issue #36.
+5. **Config resource collection.** Generic config Mutations always target the `core` collection. The server sends `collection=core` explicitly. A caller-supplied collection is accepted only when it is `core`; any other value fails with `invalid_argument`. A Target's identity is therefore `<resourceType>/<name>` in `core`.
 
 ```yaml
 owner_rulings_2026_09_22:
@@ -143,4 +145,6 @@ owner_rulings_2026_09_22:
   alarm_acknowledge: parked
   phase4_live_environment_protection: none_owner_accepted
   config_collection: core_only
+  reserved_provider_config_resource: refuse_by_name_in_config_resource_tools
+  reserved_provider_config_refusal_code: permission_denied
 ```
