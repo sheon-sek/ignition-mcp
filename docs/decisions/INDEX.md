@@ -211,11 +211,16 @@ compatibility rows live under
 [`g5-8.3.8-mcp-2026021307`](../../tests/compatibility/evidence/g5-8.3.8-mcp-2026021307/README.md)
 and [`g5-8.3.9-mcp-2026021307`](../../tests/compatibility/evidence/g5-8.3.9-mcp-2026021307/README.md).
 
-**Phase 6 is open** on `feature/phase-6`. Its scope comes from the D26 Phase 6 amendment (owner
-ruling, 2026-09-23): `setup-native install-module`, one live stage proving a fresh Module install and
-a Bundle upgrade, and the [v1 operations runbook](../operations/runbook.md). The G6 checklist is open
-in the [Phase 6 runbook](../development/phase-6.md). Issue #57 holds what moved out of v1.
+**Phase 6 is closed and merged** (G6) on `feature/phase-6`. Its scope came from the D26 Phase 6
+amendment (owner ruling, 2026-09-23): `setup-native install-module`, one live stage proving a fresh
+Module install and a Bundle upgrade, and the [v1 operations runbook](../operations/runbook.md). The
+[Phase 6 runbook](../development/phase-6.md) holds the ticked G6 checklist and what each item rests
+on. `g6-8.3.8-mcp-2026021307` closes `VERIFIED` with `VERIFIED_WITH_LIMITATION` under D27, and
+`g6-8.3.9-mcp-2026021307` closes `FAILED_NATIVE_BINDING`; both rows sit under
+[`tests/compatibility/evidence/`](../../tests/compatibility/evidence/) and both report
+`compatibilityStatus: UNTESTED`. #39, #41 and #51 stay open as deferred work, and issue #57 holds what
+moved out of v1.
 
-No Gateway/Module tuple is `SUPPORTED`, and G6 never records one.
+No Gateway/Module tuple is `SUPPORTED`, and G6 records none.
 
 Treat D01–D30 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
