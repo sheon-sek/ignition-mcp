@@ -136,6 +136,12 @@ new_error_codes: false
 3. **`phase4-live` environment.** The owner accepts that it has no protection rules. This is the same deviation, with the same compensating controls, as `phase3-live`.
 4. **The reserved provider's own config resource.** Generic config Mutations (`config_resource_create`, `config_resource_update`, `config_resource_delete`, `config_resource_rename`) refuse the Tag-provider config resource named `IgnitionMCPPolicy` — type `ignition/tag-provider`, collection `core`, name `IgnitionMCPPolicy` — before the Target allowlist check, with `permission_denied`, even under an explicit `*`. Other Tag-provider resources remain manageable through `config_resource_*`. This is a refusal by name within an allowed type, not a new entry in the Refused resource types set (§5). Tracked as issue #36.
 5. **Config resource collection.** Generic config Mutations always target the `core` collection. The server sends `collection=core` explicitly. A caller-supplied collection is accepted only when it is `core`; any other value fails with `invalid_argument`. A Target's identity is therefore `<resourceType>/<name>` in `core`.
+6. **Delivery priority: speed.** For the rest of Phase 4 the goal is complete, working Tools: every Tool runs and has correct input and output behaviour. Blockers are limited to:
+   - functional failures, meaning a wrong result or error code, or an overwrite or unintended Mutation;
+   - broken safety rules (allowlist, reserved provider, `_types_`, Precondition token, secrets);
+   - red live runs.
+
+   Precision in D10 bound accounting is **deferred, not waived**. That covers exact serialized-byte accounting of Observed state, the aggregate early stop, and the wording of requested amounts and reduction advice. Coarse bounds must still exist: item-count ceilings and the output ceiling. The deferred findings are tracked in issue #41. D10 itself is unchanged, and #41 must be resolved or explicitly re-ruled before any claim beyond G4.
 
 ```yaml
 owner_rulings_2026_09_22:
@@ -147,4 +153,6 @@ owner_rulings_2026_09_22:
   config_collection: core_only
   reserved_provider_config_resource: refuse_by_name_in_config_resource_tools
   reserved_provider_config_refusal_code: permission_denied
+  delivery_priority: speed_functional_io_first
+  d10_accounting_precision: deferred_issue_41
 ```

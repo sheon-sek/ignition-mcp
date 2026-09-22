@@ -222,6 +222,15 @@ ambiguous boundary where the armed fault meant a refused connect.
 | `core-collection-update-moves-the-signature` | …and the Resource signature moved |
 | `core-collection-read-count`, `core-collection-is-on-every-read` | the hop saw exactly the update's two reads, both with `collection=core` |
 | `core-collection-write-count`, `core-collection-write-names-the-collection-route` | exactly one `PUT` left the server, to the resource type's documented collection route |
+| `reserved-provider-config-resource-is-readable` | the reserved policy provider is readable through `config_resource_get` (the refusal is Mutation-only) |
+| `reserved-provider-update-is-permission-denied`, `…-delete-…`, `…-create-…` | the `ignition/tag-provider` resource named `IgnitionMCPPolicy` is refused by all three, although the Target allowlist names it |
+| `reserved-provider-update-says-which-rule` | the refusal message names the reserved resource, so it cannot be read as an allowlist denial |
+| `reserved-provider-*-dispatches-nothing` | the hop's own record holds **no** config-resource request for those calls: a refused Target is decided from its identity |
+| `reserved-provider-*-changes-nothing` | the provider's Resource signature is exactly what it was |
+| `renaming-a-provider-into-the-reserved-name-is-permission-denied`, `…-says-which-rule`, `…-dispatches-nothing`, `…-changes-nothing` | a rename *into* the reserved name is refused too (both names of a rename are Targets, D30 §3) |
+| `renaming-the-reserved-provider-away-…` | …and so is renaming the reserved provider away, even onto an occupied destination: the name rule runs before the collision probe |
+| `another-provider-update-applies`, `…-moves-the-signature`, `…-dispatches-one-write` | an ordinary Tag provider is still updated through the same Tool, with exactly one `PUT` |
+| `a-name-that-begins-with-the-reserved-name-update-applies`, `…-moves-the-signature` | `IgnitionMCPPolicyStaging` is a different resource: the name matches exactly, never as a substring |
 
 The `core-collection-*` rows are the live form of D30's owner ruling 5. A real Gateway
 answers a read that omits the collection exactly as it answers one that names `core`, so
@@ -234,6 +243,21 @@ collection with the wrong resource or none at all. The case runs **after** the f
 above, because the fault instance runs a deliberately small tool budget and the `#20` cases
 are timing-sensitive: a few extra requests in front of them would perturb evidence this
 ticket does not own.
+
+The `reserved-provider-*` rows are the live form of D30's owner ruling 4 (ticket #36). The
+refusal is decided from the Target's identity, so Gateway state cannot show what a refused
+call did — and, unlike a Refused resource type, the *rule* is about one name inside an
+allowed type, so the same run also proves the type stays manageable: an ordinary provider
+and one whose name merely begins with the reserved one are updated through the same Tool.
+The hop's record is what makes "nothing was dispatched" observable: the cases assert the
+proxy saw **no** config-resource request at all for a refused call, while a call that was
+accepted shows exactly its one `PUT`. Every Target these cases address — including the
+reserved one — is in the deployment's Target allowlist, so a `permission_denied` could not
+be the allowlist's, and one case renames onto an *occupied* destination so the refusal is
+also provably not the D11 collision. The reserved provider is provisioned by
+`provision.py`; `policyProviders.caseFoldedLookup` records how the live Gateway answers a
+read of that name with its case folded, which is the measurement behind the rule's
+fail-closed case handling.
 
 "Never a replay" is asserted twice, and independently: the audit log holds exactly one
 `attempt` row for the call, and the proxy's per-method counter shows exactly one write
@@ -268,7 +292,12 @@ than minutes; the deadlines themselves are the production rules, only smaller. I
   `tagProvider.convention` block records where the Gateway puts each of the two Tag
   import document shapes (a named root and a provider-root document), read back from a
   provider-root export, so the rule the Tool's verification depends on is live evidence
-  in every row rather than an assumption.
+  in every row rather than an assumption. It also creates the three Tag-provider *config
+  resources* ticket #36 is about — the reserved `IgnitionMCPPolicy` provider, an ordinary
+  one, and a longer name that only begins with the reserved one — reads each back for its
+  Resource signature, and records in `policyProviders.caseFoldedLookup` how the Gateway
+  answers a read of the reserved name with its case folded (the measurement behind the
+  rule's fail-closed case handling).
 - `rest_driver.py` — the live cases, in `--mode gate-on`, `--mode gate-off` and
   `--mode fault` (the D23 injected failures). The two pipeline paths the cancel cases
   address are derived by the workflow from the disposable Projects

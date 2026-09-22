@@ -679,6 +679,13 @@ def _layer_message(decision: PolicyDecision) -> str:
                 "the target is inside the reserved Runtime Target Policy provider, which "
                 "no Mutation may write; administer the policy through its own curated path"
             )
+        if decision.reason.startswith("reserved-config-resource:"):
+            reserved = decision.reason.split(":", 1)[1]
+            return (
+                f"{reserved} is the config resource that holds the Runtime Target Policy, "
+                "and no generic configuration Mutation may change it; administer the policy "
+                "through its own curated path"
+            )
         return (
             "this resource type is refused for generic configuration mutation; "
             "administer it through its own curated path"
