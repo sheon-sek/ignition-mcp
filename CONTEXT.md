@@ -83,3 +83,17 @@ _Avoid_: verification result, confirmed value
 **Outcome unknown**:
 The outcome of a Mutation that may have executed but whose final state could not be established. It is never automatically replayed.
 _Avoid_: timeout, failed
+
+### Perspective authoring
+
+**Logical resource path**:
+The name a caller uses for a Perspective resource, such as `Pages/Overview` for a View. The server maps it to the archive; callers never pass archive or filesystem paths.
+_Avoid_: file path, ZIP path, resource path
+
+**Local resource**:
+A resource defined in the Project itself, so it appears in that Project's export. Perspective Mutations only ever change Local resources.
+_Avoid_: own resource, child resource
+
+**Inherited resource**:
+A resource that a Project gets from an ancestor Project and does not define locally. A Mutation that would create a local override of one is refused, never performed silently.
+_Avoid_: parent resource, override

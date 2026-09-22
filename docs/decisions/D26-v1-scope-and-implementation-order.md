@@ -639,3 +639,32 @@ Read-only milestones 可以提前用于 development / internal evaluation，但�
 ## D27 amendment — Phase 0 G0 resolution rule
 
 D27 fulfils this Decision's requirement to open a new Decision when the target official MCP Module cannot satisfy D06's stricter native `outputSchema` requirement. For the exact D27 tuple, G0 accepts `VERIFIED_WITH_LIMITATION` only if native `structuredContent`, `isError`, discovery, Resources and Prompts all pass and only native `outputSchema` is absent. Future tuples do not inherit the exception.
+
+## Phase 5 amendment — G5 evidence reuse (owner ruling, 2026-09-22)
+
+The Phase 5 writes run through the same `ProjectTransactionService` that G3 and G4 already proved live. They differ only in how the candidate archive is built. G5 therefore splits its cases into two groups.
+
+The G5 live stage must run these cases against Perspective resources:
+
+- normal edit;
+- no-op;
+- unrelated-resource preservation;
+- refusal of a Mutation that would override an Inherited resource;
+- concurrent external change abort.
+
+The remaining D26 G5 cases test the generic transaction, not the Perspective adapter. G5 cites the existing G3/G4 evidence for them, as long as the Perspective writes call the unchanged transaction service:
+
+- backup failure abort-before-import;
+- ambiguous import outcome reconciliation;
+- invalid ZIP, path traversal, duplicate, symlink and bomb rejection;
+- post-import verification failure and the recovery-required path.
+
+If a Phase 5 change modifies `ProjectTransactionService` or ZIP safety, the affected cases return to the live stage.
+
+The owner also fixed these Phase 5 behaviours:
+
+- Reads return Local resources only.
+- Writes replace one whole document and take the `pcf1` Project fingerprint as their Precondition token.
+- Before a write, the server checks the ancestor chain. A write that would create a local override of an Inherited resource fails with `invalid_argument` and reason `inherited_resource`.
+- `perspective_view_validate` checks JSON, a `root` object with a string `type`, and the D10 size and depth budgets. It accepts unknown component types.
+- `perspective_view_delete` removes one View per call and never a folder.
