@@ -85,6 +85,21 @@
     "errorCode": "permission_denied",
     "unclassified": "refused"
   },
+  "reservedResourceNames": {
+    "resourceType": "ignition/tag-provider",
+    "collection": "core",
+    "names": [
+      "IgnitionMCPPolicy"
+    ],
+    "match": "the whole name, trimmed and compared case-insensitively, never a substring: `IgnitionMCPPolicyStaging` is a different resource and stays manageable. Fail-closed on case because Ignition documents no rule for how two config resource names compare, and the refusal names the *reserved* spelling however the caller wrote it.",
+    "targets": [
+      "name"
+    ],
+    "denialCode": "permission_denied",
+    "layer": "target-class",
+    "rule": "D30 owner ruling 4: this resource is the Tag provider that holds the Runtime Target Policy, and a generic config Mutation refuses it **by name** before the Target allowlist is consulted — even under an explicit `*` — because `ignition/tag-provider` is an allowed type and nothing else would stop a delete or a reconfiguration of the policy's storage provider. It is a refusal by name *within* an allowed type, not an entry in the Refused resource types set (D30 §5): the type stays allowed and every other Tag provider stays manageable through this Tool. The refusal is Mutation-only, so `config_resource_get` still serves the resource.",
+    "source": "D30 owner ruling 4 (2026-09-22); issue #36"
+  },
   "fixedKnobs": {
     "allowInvalidReferences": "false",
     "collection": "core"

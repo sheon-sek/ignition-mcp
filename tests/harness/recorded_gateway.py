@@ -85,6 +85,15 @@ _OPENAPI_OPERATIONS = (
     # audit log the recorded attempt/result rows are read back from.
     ("get", "/data/api/v1/resources/find/ignition/audit-profile/{name}"),
     ("get", "/data/api/v1/audit/log/{name}"),
+    # Phase 4 ticket #36: the same provider type through the generic config Mutations.
+    # D30 owner ruling 4 refuses the resource named `IgnitionMCPPolicy` by name, and
+    # the cases that prove the *rest* of the type stays manageable need its update,
+    # delete and rename routes to exist - a type without them has no such Tool at all
+    # (the capability snapshot withholds it), so the refusal being asserted could
+    # never be reached.
+    ("put", "/data/api/v1/resources/ignition/tag-provider"),
+    ("delete", "/data/api/v1/resources/ignition/tag-provider/{name}/{signature}"),
+    ("post", "/data/api/v1/resources/rename/ignition/tag-provider/{name}"),
 )
 
 #: Path segments under ``/data/api/v1/resources/`` that name an operation rather
@@ -1230,14 +1239,14 @@ class _Handler(http.server.BaseHTTPRequestHandler):
             return
         if path.startswith("/data/api/v1/resources/find/ignition/tag-provider/"):
             name = path.rsplit("/", 1)[-1]
-            if name != server.policy_provider:
-                self._json(404, {"message": "No resource", "status": "404"})
+            # Ticket #6's recorded provider document, for the harness that provisions the
+            # Runtime Target Policy through this route. Every other name — and the same
+            # name before that harness has created it — is the generic recorded behaviour
+            # below, so a test that seeds its own Tag-provider resources (ticket #36's
+            # by-name refusal) reads them back like any other resource.
+            if name == server.policy_provider and server.policy_provider_created:
+                self._json(200, _fixture("phase4/tag-provider-find.json"))
                 return
-            if not server.policy_provider_created:
-                self._json(404, {"message": "No resource", "status": "404"})
-                return
-            self._json(200, _fixture("phase4/tag-provider-find.json"))
-            return
         # Ticket #21: the Server Config find answers from the modelled resource state
         # (``server.resources``), exactly as every other config-resource read does, so
         # a config apply created is readable and a config that is not there is a 404.

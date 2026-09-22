@@ -35,6 +35,15 @@ Three rules decide the wire item:
   allowlist names a resource and not a collection. A rename changes its source *and*
   produces a resource at its destination, so both are Targets and both must be
   allowlisted (D30 §3).
+- **Target class.** Two rules decide a Target from its identity alone, and both run
+  *before* the Target allowlist, so an explicit ``*`` or an entry naming the Target
+  cannot reach past them: D30 §5's Refused resource types (an allowlist of types, so an
+  unclassified one is refused) and D30 owner ruling 4's reserved Runtime Target Policy
+  resource — the ``ignition/tag-provider`` resource named exactly ``IgnitionMCPPolicy``
+  — which is a refusal by *name inside an allowed type*. The two lists stay separate:
+  ``ignition/tag-provider`` is an allowed type and other providers stay manageable. Both
+  refusals are decided before any read, so a refused call reads nothing and dispatches
+  nothing; a rename evaluates the name rule for both of its names (D30 §3).
 
 Because an explicit Gateway rejection is final for these Tools (D30 §2), every
 operation is declared ``rejection_is_final``: the caller either gets the Gateway's
@@ -73,8 +82,12 @@ from ignition_rest_mcp.safety.executor import (
     execute_mutation,
     mutation_failure,
 )
-from ignition_rest_mcp.safety.policy import CONFIG_MUTATION, MutationOperation
-from ignition_rest_mcp.safety.refused_resource_types import refuse_resource_type_decision
+from ignition_rest_mcp.safety.policy import CONFIG_MUTATION, MutationOperation, PolicyDecision
+from ignition_rest_mcp.safety.refused_resource_types import (
+    is_refused_resource_type,
+    refuse_resource_type_decision,
+)
+from ignition_rest_mcp.safety.reserved_config_resources import reserved_config_resource_decision
 from ignition_rest_mcp.safety.verification import verdict as _verdict
 from ignition_rest_mcp.services.config_resources import (
     bounded_text,
@@ -220,7 +233,7 @@ async def config_resource_update(
             verify=verify,
             precondition=precondition,
             rejection=_gateway_rejection,
-            target_policy=_target_policy(capability),
+            target_policy=_target_policy(capability, name),
             audit_fields={
                 "resourceType": capability.resource_type, "name": name, "collection": collection,
             },
@@ -314,7 +327,7 @@ async def config_resource_create(
             verify=verify,
             precondition=precondition,
             rejection=_gateway_rejection,
-            target_policy=_target_policy(capability),
+            target_policy=_target_policy(capability, name),
             audit_fields={
                 "resourceType": capability.resource_type, "name": name, "collection": collection,
             },
@@ -402,7 +415,7 @@ async def config_resource_delete(
             verify=verify,
             precondition=precondition,
             rejection=_gateway_rejection,
-            target_policy=_target_policy(capability),
+            target_policy=_target_policy(capability, name),
             audit_fields={
                 "resourceType": capability.resource_type, "name": name, "collection": collection,
             },
@@ -504,7 +517,7 @@ async def config_resource_rename(
             verify=verify,
             precondition=precondition,
             rejection=_gateway_rejection,
-            target_policy=_target_policy(capability),
+            target_policy=_multiple_target_policy(capability, (name, new_name)),
             audit_fields={
                 "resourceType": capability.resource_type, "name": name, "collection": collection,
             },
@@ -771,9 +784,54 @@ def _bounded_body(payload: Any) -> bytes:
     return raw
 
 
-def _target_policy(capability: ConfigResourceCapability) -> Callable[[], Any]:
+def _single_target_policy(capability: ConfigResourceCapability, name: str) -> Callable[[], Any]:
+    """One Target's D30 §5 rule: a refused type refuses, otherwise the name rule decides.
+
+    The two rules are separate and both are Target-class: D30 §5's Refused resource types
+    govern a *type*, and D30 owner ruling 4 governs one *name* inside an allowed type. A
+    Target is refused when either says so, and the refused type is answered first because
+    it is the stronger statement about the Target.
+    """
+
     def policy() -> Any:
-        return refuse_resource_type_decision(capability.resource_type)
+        if is_refused_resource_type(capability.resource_type):
+            return refuse_resource_type_decision(capability.resource_type)
+        return reserved_config_resource_decision(capability.resource_type, name)
+
+    return policy
+
+
+def _target_policy(capability: ConfigResourceCapability, name: str) -> Callable[[], Any]:
+    """The Target-class rule for the one Target a config call addresses.
+
+    D30 §5 (Refused resource types) and D30 owner ruling 4 (the reserved Runtime Target
+    Policy resource) are both evaluated *before* the Target allowlist, so neither an
+    explicit ``*`` nor an entry naming the Target can reach them. Both are decided from
+    the Target's identity alone: nothing is read, and nothing is dispatched.
+    """
+
+    return _single_target_policy(capability, name)
+
+
+def _multiple_target_policy(
+    capability: ConfigResourceCapability, names: tuple[str, ...],
+) -> Callable[[], Any]:
+    """The Target-class rule for a call whose Target is one of several names.
+
+    The D08 chain evaluates an operation's Target-class rule once and applies its verdict
+    to every Target of the call, including the additional ones, so a rule that must hold
+    for any of them has to answer for any of them: the reserved name is refused whether it
+    is the resource being renamed or the one the rename produces (D30 §3).
+    """
+
+    def policy() -> Any:
+        if is_refused_resource_type(capability.resource_type):
+            return refuse_resource_type_decision(capability.resource_type)
+        for name in names:
+            decision = reserved_config_resource_decision(capability.resource_type, name)
+            if not decision.allowed:
+                return decision
+        return PolicyDecision.allow()
 
     return policy
 

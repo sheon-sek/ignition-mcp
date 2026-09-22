@@ -195,6 +195,21 @@ def test_an_explicit_types_entry_creates_a_udt_definition() -> None:
     assert structured["summary"]["succeeded"] == 1
 
 
+def test_a_folder_named_types_deeper_in_the_path_is_an_ordinary_target() -> None:
+    """D30 §6's grammar is positional: only the *first* post-provider segment selects
+    the UDT definition namespace, so a folder that merely happens to be called `_types_`
+    deeper in the path is an ordinary target. It is covered by the ordinary allowlist
+    entry and reaches the Gateway like any other create — which is what the recorded
+    call list shows, and what the membership test alone got wrong."""
+    structured = _structured("deeper-folder-types-namespace")
+
+    assert _statuses(structured) == [("[default]IgnitionMCP_CI/_types_/Probe", "executed")]
+    assert structured["summary"]["succeeded"] == 1
+    # The dispatch happened: the pre-fix membership rule refused this batch before any
+    # native call, so the recorded sequence is the difference between the two rules.
+    assert "system.tag.configure" in _recorded_targets("deeper-folder-types-namespace")
+
+
 @pytest.mark.parametrize(
     ("name", "reason"),
     [
@@ -295,6 +310,36 @@ def test_an_indeterminate_native_outcome_does_not_stop_the_batch() -> None:
     assert _statuses(structured) == [(TARGET, "outcome_unknown"), (TARGET2, "executed")]
     assert structured["summary"]["outcomeUnknown"] == 1
     assert structured["summary"]["notExecuted"] == 0
+
+
+def test_a_target_that_appears_after_the_existence_check_is_a_raced_conflict() -> None:
+    """D11 and D30 §2: a create takes no Precondition token, so its concurrency rule is
+    the collision rule. `exists` answers false and Preflight dispatches, then another
+    writer creates the target and the fixed `Abort` policy refuses — the mutation never
+    lands. The item is the conflict the contract requires, not a failed create, and its
+    Native outcome is kept beside it.
+
+    The provider's own collision QualityCode is not established for this tuple, so the
+    handler does not infer from the code: one bounded post-failure existence check decides
+    it, and the recorded call list proves both that check and that the mutation was never
+    replayed.
+    """
+    structured = _structured("raced-collision")
+
+    item = structured["items"][0]
+    assert item["status"] == "conflict"
+    assert item["reason"] == "targetExists"
+    # The provider's answer is still visible, and it was not Good.
+    assert item["nativeOutcome"]["good"] is False
+    assert item["nativeOutcome"]["name"] == "Bad_Unsupported"
+    assert structured["summary"]["succeeded"] == 0
+    assert structured["summary"]["failed"] == 1
+    targets = _recorded_targets("raced-collision")
+    # Exactly one configure: the race is reported, never replayed.
+    assert targets.count("system.tag.configure") == 1
+    # The post-failure existence check runs once, after the dispatch.
+    assert targets.count("system.tag.exists") == 2
+    assert targets.index("system.tag.configure") < targets.index("system.tag.exists", targets.index("system.tag.configure"))
 
 
 @pytest.mark.parametrize("name", ["observed-read-fails", "observed-read-empty"])

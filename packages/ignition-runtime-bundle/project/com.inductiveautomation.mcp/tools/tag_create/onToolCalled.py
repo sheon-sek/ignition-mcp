@@ -345,7 +345,12 @@ def onToolCalled(builder, items):
 		return value[0:index]
 
 	def isUdtDefinitionTarget(value):
-		return UDT_NAMESPACE in targetSegments(value)
+		# D30 6 names `[provider]_types_/...`, so the grammar is positional: only the
+		# first post-provider segment selects the definition namespace. A folder that
+		# merely happens to be called `_types_` deeper in the path is an ordinary
+		# target, matched by the ordinary allowlist.
+		segments = targetSegments(value)
+		return len(segments) > 0 and segments[0] == UDT_NAMESPACE
 
 	def normalizeEntries(entries):
 		# D30 1: allowlist entries are provider-qualified prefixes matched at
@@ -378,11 +383,12 @@ def onToolCalled(builder, items):
 
 	def matchesUdtAllowlist(path, entries):
 		# D30 6: a UDT definition target needs an explicit _types_ entry; a bare *
-		# does not cover it, and the entry itself has to name the _types_ segment.
+		# does not cover it, and the entry itself has to name the _types_ segment the
+		# same positional way the target does.
 		for entry in entries:
 			if entry == WILDCARD:
 				continue
-			if UDT_NAMESPACE not in targetSegments(entry):
+			if not isUdtDefinitionTarget(entry):
 				continue
 			if matchesEntry(path, entry):
 				return True
@@ -534,6 +540,34 @@ def onToolCalled(builder, items):
 		if isinstance(value, Boolean):
 			return None if value.booleanValue() else "targetMissing"
 		return "existenceCheckIndeterminate"
+
+	def postFailureExistence(index):
+		# D11/D30 2 and 7: the check-to-dispatch race. Fixing collisionPolicy=Abort means
+		# the mutation can only have been refused, never applied, so a target that is there
+		# now is the collision another writer created in the window. That race is reported
+		# as conflict, never as a success and never by replaying anything.
+		#
+		# Which QualityCode the provider returns for that Abort is not established by this
+		# repository, so the outcome is not inferred from the code alone: one bounded
+		# existence check for this item's own target decides it. Only a plain boolean true is
+		# an answer; a raised check or a non-boolean is left unresolved and the item keeps
+		# its own Native outcome.
+		path = paths[index]
+		try:
+			present = system.tag.exists(path)
+		except (Exception, JavaException) as exc:
+			logger.warn("correlationId=" + correlationId + " target=" + unicode(index) + " post-failure existence check failed: " + text(exc))
+			return False
+		return existenceProblem(present) is None
+
+	def collisionOutcome(index, nativeQuality):
+		# D30 7: a Native outcome that is not Good, on a target Preflight found free and that
+		# is now taken, is this Tool's collision case - conflict / target - not a failed
+		# mutation. The item keeps its Native outcome so the provider's own answer is still
+		# visible, and the conflict is stated beside it.
+		if qualityIsGood(nativeQuality):
+			return False
+		return postFailureExistence(index)
 
 	stage = "input_validation"
 	dispatched = False
@@ -695,6 +729,13 @@ def onToolCalled(builder, items):
 			if codes is None or len(codes) != 1 or codes[0] is None:
 				results.append({"path": paths[index], "status": "outcome_unknown"})
 				outcomeUnknown += 1
+				continue
+			if collisionOutcome(index, codes[0]):
+				# The target appeared after the Preflight existence check and Abort left
+				# it alone: this is the conflict D11 and D30 2 name, reported per item
+				# with the provider's own outcome still attached.
+				results.append({"path": paths[index], "status": "conflict", "reason": "targetExists", "nativeOutcome": quality(codes[0])})
+				failed += 1
 				continue
 			results.append({"path": paths[index], "status": "executed", "nativeOutcome": quality(codes[0])})
 			if qualityIsGood(codes[0]):

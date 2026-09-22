@@ -21,13 +21,19 @@ from starlette.testclient import TestClient
 import ignition_rest_mcp.server as server_module
 from ignition_rest_mcp.authorization import scope_tag
 from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
+from ignition_rest_mcp.safety.refused_resource_types import is_refused_resource_type
+from ignition_rest_mcp.safety.reserved_config_resources import reserved_config_resource
 from ignition_rest_mcp.services.config_mutation import CONFIG_RESOURCE_UPDATE
 from phase4_fixtures import (
     CONFIG,
     CORE_COLLECTION,
+    LOOKALIKE_PROVIDER,
     OTHER_COLLECTION,
+    OTHER_PROVIDER,
     PROFILE,
+    PROVIDER_TYPE,
     READ_INVENTORY,
+    RESERVED_PROVIDER,
     RESOURCE,
     TOKEN_TYPE,
     UPDATE_TOOL,
@@ -420,6 +426,177 @@ def test_a_refused_resource_type_is_denied_whatever_the_allowlist_says(
         ("decision", f"denied:target-class:refused-resource-type:{TOKEN_TYPE}",
          f"{TOKEN_TYPE}/ignition-mcp-ci"),
     ]
+
+
+def test_the_reserved_provider_is_a_name_rule_inside_an_allowed_type() -> None:
+    """D30 §5 / owner ruling 4: the two rules stay separate.
+
+    `ignition/tag-provider` stays an *allowed* type — the Refused resource types set says
+    nothing about it and other providers keep working — and the reserved provider is a
+    separate rule about exactly one *name*: never a substring, and never another type.
+    """
+
+    assert is_refused_resource_type(PROVIDER_TYPE) is False, "the type stays allowed (D30 §5)"
+    reserved_id = f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    assert reserved_config_resource(PROVIDER_TYPE, RESERVED_PROVIDER) == reserved_id
+    for accepted in (OTHER_PROVIDER, LOOKALIKE_PROVIDER, f"{RESERVED_PROVIDER}Renamed"):
+        assert reserved_config_resource(PROVIDER_TYPE, accepted) is None, accepted
+    assert reserved_config_resource(PROFILE, RESERVED_PROVIDER) is None
+    assert reserved_config_resource(PROVIDER_TYPE, "ignitionmcppolicy ") == reserved_id
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("*",),
+        (f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}",),
+    ],
+    ids=["wildcard", "narrow"],
+)
+def test_the_reserved_policy_provider_is_denied_whatever_the_allowlist_says(
+    tmp_path: Path, targets: tuple[str, ...],
+) -> None:
+    """D30 owner ruling 4: the resource that holds the Runtime Target Policy is refused
+    by name, before the Target allowlist and whatever that allowlist says.
+
+    The refusal is decided from the Target's identity alone, so nothing is read and
+    nothing is dispatched, and the provider is exactly as it was. The cases beside this
+    one prove the rule does not reach the type: an ordinary provider and a longer name
+    that begins with the reserved one are still changed.
+    """
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: targets},
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": RESERVED_PROVIDER, "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+        stored = gateway.resource(PROVIDER_TYPE, RESERVED_PROVIDER)
+
+    error = envelope(result)
+    reserved_id = f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    assert error["code"] == "permission_denied"
+    assert reserved_id in error["message"], "the refusal detail names the reserved resource"
+    assert requests == [], "a reserved name is refused before anything is read or dispatched"
+    assert stored["enabled"] is True and stored["signature"] == before
+    assert [(row["phase"], row["outcome"], row["target_id"]) for row in rows] == [
+        ("decision", f"denied:target-class:reserved-config-resource:{reserved_id}", reserved_id),
+    ]
+
+
+def test_a_name_that_differs_only_in_case_is_denied_too(tmp_path: Path) -> None:
+    """Fail-closed, like the reserved Tag provider: the comparison folds case.
+
+    Ignition documents no rule for how two config resource names compare, so a name that
+    differs from the reserved one only in case is refused rather than trusted to be a
+    different resource. The refusal names the *reserved* spelling, however the caller
+    wrote it, so the recorded reason is one value.
+    """
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: ("*",)},
+        )
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": "sig-from-anywhere",
+                "name": RESERVED_PROVIDER.lower(), "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+
+    assert envelope(result)["code"] == "permission_denied"
+    assert requests == []
+    assert [row["outcome"] for row in rows] == [
+        f"denied:target-class:reserved-config-resource:{PROVIDER_TYPE}/{RESERVED_PROVIDER}",
+    ]
+
+
+def test_another_tag_provider_is_still_manageable(tmp_path: Path) -> None:
+    """Owner ruling 4 refuses one name, not the type: an ordinary Tag provider is
+    changed exactly as any other allowed resource is."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: (f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",)},
+        )
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": OTHER_PROVIDER, "description": "CI Tag provider (changed)",
+            })
+
+        puts = write_requests(gateway, "PUT")
+        stored = gateway.resource(PROVIDER_TYPE, OTHER_PROVIDER)
+
+    assert structured(result)["signature"] == stored["signature"]
+    assert [request["path"] for request in puts] == [
+        f"/data/api/v1/resources/{PROVIDER_TYPE}?allowInvalidReferences=false",
+    ]
+    assert stored["description"] == "CI Tag provider (changed)"
+    assert stored["signature"] != before
+
+
+def test_a_longer_name_that_begins_with_the_reserved_name_is_manageable(tmp_path: Path) -> None:
+    """The name matches exactly, never as a substring.
+
+    `IgnitionMCPPolicyStaging` is a different resource — the same reading D30 §1 gives the
+    reserved Tag provider, which matches its provider component and not one of its
+    characters.
+    """
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, LOOKALIKE_PROVIDER)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+            mutation_targets={UPDATE_TOOL: (f"{PROVIDER_TYPE}/{LOOKALIKE_PROVIDER}",)},
+        )
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": LOOKALIKE_PROVIDER, "description": "CI Tag provider (look-alike)",
+            })
+
+        stored = gateway.resource(PROVIDER_TYPE, LOOKALIKE_PROVIDER)
+
+    assert stored["description"] == "CI Tag provider (look-alike)"
+    assert stored["signature"] != before
+    assert structured(result)["name"] == LOOKALIKE_PROVIDER
+
+
+def test_the_reserved_policy_provider_stays_readable(tmp_path: Path) -> None:
+    """Owner ruling 4 is Mutation-only: the read Tool still serves the provider's
+    configuration, which is how a deployment inspects the policy's storage provider."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        settings = read_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "reader-secret").read(PROVIDER_TYPE, RESERVED_PROVIDER)
+
+    body = structured(result)
+    assert body["signature"] == gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+    assert body["resource"]["description"] == "CI policy provider"
+    assert body["resource"]["config"]["profile"] == {"type": "STANDARD"}
 
 
 def test_a_gateway_refusal_inside_a_success_response_is_a_conflict(tmp_path: Path) -> None:

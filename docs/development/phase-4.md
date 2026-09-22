@@ -648,6 +648,58 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     fake had answered `pathOverLength`. `d33251e` fixes the case, the fake's selection order and the
     selector test; the run above is the one that records this ticket's evidence.
 
+#### Review round 1 — owner scope cut
+
+Review round 1 (`11-review-1.md`) raised five blockers and one nit. **The owner cut the scope of
+this round**: Phase 4 now goes for maximum speed, so only a Tool that runs with correct *input and
+output* counts; byte-accounting precision is deferred. The round therefore fixes **S4** and **S5**
+only, and records the rest as deferred work rather than doing it now.
+
+- **S4 — the `_types_` rule is positional (`isUdtDefinitionTarget`).** D30 §6 names
+  `[provider]_types_/...`, so only the **first** post-provider segment selects the UDT definition
+  namespace. Both handlers used a bare membership test (`"_types_" in targetSegments(value)`), so
+  `[default]Area/_types_/Tag` was treated as a definition and refused under a wildcard. Both the
+  target and the allowlist entry now use the positional rule (`segments[0] == "_types_"`), which is
+  the correction ticket #10 already carries for `tag_update`.
+  Fixtures: `tag_create-deeper-folder-types-namespace`, `tag_copy-deeper-folder-types-namespace` —
+  a folder called `_types_` one segment below the provider root, covered by the ordinary
+  `[default]IgnitionMCP_CI` prefix. Both reach the Gateway; the pre-fix handler refused both before
+  any native call.
+- **S5 — the check-to-dispatch race is a collision, not a failed mutation.** Preflight finds the
+  target absent (or the destination free) and dispatches; a competing writer acts first; the fixed
+  `collisionPolicy=Abort` refuses instead of overwriting. Each handler now reports that item as
+  `conflict` — `details.items[].reason = targetExists` / `destinationExists` — with its own Native
+  outcome still attached, so the provider's answer stays visible and nothing is replayed. Which
+  QualityCode a Gateway returns for that `Abort` is **not established by this repository**, so the
+  handler does not infer from the code: one bounded post-failure `system.tag.exists` for that item's
+  own path decides it, and a raised or non-boolean check leaves the item's own Native outcome
+  standing rather than claiming either outcome. Both output schemas gained the `conflict` item
+  shape, and both contracts gained a `racedCollision` clause.
+  Fixtures: `tag_create-raced-collision`, `tag_copy-raced-collision` — `exists` answers false, the
+  native call answers a Bad collision, and the post-failure check answers true. Both fail on
+  `a3ab3fc` and pass after the change.
+
+**Deferred by the owner's scope cut (S1, S2, S3, S5's live case, and the review's P1 nit).** These
+are real gaps the reviewer named and they are **not** fixed in this round:
+
+1. **S1 — the Observed walk is not bounded before conversion.** Both handlers still call
+   `jsonValue(nativeConfiguration)` before the size check, and the later counter does not mirror
+   `jsonValue` for `iteritems`-only objects, Java arrays arriving as `array.array`, Datasets and
+   their column names, enums/native-object text, or wide numbers.
+2. **S2 — input accounting materializes full strings and scans past the aggregate ceiling**, and
+   the hard-count, path, configuration and policy-count refusals carry no structured `advice`.
+3. **S3 — QualityCode `name`/`level` are truncated** by character count rather than being exact or
+   omitted, and are presented as required identifiers.
+4. **Byte-accounting precision generally.** The coordinator's exactness requirement (the walk's
+   reported byte count must equal the published JSON's length exactly, with near-budget fixtures
+   for a mapping, an `$ignition` mapping and a Dataset) is deferred with the rest of the precision
+   work. The accepted ticket #10 lane's walk measures `text + className` for a rendered value while
+   publishing a larger JSON wrapper, so its own count is optimistic; making the count exact is part
+   of this deferred issue, not a tag_create/tag_copy-only change.
+5. **P1 — the modelled refusal bodies** in `tests/fixtures/recorded/gateway-8.3/provenance.json`
+   are still labelled `modelled` after two green G4b runs; re-recording them is a runbook
+   follow-up.
+
 ### Ticket #16 — REST `project_import` (milestone 4c)
 
 - Fixture-first coverage: the recorded Gateway now models the Project import the way it
@@ -1523,8 +1575,161 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   fails. Without the flag there is no local copy and no rollback (the ticket's rule),
   and the Gateway's own configuration backup remains the operator's safety net.
   **For the owner:** confirm the opt-in shape, or make the backup mandatory.
+### Ticket #36 — refuse the `IgnitionMCPPolicy` Tag-provider config resource by name (milestone 4c)
+
+- **Rule (D30 §5 and owner ruling 4, `reserved_provider_config_resource`).** The
+  `ignition/tag-provider` config resource named exactly `IgnitionMCPPolicy` — the provider
+  the Runtime Target Policy lives in (D30 §1, ticket #6) — is refused by
+  `config_resource_create`, `config_resource_update`, `config_resource_delete` and
+  `config_resource_rename` with `permission_denied`, **before** the Target allowlist is
+  consulted, so an explicit `*` and an entry naming the Target change nothing. It is a
+  refusal by *name inside an allowed type*, kept separate from D30 §5's Refused resource
+  types: `ignition/tag-provider` stays classified as allowed and every other Tag provider
+  stays manageable through the same Tools. The rule is decided from the Target's identity,
+  so a refused call reads nothing and dispatches nothing, and Preflight lists the item as
+  failed before anything executes (D30 §3). `config_resource_get` is untouched: the refusal
+  is Mutation-only, so the provider's configuration stays readable.
+- **Both names of a rename.** A rename changes its source and produces a resource at its
+  destination (D30 §3), so the rule covers both: renaming another provider *into* the
+  reserved name is refused as well as renaming the reserved provider *away*. The denial's
+  message and the audited reason name `ignition/tag-provider/IgnitionMCPPolicy`.
+- **Where the refusal is recorded.** The denial is the operation's Target-class rule, so it
+  runs inside the D08 chain exactly where D30 §5's Refused resource types run: the D18
+  `decision` row carries `denied:target-class:reserved-config-resource:<resourceType>/<name>`
+  and nothing else is written (no `attempt`, no `result`), under the same audit-mode rules as
+  every other denial. The executor evaluates an operation's Target-class rule once and applies
+  its verdict to every Target of the call, so for a rename whose *destination* is the refused
+  resource the recorded row's Target is the call's first Target (the source) while the
+  **reason** names the reserved resource — the reason is the accurate part, and the rename
+  contract says so explicitly.
+- **Exact name, and fail-closed on case.** The whole name is compared, never a substring,
+  so `IgnitionMCPPolicyStaging` is a different resource and stays manageable — the same
+  reading D30 §1 gives the reserved Tag provider, which matches its provider component and
+  not one of its characters. The comparison trims surrounding whitespace and folds case,
+  because Ignition documents no rule for how two config resource names compare and a name
+  that differs only in case could address the same resource: exactly the same fail-closed
+  choice `safety/reserved_tag_providers.py` already makes for the provider name. The live
+  harness records the measurement behind that choice (`provision.json` →
+  `policyProviders.caseFoldedLookup`: how a real Gateway answers a read of the reserved
+  name with its case folded), and it is recorded as an open question below.
+- **Code.** `safety/reserved_config_resources.py` holds the reserved identity
+  (`ignition/tag-provider` + `IgnitionMCPPolicy`), `reserved_config_resource` (the
+  whole-name lookup) and `reserved_config_resource_decision`, which returns the
+  `target-class` `permission_denied` denial with the reason
+  `reserved-config-resource:<resourceType>/<name>`. `services/config_mutation.py` builds
+  each Tool's Target-class rule from it: `_target_policy` / `_single_target_policy` for the
+  one-Target Tools, and `_multiple_target_policy` for the rename, which answers for *any*
+  of its names because the D08 chain evaluates an operation's Target-class rule once and
+  applies the verdict to every Target of the call. The Refused resource type is still
+  answered first (it is the stronger statement about the Target) and the two rules stay
+  two: a type rule and a name rule. `safety/executor.py`'s `_layer_message` gained the
+  branch that names the reserved resource in the caller's message.
+- **Fixture first.** `tests/harness/recorded_gateway.py` now records the Tag-provider
+  type's `PUT`, `DELETE` and rename routes (the capability snapshot withholds the Tool for
+  a type without them, so a refusal could never be reached), and its
+  `find/ignition/tag-provider/<name>` route serves seeded resources like any other type —
+  it keeps answering ticket #6's recorded provider document for the harness that
+  provisions the policy. `phase4_fixtures.py` seeds the three providers (the reserved one,
+  an ordinary one, and the longer look-alike). With the rule present but inert, the cases
+  failed exactly as the hole describes: the update **applied** (`enabled: false`, one
+  `PUT`), the delete **removed** the policy's provider, and both renames came back
+  `conflict` from the collision probe instead of the name rule.
+- **Tests.** `test_phase4_config_resource_update.py` (+6 cases, 36 total) covers the
+  refusal under `*` and under an entry naming the Target, the fail-closed folded name, the
+  accepted ordinary provider, the accepted look-alike, the still-readable reserved
+  resource, and one structural case pinning that the type stays allowed while only the name
+  is reserved. `test_phase4_config_resource_create_delete_rename.py` (+6 cases, 47 total)
+  covers the create refusal, the delete refusal (both allowlists), both rename directions,
+  an accepted rename inside the type, and a delete of the look-alike name. The contracts
+  declare `reservedResourceNames` per Tool — a block separate from `refusedResourceTypes`,
+  with the rename declaring both of its Target names — and `tooling/contracts/lint.py`
+  checks it exactly, including that the rule keeps saying "allowed type" and that
+  `ignition/tag-provider` stays in `shared/refused-resource-types.json`'s allowed list.
+  Five new linter drift cases pin those checks.
+- **Documentation.** The package README states the rule in the "Common rules for all four"
+  paragraph, the live harness README documents the new cases and why they live in the fault
+  mode, and `provision.py`'s docstring records the provider fixtures.
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **217/217 cases**
+  against the recorded Gateway (194 before this ticket; the 23 new ones are the
+  reserved-provider section, which runs after the `#20` fault cases and after ticket #35's
+  wire case, exactly as the brief requires, because the fault instance's tool budget makes
+  those timing-sensitive).
+- **Live** (workflow `Phase 4 Live Gateway REST mutation`, run
+  [35685817474](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817474), the code
+  head `df77733`; the documentation head after it re-ran the same four workflows and is
+  recorded in the ticket report): **both rows green, 217/217 live cases on 8.3.8
+  (`2026071409`, required) and 217/217 on 8.3.9 (`2026082511`, candidate)** — 194 before this
+  ticket, so all 23 new cases pass on both Gateway versions. What the artifacts record:
+  - the five refusals — update, delete, create, rename *into* the reserved name and rename
+    *away* from it — answer `permission_denied`, and the refusal message names
+    `ignition/tag-provider/IgnitionMCPPolicy`; every one of those Targets is in the
+    deployment's Target allowlist, and the rename-away destination is occupied, so neither
+    an allowlist denial nor the D11 collision can be mistaken for the name rule;
+  - the hop's own record (`observations.json` → `reserved*Hop`) holds **zero** config-resource
+    requests for all five refusals on both rows: a refused Target is decided from its
+    identity, so no read and no write left the server, and the reserved provider's Resource
+    signature is unchanged. The accepted calls beside them show exactly what a real change
+    costs (`otherProviderHop`: one `GET`, one `PUT` to
+    `/data/api/v1/resources/ignition/tag-provider?allowInvalidReferences=false`, one `GET`);
+  - `reserved-provider-config-resource-is-readable` — the reserved provider's configuration
+    is served by `config_resource_get`, with its `STANDARD` profile and its `core`
+    collection, which is the Mutation-only scope of the rule;
+  - `another-provider-update-applies` and
+    `a-name-that-begins-with-the-reserved-name-update-applies` — an ordinary Tag provider and
+    the longer `IgnitionMCPPolicyStaging` are both updated through the same Tool, so the rule
+    refuses a name and not the type (D30 §5's classification is unchanged);
+  - `provision.json` → `policyProviders` records the three fixtures created in `core`
+    (HTTP 200 each) with their signatures, and the **case measurement**:
+    `caseFoldedLookup.status` is **404 on both 8.3.8 and 8.3.9**, i.e. neither Gateway
+    treats `ignitionmcppolicy` as the reserved resource's name. That is the evidence the open
+    question below needs — the Tool's fail-closed case folding only ever over-refuses here.
+  - **One rerun, and why.** The 8.3.8 row's first attempt failed *before any live stage*: the
+    unit suite's Jython runner could not fetch the pinned
+    `jython-standalone-2.7.4.jar` (`HTTP Error 429: Too Many Requests` from
+    `repo.maven.apache.org`). The 8.3.9 row passed 217/217 in the same attempt, no case ever
+    ran on the failed row, and nothing in this ticket touches the Jython runner. Rerunning the
+    failed job was green: **217/217 on both rows** (attempt 2, same run id, artifact
+    `10676439117` re-read). Recorded rather than hidden.
+  - **Frozen gates on the same head (`df77733`), all green**: CI
+    [35685817487](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817487),
+    Phase 3 Live Gateway G3
+    [35685817497](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817497), and
+    Phase 4 Live Gateway G4a
+    [35685817529](https://github.com/sheon-sek/ignition-mcp/actions/runs/35685817529).
+- **The live form of the rule.** The refusal is invisible on the Gateway — nothing is read or
+  written — so the hop's record is what proves it, which is why these cases live in
+  `--mode fault` **after** the `#20` cases and after ticket #35's wire case: the fault
+  instance runs a deliberately small tool budget and the `#20` cases are timing-sensitive
+  (issue #39). Every Target the cases address is provisioned by `provision.py`, so the
+  reserved provider they refuse really exists and "changed nothing" is observable.
 
 ## Open questions
+
+- **Owed by the owner's #11 scope cut: the byte-accounting precision issue.** Review round 1 named
+  five blockers; the owner cut the round to the two correctness ones (S4 positional `_types_`, S5
+  collision race) so Phase 4 could move at maximum speed, and deferred the precision work:
+  - the Observed walk must measure every native shape (a Dataset and its column names, an
+    `iteritems` object, a Java array arriving as `array.array`, a wide number, an enum/native-object
+    text) **before** converting, in one pass, and the count it reports must equal the byte length of
+    the JSON the caller receives **exactly** — not as an upper or lower bound — with near-budget
+    fixtures (value at the ceiling returned, ceiling+1 refused) for a mapping, a reserved-key
+    mapping and a Dataset;
+  - the input walk must count UTF-8 incrementally, validate and account in one request-order pass
+    that stops at the 65536-byte budget, and every `limit_exceeded` site must carry `requested`,
+    `limit` and `advice` in both the structured details and the message;
+  - a QualityCode `name`/`level` over its ceiling must be exact or omitted with a
+    `nameOverLimitBytes`/`levelOverLimitBytes` marker, and the diagnostic a bounded marked prefix;
+  - the same holds for `tag_write` (#7) and `tag_update` (#10): all three handlers must agree, and
+    the accepted #10 walk currently charges `text + className` for a rendered value while
+    publishing a larger JSON wrapper, so its count is optimistic by that wrapper's bytes. D30's owner ruling already defers this to **issue #41**, which must be resolved or
+    re-ruled before any claim beyond G4.
+- **Owed by the owner's #11 scope cut: the modelled refusal bodies (review nit P1).**
+  `tests/fixtures/recorded/gateway-8.3/provenance.json` still labels the 21 ticket #11 refusal
+  bodies `modelled` although two G4b runs are now green, and their provenance says the first live
+  run re-records them. A live run does not do that by itself, so re-recording the eligible bodies
+  from the green G4b artifacts (keeping pure request-check fixtures modelled, with the reason
+  stated) is a follow-up commit. **For the owner:** confirm, or accept the modelled bodies as
+  permanent for this milestone.
 
 - **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
   `tag_copy` no name of its own and D30 §6 checks only the destination, but the native call
@@ -1685,6 +1890,29 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   refusal (a bundle has no shared modules), and the shared contract text is
   `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
   a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
+- **Ticket #36 — the reserved name is refused case-insensitively, and Ignition documents no
+  rule for it.** D30 owner ruling 4 names one resource, `ignition/tag-provider` +
+  `IgnitionMCPPolicy`, and says nothing about how Ignition compares two config resource
+  names. The ticket asked for the conservative reading, and that is what shipped: the name
+  is trimmed and case-folded before it is compared, so a resource named
+  `ignitionmcppolicy` is refused exactly like the reserved one. The cost of the choice is
+  bounded and fail-closed — a deployment that really holds a *different* resource whose
+  name differs only in case cannot manage it through `config_resource_*` (it can still be
+  read, and `setup-native`/Designer remain its paths) — whereas the other reading would
+  leave a case-folded name able to delete or reconfigure the policy's storage provider if
+  Ignition turns out to treat the two names as one. The live harness records the measurement
+  that would settle it in every run: `provision.json` → `policyProviders.caseFoldedLookup`
+  reads the reserved provider's name with its case folded through the Gateway's own REST
+  API and records the status. **Recorded: `status: 404` on both 8.3.8 and 8.3.9** (run
+  35685817474, `provision.json`) — neither Gateway treats `ignitionmcppolicy` as the
+  reserved resource's name, so on the supported tuples the folded refusal only ever
+  over-refuses and never weakens D30 §1. **For the owner:** with that measurement in hand the
+  rule may be narrowed to an exact, case-sensitive comparison; that is a decision, not a bug
+  fix, and the shipped behaviour stays fail-closed until the owner says otherwise. (The same
+  measurement is why the wording above says "could address the same resource" rather than
+  "does": Ignition documents no rule, one live sample says it does not fold, and a future
+  Gateway version is not bound by it.)
+
 - **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
   evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
   `2026-09-22T01:27:45Z` with head `200c8b9`, so the push of `2368b58` created **no**
@@ -1885,13 +2113,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`reservedTagProviders`) and the linter require it for a Tool whose Target is a Tag path,
   and the live REST driver asserts the refusal and its message on every row. **Residual,
   recorded for the owner:** the rule covers Tag Mutations, which is what D30 §1 protects;
-  `config_resource_update`/`delete` can still change the `ignition/tag-provider` *resource*
-  because D30 §5 classifies that type as allowed. That is a different plane — the provider's
-  configuration, not the policy Tag — and it fails closed rather than open: removing or
-  breaking the provider leaves the policy unreadable, which every Runtime Mutation answers
-  with `operation_disabled` (D30 §1/§7). If the owner wants that resource type refused as
-  well, it is a one-line addition to `contracts/shared/refused-resource-types.json` and the
-  Runtime Text Resource that mirrors it.
+  `config_resource_update`/`delete` could still change the `ignition/tag-provider`
+  *resource* because D30 §5 classifies that type as allowed. That is a different plane —
+  the provider's configuration, not the policy Tag — and it failed closed rather than open:
+  removing or breaking the provider leaves the policy unreadable, which every Runtime
+  Mutation answers with `operation_disabled` (D30 §1/§7). If the owner wanted that resource
+  refused as well, it was a one-line addition to
+  `contracts/shared/refused-resource-types.json` and the Runtime Text Resource that mirrors
+  it. **CLOSED by ticket #36** (D30 owner ruling 4, the reserved-name rule): the *one*
+  resource — `ignition/tag-provider` named `IgnitionMCPPolicy` — is now refused by all four
+  `config_resource_*` Tools, while the type stays allowed so every other provider remains
+  manageable. The owner chose the by-name rule over the type rule, and the refused-types
+  file is unchanged.
 - **Resolved (#16 review round 1) — which artifacts `project_import` consumes: keep the
   union.** D30 §6 names a READY `project_archive`; the ticket names "the artifact ID of a
   READY `project_archive` ... (uploaded through `POST /artifacts` or produced by

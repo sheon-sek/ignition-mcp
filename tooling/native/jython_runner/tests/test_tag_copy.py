@@ -237,6 +237,18 @@ def test_an_explicit_types_entry_copies_a_udt_definition() -> None:
     assert _statuses(structured) == [(UDT, UDT_COPY, "executed")]
 
 
+def test_a_folder_named_types_deeper_in_the_path_is_an_ordinary_destination() -> None:
+    """D30 §6's grammar is positional for a copy's destination too: a `_types_` folder
+    one segment below the provider root is an ordinary destination, covered by the
+    ordinary allowlist entry, and the copy reaches the Gateway."""
+    structured = _structured("deeper-folder-types-namespace")
+
+    assert _statuses(structured) == [
+        (SOURCE, "[default]IgnitionMCP_CI/_types_/WriteTarget", "executed")
+    ]
+    assert "system.tag.copy" in _recorded_targets("deeper-folder-types-namespace")
+
+
 def test_a_destination_whose_leaf_differs_from_the_source_is_invalid_argument() -> None:
     """One `system.tag.copy` call copies a path list into one destination folder
     under each source's own name, so a renaming copy cannot land where the caller
@@ -357,6 +369,27 @@ def test_an_indeterminate_native_outcome_does_not_stop_the_batch() -> None:
 
     assert _statuses(structured) == [(SOURCE, COPY, "outcome_unknown"), (TEXT_SOURCE, COPY2, "executed")]
     assert structured["summary"]["notExecuted"] == 0
+
+
+def test_a_destination_that_appears_after_the_existence_check_is_a_raced_conflict() -> None:
+    """D11 and D30 §2: a copy's concurrency rule is the collision rule too. Preflight
+    finds the destination free and dispatches, another writer occupies it, and the fixed
+    `Abort` policy refuses — so the copy never lands and the source is untouched. The item
+    is `conflict` / `destinationExists`, decided by one bounded post-failure existence
+    check rather than by guessing the provider's collision code, and nothing is replayed.
+    """
+    structured = _structured("raced-collision")
+
+    item = structured["items"][0]
+    assert item["status"] == "conflict"
+    assert item["reason"] == "destinationExists"
+    assert item["nativeOutcome"]["good"] is False
+    assert structured["summary"]["succeeded"] == 0
+    assert structured["summary"]["failed"] == 1
+    targets = _recorded_targets("raced-collision")
+    assert targets.count("system.tag.copy") == 1
+    assert targets.count("system.tag.exists") == 3
+    assert targets.index("system.tag.copy") < targets.index("system.tag.exists", targets.index("system.tag.copy"))
 
 
 @pytest.mark.parametrize("name", ["observed-read-fails", "observed-read-empty"])
