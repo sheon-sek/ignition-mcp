@@ -287,12 +287,28 @@ def test_an_array_over_the_element_ceiling_is_refused_before_any_native_call() -
 
 def test_the_aggregate_input_byte_budget_is_finite() -> None:
     """Every per-item value is inside its own ceiling and the batch is still
-    refused, so the aggregate budget is what bounds the request."""
+    refused, so the aggregate budget is what bounds the request. The count stops one
+    byte past the 65536-byte budget rather than adding up all 66075 bytes, and the
+    message says the amount is a lower bound."""
     error = _error("input-over-byte-budget", "limit_exceeded")
 
     assert error["details"]["reason"] == "inputOverByteBudget"
-    assert error["details"]["requested"] == 66075  # five 13200-byte values plus their paths
+    # Five 13200-byte values plus their 15-byte paths, counted only to the budget.
+    assert error["details"]["requested"] == 65537
     assert error["details"]["limit"] == 65536
+    assert "lower bound" in error["message"]
+
+
+def test_the_aggregate_input_walk_stops_at_the_budget() -> None:
+    """The fifth 13200-byte value crosses the aggregate budget and the sixth item is
+    over the 16384-byte per-string ceiling, so a walk that kept counting would report
+    that sixth item instead. The refused call names no item index, which is the proof
+    that the walk stopped at the budget, and the recorded call list is empty, so
+    nothing reached the policy read or the Gateway."""
+    error = _error("input-aggregate-stops-at-budget", "limit_exceeded")
+
+    assert error["details"] == {"reason": "inputOverByteBudget", "requested": 65537, "limit": 65536}
+    assert _recorded_targets("input-aggregate-stops-at-budget") == []
 
 
 def test_a_denied_target_is_audited_as_a_decision_and_dispatches_no_write() -> None:
@@ -464,6 +480,81 @@ def test_a_dataset_inside_the_budget_is_still_reported_as_observed_state() -> No
     }
 
 
+def _refused_observed_value(name: str) -> dict:
+    """The Observed entry of a fixture whose read-back value must be refused, with
+    the item outcome and the summary asserted to be untouched by it."""
+    structured = run_recorded_tool("tag_write", _fixture(name))["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+    # A refused value is never materialized, so the entry carries no value at all.
+    assert "value" not in observed
+    return observed
+
+
+def test_a_wide_list_of_free_members_cannot_pass_the_observed_budget() -> None:
+    """A list of empty strings costs nothing per member unless the walk charges the
+    member's own JSON punctuation, so the width of a list has to be counted: the
+    depth ceiling cannot bound it, and the pre-fix walk charged only the bracket and
+    then copied all 3000 members."""
+    recorded = json.loads(_fixture("observed-wide-empty-string-list").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"] == [""] * 3000
+
+    _refused_observed_value("observed-wide-empty-string-list")
+
+
+def test_a_java_array_is_measured_with_its_members() -> None:
+    """Jython hands a handler a Java array as an `array.array`, which reports no
+    `getClass`, so the array shape a Gateway returns is this one: it must be measured
+    member by member under the same depth counter and budget instead of being copied
+    whole or reported as unsupported."""
+    recorded = json.loads(_fixture("observed-java-array-over-budget").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"] == {
+        "nativeType": "JavaArray", "items": [""] * 3000,
+    }
+
+    _refused_observed_value("observed-java-array-over-budget")
+
+
+def test_a_java_array_inside_the_budget_is_reported_as_a_list() -> None:
+    """The same shape inside the budget is Observed state like any other value, so
+    the array branch is a bounded walk rather than a refusal."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-java-array-small")
+    )["structuredContent"]
+
+    assert structured["observed"][0]["status"] == "ok"
+    assert structured["observed"][0]["value"] == ["a", 1, {"$ignition": "null"}]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "observed-jython-long-over-budget",
+        "observed-big-integer-over-budget",
+        "observed-big-decimal-over-budget",
+    ],
+)
+def test_a_native_number_is_measured_before_its_decimal_text_is_built(name: str) -> None:
+    """A Jython `long`, a Java `BigInteger` and a Java `BigDecimal` each cost a fixed
+    24 bytes in the pre-fix walk, so a 20000-digit value passed the budget and its
+    text was built to be returned. The walk now bounds each from its width - the
+    interpreter long's `bit_length`, the BigInteger's `bitLength`, the BigDecimal's
+    unscaled width and scale - and refuses it before any text exists."""
+    recorded = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    text = recorded["calls"][-1]["result"]["items"][0]["value"]["text"]
+    assert len(text) >= 20000
+
+    observed = _refused_observed_value(name)
+    # The bound is a width, not a count of digits that were written out: no part of
+    # the value's text reaches the caller.
+    assert "1234567890" not in observed["error"]["message"]
+
+
 def test_an_oversize_native_diagnostic_keeps_the_outcome_and_marks_the_limit() -> None:
     """The provider's free text has no bound of its own, so its representation is
     bounded before the item is built: code, name, level and good stay exact, the
@@ -571,6 +662,14 @@ VALID_POLICY_FIXTURES = (
     "tag_write-observed-dataset-deep-cell",
     "tag_write-native-outcome-oversize-name",
     "tag_write-native-outcome-oversize-level",
+    # Round 4: the width of a list and the shapes Jython presents for a Java array
+    # and for a native number.
+    "tag_write-observed-wide-empty-string-list",
+    "tag_write-observed-java-array-over-budget",
+    "tag_write-observed-java-array-small",
+    "tag_write-observed-jython-long-over-budget",
+    "tag_write-observed-big-integer-over-budget",
+    "tag_write-observed-big-decimal-over-budget",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (

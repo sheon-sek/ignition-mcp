@@ -37,6 +37,15 @@ Matching rules:
   `resource` / `missing` (`system.config.getResource`), and `raise` (a
   `java.lang.RuntimeException`, the shape a handler's `except (Exception, JavaException)`
   catches).
+- A recorded value may also carry a `nativeType` marker for a shape JSON cannot
+  express, so a fixture can replay what a handler distinguishes by duck typing:
+  `{"nativeType": "Dataset", "columns": [...], "rows": [[...]]}` is the Dataset-like
+  object a handler reads through `getColumnCount`/`getColumnName`/`getRowCount`/
+  `getValueAt`; `{"nativeType": "JavaArray", "items": [...]}` is an `Object[]`, which
+  Jython presents to a handler as an `array.array`; and
+  `{"nativeType": "JythonLong"|"BigInteger"|"BigDecimal", "text": "..."}` is the
+  interpreter's own `long` or the Java number itself, whose decimal text is not the
+  JSON number a fixture would otherwise carry.
 - `system.util.jsonEncode`, `jsonDecode` and `getLogger` are real implementations in the
   Jython process; only Gateway state is recorded.
 

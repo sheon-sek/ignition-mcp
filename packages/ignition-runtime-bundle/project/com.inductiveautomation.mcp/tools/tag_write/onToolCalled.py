@@ -1,6 +1,7 @@
 def onToolCalled(builder, writes, timeout):
 	from java.lang import Boolean, Number, Exception as JavaException
 	from java.util import UUID, Date, Map, List
+	import array
 	import math
 	correlationId = unicode(UUID.randomUUID())
 	logger = system.util.getLogger("IgnitionMCP.Runtime.TagWrite")
@@ -34,6 +35,10 @@ def onToolCalled(builder, writes, timeout):
 	ARRAY_MAX_ELEMENTS = 1000
 	INPUT_MAX_BYTES = 65536
 	NUMERIC_INPUT_BYTES = 32
+	# D10 input ceilings are pure validation over the request, and every count stops at
+	# the ceiling or the aggregate budget it is checked against, so a reported amount is
+	# a lower bound and every refusal says so.
+	INPUT_CEILING_MESSAGE = "A write item is over a documented D10 input ceiling; a reported byte amount is counted only up to that ceiling, so it is a lower bound. No item was executed."
 	# D10 output: the Observed state carries its own budget, so a value it cannot
 	# return never becomes the reason a completed write's outcomes disappear.
 	OBSERVED_VALUE_MAX_BYTES = 8192
@@ -136,38 +141,6 @@ def onToolCalled(builder, writes, timeout):
 			rendered["levelOverLimitBytes"] = levelOverLimit
 		return rendered
 
-	def jsonValue(value):
-		if value is None or isinstance(value, (bool, int, long, basestring)):
-			return value
-		if isinstance(value, Boolean):
-			return value.booleanValue()
-		if isinstance(value, float):
-			if math.isnan(value) or math.isinf(value):
-				return {"type": "non-finite-number", "text": unicode(value)}
-			return value
-		if isinstance(value, Number):
-			typeName = unicode(value.getClass().getName())
-			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long", "java.math.BigInteger"):
-				return long(unicode(value))
-			if typeName == "java.math.BigDecimal":
-				return {"type": "decimal", "text": unicode(value)}
-			return jsonValue(float(value.doubleValue()))
-		if isinstance(value, Date):
-			return unicode(value.toInstant().toString())
-		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
-			columns = [unicode(value.getColumnName(c)) for c in range(value.getColumnCount())]
-			rows = [[jsonValue(value.getValueAt(r, c)) for c in range(value.getColumnCount())] for r in range(value.getRowCount())]
-			return {"columns": columns, "rows": rows}
-		if isinstance(value, dict):
-			return dict((unicode(k), jsonValue(v)) for k, v in value.items())
-		if isinstance(value, Map):
-			return dict((unicode(entry.getKey()), jsonValue(entry.getValue())) for entry in value.entrySet())
-		if isinstance(value, (list, tuple, List)):
-			return [jsonValue(child) for child in value]
-		if hasattr(value, "getClass") and value.getClass().isArray():
-			return [jsonValue(child) for child in value]
-		raise TypeError("Unsupported Tag value type: " + unicode(type(value)))
-
 	def validCurrentValuePath(value):
 		if not isinstance(value, basestring) or not value.strip():
 			return False
@@ -264,140 +237,289 @@ def onToolCalled(builder, writes, timeout):
 			index += 1
 		return rendered[:index]
 
-	def fits(budget, cost):
-		# The walk's one decision: a cost against the budget left for it.
+	def fits(budget, cost, rendered):
+		# The walk's one decision: a cost against the budget left for it. A value that
+		# does not fit is refused by its counted cost, and nothing is converted to find
+		# out.
 		if cost > budget:
-			return (cost, "bytes")
-		return (cost, None)
+			return ("bytes", cost, None)
+		return (None, cost, rendered)
 
-	def valueCost(value, budget, depth):
-		# The JSON cost of `value` up to `budget` bytes, and why it does not fit:
-		# `(cost, None)` when the whole value can be represented inside the budget
-		# within `depth` levels, else `(cost, "bytes")` or `(cost, "depth")`. Nothing
-		# is materialized and no leaf is encoded: every leaf is counted with
-		# utf8BytesBounded, so an arbitrarily large string, column name or cell is
-		# measured only as far as the budget. The allowances for punctuation keep the
-		# cost an upper bound on what jsonValue would produce.
-		if depth <= 0:
-			return (budget + 1, "depth")
-		if value is None:
-			return fits(budget, 4)
-		if isinstance(value, basestring):
-			return fits(budget, utf8BytesBounded(value, budget))
-		if isinstance(value, (bool, Boolean)):
-			return fits(budget, 5)
-		if isinstance(value, (int, long, float, Number)):
-			return fits(budget, 24)
-		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
-			# A Dataset's representation carries its column names as well as its
-			# cells, so both are counted: a tiny cell under a very large name is
-			# exactly the shape a cell-only estimate lets through.
-			total = 8
-			columns = int(value.getColumnCount())
+	def integerTextCost(value):
+		# An upper bound on the decimal text an integer is emitted as, taken from its
+		# width rather than from its digits, so a wide number is refused without being
+		# converted to be measured. Jython's own long carries `bit_length`, a Java
+		# BigInteger carries `bitLength`, and any remaining integral Number is inside 64
+		# bits. One digit per 3.32 bits plus a sign is all a JSON encoder can write.
+		if hasattr(value, "bit_length"):
+			bits = value.bit_length()
+		elif hasattr(value, "bitLength"):
+			bits = value.bitLength()
+		else:
+			bits = 64
+		cost = (bits * 30103) // 100000 + 2
+		if hasattr(value, "signum"):
+			negative = value.signum() < 0
+		else:
+			negative = value < 0
+		if negative:
+			cost += 1
+		return cost
+
+	def decimalTextCost(value):
+		# The same bound for a Java BigDecimal, whose emitted shape wraps its unscaled
+		# digits, a sign and the scale's exponent. The unscaled value is read as a width,
+		# never as the decimal text.
+		scale = value.scale()
+		cost = 28 + integerTextCost(value.unscaledValue())
+		if scale != 0:
+			cost += len(unicode(abs(scale)))
+		return cost
+
+	def jsonTextCost(value, budget):
+		# The emitted JSON cost of a string: its two quotes plus every character, counted
+		# one character at a time so a provider text is never encoded to be measured. The
+		# quote and the backslash take a two-character escape, a control character takes a
+		# two- or a six-character one, and a non-ASCII character is charged the six bytes
+		# an escaping encoder needs for it, which keeps the count an upper bound whatever
+		# `system.util.jsonEncode` does. The count stops as soon as the budget is spent, so
+		# the number is then a lower bound (at most one character past the budget).
+		total = 2
+		if total > budget:
+			return total
+		for character in text(value):
+			code = ord(character)
+			if character == '"' or character == '\\':
+				total += 2
+			elif code < 32:
+				if code == 8 or code == 9 or code == 10 or code == 12 or code == 13:
+					total += 2
+				else:
+					total += 6
+			elif code < 128:
+				total += 1
+			else:
+				total += 6
+			if total > budget:
+				return total
+		return total
+
+	def boundedSequence(values, budget, depth):
+		# A bounded walk over an array-like value's members: each member pays one byte of
+		# JSON punctuation before its own cost, so a wide list whose members are free (a
+		# list of empty strings) still crosses the budget instead of being copied in full.
+		# A `list`, a `tuple`, a Java `List`, a Java array - which Jython exposes as an
+		# `array.array` - and a Java object that reports an array class are all accepted
+		# shapes, and each is read lazily, so the walk stops at the first member that does
+		# not fit.
+		total = 2
+		rendered = []
+		for child in values:
+			total += 1
+			if total > budget:
+				return ("bytes", total, None)
+			reason, cost, childRendered = boundedValue(child, budget - total, depth - 1)
+			total += cost
+			if reason is not None:
+				return (reason, total, None)
+			rendered.append(childRendered)
+		return (None, total, rendered)
+
+	def boundedMapping(value, budget, depth):
+		# The same walk for an object-like value: a `dict` or a Java `Map`. Its keys are
+		# part of the emitted JSON, so they are counted like any other text, and neither
+		# shape is copied before it is measured.
+		javaMap = isinstance(value, Map)
+		entries = value.entrySet() if javaMap else value
+		total = 2
+		rendered = {}
+		for entry in entries:
+			total += 1
+			if total > budget:
+				return ("bytes", total, None)
+			if javaMap:
+				key = entry.getKey()
+				child = entry.getValue()
+			else:
+				key = entry
+				child = value[entry]
+			total += jsonTextCost(key, budget - total)
+			if total > budget:
+				return ("bytes", total, None)
+			reason, cost, childRendered = boundedValue(child, budget - total, depth - 1)
+			total += cost
+			if reason is not None:
+				return (reason, total, None)
+			rendered[unicode(key)] = childRendered
+		return (None, total, rendered)
+
+	def boundedDataset(value, budget, depth):
+		# A Dataset carries its column names as well as its cells, so both are counted: a
+		# tiny cell under a very large name is exactly the shape a cell-only estimate lets
+		# through. The cell count is checked first, so a wide Dataset is refused in
+		# constant time instead of being walked, and every column, row and cell pays its
+		# punctuation before its own cost.
+		columns = int(value.getColumnCount())
+		rows = int(value.getRowCount())
+		cells = columns * rows
+		if cells > OBSERVED_DATASET_MAX_CELLS:
+			return ("cells", cells, None)
+		total = 16
+		columnNames = []
+		for column in range(columns):
+			total += 1
+			if total > budget:
+				return ("bytes", total, None)
+			name = value.getColumnName(column)
+			total += jsonTextCost(name, budget - total)
+			if total > budget:
+				return ("bytes", total, None)
+			columnNames.append(unicode(name))
+		renderedRows = []
+		for row in range(rows):
+			total += 2
+			if total > budget:
+				return ("bytes", total, None)
+			rowValues = []
 			for column in range(columns):
-				cost, reason = fits(budget - total, 4 + utf8BytesBounded(value.getColumnName(column), budget))
+				total += 1
+				if total > budget:
+					return ("bytes", total, None)
+				reason, cost, cell = boundedValue(value.getValueAt(row, column), budget - total, depth - 1)
 				total += cost
 				if reason is not None:
-					return (total, reason)
-			for row in range(int(value.getRowCount())):
-				for column in range(columns):
-					cost, reason = valueCost(value.getValueAt(row, column), budget - total, depth - 1)
-					total += cost
-					if reason is not None:
-						return (total, reason)
-			return (total, None)
-		if isinstance(value, (list, tuple, List)):
-			total = 2
-			for child in value:
-				cost, reason = valueCost(child, budget - total, depth - 1)
-				total += cost
-				if reason is not None:
-					return (total, reason)
-			return (total, None)
-		if isinstance(value, Map):
-			total = 2
-			for entry in value.entrySet():
-				cost, reason = fits(budget - total, utf8BytesBounded(entry.getKey(), budget))
-				total += cost
-				if reason is not None:
-					return (total, reason)
-				cost, reason = valueCost(entry.getValue(), budget - total, depth - 1)
-				total += cost
-				if reason is not None:
-					return (total, reason)
-			return (total, None)
-		if isinstance(value, dict):
-			total = 2
-			for key in value:
-				cost, reason = fits(budget - total, utf8BytesBounded(key, budget))
-				total += cost
-				if reason is not None:
-					return (total, reason)
-				cost, reason = valueCost(value[key], budget - total, depth - 1)
-				total += cost
-				if reason is not None:
-					return (total, reason)
-			return (total, None)
-		return fits(budget, 64)
+					return (reason, total, None)
+				rowValues.append(cell)
+			renderedRows.append(rowValues)
+		return (None, total, {"columns": columnNames, "rows": renderedRows})
 
-	def scalarInputBytes(value, budget):
+	def boundedValue(value, budget, depth):
+		# The single Observed-state walk: it both measures `value` against `budget` and
+		# renders it, so what is measured and what is returned cannot diverge. Every branch
+		# below mirrors a shape a Tag value can carry, every collection member pays
+		# punctuation before its own cost, and no leaf is converted before its cost is
+		# inside the budget - a wide list, a Java array, an arbitrarily wide integer or a
+		# large text is refused by its counted size instead of being copied to be measured.
+		# Returns (reason, cost, rendered), with reason None when the value fits.
+		if depth <= 0:
+			return ("depth", budget + 1, None)
+		if value is None:
+			return fits(budget, 20, None)
+		if isinstance(value, bool):
+			return fits(budget, 5, value)
+		if isinstance(value, Boolean):
+			return fits(budget, 5, value.booleanValue())
 		if isinstance(value, basestring):
-			return utf8BytesBounded(value, budget)
+			cost = jsonTextCost(value, budget)
+			if cost > budget:
+				return ("bytes", cost, None)
+			return (None, cost, value)
+		if isinstance(value, (int, long)):
+			cost = integerTextCost(value)
+			if cost > budget:
+				return ("number", cost, None)
+			return (None, cost, value)
+		if isinstance(value, float):
+			if math.isnan(value) or math.isinf(value):
+				return fits(budget, 48, {"type": "non-finite-number", "text": unicode(value)})
+			return fits(budget, 32, value)
+		if isinstance(value, Number):
+			typeName = unicode(value.getClass().getName())
+			if typeName in ("java.lang.Byte", "java.lang.Short", "java.lang.Integer", "java.lang.Long"):
+				return fits(budget, 24, long(unicode(value)))
+			if typeName == "java.math.BigInteger":
+				cost = integerTextCost(value)
+				if cost > budget:
+					return ("number", cost, None)
+				return (None, cost, long(unicode(value)))
+			if typeName == "java.math.BigDecimal":
+				cost = decimalTextCost(value)
+				if cost > budget:
+					return ("number", cost, None)
+				return (None, cost, {"type": "decimal", "text": unicode(value)})
+			doubled = float(value.doubleValue())
+			if math.isnan(doubled) or math.isinf(doubled):
+				return fits(budget, 48, {"type": "non-finite-number", "text": unicode(doubled)})
+			return fits(budget, 32, doubled)
+		if isinstance(value, Date):
+			return fits(budget, 48, unicode(value.toInstant().toString()))
+		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+			return boundedDataset(value, budget, depth)
+		if isinstance(value, dict) or isinstance(value, Map):
+			return boundedMapping(value, budget, depth)
+		if isinstance(value, (list, tuple, List)) or isinstance(value, array.array):
+			return boundedSequence(value, budget, depth)
+		if hasattr(value, "getClass") and value.getClass().isArray():
+			return boundedSequence(value, budget, depth)
+		raise TypeError("Unsupported Tag value type: " + unicode(type(value)))
+	def numericCost(value):
+		# An upper bound on the text a numeric write value is counted as: a boolean is
+		# `true` or `false`, an integer and a Java BigInteger are counted from their width,
+		# a BigDecimal from its unscaled width and scale, and any other Number - a double -
+		# is inside 32 bytes.
+		if isinstance(value, (bool, Boolean)):
+			return 5
+		if isinstance(value, (int, long)):
+			return integerTextCost(value)
+		if isinstance(value, Number):
+			typeName = unicode(value.getClass().getName())
+			if typeName == "java.math.BigInteger":
+				return integerTextCost(value)
+			if typeName == "java.math.BigDecimal":
+				return decimalTextCost(value)
 		return NUMERIC_INPUT_BYTES
 
-	def inputBytes(value):
-		if isinstance(value, (list, tuple, List)):
-			total = 2
-			for child in value:
-				total += scalarInputBytes(child, INPUT_MAX_BYTES)
-			return total
-		return scalarInputBytes(value, INPUT_MAX_BYTES)
-
-	def inputLimitProblem(path, value):
-		# D10 input ceilings. Every one of them is pure validation over the
-		# request, so an over-budget batch is refused before any native call, and
-		# every byte count stops at the ceiling it is checked against.
-		pathBytes = utf8BytesBounded(path, PATH_MAX_BYTES)
-		if pathBytes > PATH_MAX_BYTES:
-			return ("pathOverLength", pathBytes, PATH_MAX_BYTES)
+	def inputValueBudget(value, budget):
+		# One write value measured against `budget`, the aggregate budget left for its
+		# item: `(problem, bytes)`, where `problem` is the per-value ceiling it breaks, if
+		# any. The count stops at `budget`, so an over-budget item costs bounded work
+		# however the items after it are shaped, and a string is counted up to its own
+		# ceiling only when the budget still reaches that ceiling.
+		if isinstance(value, basestring):
+			counted = utf8BytesBounded(value, min(budget, VALUE_STRING_MAX_BYTES))
+			if counted > VALUE_STRING_MAX_BYTES:
+				return (("stringValueOverLimit", counted, VALUE_STRING_MAX_BYTES), counted)
+			return (None, counted)
 		if isinstance(value, (list, tuple, List)):
 			if len(value) > ARRAY_MAX_ELEMENTS:
-				return ("arrayElementsOverLimit", len(value), ARRAY_MAX_ELEMENTS)
+				return (("arrayElementsOverLimit", len(value), ARRAY_MAX_ELEMENTS), 0)
+			total = 2
 			for child in value:
-				if isinstance(child, basestring):
-					childBytes = utf8BytesBounded(child, VALUE_STRING_MAX_BYTES)
-					if childBytes > VALUE_STRING_MAX_BYTES:
-						return ("stringValueOverLimit", childBytes, VALUE_STRING_MAX_BYTES)
-			return None
-		if isinstance(value, basestring):
-			valueBytes = utf8BytesBounded(value, VALUE_STRING_MAX_BYTES)
-			if valueBytes > VALUE_STRING_MAX_BYTES:
-				return ("stringValueOverLimit", valueBytes, VALUE_STRING_MAX_BYTES)
-		return None
+				total += 1
+				if total > budget:
+					return (None, total)
+				problem, counted = inputValueBudget(child, budget - total)
+				total += counted
+				if problem is not None:
+					return (problem, total)
+			return (None, total)
+		return (None, numericCost(value))
+	def observedNoun(value):
+		if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt"):
+			return "Dataset"
+		return "value"
 
-	def observedBudgetMessage(noun, cost, reason):
+	def observedBudgetMessage(noun, reason, count):
 		if reason == "depth":
 			return "The observed " + noun + " nests deeper than the " + unicode(OBSERVED_MAX_DEPTH) + "-level Observed-state depth budget; it was not returned."
-		return "The observed " + noun + " is at least " + unicode(cost) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
+		if reason == "cells":
+			return "The observed Dataset is " + unicode(count) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned."
+		if reason == "number":
+			return "The observed " + noun + " is a number whose decimal text is up to " + unicode(count) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
+		return "The observed " + noun + " is at least " + unicode(count) + " bytes, over the " + unicode(OBSERVED_VALUE_MAX_BYTES) + "-byte Observed-state value budget; it was not returned."
 
-	def observedValueBudget(value):
-		# The per-value half of the Observed-state budget: `(problem, cost)`. A value
-		# that cannot be returned is never materialized, and the message names what the
-		# bounded walk counted (a lower bound when it stopped at the budget) or the
-		# depth it reached. An over-budget value is an explicit observed error, never a
-		# truncation.
-		noun = "Dataset" if hasattr(value, "getColumnCount") and hasattr(value, "getRowCount") and hasattr(value, "getValueAt") else "value"
-		if noun == "Dataset":
-			cells = int(value.getRowCount()) * int(value.getColumnCount())
-			if cells > OBSERVED_DATASET_MAX_CELLS:
-				return ("The observed Dataset is " + unicode(cells) + " cells, over the " + unicode(OBSERVED_DATASET_MAX_CELLS) + "-cell Observed-state budget; it was not returned.", 0)
-		if isinstance(value, (bool, Boolean, int, long, float, Number)):
-			return (None, valueCost(value, OBSERVED_VALUE_MAX_BYTES, OBSERVED_MAX_DEPTH)[0])
-		cost, reason = valueCost(value, OBSERVED_VALUE_MAX_BYTES, OBSERVED_MAX_DEPTH)
+	def observedEntryBudget(value, timestamp):
+		# One Observed entry's budget: the Tag value is measured and rendered by the walk,
+		# then the timestamp with what is left of the same per-value budget, because both
+		# are part of what the entry returns. `(problem, cost, value, timestamp)`, where a
+		# problem means nothing was materialized for the entry.
+		reason, cost, rendered = boundedValue(value, OBSERVED_VALUE_MAX_BYTES, OBSERVED_MAX_DEPTH)
 		if reason is not None:
-			return (observedBudgetMessage(noun, cost, reason), 0)
-		return (None, cost)
-
+			return (observedBudgetMessage(observedNoun(value), reason, cost), 0, None, None)
+		reason, timestampCost, renderedTimestamp = boundedValue(timestamp, OBSERVED_VALUE_MAX_BYTES - cost, OBSERVED_MAX_DEPTH)
+		if reason is not None:
+			return (observedBudgetMessage("timestamp", reason, timestampCost), 0, None, None)
+		return (None, cost + timestampCost, rendered, renderedTimestamp)
 	def observedError(path, code, message):
 		return {"path": path, "status": "error", "error": {"code": code, "message": message, "correlationId": correlationId}}
 
@@ -609,15 +731,23 @@ def onToolCalled(builder, writes, timeout):
 		if inputProblems:
 			return toolError("invalid_argument", "Every write item must carry an absolute provider-qualified current Tag path and a scalar or scalar-array value; no item was executed.", {"reason": "preflightInputFailed", "items": inputProblems})
 		# D10 input ceilings: pure validation over the request, so an over-budget
-		# batch never reaches the policy read, let alone the Gateway.
+		# batch never reaches the policy read, let alone the Gateway. One walk measures
+		# each item against the aggregate budget left for it and stops as soon as that
+		# budget is crossed, so the batch costs bounded work however the items after the
+		# refusal are shaped.
 		totalInputBytes = 0
 		for index in range(len(paths)):
-			problem = inputLimitProblem(paths[index], values[index])
-			if problem is not None:
-				return toolError("limit_exceeded", "A write item is over a documented D10 input ceiling; a reported byte amount is counted only up to that ceiling, so it is a lower bound. No item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
-			totalInputBytes += utf8BytesBounded(paths[index], INPUT_MAX_BYTES) + inputBytes(values[index])
-		if totalInputBytes > INPUT_MAX_BYTES:
-			return toolError("limit_exceeded", "The write batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
+			pathBytes = utf8BytesBounded(paths[index], min(INPUT_MAX_BYTES - totalInputBytes, PATH_MAX_BYTES))
+			if pathBytes > PATH_MAX_BYTES:
+				return toolError("limit_exceeded", INPUT_CEILING_MESSAGE, {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
+			totalInputBytes += pathBytes
+			if totalInputBytes <= INPUT_MAX_BYTES:
+				problem, valueBytes = inputValueBudget(values[index], INPUT_MAX_BYTES - totalInputBytes)
+				totalInputBytes += valueBytes
+				if problem is not None:
+					return toolError("limit_exceeded", INPUT_CEILING_MESSAGE, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+			if totalInputBytes > INPUT_MAX_BYTES:
+				return toolError("limit_exceeded", "The write batch is at least " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; the count stops at the budget, so the amount is a lower bound. Split the request across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()
 		if policy is None:
@@ -715,11 +845,11 @@ def onToolCalled(builder, writes, timeout):
 					if value is None or not (hasattr(value, "getValue") and hasattr(value, "getQuality") and hasattr(value, "getTimestamp")):
 						raise TypeError("Native item is not a QualifiedValue")
 					rawValue = value.getValue()
-					# D10: the Observed state carries its own budget, decided before the
-					# value is materialized. A value the budget cannot return is an
-					# explicit observed error, never a truncation, and the walk that
-					# decides it counts incrementally and bounds its depth.
-					problem, cost = observedValueBudget(rawValue)
+					# D10: the Observed state carries its own budget, decided by one walk that
+					# measures and renders together, so nothing this entry returns was materialized
+					# before its cost was inside the budget. A value or a timestamp the budget cannot
+					# return is an explicit observed error, never a truncation.
+					problem, cost, rendered, renderedTimestamp = observedEntryBudget(rawValue, value.getTimestamp())
 					if problem is None and observedBudgetSpent:
 						problem = "The Observed-state budget of " + unicode(OBSERVED_STATE_MAX_BYTES) + " bytes is already spent; this value was not returned."
 					if problem is None and observedBytes + cost > OBSERVED_STATE_MAX_BYTES:
@@ -728,9 +858,8 @@ def onToolCalled(builder, writes, timeout):
 					if problem is not None:
 						observed.append(observedError(path, "limit_exceeded", problem))
 						continue
-					rendered = jsonValue(rawValue)
 					observedBytes += cost
-					observed.append({"path": path, "status": "ok", "value": rendered, "quality": quality(value.getQuality()), "timestamp": jsonValue(value.getTimestamp())})
+					observed.append({"path": path, "status": "ok", "value": rendered, "quality": quality(value.getQuality()), "timestamp": renderedTimestamp})
 				except (Exception, JavaException) as itemExc:
 					logger.error("correlationId=" + correlationId + " observed item serialization failed: " + text(itemExc))
 					observed.append(observedError(path, "schema_mismatch", "The observed Tag item could not be represented."))

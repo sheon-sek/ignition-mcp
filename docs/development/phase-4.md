@@ -402,6 +402,42 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `conflict`/`fingerprintMismatch` with an observed fingerprint — so that row is
     not attributable to this fix's Runtime-plane changes.
 
+- **Review round 4 fixes** (the ticket report holds the detail):
+  - **One bounded walk measures and renders the Observed state.** `valueCost` and
+    `jsonValue` are now a single walk, so what is measured and what is returned cannot
+    diverge, and every shape the old `jsonValue` accepted is counted: each collection
+    member pays a byte of JSON punctuation before its own cost (a list of 3000 empty
+    strings is refused instead of copied), a string pays its quotes and JSON escapes, a
+    Dataset pays its rows and cells as well as its column names, an integer and a Java
+    `BigInteger` are bounded from their width and a `BigDecimal` from its unscaled width
+    and scale instead of a fixed 24 bytes each, and a Java array is a supported shape.
+    Jython hands a handler a Java array as an `array.array` with no `getClass`, so the
+    old `value.getClass().isArray()` branch was unreachable and a Java array came back as
+    `schema_mismatch`; it is now walked member by member under the same depth counter and
+    budget, and returned as a JSON list when it fits. The timestamp is measured by the
+    same walk against what the value left. Fixtures:
+    `tag_write-observed-wide-empty-string-list`,
+    `tag_write-observed-java-array-over-budget`, `tag_write-observed-java-array-small`,
+    `tag_write-observed-jython-long-over-budget`,
+    `tag_write-observed-big-integer-over-budget`,
+    `tag_write-observed-big-decimal-over-budget`; the D29 launcher gained the
+    `JavaArray`, `JythonLong`, `BigInteger` and `BigDecimal` value markers they need.
+  - **The aggregate input walk stops at its budget.** One walk measures each write item
+    against the budget left for that item and refuses as soon as it is crossed, so the
+    two-pass scan (every string against its 16 KiB ceiling, then every array child again
+    against a fresh 64 KiB budget) is gone and a later item's per-item ceiling is never
+    scanned after the refusal point. A reported amount is now a lower bound and the
+    message says so: `tag_write-input-over-byte-budget` reports 65537, the point the
+    count crossed the 65536-byte budget, rather than the batch's 66075 bytes. Fixture:
+    `tag_write-input-aggregate-stops-at-budget`, whose sixth item is over the 16384-byte
+    per-string ceiling — the refusal carries no item index, which is what proves the walk
+    stopped at the fifth item and recorded no native call at all.
+  - **The quality schema description matches the diagnostic behavior.**
+    `contracts/schemas/tag-write.output.schema.json` now limits the null-on-over-ceiling
+    sentence to `name` and `level` and describes `diagnosticMessage` as a bounded
+    512-byte prefix marked with `diagnosticMessageOverLimitBytes`. The schema is not a
+    published Text Resource, so `tooling.native.sync_schemas` stays a no-op.
+
 ### Ticket #8: Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
 
 - Fixture-first coverage: 39 recorded-Jython fixtures

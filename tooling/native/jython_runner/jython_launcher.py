@@ -21,7 +21,11 @@ A recorded value may also carry a ``nativeType`` marker for a shape JSON cannot
 express, so a fixture can replay what a handler distinguishes by duck typing:
 ``{"nativeType": "Dataset", "columns": [...], "rows": [[...]]}`` becomes the
 Dataset-like object whose ``getColumnCount``/``getColumnName``/``getRowCount``/
-``getValueAt`` a handler reads.
+``getValueAt`` a handler reads, ``{"nativeType": "JavaArray", "items": [...]}``
+becomes an ``Object[]`` (which Jython hands a handler as an ``array.array``), and
+``{"nativeType": "JythonLong"|"BigInteger"|"BigDecimal", "text": "..."}`` becomes the
+interpreter's own ``long`` or the Java number, whose decimal text is not the JSON
+number a fixture would otherwise carry.
 
 A fixture may also inject a failure of one of those real helpers so a handler's
 failure path is reachable from a recording:
@@ -38,7 +42,9 @@ from __future__ import print_function
 import json
 import sys
 
-from java.lang import RuntimeException
+from java.lang import Object, RuntimeException
+from java.lang.reflect import Array
+from java.math import BigDecimal, BigInteger
 from java.util import ArrayList, LinkedHashMap
 
 
@@ -108,11 +114,34 @@ def _recorded_value(recorded):
     """A recorded Tag value: JSON scalars and arrays as they are, plus the native
     shapes a handler distinguishes by duck typing. A ``nativeType`` marker turns a
     recorded mapping into the Java-like object the handler sees, so a fixture can
-    replay a value shape a JSON scalar cannot express (a Dataset)."""
+    replay a value shape JSON cannot express (a Dataset, a Java array) or a Java
+    number whose text is not the JSON number a fixture would otherwise carry."""
 
-    if isinstance(recorded, dict) and recorded.get("nativeType") == "Dataset":
-        return _RecordedDataset(recorded)
+    if isinstance(recorded, dict):
+        marker = recorded.get("nativeType")
+        if marker == "Dataset":
+            return _RecordedDataset(recorded)
+        if marker == "JavaArray":
+            return _recorded_java_array(recorded)
+        if marker == "JythonLong":
+            return long(recorded["text"].encode("ascii"))  # noqa: F821 - Jython 2.7 built-in
+        if marker == "BigInteger":
+            return BigInteger(recorded["text"].encode("ascii"))
+        if marker == "BigDecimal":
+            return BigDecimal(recorded["text"].encode("ascii"))
     return recorded
+
+
+def _recorded_java_array(recorded):
+    """A recorded Java array: an ``Object[]``, which Jython hands a handler as an
+    ``array.array``, so this replays the shape a Gateway returns for an array Tag
+    value. JSON has no array type of its own, so a fixture names it explicitly."""
+
+    items = recorded.get("items") or []
+    native = Array.newInstance(Object, len(items))
+    for index in range(len(items)):
+        native[index] = _recorded_value(items[index])
+    return native
 
 
 class _RecordedDataset(object):
