@@ -217,6 +217,7 @@ jobs:
           uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
             --base-url "$P4_BASE_URL" \
             --expected-origin "$P4_ORIGIN" \
+            --compose-file "$COMPOSE_FILE" \
             --api-token "$CI_API_TOKEN" \
             --bundle-manifest "$release_manifest" \
             --bundle-zip "$release_zip" \

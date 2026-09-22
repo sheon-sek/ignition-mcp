@@ -1539,25 +1539,48 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   run, and it is a step of the workflow as well.
 - **Live.** Workflow `Phase 4 Live Gateway apply`
   (`.github/workflows/phase4-live-apply.yml`), its own Gateway row for milestone 4d so
-  the 4a/4b Mutation evidence keeps its own Gateways: run
-  [35708881821](https://github.com/sheon-sek/ignition-mcp/actions/runs/35708881821) on
-  `ffda72d`, with the stage evidence in
-  `phase4-apply-<version>-<run-id>/setup-native-apply.json` (the plan lines, every write
-  with its read-back, the embedded verify report, and the second `plan`/`apply` pair that
-  must write nothing).
-- **The first head of this row was red, and both causes are fixed.** Run
-  [35706182326](https://github.com/sheon-sek/ignition-mcp/actions/runs/35706182326) on
-  `906d55e` failed the stage step on *both* rows before any evidence was written: the
-  stage's bounded verify retry calls `verify`, and `verify` still required `--mcp-url`
-  even though `apply` derives the endpoint from the Server Config it wrote. `ffda72d`
-  makes `doctor`/`verify` accept `--server-config-name` in place of `--mcp-url` (the
-  stage names the URL explicitly as well) and adds a case that pins it. The same run's
-  artifact also showed the stage's `0600` token file inside the uploaded evidence
-  directory; it now lives in a `0700` directory outside the evidence tree, the G3
-  driver's rule. That token was run-scoped and only ever valid on the disposable Gateway
-  the job destroys, and the artifact belongs to that finished run.
-- **Frozen gates** green on the same head: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
-  mutation row (run set `35708881777`–`35708881874`).
+  the 4a/4b Mutation evidence keeps its own Gateways. Three heads ran it, and the run is
+  the row's own evidence:
+  - [35706182326](https://github.com/sheon-sek/ignition-mcp/actions/runs/35706182326)
+    (`906d55e`): both rows red before any evidence was written — the stage's bounded
+    verify retry calls `verify`, which still required `--mcp-url` even though `apply`
+    derives the endpoint from the Server Config it wrote. `ffda72d` makes
+    `doctor`/`verify` accept `--server-config-name` in place of `--mcp-url` (the stage
+    names the URL explicitly too), with a case that pins it. The same run's artifact also
+    showed the stage's `0600` token file inside the uploaded evidence directory; it now
+    lives in a `0700` directory outside the evidence tree (the G3 driver's rule). That
+    token was run-scoped and only ever valid on the disposable Gateway the job destroys.
+  - [35708881821](https://github.com/sheon-sek/ignition-mcp/actions/runs/35708881821)
+    (`ffda72d`): both rows reached the writes and found **two live defects**, both fixed
+    locally (this head is not pushed — the coordinator folds the branch into the final
+    integration run, so the fixes await its row):
+    - *The write level.* The bundle Project was imported and read back managed
+      (`CREATE 295022 bytes; read back managed bundle 0.6.0`) and the Server Config was
+      created with the profile's 13 Tools, but the policy write failed:
+      `the reserved policy provider did not become readable within 60s (20 attempt(s);
+      resource=absent, export=readable)`. The create had in fact succeeded — the Gateway
+      log shows `Tag provider 'IgnitionMCPPolicy' is initialized` — while
+      `GET /resources/find/ignition/tag-provider/IgnitionMCPPolicy` answered 404 for the
+      whole 60 s: `resource_document` percent-escaped the `/` inside the resource *type*,
+      so the find addressed a type named `ignition%2Ftag-provider`. Fixed (`safe="/"`,
+      only the name is escaped) with a regression pin that fails on any `%2F` in a request
+      path; the recorded fake unquotes like the Gateway does, which is why the rehearsal
+      could not see it.
+    - *The verify level.* The endpoint `apply` created *was* served —
+      `mcp-initialize` passed with `server={"name": "phase4-apply-runtime", "version":
+      "0.6.0"}` — but it advertised no primitives at all (`capabilities=[-]`,
+      `tools/list -> -32600`, `tools/call -> -32600`), through seven read-only verify
+      attempts over ~70 s. The 4a/4b rows never judge an endpoint the Gateway started
+      without: they install the Project and the Server Config by file copy and restart
+      before any case runs. The stage now reloads the disposable Gateway once
+      (`--compose-file`, recorded in the evidence as `gatewayReload`) after its read-only
+      retries are exhausted and re-runs verify, which is the harness's own discipline
+      rather than a product claim; no *write* is ever re-run. Recorded as an open
+      question for the owner (whether the pinned Module is expected to serve a Server
+      Config created live, over a Project imported live, without a reload).
+  - The frozen gates are green on `906d55e`: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
+    mutation row (run set `35708881777`–`35708881874`). CI is green on `ffda72d` as well
+    (run `35708881794`).
 
 - **Ticket #21 — the harness's test-only policy provisioning is not replaced yet.**
   The 4a/4b driver stages still call `install_policy`/`install_tag_*_policy` (the
@@ -1717,6 +1740,30 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   instance runs a deliberately small tool budget and the `#20` cases are timing-sensitive
   (issue #39). Every Target the cases address is provisioned by `provision.py`, so the
   reserved provider they refuse really exists and "changed nothing" is observable.
+
+- **Ticket #21 — a Server Config created live is served without primitives until the
+  Gateway reloads.** The ticket #21 row's evidence: `apply` created a Server Config (13
+  explicit Tools, enabled, read back) for a Project it had just imported, and the Module
+  served the endpoint — `initialize` answered with the config's own name and version —
+  while advertising no capabilities at all (`capabilities=[-]`, `tools/list -> -32600`)
+  for the whole 70 s of read-only verify attempts. Every 4a/4b row judges an endpoint the
+  Gateway started with, because the harness installs the Project and the Server Config by
+  file copy before startup. The apply stage therefore reloads the disposable Gateway once
+  before it judges the endpoint, and records the reload; the CLI's own inline verify still
+  reports what it observed. **For the owner:** say whether the pinned Module is expected to
+  serve a Server Config created through Native REST, over a Project imported through Native
+  REST, without a Gateway reload. If it is, this is a Module defect to raise upstream and the
+  reload can be dropped from the stage; if it is not, `apply`'s "ends by running verify"
+  (D20) is only true for a deployment whose Project was already present, and the row should
+  say so.
+- **Ticket #21 — a percent-escaped resource type in a find path is a 404, and only the live
+  row could see it.** `resource_document` had escaped the `/` inside `ignition/tag-provider`;
+  the recorded fake unquotes the path before routing (as the Gateway does), so the
+  rehearsal, the unit tests and the fake all passed while the live Gateway answered 404 for
+  60 s and the policy write failed. Fixed, with a pin that fails on any `%2F` in a recorded
+  request path. **For the owner:** note the fixture's tolerance as the reason it was
+  invisible — a fixture that routed on the raw, still-escaped path would have caught it —
+  and consider whether the shared fake should stop unquoting before it routes.
 
 ## Open questions
 

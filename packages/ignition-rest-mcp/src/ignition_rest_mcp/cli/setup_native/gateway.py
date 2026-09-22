@@ -256,8 +256,11 @@ class GatewayRest:
     async def resource_document(self, resource_type: str, name: str) -> dict[str, Any] | None:
         """One config resource document of any type, or ``None`` when it is absent."""
 
+        # The type id is a documented ``<module>/<typeId>`` and both halves are path
+        # segments: escaping the separator makes the Gateway answer 404 for a resource
+        # that exists (found live on the ticket #21 row), so only the name is escaped.
         path = RESOURCE_FIND_PATH.format(
-            resource_type=quote(resource_type, safe=""), name=quote(name, safe=""),
+            resource_type=quote(resource_type, safe="/"), name=quote(name, safe=""),
         )
         document = await self.get_json(path, allow_404=True)
         return document if isinstance(document, dict) else None

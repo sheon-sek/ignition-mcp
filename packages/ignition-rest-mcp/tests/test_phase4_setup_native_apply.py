@@ -467,6 +467,32 @@ def test_a_major_change_needs_the_explicit_acknowledgement(
     assert "bundle=0.6.0" in backup["description"]
 
 
+def test_no_gateway_path_escapes_a_resource_type(
+    gateway: RecordedGateway, workdir: Workdir
+) -> None:
+    """The recorded-live failure of the ticket #21 row: an escaped type id is a 404.
+
+    The fake unquotes the path before it routes, exactly as the Gateway does, so a
+    path that escapes the `/` inside `ignition/tag-provider` still reached the
+    resource here while the live Gateway answered 404 for 60 s — which left the
+    policy write reporting a provider that never became readable. The raw request
+    paths are what the fake records, so this is the pin that catches it.
+    """
+
+    code, out, _ = run_cli(workdir.argv(
+        "apply", gateway.base_url, policy_file=workdir.policy, permissions_file=workdir.permissions,
+    ))
+    assert code == 0, out
+    escaped = [
+        str(request["path"]) for request in gateway.requests
+        if "%2f" in str(request["path"]).lower()
+    ]
+    assert escaped == []
+    assert ("GET", "/data/api/v1/resources/find/ignition/tag-provider/IgnitionMCPPolicy") in [
+        (str(request["method"]), str(request["path"])) for request in gateway.requests
+    ]
+
+
 def test_verify_derives_its_endpoint_from_the_server_config(
     gateway: RecordedGateway, workdir: Workdir
 ) -> None:
