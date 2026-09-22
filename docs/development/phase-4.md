@@ -530,6 +530,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     prefix test.
   - The D29 launcher gained the #7 fix's `utilFailures` injection (so a handler's serialization
     failure is reachable from a recording) and sends handler diagnostics to stderr.
+  - Live, after merging `origin/feature/phase-4` into the lane branch (workflow
+    `Phase 4 Live Gateway G4b`,
+    [run 35673872197](https://github.com/sheon-sek/ignition-mcp/actions/runs/35673872197) at
+    `16eb362`, both rows green with `drift: {}` on 8.3.8 `2026071409` required and 8.3.9
+    `2026082511` candidate): the D10 item ceiling refused a 21-target batch with
+    `limit_exceeded` / `itemsOverPolicyLimit` before any native call; a refused Target and a
+    refused Precondition both reported `auditRecorded=true`, so the D18 decision row is
+    live-proven as well as fixture-proven; the exact UDT definition read was allowed, published a
+    `tcf1` token, and that token is what the `_types_` update case handed back; and every earlier
+    case still held, including the fingerprint recomputed from the published configuration with
+    the corrected (single-encoding) verifier. CI, Phase 0 G0, Phase 3 G3, Phase 4 G4a and the REST
+    row are green on the same head.
 - Frozen gates, green on the same head that records this evidence: CI, Phase 0 G0 and Phase 3
   G3, plus the Phase 4 G4a and REST rows.
 
@@ -979,6 +991,15 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   of Gateway-side provider-startup flake the ticket #6 evidence recorded and that
   `phase4/tag-import-provider-not-ready.json` already documents. **For the owner:** no decision;
   recorded because a G4a or G4b row can fail this way on an unmodified head and needs a rerun.
+- **Ticket #10 — the missing lane-head runs after the outage were a CONFLICTING pull request, not
+  the outage (corrected).** Actions recovered at 00:29Z and other lanes got runs immediately, but
+  `p4/runtime` and a throwaway branch pointing at the same commit still created none. The cause was
+  `feature/phase-4` moving 23 commits ahead of the lane branch, which left PR #27 `CONFLICTING` /
+  `DIRTY`; GitHub does not build a merge commit — and therefore creates no `pull_request` workflow
+  run — for a conflicted head. Merging `origin/feature/phase-4` into `p4/runtime` made the PR
+  `MERGEABLE` and every workflow run again on `16eb362`. The lesson for the coordinator: a lane
+  that stops producing runs should be checked for `mergeable_state` before it is written off as an
+  outage; the outage itself (23:49:41Z to 00:29:12Z) was real and affected every branch.
 - **Ticket #10 — GitHub Actions stopped creating `pull_request` runs for the lane head.** After
   the `p4/runtime-fix` batch created its six runs at 23:49:41Z, no workflow run was created for the
   repository at all: three pushes to `p4/runtime` (`25c8516`, `b5dde77`, `8593cb8`), a close/reopen

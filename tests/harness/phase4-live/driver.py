@@ -1226,6 +1226,7 @@ def tag_update_paths() -> dict[str, str]:
         "nestedTarget": f"[{policy_document.TAG_FIXTURE_PROVIDER}]{root}/Nested/Inner",
         "missingTarget": policy_document.TAG_FIXTURE_MISSING_PATH,
         "nestedFolder": policy_document.TAG_UPDATE_FOLDER,
+        "writeProbe": policy_document.WRITE_PROBE_PATH,
         "siblingTarget": policy_document.TAG_FIXTURE_SIBLING_PATH,
         "udtTarget": policy_document.TAG_UPDATE_UDT_TARGET,
     }

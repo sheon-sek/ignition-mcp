@@ -233,6 +233,7 @@ _TAG_UPDATE_TEMPLATES = (
     ("__TARGET__", "writeTarget"),
     ("__TEXT_TARGET__", "textTarget"),
     ("__FOLDER__", "nestedFolder"),
+    ("__RESERVED__", "writeProbe"),
     ("__SIBLING__", "siblingTarget"),
     ("__MISSING__", "missingTarget"),
     ("__UDT__", "udtTarget"),

@@ -1,7 +1,7 @@
 {
   "content": [
     {
-      "text": "{\"code\": \"permission_denied\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_update\", \"auditRecorded\": true, \"items\": [{\"code\": \"permission_denied\", \"index\": 0, \"path\": \"__TARGET__\", \"reason\": \"reservedProvider\"}], \"reason\": \"preflightTargetRefused\"}, \"message\": \"Every target must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry) and outside the reserved policy provider; no item was executed.\"}",
+      "text": "{\"code\": \"permission_denied\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_update\", \"auditRecorded\": true, \"items\": [{\"code\": \"permission_denied\", \"index\": 0, \"path\": \"__RESERVED__\", \"reason\": \"reservedProvider\"}], \"reason\": \"preflightTargetRefused\"}, \"message\": \"Every target must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry) and outside the reserved policy provider; no item was executed.\"}",
       "type": "text"
     }
   ],
