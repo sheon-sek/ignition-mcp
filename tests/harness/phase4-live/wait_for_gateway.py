@@ -15,7 +15,6 @@ import argparse
 import json
 from pathlib import Path
 import sys
-import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -26,6 +25,10 @@ import mcp_client  # noqa: E402
 EXIT_READY = 0
 EXIT_NOT_READY = 2
 EXIT_ORIGIN_REFUSED = 3
+#: How long the waiter waits between two readiness probes, in seconds. Live runs
+#: keep the interval the recorded runs used; the harness tests install the driver's
+#: virtual clock, whose wait also advances the deadline arithmetic below.
+POLL_SECONDS = 3.0
 
 
 def rest_ready(base_url: str, api_token: str) -> tuple[bool, str, dict | None]:
@@ -73,11 +76,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"originRefused": str(error)}), file=sys.stderr)
             return EXIT_ORIGIN_REFUSED
 
-    deadline = time.monotonic() + args.timeout
+    deadline = driver.CLOCK.now() + args.timeout
     rest_ok = False
     mcp_ok = dict((url, False) for url in args.mcp_urls)
     last_error = ""
-    while time.monotonic() < deadline:
+    while driver.CLOCK.now() < deadline:
         if not rest_ok:
             rest_ok, last_error, info = rest_ready(args.base_url, args.api_token)
             if rest_ok and args.evidence_dir and info is not None:
@@ -92,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
         if rest_ok and all(mcp_ok.values()):
             print(json.dumps({"rest": True, "mcp": {url: True for url in args.mcp_urls}}, sort_keys=True))
             return EXIT_READY
-        time.sleep(3.0)
+        driver.CLOCK.wait(POLL_SECONDS)
     print(json.dumps({"rest": rest_ok, "mcp": mcp_ok, "lastError": last_error}, sort_keys=True), file=sys.stderr)
     return EXIT_NOT_READY
 

@@ -9,11 +9,12 @@ permissions:
   contents: read
 
 jobs:
+  # Everything that is not a pytest run: the lockfile, the linters, mypy, and the
+  # deterministic build/validate lanes. The unit suite is split into the two jobs
+  # below so each half gets a runner of its own; only `jython-handlers` installs
+  # Java, because only its paths start the recorded-Jython runner (D29).
   static-unit-build:
     runs-on: ubuntu-latest
-    # The merged Runtime lane's recorded-Jython fixture suites are the union of the
-    # #7/#8, #10 and #11 tickets, and each fixture starts a JVM: the unit step alone
-    # runs past 15 minutes, which is a job timeout and therefore a cancelled run.
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -23,11 +24,6 @@ jobs:
         with:
           version: "0.12.17"
           enable-cache: true
-      - name: Install Java 11 for the recorded Jython runner (D29)
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
-        with:
-          distribution: temurin
-          java-version: "11"
       - name: Verify lockfile
         run: uv lock --check
       - name: Ruff
@@ -36,8 +32,6 @@ jobs:
         run: uv run --no-sync python -m tooling.ci.check_workflows
       - name: Mypy
         run: uv run --locked --package ignition-rest-mcp --with mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
-      - name: Unit and contract tests
-        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest -q -n auto --dist loadfile tooling packages/ignition-rest-mcp/tests
       - name: Build external Python distribution
         run: uv build --package ignition-rest-mcp
       - name: Validate Runtime Designer project
@@ -83,3 +77,64 @@ jobs:
             tests/harness/runtime-binding/probe.py \
             tests/harness/runtime-binding/build_fixture.py \
             tests/harness/runtime-binding/prepare_ci_security.py
+
+  # The recorded-Jython handler tests: one interpreter start per fixture, so they
+  # are the CPU-bound half and get their own runner. The paths below are the only
+  # ones that start Java; `python-tests` runs everything else.
+  jython-handlers:
+    runs-on: ubuntu-latest
+    # One JVM per recorded call, and a hung interpreter has to fail the job rather
+    # than hold a runner for the default six hours.
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+          enable-cache: true
+      - name: Install Java 11 for the recorded Jython runner (D29)
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        with:
+          distribution: temurin
+          java-version: "11"
+      - name: Recorded Jython handler tests
+        # -n 2 is the runner's two cores; --dist loadfile keeps one test file per
+        # worker, and --durations names the slowest cases of this half.
+        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest -q -n 2 --dist loadfile --durations=15 tooling/native/jython_runner/tests
+
+  # Everything else the unit suite covers: the harnesses, the contracts tooling and
+  # the external server's tests. No Java is installed here — nothing under these
+  # paths starts the recorded-Jython runner.
+  python-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.17"
+          enable-cache: true
+      - name: Unit and contract tests
+        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest -q -n 2 --dist loadfile --durations=15 tooling packages/ignition-rest-mcp/tests --ignore=tooling/native/jython_runner/tests
+
+  # The one status check that means the whole workflow is green. Its `needs` is the
+  # list of every other job, so requiring this job cannot merge a partial run.
+  ci-gate:
+    name: CI gate
+    needs: [static-unit-build, jython-handlers, python-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to have succeeded
+        run: |
+          echo "static-unit-build: ${{ needs['static-unit-build'].result }}"
+          echo "jython-handlers: ${{ needs['jython-handlers'].result }}"
+          echo "python-tests: ${{ needs['python-tests'].result }}"
+          test "${{ needs['static-unit-build'].result }}" = success
+          test "${{ needs['jython-handlers'].result }}" = success
+          test "${{ needs['python-tests'].result }}" = success

@@ -30,6 +30,11 @@ uv lock --check
 uvx --from ruff==0.16.8 ruff check .
 uv run --locked --package ignition-rest-mcp --with mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
 uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+# ci.yml runs that same collection as two parallel jobs with pytest-xdist (D29's
+# Java 11 is only installed for the first): the recorded-Jython handler tests
+# (tooling/native/jython_runner/tests) and everything else — `tooling` minus that
+# directory, plus packages/ignition-rest-mcp/tests. The two paths are disjoint and
+# their union is the single command above.
 
 # single test
 uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q packages/ignition-rest-mcp/tests/test_phase2_readonly.py -k <name>
