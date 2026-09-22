@@ -58,7 +58,13 @@ Error and returns the error object (including its `details`), so a test can asse
 ## Requirements
 
 - Java 11. Set `JYTHON_RUNNER_JAVA` to its `java` executable when it is not the default.
-- Network access on the first run. The runner downloads the Maven Central JAR to `build/cache/`, checks its size and SHA-256, and verifies it again on every use. The repository's existing `build/` ignore rule keeps the artifact out of Git.
+- Network access on the first run. The runner downloads the Maven Central JAR to
+  `build/cache/`, checks its size and SHA-256, and verifies it again on every use. The
+  repository's existing `build/` ignore rule keeps the artifact out of Git. A transient
+  failure of that fetch — the CDN has answered `HTTP 404` for the pinned JAR — is
+  retried with bounded backoff (five attempts, 1 s to 8 s); the pinned size and digest
+  still decide what is accepted, so a retry cannot substitute another artifact, and an
+  oversized body is refused without a retry.
 - The repository's locked Python environment, including `jsonschema`.
 
 Fixtures are committed repository files under `fixtures/`. D29 confines the Jython process to repository-controlled inputs, so a fixture path that resolves outside that directory (including through a symlink) is rejected, as is a fixture over 256 KiB. Both checks run before Java starts; a rejection is a loud error, never a skip.

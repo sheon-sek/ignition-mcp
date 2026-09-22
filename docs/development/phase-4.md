@@ -432,6 +432,20 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     `tag_write-input-aggregate-stops-at-budget`, whose sixth item is over the 16384-byte
     per-string ceiling — the refusal carries no item index, which is what proves the walk
     stopped at the fifth item and recorded no native call at all.
+  - **The pinned interpreter fetch survives a transient CDN failure.** The 8.3.9 row of
+    `Phase 4 Live Gateway G4a` run
+    [35684702309](https://github.com/sheon-sek/ignition-mcp/actions/runs/35684702309)
+    failed in "Validate the repository and build the probe fixture" with
+    `urllib.error.HTTPError: HTTP Error 404: Not Found` from
+    `tooling/native/jython_runner/runner.py` — Maven Central's CDN answered `404` for
+    the pinned jython-standalone 2.7.4 JAR, which failed every recorded-Jython test in
+    that job before any handler ran (the 8.3.8 row, CI and the other workflows on the
+    same head were green; the artifact answered `200` minutes later). The fetch now
+    retries a transport failure, a truncated body and a digest mismatch with bounded
+    backoff (five attempts, 1 s to 8 s), keeps the pinned size and digest as what
+    decides acceptance, and refuses an oversized body without a retry — the same shape
+    as the round-2 actionlint fetch fix. `test_artifact_fetch.py` drives the policy
+    with a small payload.
   - **The quality schema description matches the diagnostic behavior.**
     `contracts/schemas/tag-write.output.schema.json` now limits the null-on-over-ceiling
     sentence to `name` and `level` and describes `diagnosticMessage` as a bounded
