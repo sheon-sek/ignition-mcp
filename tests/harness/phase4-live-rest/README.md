@@ -179,9 +179,57 @@ locked RECOVERY artifact comes from a D16 transaction that ended unresolved and 
 in this harness produces one. `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py`
 pins both, and the same fixture pins the crash-safe `DELETING` recovery.
 
+## Injected transport failures (ticket #20)
+
+The driver's third mode (`--mode fault`) drives a second `ignition-rest` instance whose
+Gateway URL points at `fault_proxy.py`: a stdlib-only TCP hop the compose stack runs on
+the host network, with a control port that arms one fault at a time. A case is
+`arm(mode, route) → call the Tool → judge` against three independent records: what the
+caller saw, what the *hop* did (every request it saw, whether it reached the Gateway,
+whether the body completed), and what the *server* audited (D18's rows) and persisted
+(the D16 transaction row).
+
+| Fault | What it does | Why it is the right shape |
+|---|---|---|
+| `refuse_after_forward` | answers the first *N* matching requests, then closes its data listener | a refused connect needs the listener itself to go away: a RST after `accept()` is a *successful* connect, which the server correctly classifies as possibly dispatched |
+| `drop_mid_body` | reads a few body bytes, then RSTs without dialling the Gateway | the connection dies while the body is being written, and the Gateway never sees the request |
+| `drop_after_body` | relays the whole request, reads the Gateway's answer, then RSTs the client | the Gateway applied the change and answered; the caller cannot learn anything from the exchange |
+| `delay_response` | relays the request, then holds the answer for *N* seconds | the answer arrives after the deployment's deadline |
+| `connect_refused` | closes the data listener immediately | every connect is refused (used where a case needs the hop to be gone for the whole call) |
+
+The proxy answers **one request per connection** and says so on the wire (`Connection:
+close`, rewritten on the answer head as well). Without that, a pooled client would send
+its next request into a socket the proxy had already closed, and the server would see an
+ambiguous boundary where the armed fault meant a refused connect.
+
+| Case | Expectation |
+|---|---|
+| `fault-not-sent-*` | the write's connect is refused: the caller gets `gateway_unavailable`, the audit result row is `not_sent`, and nothing changed |
+| `fault-mid-body-*` | the proxy never forwarded the request, the read-back shows the pre-state, so the call is `conflict`/`not_applied` |
+| `fault-after-full-body-*` | the change is in place *and* the caller gets `outcome_unknown` — a read-back alone may not claim this call's success (D30 §2) |
+| `fault-deadline-*` | the caller gets the deployment's `timeout`; the audit holds one cancelled result row naming the boundary and the Target; the change may well have applied |
+| `fault-cancellation-*` | `notifications/cancelled` is answered with JSON-RPC `-32800`; one attempt, one cancelled result row, no replay |
+| `fault-import-not-sent-*` | the D16 row records `importDispatched: false` and the `not_sent` boundary, holds no recovery lock, and the Project is unchanged |
+| `fault-import-mid-body-*` | `NOT_APPLIED` on the read-back, with the ambiguous boundary on the row |
+| `fault-import-after-full-body-*` | D16's reconciliation: the post-import export equals the staged candidate, so the transaction is `COMMITTED` and the content lands |
+| `fault-import-cancellation-*` | the row is left interrupted and the reconcile loop ends it `OUTCOME_UNKNOWN` — never a success, and never a second dispatch |
+
+"Never a replay" is asserted twice, and independently: the audit log holds exactly one
+`attempt` row for the call, and the proxy's per-method counter shows exactly one write
+left the server.
+
+The fault instance runs with the deployment's smallest useful budgets
+(`IGNITION_MCP_TOOL_TIMEOUT_SECONDS`, `IGNITION_MCP_ARTIFACT_TIMEOUT_SECONDS`) and a
+short `IGNITION_MCP_PROJECT_RECONCILE_INTERVAL_SECONDS`, so a case costs seconds rather
+than minutes; the deadlines themselves are the production rules, only smaller. Its
+`--raw-dir` is a subdirectory, so its raw bodies cannot overwrite the other modes'.
+
 ## Layout
 
-- `docker-compose.yml` — one Gateway, no MCP Module: the REST plane needs none.
+- `docker-compose.yml` — one Gateway, no MCP Module: the REST plane needs none. It also
+  runs the fault proxy (`fault-proxy`) for the injected-failure cases; that service uses
+  the host network on purpose, so the data port it closes is a real loopback socket and
+  a closed one is a *refused* connect rather than a Docker-proxied one.
 - `provision.py` — test-only fixture provisioning through the Gateway's own Native
   REST API: four `ignition/audit-profile` resources (the allowlisted Target, an
   allowlist control, and the two rename sources). It waits for the required OpenAPI
@@ -197,13 +245,22 @@ pins both, and the same fixture pins the crash-safe `DELETING` recovery.
   import document shapes (a named root and a provider-root document), read back from a
   provider-root export, so the rule the Tool's verification depends on is live evidence
   in every row rather than an assumption.
-- `rest_driver.py` — the live cases, in `--mode gate-on` and `--mode gate-off`. The two
-  pipeline paths the cancel cases address are derived by the workflow from the disposable
-  Projects (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and
-  the paths the driver sends are the same run-unique strings.
+- `rest_driver.py` — the live cases, in `--mode gate-on`, `--mode gate-off` and
+  `--mode fault` (the D23 injected failures). The two pipeline paths the cancel cases
+  address are derived by the workflow from the disposable Projects
+  (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and the
+  paths the driver sends are the same run-unique strings. The fault mode also reads the
+  server's own `audit.db` and `state.db` **read-only** for the D18 audit rows and the
+  D16 transaction row: those are the server's record of the attempt, and nothing in the
+  harness writes to them.
+- `fault_proxy.py` — the fault-injecting proxy (#20): a stdlib-only data listener plus a
+  control listener (`GET /state`, `POST /fault`, `POST /reset`) that reports every
+  request it saw. It runs as a compose service on the host network, and the Docker-free
+  rehearsal starts the same class in-process.
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
-  `tests/harness/recorded_gateway.py` and runs both driver modes with the same
-  per-Tool Target allowlists the workflow configures.
+  `tests/harness/recorded_gateway.py`, in front of which it also starts `fault_proxy.py`,
+  and runs all three driver modes with the same per-Tool Target allowlists the workflow
+  configures.
 
 ## Rehearsing
 

@@ -770,6 +770,74 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   head this section was last touched on re-runs the same four workflows; its run IDs are in
   the ticket report.
 
+### Ticket #20 — REST fault-injecting proxy and the live timeout, ambiguous-outcome and cancellation cases (milestone 4c)
+
+- **The proxy** (`tests/harness/phase4-live-rest/fault_proxy.py`) is a stdlib-only TCP/HTTP
+  hop with a data listener and a control listener (`GET /state`, `POST /fault`,
+  `POST /reset`). It can refuse a connect (by closing its listener), drop a connection while
+  the body is being written, relay the whole request and then drop the answer, and hold an
+  answer back past a deadline. It answers **one request per connection** and says so on the
+  wire (`Connection: close`, rewritten on the answer head as well), which is what makes the
+  refused-connect cases deterministic: without it a pooled client sends its next request into
+  a socket the proxy already closed, and the server correctly classifies that as an ambiguous
+  boundary rather than a known non-attempt. It runs as the `fault-proxy` compose service and,
+  for the Docker-free rehearsal, in-process in `rehearse_local.py`.
+- **What the cases prove, on `config_resource_update` and `project_import`**, each against
+  three independent records (the caller's result, the hop's account of every request, the
+  server's own D18 audit rows and D16 transaction row):
+  - a refused connect on the dispatch is a **known non-attempt**: the caller gets
+    `gateway_unavailable`, the audit result row is `not_sent`, the D16 row records
+    `importDispatched: false` and the `not_sent` boundary, and nothing changed;
+  - a connection dropped **mid-body** never reaches the Gateway (the hop reports
+    `forwarded: false`), the read-back shows the pre-state, and the call is
+    `conflict`/`not_applied` — an ambiguous boundary the evidence can still attribute to
+    "nothing landed";
+  - a connection dropped **after the full body** leaves the change in place
+    (independently re-read) while the caller gets `outcome_unknown`: a read-back alone may
+    not claim this call's success (D30 §2). For `project_import` the same fault is D16's
+    reconciliation instead — the transaction's post-import export equals its staged
+    candidate, so the call reports `COMMITTED` with `importDispatched: true`;
+  - a response held back **past the deadline** ends the call with the deployment's
+    `timeout`, and the audit holds exactly one result row — `cancelled` with
+    `outcome_unknown` and the Target — even though the write may well have applied (the
+    hop forwarded the complete body before it held the answer back, and the case proves the
+    change is in place);
+  - a **cancellation** (`notifications/cancelled`) is answered with JSON-RPC `-32800`, and
+    leaves the same single cancelled result row; for `project_import` the interrupted row is
+    ended by the reconcile loop as `OUTCOME_UNKNOWN`, never as a success.
+  - **No replay** is asserted twice, independently: exactly one `attempt` row in the audit,
+    and exactly one write per case in the hop's per-method counter. The audit is asserted
+    row by row (`decision, attempt, result, result` with the exact outcomes per case): the
+    executor's result row carries the dispatch boundary and the Target, and the lifecycle's
+    carries the code the caller saw.
+- **One server-side gap this ticket closed.** A dispatch that died mid-flight is supposed
+  to leave the executor's own result row — `cancelled` with `outcome_unknown`, the row that
+  says the write *may* have applied — and the live cases showed it could be **lost**:
+  `asyncio.shield` let the cancellation through immediately while the write it protected
+  was still pending, so the lifecycle's row (the invocation's final word) landed instead
+  and the boundary was never recorded. The executor now awaits that write to completion
+  (bounded by `CANCELLED_AUDIT_DEADLINE_SECONDS`, absorbing the second cancellation it is
+  itself under) and the row carries the Target like every other row, so it is as complete
+  as the rest of the log. `packages/ignition-rest-mcp/tests/test_phase4_mutation_cancelled_audit.py`
+  pins it: `[decision, attempt, result, result]` with
+  `[allowed, attempted, cancelled, failed]` for the deadline case and
+  `[allowed, attempted, cancelled, cancelled]` for a client cancellation, the boundary row
+  carrying `outcome_unknown` and the Target, and the last row carrying the code the caller
+  saw. Both cases fail on the pre-change code (the boundary row's absence/error code) and
+  pass after it. The two result rows per invocation are the frozen D18 shape the Phase 3/4
+  suite pins (`_outcomes()[-1]` is the caller's D06 code); this ticket did not change it.
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **170/170 cases**
+  against the recorded Gateway through the real proxy, covering all three driver modes
+  (gate-on, gate-off, fault).
+- **`LIVE EVIDENCE PENDING (Actions outage)`.** The live `Phase 4 Live Gateway REST
+  mutation` rows cannot be produced: no workflow run has been created for this repository
+  since `2026-09-21T23:49:41Z` (see Open questions). The workflow, the compose service and
+  the three driver modes are wired (`pull → wait → run → enforce`), the fault row's exit
+  code is part of the gate, and the `AGENTS.md` block plus the rehearsal are green on the
+  pushed head. The live checks still owed: the fault-mode `observations.json` and
+  `fault-proxy-state.json` on 8.3.8 and 8.3.9, and the proxy image digest recorded in
+  `identity.json`.
+
 ## Open questions
 
 - **Ticket #19 — GitHub Actions delivered no runs for the documentation-only head.** The
@@ -1080,3 +1148,40 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **`alarm_acknowledge` (ticket #9) is parked.** The D12 Phase 4 amendment holds only if recorded evidence shows an exact-path `queryStatus` is bounded before or during execution. The recorded run shows the opposite: one exact Alarm path returned 1 → 2 → 3 items over three unacknowledged activate/clear cycles, because cleared-unacknowledged events accumulate until they are acknowledged, and the query exposes no limit or continuation (D12 Phase 2 amendment). The handler-side Observed state for an acknowledge has no bounded source, so the ticket cannot be implemented as specified. **For the owner:** approve the park, or supply a credible pre/during-execution bound (a verified native limit/continuation, or an independently bounded alarm backend). The scope and ticket tables mark it parked.
 - **Policy read bound (ticket #6 follow-up).** The Runtime Target Policy is a `String` Tag, and Ignition documents no maximum length for a Tag value; `system.tag.readBlocking` takes only paths and a timeout, so a post-read length check is not a bound (the reasoning D12's Phase 2 amendment applied to `alarm_status`). The recommendation is therefore conditional on a product-enforced cap: the policy Tag carries a companion `RuntimeTargetPolicyLength` Int4 Tag that `setup-native apply` writes in the same import, and the reader refuses a document whose declared length is missing, non-integer or over `IgnitionMcpPolicyMaxBytes` (32 KiB) **without reading the value at all**, then re-checks the value's byte length after reading. The harness measures both the served, length-verified read and a deliberately oversize pair that must be skipped unmaterialized. **For the owner to approve or reject:** the cap value and the rule that `apply` is the only writer of that provider (which is what makes the declared length an enforced maximum). If the cap is rejected, the fail-closed default is to keep Runtime Mutations disabled and move the policy to a mechanism with a native bound.
 - **`phase4-live` environment reuse.** The new `phase4-live` GitHub environment was created with no protection rules, reusing the owner-accepted deviation recorded for `phase3-live`. The compensating controls are the trusted-repo guard, no repository or environment secrets in the job, compose-localhost endpoints only, run-unique Alarm paths, and the driver-enforced CI marker plus Gateway-identity check that fails closed before any probe call. Recorded in every evidence row (`ownerAcceptedDeviations`).
+
+- **Ticket #20 — GitHub Actions created no runs after `2026-09-21T23:49:41Z`.** The live
+  `Phase 4 Live Gateway REST mutation` rows for this ticket cannot be produced: `GET
+  /repos/…/actions/runs` shows nothing created repo-wide after that timestamp, the API
+  reports Actions enabled, and the status page shows it operational. Per the brief's outage
+  rule, the ticket finished on the full `AGENTS.md` block plus the local rehearsals, pushed
+  as usual, and marks the live row `LIVE EVIDENCE PENDING (Actions outage)`; it does not
+  claim a live pass. **For the coordinator:** run the live sweep over `feature/phase-4` once
+  runs appear again, and re-check the fault row's evidence (`observations.json` including the
+  `fault-*` cases, and `fault-proxy-state.json`) on both Gateway rows.
+- **Ticket #20 — a refused-connect import that also fails its drift re-export ends
+  `FAILED_PRE_IMPORT`, not `NOT_APPLIED`.** D16 finalizes a dispatched-and-unchanged import as
+  `NOT_APPLIED` after a diagnostic re-export; when the same fault keeps the hop down for the
+  whole call, that re-export fails too, the transaction raises, and its `except GatewayError`
+  handler finalizes the row as `FAILED_PRE_IMPORT` — the state it uses for "a row still in
+  `IMPORT_SENT` after a raise". Both are release-set states (no recovery lock, no replay), and
+  the row still carries `importDispatched: false`, the `not_sent` boundary and the transport
+  error, which is what the case asserts. Naming the failure *phase* accurately in that corner
+  would need a tri-state `externalDrift` column and a change to a reviewed D16 module, which
+  this ticket did not take on. **For the owner:** accept the state name as characterized, or
+  amend D16 to finalize `NOT_APPLIED` with an explicit "drift unknown" marker when the
+  diagnostic re-export fails.
+- **Ticket #20 — the fault proxy runs on the host network inside the compose stack.** The
+  issue asks for the proxy "in the `phase4-live` compose network". It is a compose service
+  (`fault-proxy`) in that stack, but with `network_mode: host`, because a *published* data
+  port would put Docker's userland proxy in front of the listener: it accepts the connection
+  and then fails to reach the container, so the server sees an ambiguous boundary
+  (`SENT_COMPLETE_NO_RESPONSE`) where the case means a refused connect (`NOT_SENT`). On the
+  host network the listener is a real loopback socket, closing it is a genuine
+  `ECONNREFUSED`, and the Docker-free rehearsal exercises exactly the same code path. The
+  proxy binds loopback only and reaches the Gateway through its own published port.
+- **Ticket #20 — the fault proxy's image is a mutable tag.** The compose service uses
+  `python:3.12-slim`, which the workflow pulls and records the digest of in `identity.json`;
+  the job fails closed if `EXPECTED_PROXY_DIGEST` is set and does not match. It is a rolling
+  tag (the same shape `phase2-live` uses for `mariadb:11.4.13-noble`), so a certification that
+  wants a pinned proxy must supply the digest. **For the owner:** confirm the tag, or name the
+  digest to pin in `.github/workflows/phase4-live-rest.yml`.

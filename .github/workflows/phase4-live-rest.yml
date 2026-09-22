@@ -8,6 +8,15 @@ name: Phase 4 Live Gateway REST mutation
 # inventory per credential with the mutation classes enabled and disabled, against
 # real disposable Gateways.
 #
+# The last section is D23's L5 failure injection (ticket #20): a stdlib-only
+# fault-injecting proxy in the compose stack sits between a second `ignition-rest`
+# instance and the Gateway, and the driver arms it over its control port to refuse a
+# connect, drop a connection mid-body, drop it after the full body, or hold an answer
+# back past the deployment's deadline. Those cases are the live proof that a
+# `NOT_SENT` dispatch is a known non-attempt, that an ambiguous one is `outcome_unknown`
+# (or D16's reconciliation), that a cancelled one is never replayed, and that each
+# leaves D18's decision/attempt/result triple complete.
+#
 # Runs only from pull requests in the trusted repository (no fork execution) and
 # only under the dedicated `phase4-live` GitHub environment. That environment
 # exists WITHOUT protection rules — the same owner-accepted deviation as
@@ -86,6 +95,16 @@ jobs:
       ALARM_EVENT_ID: "00000000-0000-4000-8000-000000000000"
       # The D16 writer identity: one stable operator-chosen ID per Gateway.
       GATEWAY_ID: phase4-rest-${{ matrix.gateway_version }}-${{ github.run_id }}
+      # D23 ticket #20: the fault-injecting proxy the compose stack runs on the host
+      # network, and the budgets its own ignition-rest instance is configured with. The
+      # delayed-response cases hold an answer past *these* deadlines, so a case costs
+      # seconds of wall clock instead of minutes of deployment timeout.
+      PROXY_IMAGE: python:3.12-slim
+      PROXY_DATA_URL: http://127.0.0.1:8090
+      PROXY_CONTROL_URL: http://127.0.0.1:8091
+      FAULT_TOOL_TIMEOUT_SECONDS: "8"
+      FAULT_ARTIFACT_TIMEOUT_SECONDS: "20"
+      FAULT_RECONCILE_INTERVAL_SECONDS: "2"
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -112,7 +131,7 @@ jobs:
           echo "::add-mask::$AGENT_TOKEN"
           echo "::add-mask::$OPERATOR_TOKEN"
 
-      - name: Pull the exact service image
+      - name: Pull the exact service images
         shell: bash
         run: |
           set -euo pipefail
@@ -121,6 +140,19 @@ jobs:
           IMAGE_DIGEST="${IMAGE_REF##*@}"
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           echo "IMAGE_DIGEST=$IMAGE_DIGEST" >> "$GITHUB_ENV"
+          # The fault proxy (#20) runs on a stock Python image: record what was pulled so
+          # the evidence names the exact bytes, and fail closed if a digest is pinned and
+          # does not match (the same shape the Gateway build assertion uses).
+          docker pull "$PROXY_IMAGE"
+          PROXY_REF="$(docker image inspect --format '{{index .RepoDigests 0}}' "$PROXY_IMAGE")"
+          PROXY_DIGEST="${PROXY_REF##*@}"
+          [[ "$PROXY_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          if [[ -n "${EXPECTED_PROXY_DIGEST:-}" && "$PROXY_DIGEST" != "$EXPECTED_PROXY_DIGEST" ]]; then
+            echo "Unexpected fault-proxy image digest: $PROXY_DIGEST != $EXPECTED_PROXY_DIGEST" >&2
+            exit 1
+          fi
+          echo "PROXY_IMAGE_DIGEST=$PROXY_DIGEST" >> "$GITHUB_ENV"
+          echo "fault proxy image: $PROXY_IMAGE $PROXY_DIGEST"
 
       - name: Start a fresh Gateway
         run: docker compose -f "$COMPOSE_FILE" up -d --no-build
@@ -236,6 +268,36 @@ jobs:
           echo "PIPELINE=project:$IMPORT_PROJECT:/pipeline:MCP_CI_Notify" >> "$GITHUB_ENV"
           echo "CONTROL_PIPELINE=project:$IMPORT_CONTROL_PROJECT:/pipeline:MCP_CI_Notify" >> "$GITHUB_ENV"
 
+      - name: Compute the deployment's Mutation policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          # One source of truth for both ignition-rest instances (#20): the class-enabled
+          # instance the mutation cases drive and the fault-mode instance the injected
+          # failures drive must be allowed exactly the same operations and Targets, or a
+          # fault case could pass on a deployment that differs from the one the other
+          # cases prove.
+          echo "IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete" >> "$GITHUB_ENV"
+          jq -nc \
+            --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
+            --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
+            --arg rename_source "$RESOURCE_TYPE/$RENAME_SOURCE" \
+            --arg rename_source_2 "$RESOURCE_TYPE/$RENAME_SOURCE_2" \
+            --arg renamed "$RESOURCE_TYPE/$RENAMED_RESOURCE" \
+            --arg singleton "$SINGLETON_TYPE" \
+            --arg project "$IMPORT_PROJECT" \
+            --arg tag_target "[$TAG_PROVIDER]$TAG_TARGET_PATH" \
+            --arg pipeline "$PIPELINE" \
+            '{config_resource_update: [$allowlisted, $singleton],
+              config_resource_create: [$created, $rename_source, $rename_source_2],
+              config_resource_delete: [$allowlisted, $created],
+              config_resource_rename: [$rename_source, $rename_source_2, $renamed],
+              project_import: [$project],
+              tag_config_import: [$tag_target],
+              alarm_pipeline_cancel: [$pipeline],
+              artifact_delete: ["*"]}' \
+            | sed 's/^/IGNITION_MCP_MUTATION_TARGETS=/' >> "$GITHUB_ENV"
+
       - name: Provision the Phase 4 REST fixtures
         shell: bash
         run: |
@@ -270,25 +332,8 @@ jobs:
           IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED=true \
           IGNITION_MCP_PROJECT_WRITER_ENABLED=true \
           IGNITION_MCP_GATEWAY_ID="$GATEWAY_ID" \
-          IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,config_resource_create,config_resource_delete,config_resource_rename,project_import,tag_config_import,alarm_pipeline_cancel,artifact_delete \
-          IGNITION_MCP_MUTATION_TARGETS="$(jq -nc \
-            --arg allowlisted "$RESOURCE_TYPE/$ALLOWLISTED_RESOURCE" \
-            --arg created "$RESOURCE_TYPE/$CREATED_RESOURCE" \
-            --arg rename_source "$RESOURCE_TYPE/$RENAME_SOURCE" \
-            --arg rename_source_2 "$RESOURCE_TYPE/$RENAME_SOURCE_2" \
-            --arg renamed "$RESOURCE_TYPE/$RENAMED_RESOURCE" \
-            --arg singleton "$SINGLETON_TYPE" \
-            --arg project "$IMPORT_PROJECT" \
-            --arg tag_target "[$TAG_PROVIDER]$TAG_TARGET_PATH" \
-            --arg pipeline "$PIPELINE" \
-            '{config_resource_update: [$allowlisted, $singleton],
-              config_resource_create: [$created, $rename_source, $rename_source_2],
-              config_resource_delete: [$allowlisted, $created],
-              config_resource_rename: [$rename_source, $rename_source_2, $renamed],
-              project_import: [$project],
-              tag_config_import: [$tag_target],
-              alarm_pipeline_cancel: [$pipeline],
-              artifact_delete: ["*"]}')" \
+          IGNITION_MCP_MUTATION_OPERATIONS="$IGNITION_MCP_MUTATION_OPERATIONS" \
+          IGNITION_MCP_MUTATION_TARGETS="$IGNITION_MCP_MUTATION_TARGETS" \
           uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
             > "$EVIDENCE_DIR/ignition-rest-gate-on.log" 2>&1 &
           echo "$!" > artifacts/rest-gate-on.pid
@@ -397,6 +442,87 @@ jobs:
           echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
           exit 0
 
+      - name: Start ignition-rest behind the fault-injecting proxy (#20)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The proxy's own readiness first (D23: bounded polling, never a fixed sleep).
+          deadline=$((SECONDS + 60))
+          until curl --fail --silent --max-time 3 "$PROXY_CONTROL_URL/state" > "$EVIDENCE_DIR/fault-proxy-initial.json"; do
+            if (( SECONDS >= deadline )); then
+              docker compose -f "$COMPOSE_FILE" logs --no-color fault-proxy >&2
+              echo "the fault-injecting proxy never answered on its control port" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          # The same policy as the class-enabled instance above, with the budgets the
+          # injected failures are aimed at, and a short D16 reconcile interval so a
+          # cancelled import settles inside its case.
+          IGNITION_MCP_DATA_DIR="$RUNNER_TEMP/ignition-mcp-data" \
+          IGNITION_MCP_GATEWAY_URL="$PROXY_DATA_URL" \
+          IGNITION_MCP_GATEWAY_API_TOKEN="$CI_API_TOKEN" \
+          IGNITION_MCP_DEPLOYMENT_PROFILE=development \
+          IGNITION_MCP_AUTH_MODE=static-token \
+          IGNITION_MCP_STATIC_TOKENS="$(jq -nc --arg a "$AGENT_TOKEN" \
+            '{"config-agent":{"token":$a,"scopes":["ignition.read","ignition.config"]}}')" \
+          IGNITION_MCP_HOST=127.0.0.1 \
+          IGNITION_MCP_PORT=8766 \
+          IGNITION_MCP_PATH=/mcp \
+          IGNITION_MCP_WATCHER_INTERVAL_SECONDS=2 \
+          IGNITION_MCP_TOOL_TIMEOUT_SECONDS="$FAULT_TOOL_TIMEOUT_SECONDS" \
+          IGNITION_MCP_ARTIFACT_TIMEOUT_SECONDS="$FAULT_ARTIFACT_TIMEOUT_SECONDS" \
+          IGNITION_MCP_PROJECT_RECONCILE_INTERVAL_SECONDS="$FAULT_RECONCILE_INTERVAL_SECONDS" \
+          IGNITION_MCP_CONFIG_MUTATION_ENABLED=true \
+          IGNITION_MCP_CONTROL_MUTATION_ENABLED=true \
+          IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true \
+          IGNITION_MCP_ARTIFACT_UPLOAD_ENABLED=true \
+          IGNITION_MCP_PROJECT_WRITER_ENABLED=true \
+          IGNITION_MCP_GATEWAY_ID="$GATEWAY_ID" \
+          IGNITION_MCP_MUTATION_OPERATIONS="$IGNITION_MCP_MUTATION_OPERATIONS" \
+          IGNITION_MCP_MUTATION_TARGETS="$IGNITION_MCP_MUTATION_TARGETS" \
+          uv run --locked --package ignition-rest-mcp ignition-rest-mcp \
+            > "$EVIDENCE_DIR/ignition-rest-fault.log" 2>&1 &
+          echo "$!" > artifacts/rest-fault.pid
+          deadline=$((SECONDS + 120))
+          while (( SECONDS < deadline )); do
+            if curl --fail --silent --max-time 3 http://127.0.0.1:8766/health/ready >/dev/null; then exit 0; fi
+            if ! kill -0 "$(cat artifacts/rest-fault.pid)" 2>/dev/null; then
+              cat "$EVIDENCE_DIR/ignition-rest-fault.log" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          cat "$EVIDENCE_DIR/ignition-rest-fault.log" >&2
+          exit 1
+
+      - name: Run the live fault-injection cases (#20)
+        id: fault
+        shell: bash
+        run: |
+          set +e
+          uv run --locked --package ignition-rest-mcp python "$HARNESS/rest_driver.py" \
+            --mode fault \
+            --rest-url http://127.0.0.1:8766 \
+            --agent-token "$AGENT_TOKEN" \
+            --proxy-control-url "$PROXY_CONTROL_URL" \
+            --data-dir "$RUNNER_TEMP/ignition-mcp-data" \
+            --resource-type "$RESOURCE_TYPE" \
+            --allowlisted "$ALLOWLISTED_RESOURCE" \
+            --project "$IMPORT_PROJECT" \
+            --tool-timeout-seconds "$FAULT_TOOL_TIMEOUT_SECONDS" \
+            --observations "$EVIDENCE_DIR/observations.json" \
+            --raw-dir "$EVIDENCE_DIR/raw/fault" \
+            > "$EVIDENCE_DIR/driver-fault.log" 2>&1
+          rc=$?
+          set -e
+          cat "$EVIDENCE_DIR/driver-fault.log"
+          # The proxy's own account of the hop, taken while it is still up.
+          curl --silent --max-time 5 "$PROXY_CONTROL_URL/state" \
+            > "$EVIDENCE_DIR/fault-proxy-state.json" 2>&1 || true
+          echo "exit_code=$rc" >> "$GITHUB_OUTPUT"
+          exit 0
+
       - name: Record the run identity
         if: always()
         shell: bash
@@ -407,10 +533,13 @@ jobs:
             --arg gatewayBuild "${GATEWAY_BUILD:-unknown}" \
             --arg gatewayImage "$GATEWAY_IMAGE" \
             --arg gatewayImageDigest "${IMAGE_DIGEST:-unknown}" \
+            --arg proxyImage "$PROXY_IMAGE" \
+            --arg proxyImageDigest "${PROXY_IMAGE_DIGEST:-unknown}" \
             --arg sourceRevision "$GITHUB_SHA" \
             --arg runId "$GITHUB_RUN_ID" \
             '{schemaVersion: 1, gatewayVersion: $gatewayVersion, gatewayBuild: $gatewayBuild,
               gatewayImage: $gatewayImage, gatewayImageDigest: $gatewayImageDigest,
+              faultProxyImage: $proxyImage, faultProxyImageDigest: $proxyImageDigest,
               sourceRevision: $sourceRevision, runId: $runId,
               note: "REST plane only: this harness deploys no MCP Module, so no G4 compatibility row is composed here."}' \
             > "$EVIDENCE_DIR/identity.json"
@@ -422,6 +551,7 @@ jobs:
         run: |
           kill "$(cat artifacts/rest-gate-on.pid)" 2>/dev/null || true
           kill "$(cat artifacts/rest-gate-off.pid)" 2>/dev/null || true
+          kill "$(cat artifacts/rest-fault.pid)" 2>/dev/null || true
 
       - name: Refresh diagnostics
         if: always()
@@ -463,8 +593,9 @@ jobs:
         run: |
           gateon_rc='${{ steps.gateon.outputs.exit_code }}'
           gateoff_rc='${{ steps.gateoff.outputs.exit_code }}'
-          if [[ "$gateon_rc" != "0" || "$gateoff_rc" != "0" ]]; then
-            echo "phase 4 REST live cases failed: class-enabled rc ${gateon_rc:-missing}, class-disabled rc ${gateoff_rc:-missing}" >&2
+          fault_rc='${{ steps.fault.outputs.exit_code }}'
+          if [[ "$gateon_rc" != "0" || "$gateoff_rc" != "0" || "$fault_rc" != "0" ]]; then
+            echo "phase 4 REST live cases failed: class-enabled rc ${gateon_rc:-missing}, class-disabled rc ${gateoff_rc:-missing}, fault rc ${fault_rc:-missing}" >&2
             exit 1
           fi
           echo "phase 4 REST live cases passed on ${GATEWAY_VERSION}"
