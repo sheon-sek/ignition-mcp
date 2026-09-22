@@ -59,7 +59,7 @@ where it is not live — the limitation:
 | cancellation | **LIVE** (fault proxy) | **NONE** |
 
 `gateResult` is therefore `VERIFIED_WITH_LIMITATION`, and the row keeps what is
-*not* proven separate from it in `limitations` and `unsatisfiedAcceptance`. Two
+*not* proven separate from it in `limitations` and `unsatisfiedAcceptance`. Three
 things are not claimed:
 
 - **Runtime cancellation has no evidence at all.** There is no live case and no
@@ -71,10 +71,18 @@ things are not claimed:
   proves the D18 fail-closed branch by unit tests that raise `AuditWriteError`,
   and every live Runtime stage installs its policy with `auditMode=best_effort`.
   D26's G4 acceptance text asks for this case live on both Planes.
+- **`setup-native apply` has no post-fix green live run.** Its confirmation run on
+  the final integration head (`35712191958`) was cancelled during the
+  Actions-saturation window. The last live observation is run `35708881821`, which
+  reached the writes (bundle Project imported and read back managed, Server Config
+  created with the profile's Tools, policy provider created) and found two defects
+  — the percent-escaped resource type in the provider find path, and `verify`
+  needing an endpoint derive — both fixed in `4aa9471` and covered by the green
+  local rehearsal. What is missing is the confirmation, not the write path.
 
-Both are recorded as owner questions in the Phase 4 runbook rather than papered
-over. The D30-sanctioned Runtime fixture-only cases (timeout, ambiguous outcome)
-are limitations with a ruling behind them, not gaps.
+The first two are recorded as owner questions in the Phase 4 runbook. The
+D30-sanctioned Runtime fixture-only cases (timeout, ambiguous outcome) are
+limitations with a ruling behind them, not gaps.
 
 ## Inventories and default state
 

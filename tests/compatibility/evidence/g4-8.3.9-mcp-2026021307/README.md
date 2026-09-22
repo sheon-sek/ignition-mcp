@@ -26,7 +26,9 @@ the same MCP Module and the same deployed Runtime Bundle as the required row.
 The L5 matrix, the limitations (`limitations`), the unproven case
 (`unsatisfiedAcceptance`) and `gateResult: VERIFIED_WITH_LIMITATION` are identical
 to the required row's, for the same reasons: Runtime cancellation has no evidence
-at all, and audit failure (`required` mode) is not live on either Plane.
+at all, audit failure (`required` mode) is not live on either Plane, and
+`setup-native apply` has no post-fix green live run (its confirmation run on the
+final integration head was cancelled; see the required row's README).
 
 [evidence.json](evidence.json) is copied byte-for-byte from the generator's
 output; the close document it was composed from is

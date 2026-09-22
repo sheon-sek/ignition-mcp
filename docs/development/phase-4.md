@@ -248,7 +248,7 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   `tooling/contracts/lint.py`. `python -m tooling.compat g4 --close <close.json> --artifacts
   <downloads> --out-dir tests/compatibility/evidence` composes a row and re-validates it
   before writing, and refuses to overwrite an existing one. `tooling/compat/tests/test_g4.py`
-  (12 cases) proves both committed rows are exactly what their committed close documents say
+  (9 cases) proves both committed rows are exactly what their committed close documents say
   and that every dishonest composition is refused.
 - **Inventories are exact and recorded in the rows** (the tables above): `readonly` 13
   (unchanged, live from G1–G3), `operator` 16 (live), `configurator` 19 (live), `full` 22
@@ -260,14 +260,17 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   Gateway row with `compatibilityStatus UNTESTED`; `tooling/native/tests/test_phase3_release.py`
   asserts exactly that (and still refuses any `SUPPORTED` tuple). Two release builds are
   byte-identical.
-- **What these rows do not claim.** Two of D26's acceptance items are recorded as
-  `unsatisfiedAcceptance` rather than met: audit failure (`required` mode) is not proven live
-  on either Plane (the REST plane proves the D18 fail-closed branch by unit tests, and every
-  live Runtime stage runs `auditMode=best_effort`), and Runtime cancellation has no evidence
-  at all — no live case and no fixture — which means D30's sentence that the three Runtime
-  cases are "proven with recorded fixtures only" is not satisfied for cancellation. Both are
-  owner questions in this runbook below. The Runtime timeout and ambiguous-outcome cases are
-  limitations with D30's ruling behind them, not gaps.
+- **What these rows do not claim.** Three of D26's acceptance items are recorded as
+  `unsatisfiedAcceptance` or `limitations` rather than met: audit failure (`required` mode) is
+  not proven live on either Plane (the REST plane proves the D18 fail-closed branch by unit
+  tests, and every live Runtime stage runs `auditMode=best_effort`); Runtime cancellation has
+  no evidence at all — no live case and no fixture — which means D30's sentence that the three
+  Runtime cases are "proven with recorded fixtures only" is not satisfied for cancellation;
+  and `setup-native apply`'s confirmation run on the final integration head was cancelled, so
+  the apply item rests on the run that reached every write plus the fix commit `4aa9471` and
+  the green rehearsal, not on a post-fix live row. All three are owner questions in this
+  runbook below. The Runtime timeout and ambiguous-outcome cases are limitations with D30's
+  ruling behind them, not gaps.
 - **Deferred work stays deferred and linked.** The D10 bound-accounting precision the owner
   deferred from the #11 scope cut is [issue #41](https://github.com/sheon-sek/ignition-mcp/issues/41),
   and the flaky `fault-import-after-full-body` live case is
@@ -3110,6 +3113,20 @@ Two open issues carry whole categories of work rather than one question:
   fault, which the owner's speed ruling excludes from this phase. **For the owner:** accept
   the fixture/unit proof as the G4 record for this case, or name the live case to add and the
   run it may use.
+- **Ticket #23 — `setup-native apply` has no post-fix green live run.** The milestone-4d
+  confirmation run for the final integration head (`Phase 4 Live Gateway apply` run
+  35712191958 on `4238653`) was **cancelled** during the Actions-saturation window, so D26's
+  G4 acceptance item "`setup-native apply` is live-verified with `plan → apply → verify` on a
+  disposable Gateway" is recorded as a limitation in both evidence rows rather than claimed.
+  What *is* live: run 35708881821 reached every write (the bundle Project was imported and
+  read back managed, the Server Config was created with the profile's Tool list, the policy
+  provider and Tag were written) and failed at the two defects the fix commit `4aa9471`
+  closes — the percent-escaped `/` inside the resource *type* in the provider find path, and
+  `verify` not deriving its endpoint from the Server Config it wrote — both covered by the
+  green rehearsal `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the
+  coordinator's final sweep:** one green `Phase 4 Live Gateway apply` run on the integration
+  head completes this item; the row then takes that run as a cited run (the close document
+  gains it and the row is regenerated), and the limitation drops off.
 - **Ticket #23 — G4 closes with `VERIFIED_WITH_LIMITATION`, never `VERIFIED`.** Both evidence
   rows record `gateResult VERIFIED_WITH_LIMITATION`, `compatibilityStatus UNTESTED` and no
   `SUPPORTED` anywhere, and the two items above are `unsatisfiedAcceptance` rather than
@@ -3142,8 +3159,8 @@ its own SHA.
 | 4c | #20 fault-injecting proxy + live timeout / ambiguous / cancellation | `94564a0` | 35672781303 (REST mutation, both rows) |
 | 4c | #35 config Mutations pinned to the `core` collection | `be4dc50` | 35682027818 (REST mutation, both rows) |
 | 4c | #36 reserved `IgnitionMCPPolicy` config resource | `1bfaf8f` | 35687123699 (REST mutation, both rows) |
-| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35712191958 (apply, both rows) |
+| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35708881821 (apply, both rows: every write reached, two defects found and fixed in `4aa9471`); the confirmation run 35712191958 was cancelled |
 | 4d | #22 opt-in Security Level + API token provisioning | (in flight on `p4/setup-22`; merged after this runbook snapshot) | — |
-| G4 | #23 G4 close | this commit | the four runs the rows cite, above |
+| G4 | #23 G4 close | `602e68e` | the four runs the rows cite, above |
 | integration | Runtime lane (#7 #8 #10 #11) merged | `ca27b4b` | CI, G4a 35710377211, G4b 35710377243 green |
-| integration | Final integration head (#7 #8 #10 #11 #12 #21) | `4238653` | G4b 35712192001, apply 35712191958 |
+| integration | Final integration head (#7 #8 #10 #11 #12 #21) | `4238653` | G4b 35712192001, apply 35712191958 (the apply run was cancelled; the G4b re-run's result did not change any recorded case) |
