@@ -149,13 +149,17 @@ def test_a_bundled_schema_references_only_its_own_defs(method: str) -> None:
 @pytest.mark.parametrize("method", WRITE_METHODS)
 def test_a_bundled_schema_validates_a_minimal_item(method: str) -> None:
     """A schema that cannot validate at all is worse than no schema: the caller
-    would see an internal error instead of their own validation failure."""
+    would see an internal error instead of their own validation failure. The item is
+    the smallest one the Tool can send, which always names the core collection (D30
+    owner ruling 5), so the shipped document must accept that value too."""
 
     document = _document()
     for resource_type in _collection_routes(document, method):
         schema = bundle_collection_item_schema(document, resource_type, method)
         assert schema is not None
-        item: dict[str, Any] = {"signature": "sig-1"} if method == "put" else {}
+        item: dict[str, Any] = {"collection": "core"}
+        if method == "put":
+            item["signature"] = "sig-1"
         if "name" in schema.get("properties", {}):
             item["name"] = "example"
         try:
@@ -194,6 +198,21 @@ def test_a_change_item_declares_a_name_exactly_when_the_type_is_not_a_singleton(
         declared = "name" in schema.get("properties", {})
         singleton = f"{COLLECTION_PREFIX}singleton/{resource_type}" in document["paths"]
         assert declared is not singleton, resource_type
+
+
+@pytest.mark.parametrize("method", WRITE_METHODS)
+def test_a_change_item_declares_the_collection(method: str) -> None:
+    """D30 owner ruling 5: a collection route documents no collection query parameter,
+    so its change item is the only place a write can name the collection. Every type
+    the shipped document gives a write route to must therefore declare the field —
+    the Tool refuses a type whose item cannot name `core`, because the Gateway's own
+    default would otherwise decide which collection the write lands in."""
+
+    document = _document()
+    for resource_type in _collection_routes(document, method):
+        schema = bundle_collection_item_schema(document, resource_type, method)
+        assert schema is not None
+        assert "collection" in schema.get("properties", {}), resource_type
 
 
 def test_a_repeated_reference_keeps_every_occurrences_sibling_keywords() -> None:

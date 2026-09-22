@@ -49,7 +49,7 @@ from phase4_fixtures import ARTIFACT_DELETE_TOOL, CONFIG_MUTATION_TOOLS as MUTAT
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
-from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
+from recorded_gateway import API_TOKEN, COMMITTED_OPENAPI, RecordedGateway  # noqa: E402
 
 #: Every Phase 4 REST Mutation Tool, not just this milestone's: the class gate, not
 #: the operation allowlist, decides discovery (D08/D30), and the recorded Gateway
@@ -67,6 +67,22 @@ def _settings(tmp_path: Path, gateway: RecordedGateway, **overrides: Any) -> Any
     }
     values.update(overrides)
     return mutation_settings(**values)
+
+
+def _committed_document_without_the_create_item_collection_field() -> bytes:
+    """The committed Gateway document with the Target type's ``POST`` change item no
+    longer declaring ``collection``.
+
+    The item schema stays otherwise valid, so this is what a Gateway whose create
+    cannot address the pinned collection would serve: the Tool must refuse it rather
+    than let the Gateway's own default choose the collection (D30 owner ruling 5).
+    """
+
+    document = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
+    route = document["paths"][f"/data/api/v1/resources/{PROFILE}"]["post"]
+    item = route["requestBody"]["content"]["application/json"]["schema"]["items"]
+    del item["properties"]["collection"]
+    return json.dumps(document).encode("utf-8")
 
 
 def _delete_path(name: str, signature: str) -> str:
@@ -378,6 +394,42 @@ def test_a_non_core_collection_create_is_refused(tmp_path: Path) -> None:
     assert envelope(result)["code"] == "invalid_argument"
     assert requests == [], "a non-core collection must not reach the Gateway at all"
     assert rows == [], "the refusal is input validation, before any audited decision"
+
+
+def test_a_type_whose_item_cannot_name_the_collection_has_no_create_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D30 owner ruling 5 for the create route: its change item is the only place the
+    collection can travel, so a documented item schema without that field leaves the
+    create unable to address `core`. The Tool refuses it instead of publishing a
+    resource whose collection the Gateway's own default would pick."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        document = _committed_document_without_the_create_item_collection_field()
+
+        async def collection_less_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", collection_less_openapi)
+        settings = _settings(tmp_path, gateway)
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            session = Session(http, "cfg-secret")
+            result = session.call(CREATE_TOOL, {
+                "resourceType": PROFILE, "name": CREATED_RESOURCE,
+                "config": {"profile": {"type": "local"}},
+            })
+            # The refused call's own requests, before the read Tool's independent
+            # lookup below: that lookup is the caller's read, not part of this call.
+            requests = resource_route_requests(gateway)
+            absent = session.read(PROFILE, CREATED_RESOURCE)
+
+        rows = audit_rows(tmp_path)
+
+    assert envelope(result)["code"] == "unsupported_capability"
+    assert requests == [], "a create that cannot name the collection must not reach the Gateway"
+    assert rows == [], "the refusal is a capability fact, before any audited decision"
+    assert envelope(absent)["code"] == "not_found", "nothing may be published"
 
 
 def test_a_create_that_violates_the_gateway_request_schema_never_dispatches(

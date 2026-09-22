@@ -64,7 +64,7 @@
   },
   "targetId": {
     "form": "<resourceType>/<name>, or <resourceType> for a singleton",
-    "collection": "the core collection only: every read and every write names collection=core (the reads and the DELETE route as a query parameter, a change item as the field its documented request schema declares), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
+    "collection": "the core collection only: the reads name it as the collection query parameter and the change item carries it as the field its documented POST request-body item schema declares; a type whose item schema does not declare that field, or does not accept core, cannot address a Target here at all and is refused with unsupported_capability before anything is dispatched; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,
@@ -85,10 +85,10 @@
     "source": "gateway-openapi-capability-snapshot",
     "schema": "the resource type's documented POST request-body item schema, bundled into a self-contained JSON Schema (internal $refs hoisted to $defs) at capability refresh time",
     "appliesTo": "the complete change item, before dispatch",
-    "unavailableDisposition": "a documented create route without a usable request schema exposes no create route, so the Tool refuses the resource type with unsupported_capability",
+    "unavailableDisposition": "a documented create route without a usable request schema, or whose item schema cannot name the core collection, exposes no create route, so the Tool refuses the resource type with unsupported_capability",
     "errorCode": "invalid_argument"
   },
-  "changeItem": "name is included when the documented item schema declares it (its non-singleton create item requires it); no signature is ever sent, because a create has no Precondition token",
+  "changeItem": "name is included when the documented item schema declares it (its non-singleton create item requires it); the item always names the core collection (D30 owner ruling 5), so a type whose item schema cannot carry that field has no create here; no signature is ever sent, because a create has no Precondition token",
   "collisionPolicy": "D11: an existing Target is a `conflict`. It is checked against the Gateway before dispatch, so a collision never consumes the caller's read, and a Target that appears in the race window is refused by the Gateway itself.",
   "rejectionPolicy": {
     "rule": "D30 §2: an explicit Gateway rejection is the result of the attempt — a 4xx (including 409 for an existing name, which D30 §7 maps to `conflict`) or a 2xx carrying success=false with a problem. No read-back may turn it into a success: a resource showing the requested values may have been created by another writer.",

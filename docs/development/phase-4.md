@@ -868,10 +868,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Rule (D30 owner ruling 5, `config_collection: core_only`).**
   `config_resource_create/update/delete/rename` name `core` on every Gateway read and write
   they make: the pre-dispatch read and the verification read-back send `?collection=core`,
-  a change item carries `"collection": "core"` when the type's documented item schema
-  declares the field (every committed 8.3.8 type does), and the documented `DELETE` and
+  a change item always carries `"collection": "core"`, and the documented `DELETE` and
   rename routes send it as their own query parameter. The update/create routes document no
-  collection query parameter at all, so there the item field is the mechanism. A
+  collection query parameter at all, so there the item field is the only mechanism — a type
+  whose documented item schema does not declare that field, or does not accept `core`, has
+  no way to address a Target and is refused with `unsupported_capability` before anything is
+  dispatched (never sent for the Gateway's own default to place). A
   caller-supplied `collection` is accepted only when it is exactly `core`; any other value
   is `invalid_argument` before anything is read or dispatched. The Target identity stays
   `<resourceType>/<name>` — now unambiguously *in core* — so no Target allowlist entry
@@ -960,6 +962,47 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   resource named `IgnitionMCPPolicy` by name inside these Tools; the collection pin is
   orthogonal to it (that resource is `ignition/tag-provider`, name `IgnitionMCPPolicy`,
   collection `core`), and #36 is left untouched here.
+- **Review round 1 fixes** (`35-review-1.md`: one blocker, one nit; report `35-fix-1.md`).
+  - **Blocker — the item could silently stop naming the collection.** `_write_item`
+    (`services/config_mutation.py`) added `"collection": "core"` only when the type's
+    documented item schema declared the field. A Gateway documenting an otherwise usable
+    change item without it therefore kept the update/create Tool available and dispatched an
+    item that named no collection, leaving the Gateway's own default to choose the Target —
+    the fail-closed guarantee of ruling 5 did not hold (the committed 8.3.8 document declares
+    the field for all 56 reachable types, which is why the live rows never exercised the
+    fallback). The item now names `core` unconditionally: a create/update whose documented
+    item schema does not declare `collection`, or whose declared `collection` property does
+    not accept `core`, is refused with `unsupported_capability` before any request is built
+    (`_core_collection_refusal`, raised from `_write_item` and from the D03 validation pass —
+    the value `core` can only have come from the server, never from the caller), so no new
+    error code is introduced (D06, D30 §7). The refusal is a capability fact raised before
+    `execute_mutation`, so it leaves no audit row, exactly like the non-core input refusal.
+    Fixture-first: three recorded-Gateway cases (one per Tool that builds an item, plus the
+    `collection`-rejects-`core` variant) patch the committed document's item schema and assert
+    `unsupported_capability`, **no** request on any config-resource route, no audit row, and an
+    unchanged Target. All three fail on the pre-fix head — the no-field update case came back
+    as a *success* with `enabled:false` observed, i.e. the change had really been placed in
+    whichever collection the fixture's default named. Two committed-document invariants were
+    added too: every documented PUT/POST change item declares `collection`, and the minimal
+    item the Tool can send (which now includes `"collection": "core"`) validates against every
+    documented item schema.
+  - **Nit — the contracts described the wrong wire mechanism.** `targetId.collection` in the
+    four REST contracts now says, per Tool, where the collection actually travels: create and
+    update name the pinned reads plus the schema-validated item field (and the
+    `unsupported_capability` refusal when the item cannot carry it), delete names the pinned
+    reads plus the `DELETE` route's query parameter, rename names the pinned reads plus the
+    rename route's query parameter. The `changeItem` / `unavailableDisposition` fields that
+    described the item without the collection were corrected too. `tooling/contracts/lint.py`
+    needed no change — it pins `fixedKnobs`, the Precondition token and the structural
+    disposition, none of which moved — and it stays green; the package README's three
+    collection paragraphs were updated to the same rule.
+  - **Validation.** Full `AGENTS.md` command block green (**924 pytest cases**, +5 on the
+    pre-review 919; ruff, mypy strict, lock, workflow linter, native validate/build/release,
+    compat, contract lint, `sync_schemas` no-op), and the local recorded-Gateway rehearsal
+    `tests/harness/phase4-live-rest/rehearse_local.py` — **194/194 cases**, unchanged: the
+    new refusal is only reachable for a Gateway document no real Gateway serves, so the live
+    rows cannot exercise it (the unit fixtures are the proof), and this change must keep every
+    live row green.
 
 ## Open questions
 

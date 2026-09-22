@@ -63,7 +63,7 @@
   },
   "targetId": {
     "form": "<resourceType>/<name>, or <resourceType> for a singleton",
-    "collection": "the core collection only: every read and every write names collection=core (the reads and the rename route as a query parameter, a change item as the field its documented request schema declares), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
+    "collection": "the core collection only: the reads and the documented rename route name it as the collection query parameter (the request body carries the new name and the fixed references, never a collection), so a Target is <resourceType>/<name> in that collection; a caller-supplied collection is accepted only when it is core, and any other value fails with invalid_argument before anything is dispatched (D30 owner ruling 5)",
     "allowlist": "IGNITION_MCP_MUTATION_TARGETS",
     "wildcard": "*",
     "denyByDefault": true,

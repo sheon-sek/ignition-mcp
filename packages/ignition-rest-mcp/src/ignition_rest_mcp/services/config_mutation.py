@@ -25,13 +25,16 @@ Three rules decide the wire item:
 - **Target identity.** A Target is the exact ``<resourceType>/<name>`` in the
   ``core`` configuration collection (D30 owner ruling 5), and every Gateway read and
   write this module makes names that collection: the reads send
-  ``collection=core`` as a query parameter, a change item carries it as the field its
-  documented request schema declares, and the ``DELETE`` and rename routes send it as
-  a query parameter. A caller-supplied collection is accepted only when it *is*
-  ``core``; anything else is refused before anything is read or dispatched, because
-  the Target allowlist names a resource and not a collection. A rename changes its
-  source *and* produces a resource at its destination, so both are Targets and both
-  must be allowlisted (D30 §3).
+  ``collection=core`` as a query parameter, a change item always carries it as the
+  field its documented request schema declares, and the ``DELETE`` and rename routes
+  send it as a query parameter. A type whose documented item schema cannot carry that
+  field, or cannot accept ``core``, has no way to address a Target here and is refused
+  before anything is dispatched — an item is never sent for the Gateway's own default
+  to place. A caller-supplied collection is accepted only when it *is* ``core``;
+  anything else is refused before anything is read or dispatched, because the Target
+  allowlist names a resource and not a collection. A rename changes its source *and*
+  produces a resource at its destination, so both are Targets and both must be
+  allowlisted (D30 §3).
 
 Because an explicit Gateway rejection is final for these Tools (D30 §2), every
 operation is declared ``rejection_is_final``: the caller either gets the Gateway's
@@ -628,6 +631,23 @@ def _core_collection(value: str) -> str:
     return CORE_COLLECTION
 
 
+def _core_collection_refusal() -> GatewayError:
+    """D30 owner ruling 5: a write that cannot name the core collection has no Target.
+
+    The collection routes document no collection query parameter, so a change item is
+    the only place a ``PUT``/``POST`` can carry the collection. A type whose documented
+    item schema cannot carry the field — or cannot accept ``core`` — is a type this Tool
+    cannot address at all, and no change may be sent for it: the Gateway's own default
+    would otherwise choose the collection the write lands in.
+    """
+
+    return GatewayError(
+        "unsupported_capability",
+        "this resourceType's documented change item cannot name the core collection, which "
+        "is the only collection this Tool addresses; nothing was dispatched",
+    )
+
+
 def _write_item(
     capability: ConfigResourceCapability,
     schema: Mapping[str, Any] | None,
@@ -638,22 +658,23 @@ def _write_item(
     """The complete Gateway-shaped change item, validated against the snapshot (D03).
 
     The Resource signature is included when the operation's route carries one, the name
-    exactly when the documented item schema declares one, and the collection exactly
-    when the documented item schema declares one: a singleton's update item requires
-    only ``signature``, a create item takes no signature at all, and sending an
-    undeclared field is not what the Gateway documents. The collection is always
-    ``core`` (D30 owner ruling 5): where the item schema declares the field, the item
-    names it, and where a schema does not, the Gateway's own default — which is that
-    same collection — is what the change lands in.
+    exactly when the documented item schema declares one, and the collection *always*:
+    a singleton's update item requires only ``signature``, a create item takes no
+    signature at all, and sending an undeclared field is not what the Gateway documents.
+    The collection is always ``core`` (D30 owner ruling 5), and the item always names it
+    — where the documented item schema cannot carry that field the write has no way to
+    address the Target, so it is refused here instead of being dispatched for the
+    Gateway's own default to place.
     """
 
+    if not _schema_declares(schema, "collection"):
+        raise _core_collection_refusal()
     item: dict[str, Any] = {}
     if expected_signature is not None:
         item["signature"] = expected_signature
     if _schema_declares(schema, "name"):
         item["name"] = name
-    if _schema_declares(schema, "collection"):
-        item["collection"] = CORE_COLLECTION
+    item["collection"] = CORE_COLLECTION
     item.update(fields)
     _validate_against_gateway(capability, schema, item)
     return item
@@ -713,6 +734,12 @@ def _validate_against_gateway(
     if not errors:
         return
     first = errors[0]
+    if first.absolute_path and str(first.absolute_path[0]) == "collection":
+        # D30 owner ruling 5: `core` is the only value this module ever puts in the
+        # field, so a schema that refuses it describes a type this Tool cannot address
+        # — not anything the caller supplied, which is why this is not an
+        # `invalid_argument`.
+        raise _core_collection_refusal()
     location = "/" + "/".join(str(part) for part in first.absolute_path) if first.absolute_path else "/"
     raise GatewayError(
         "invalid_argument",

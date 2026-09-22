@@ -97,11 +97,14 @@ requires scope `ignition.config`, class `CONFIG_MUTATION`, an operation-allowlis
 Target-allowlist entry. The Target of a config change is the exact `<resourceType>/<name>`, or the
 bare `<resourceType>` for a singleton, always in the **`core`** configuration collection (D30 owner
 ruling 5). The Gateway selects a resource by collection as well as by name, so every read and every
-write a config Mutation makes names `collection=core`: the reads, the delete and the rename routes
-send it as a query parameter, and a create/update change item carries it as the field its documented
-request schema declares. A caller-supplied `collection` is accepted only when it is `core`; any other
-value is `invalid_argument` before anything is read or dispatched, rather than being resolved to a
-look-alike in another collection. A Target outside the allowlist is `permission_denied` (D30 §7).
+write a config Mutation makes names `collection=core`: the reads send it as a query parameter, and this
+Tool's change item carries it as the field its documented `PUT` request schema declares. A type whose
+documented item schema cannot carry that field, or cannot accept `core`, has no way to address a
+Target here at all: it is refused with `unsupported_capability` before anything is dispatched, never
+sent for the Gateway's own default to place. A caller-supplied `collection` is accepted only when it
+is `core`; any other value is `invalid_argument` before anything is read or dispatched, rather than
+being resolved to a look-alike in another collection. A Target outside the allowlist is
+`permission_denied` (D30 §7).
 `*` is still required to allow everything. The caller passes the `expectedSignature` it read from
 `config_resource_get`, which is
 compared against a bounded re-read immediately before dispatch and then sent to the Gateway as its
@@ -135,7 +138,9 @@ Precondition rule:
   decides instead: the Target must be absent, which is checked against the Gateway before anything
   is dispatched, and an existing target — including one that appears in the race window — is a
   `conflict`. The published resource and its signature are the Observed state. The item is validated
-  against the type's documented `POST` request schema (D03) first.
+  against the type's documented `POST` request schema (D03) first, and it always names the core
+  collection: a type whose documented item schema cannot carry that field, or cannot accept `core`, is
+  refused with `unsupported_capability` before anything is dispatched (D30 owner ruling 5).
 - `config_resource_delete` carries `expectedSignature` **in the native `DELETE` path**
   (`/data/api/v1/resources/<resourceType>/{name}/{signature}`, or `/{signature}` for a singleton), so
   the Gateway enforces the token itself, and a bounded read-compare before dispatch still turns a
@@ -155,7 +160,11 @@ Precondition rule:
 
 Common rules for all four: a Target is `<resourceType>/<name>` (or the bare `<resourceType>` for a
 singleton) in the **`core`** collection, which is the only collection these Tools address and which
-every read and every write names explicitly (D30 owner ruling 5); a caller-supplied `collection` is
+every read and every write names explicitly (D30 owner ruling 5) — the reads and the delete/rename
+routes as their `collection` query parameter, and a create/update change item as its documented item
+schema's `collection` field, which every committed type declares and accepts; a create or update whose
+type cannot name `core` that way is refused with `unsupported_capability` before anything is dispatched,
+because the item is the only place those two routes could carry it. A caller-supplied `collection` is
 accepted only when it is `core`, and any other value is `invalid_argument` before anything is
 dispatched; a Target outside the allowlist is `permission_denied` (D30 §7); and an explicit
 Gateway rejection — a 4xx or a 2xx carrying `success=false` with a `problem` — is final: no read-back

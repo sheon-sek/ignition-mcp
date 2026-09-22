@@ -47,7 +47,7 @@ from phase4_fixtures import CONFIG_MUTATION_TOOLS as MUTATION_TOOL_NAMES
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests/harness"))
 
-from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
+from recorded_gateway import API_TOKEN, COMMITTED_OPENAPI, RecordedGateway  # noqa: E402
 
 
 # ------------------------------------------------------------------- fixtures
@@ -69,6 +69,27 @@ def _mutation_settings(**overrides: Any) -> Any:
         targets=targets or {UPDATE_TOOL: (f"{PROFILE}/{RESOURCE}",)},
         **overrides,
     )
+
+
+def _committed_document_with_collection_item(property_schema: dict[str, Any] | None) -> bytes:
+    """The committed Gateway document with the Target type's ``PUT`` change item
+    declaring ``property_schema`` for ``collection`` — or not declaring the field at
+    all (``None``).
+
+    Everything else in the document is left alone, so the item schema stays otherwise
+    valid: this is what a Gateway whose write cannot address the pinned collection
+    would serve, and the Tool's decision about it must not depend on the Gateway's own
+    default choosing the collection.
+    """
+
+    document = json.loads(COMMITTED_OPENAPI.read_text(encoding="utf-8"))
+    schema = document["paths"][f"/data/api/v1/resources/{PROFILE}"]["put"]
+    item = schema["requestBody"]["content"]["application/json"]["schema"]["items"]
+    if property_schema is None:
+        del item["properties"]["collection"]
+    else:
+        item["properties"]["collection"] = property_schema
+    return json.dumps(document).encode("utf-8")
 
 
 # --------------------------------------------------------------- signature read
@@ -640,6 +661,82 @@ def test_a_non_core_collection_is_refused_and_dispatches_nothing(tmp_path: Path)
     assert rows == [], "the refusal is input validation, before any audited decision"
     assert gateway.signature(PROFILE, RESOURCE, OTHER_COLLECTION) == other_signature
     assert gateway.signature(PROFILE, RESOURCE, CORE_COLLECTION) == core_signature
+
+
+def test_a_type_whose_item_cannot_name_the_collection_has_no_update_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """D30 owner ruling 5: a collection route documents no collection query parameter,
+    so a ``PUT`` can only name the collection in its change item. A Gateway whose item
+    schema does not declare that field leaves the write with no way to address `core`,
+    and the Tool refuses it — it must never dispatch an item that lets the Gateway's own
+    default choose the collection the change lands in."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        document = _committed_document_with_collection_item(None)
+
+        async def collection_less_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", collection_less_openapi)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+        stored = gateway.resource(PROFILE, RESOURCE)
+
+    error = envelope(result)
+    assert error["code"] == "unsupported_capability"
+    assert requests == [], "a write that cannot name the collection must not reach the Gateway"
+    assert rows == [], "the refusal is a capability fact, before any audited decision"
+    assert stored["enabled"] is True, "the Target must be left exactly as it was"
+    assert stored["signature"] == before
+
+
+def test_a_type_whose_item_rejects_the_core_collection_has_no_update_to_make(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The other half of ruling 5: an item schema that declares the field but will not
+    accept `core` cannot address this Tool's Target either. The refusal is the type's
+    capability, not the caller's input — the caller never supplies the value."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROFILE, RESOURCE)
+        document = _committed_document_with_collection_item(
+            {"type": "string", "enum": [OTHER_COLLECTION]},
+        )
+
+        async def core_rejecting_openapi(self: Any) -> bytes:
+            return document
+
+        monkeypatch.setattr(server_module.GatewayClient, "openapi", core_rejecting_openapi)
+        settings = _mutation_settings(
+            data_dir=str(tmp_path), gateway_url=gateway.base_url, gateway_api_token=API_TOKEN,
+        )
+
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = _Session(http, "cfg-secret").call(UPDATE_TOOL, {
+                "resourceType": PROFILE, "expectedSignature": before,
+                "name": RESOURCE, "enabled": False,
+            })
+
+        requests = resource_route_requests(gateway)
+        stored = gateway.resource(PROFILE, RESOURCE)
+
+    assert envelope(result)["code"] == "unsupported_capability"
+    assert requests == [], "a write the type's own schema cannot address must not be sent"
+    assert stored["signature"] == before
 
 
 def test_the_core_collection_resource_is_the_one_a_change_applies_to(tmp_path: Path) -> None:
