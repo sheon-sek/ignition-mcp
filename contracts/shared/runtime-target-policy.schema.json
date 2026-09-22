@@ -64,6 +64,24 @@
       "type": "integer",
       "minimum": 1,
       "maximum": 100
+    },
+    "tagDeleteMaxItems": {
+      "description": "D10: the deployment's item ceiling for tag_delete, from 1 to the 100-target hard maximum. Absent means the 20-target project default.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "tagMoveMaxItems": {
+      "description": "D10: the deployment's item ceiling for tag_move, from 1 to the 100-target hard maximum. Absent means the 20-target project default.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
+    },
+    "tagRenameMaxItems": {
+      "description": "D10: the deployment's item ceiling for tag_rename, from 1 to the 100-target hard maximum. Absent means the 20-target project default.",
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100
     }
   },
   "required": [

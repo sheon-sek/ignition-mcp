@@ -1094,6 +1094,92 @@ are real gaps the reviewer named and they are **not** fixed in this round:
 5. **P1 — the modelled refusal bodies** in `tests/fixtures/recorded/gateway-8.3/provenance.json`
    are still labelled `modelled` after two green G4b runs; re-recording them is a runbook
    follow-up.
+### Ticket #12 — Runtime `tag_delete`, `tag_move` and `tag_rename` (milestone 4b)
+
+- Contracts and schemas: `contracts/tools/runtime/{tag_delete,tag_move,tag_rename}.contract.json`
+  (CONFIG, `CONFIG_MUTATION`, FAST; delete and move `destructive: true`, rename `destructive:
+  false`) and `contracts/schemas/tag-{delete,move,rename}.output.schema.json`. All three carry the
+  D30 §2 Tag config fingerprint per target as their Precondition token (`items[].expectedFingerprint`,
+  `tcf1`, handler read-compare, `conflict` on a mismatch, race window documented), and the observed
+  state is a uniform path-state entry: `{path, status: ok, absent: true}`, `{path, status: ok,
+  absent: false, fingerprint, configuration}` or an explicit `{path, status: error, error}`. Every
+  D10 field the handler reads (`tagDeleteMaxItems`, `tagMoveMaxItems`, `tagRenameMaxItems`) is a
+  Runtime Target Policy document field, and each Tool joins the `configurator` and `full` profiles
+  (`readonly` and `operator` unchanged; `readonly` never changes, D09). `BUNDLE_VERSION` goes
+  0.6.0 → 0.7.0 (D21 MINOR), which the two harness Server Configs and the managed bundle marker
+  follow.
+- Input rules come from the native calls. `system.tag.move(paths, destination, collisionPolicy)`
+  moves a path list into one destination folder under each source's own name, so a destination whose
+  leaf differs from its source's is `invalid_argument`
+  (`destinationLeafDiffersFromSource`) before any native call — a move that renames is `tag_rename`'s.
+  `system.tag.rename(target, newName, collisionPolicy)` takes a name, never a path, so a `newName`
+  that is not one path segment is `invalid_argument` (`newNameNotASingleSegment`) and the new path D30
+  §6 measures is the target's own parent plus that name. `system.tag.deleteTags(paths)` takes no
+  collision policy at all, which is why the delete contract declares `collisionPolicy:
+  not_applicable` and says why.
+- Target checks follow D30 §6 and owner ruling 1: a move measures the source *and* the destination
+  against the `tag_move` allowlist, a rename measures the new path (its source stays the far end D30
+  §6 does not check, exactly like a copy's source), and a delete measures its own target — each with
+  D30 §6's `_types_` rule, so a UDT definition needs an entry that itself names `_types_` and a bare
+  `*` does not reach one. The reserved `IgnitionMCPPolicy` provider is refused at both ends, before
+  the allowlist is consulted, under an explicit `*` as well: a move refuses a source or a destination
+  inside it, a rename refuses the target or the new path, and a delete refuses its target.
+- Preflight is all-or-nothing (D30 §3): input, the reserved provider, the Target allowlist, the
+  target's existence, the Precondition token, and — for a move or a rename — the destination's or the
+  new path's absence are all checked before any item executes, with one Runtime audit decision row on
+  a refusal and none in `off` mode. After Preflight the items execute one at a time with no rollback:
+  the Native QualityCode of each call is that item's outcome. `Abort` keeps a destination or new path
+  that appears in the race window from being replaced, and a call that aborts with the destination
+  present is reported as that item's `conflict` (`destinationAppeared` / `newPathAppeared`) rather
+  than as a success. Observed state is the target's absence after a delete, the destination present
+  and the source absent after a move, and the new path present and the old path absent after a
+  rename; it never decides success, and it carries its own budget so a per-item outcome is never
+  replaced by an output-limit error.
+- Fixture-first coverage: recorded-Jython fixtures and tests for all three Tools
+  (`tooling/native/jython_runner/{fixtures,tests}/tag_{delete,move,rename}*`) over the ordered native
+  call sequence, and the D29 launcher gained `system.tag.deleteTags`, `system.tag.move`,
+  `system.tag.rename` plus the single-`QualityCode` result kind `system.tag.rename` answers with.
+- Local rehearsal: `tests/harness/phase4-live/rehearse_local.py --stages 4b` — every 4b stage against
+  the recorded Gateway, `drift: {}`.
+- Live: the harness stages `tag-move`, `tag-rename` and `tag-delete` in
+  `.github/workflows/phase4-live-g4b.yml`, on the `configurator` deployment, in that order because a
+  move borrows `tag_create`'s node, a rename creates the occupied name a later case reads, and a
+  delete takes a Folder with everything beneath it. Run
+  [35707687810](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687810) is green on both
+  rows with `drift: {}` — 8.3.8 `2026071409` (required) and 8.3.9 `2026082511` (candidate), at the
+  head's merge revision `d95a2d2e` — with CI
+  [35707687767](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687767), G0
+  [35707687771](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687771) and G3
+  [35707687805](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687805) green on the same
+  head:
+  - the deployed `configurator` inventory carries all three Tools, and each stage's own log is
+    evidence;
+  - the allowlisted move landed: the destination is present and the source is gone, both read
+    independently through the provider's own export at the two exact paths, and the Observed
+    destination fingerprint is that re-read's;
+  - an occupied destination is `conflict` / `destinationExists` and changed neither end; a stale
+    token is `conflict` / `fingerprintMismatch`; a source that is not there is `not_found` /
+    `sourceMissing`;
+  - the segment-boundary sibling is refused at the *source* end (`targetNotAllowlisted`), a UDT
+    definition or its destination is refused under a plain prefix and under a bare `*`, and an
+    explicit `_types_` entry lifts that refusal (the batch then lists only its sibling);
+  - the reserved `IgnitionMCPPolicy` provider is refused at the source end *and* at the destination
+    end under an explicit `*`, with the probe Tag and the policy document both unchanged;
+  - D10's hard item ceiling, path ceiling, 20-target project default and the deployment's own
+    `tagMoveMaxItems=1` each refuse with their own reason;
+  - the rename landed with the new path present and the old path absent, again through the export at
+    both exact paths; an occupied new path is `conflict` / `newPathExists`, a multi-segment `newName`
+    is `invalid_argument` / `newNameNotASingleSegment`, a missing target is `not_found`, and the
+    sibling, `_types_` and reserved-provider rules (plus the same four ceilings) hold;
+  - the delete's partial-failure batch after Preflight behaved exactly as D30 §3 says: the Folder
+    item executed Good (taking its descendants with it), the second item — a Tag inside that Folder,
+    which Preflight had checked and whose token had matched — answered its own `Bad_NotFound`, the
+    summary is `succeeded: 1`, `failed: 1`, `outcomeUnknown: 0`, nothing was retried or rolled back,
+    both paths are observed absent, and the Folder is gone from the export; a stale token changed
+    nothing, a missing target is `not_found`, the input-key rule refuses, and the sibling, `_types_`,
+    reserved-provider and ceiling cases all hold;
+  - every dispatched stage wrote its attempt and result audit rows for the call's correlation ID
+    under the policy's Service identity (2 rows each, `best_effort`).
 
 ### Ticket #16 — REST `project_import` (milestone 4c)
 

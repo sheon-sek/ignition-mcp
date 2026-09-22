@@ -1,0 +1,9 @@
+{
+  "content": [
+    {
+      "text": "{\"code\": \"permission_denied\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"allowlistKey\": \"tag_rename\", \"auditRecorded\": true, \"items\": [{\"code\": \"permission_denied\", \"index\": 0, \"newPath\": \"__UDT_NEW_PATH__\", \"path\": \"__UDT_TARGET__\", \"reason\": \"udtDefinitionNotAllowlisted\", \"refusedPath\": \"__UDT_NEW_PATH__\"}], \"reason\": \"preflightTargetRefused\"}, \"message\": \"The new path of every target - its own parent plus the new name - must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry), and neither the target nor that new path may be inside the reserved policy provider; no item was executed.\"}",
+      "type": "text"
+    }
+  ],
+  "isError": true
+}

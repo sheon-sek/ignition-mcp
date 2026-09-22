@@ -416,6 +416,9 @@ class _Recorder(object):
             return None
         if kind == "qualified-values":
             return _QualifiedValues(result)
+        if kind == "quality":
+            # `system.tag.rename` answers a single QualityCode, not a list.
+            return _QualityCode(result)
         if kind == "quality-codes":
             return _QualityCodes(result)
         if kind == "configurations":
@@ -466,6 +469,15 @@ class _Tag(object):
 
     def exists(self, *args, **kwargs):
         return self.recorder.take("system.tag.exists", args, kwargs)
+
+    def deleteTags(self, *args, **kwargs):
+        return self.recorder.take("system.tag.deleteTags", args, kwargs)
+
+    def move(self, *args, **kwargs):
+        return self.recorder.take("system.tag.move", args, kwargs)
+
+    def rename(self, *args, **kwargs):
+        return self.recorder.take("system.tag.rename", args, kwargs)
 
 
 class _Config(object):

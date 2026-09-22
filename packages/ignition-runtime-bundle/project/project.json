@@ -1,6 +1,6 @@
 {
   "title": "Ignition Runtime MCP Bundle",
-  "description": "Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.\nignition-mcp-managed: product=ignition-runtime-bundle; bundle=0.6.0",
+  "description": "Production-buildable Runtime MCP Bundle foundation after D27 Phase 0 native binding characterization.\nignition-mcp-managed: product=ignition-runtime-bundle; bundle=0.7.0",
   "enabled": true,
   "inheritable": false
 }

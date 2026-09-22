@@ -267,7 +267,7 @@ CURRENT_RUNTIME_READ_TOOLS = [
 ]
 #: Phase 4 milestone 4a (D30). Milestone 4b adds the CONFIG Tag Mutations.
 CURRENT_RUNTIME_CONTROL_TOOLS = ["tag_write", "alarm_shelve", "alarm_unshelve"]
-CURRENT_RUNTIME_CONFIG_TOOLS = ["tag_update", "tag_create", "tag_copy"]
+CURRENT_RUNTIME_CONFIG_TOOLS = ["tag_update", "tag_create", "tag_copy", "tag_delete", "tag_move", "tag_rename"]
 CURRENT_RUNTIME_MUTATION_TOOLS = CURRENT_RUNTIME_CONTROL_TOOLS + CURRENT_RUNTIME_CONFIG_TOOLS
 CURRENT_RUNTIME_TOOLS = CURRENT_RUNTIME_READ_TOOLS + CURRENT_RUNTIME_MUTATION_TOOLS
 #: `readonly` never changes (D09); each mutation-capable profile is the READ
@@ -292,9 +292,13 @@ TAG_CONFIG_FINGERPRINT_HEX_LENGTH = 64
 TAG_CONFIG_FINGERPRINT_READ = "system.tag.getConfiguration(path, false, false)"
 #: Phase 4 milestone 4b: the Runtime CONFIG Mutations implemented so far, with the
 #: per-Tool facts the contract must state (D30 §2, §3, §6). ``targetKind`` is what
-#: decides the collision rule the Tool implements: an update reads an existing
-#: target and fails ``not_found`` when it is gone, while a create and a copy take no
-#: Precondition token (D30 §2) and fail ``conflict`` when their target is taken.
+#: decides the collision rule the Tool implements: an update or a delete works on an
+#: existing target and fails ``not_found`` when it is gone, a create fails ``conflict``
+#: when its target is already taken, and a copy, a move or a rename take a source plus
+#: an absent destination and fail ``conflict`` when that destination is taken. A create
+#: and a copy take no Precondition token at all (D30 §2). A delete has no destination to
+#: collide with, so its ``collisionPolicy`` is ``not_applicable`` and its contract must
+#: say why.
 CURRENT_RUNTIME_CONFIG_MUTATIONS: dict[str, dict[str, Any]] = {
     "tag_update": {
         "destructive": False,
@@ -317,9 +321,40 @@ CURRENT_RUNTIME_CONFIG_MUTATIONS: dict[str, dict[str, Any]] = {
         "targetKind": "source_and_absent_destination",
         "refusedConfigKeys": False,
     },
+    "tag_delete": {
+        "destructive": True,
+        "precondition": {"kind": "tag_config_fingerprint", "enforcedBy": "handler_read_compare"},
+        "collisionPolicy": "not_applicable",
+        "targetKind": "existing_target",
+        "refusedConfigKeys": False,
+    },
+    "tag_move": {
+        "destructive": True,
+        "precondition": {"kind": "tag_config_fingerprint", "enforcedBy": "handler_read_compare"},
+        "collisionPolicy": "Abort",
+        "targetKind": "source_and_absent_destination",
+        "refusedConfigKeys": False,
+    },
+    "tag_rename": {
+        "destructive": False,
+        "precondition": {"kind": "tag_config_fingerprint", "enforcedBy": "handler_read_compare"},
+        "collisionPolicy": "Abort",
+        "targetKind": "source_and_absent_destination",
+        "refusedConfigKeys": False,
+    },
 }
 RUNTIME_PRECONDITION_KINDS = frozenset({"tag_config_fingerprint", "none"})
 RUNTIME_PRECONDITION_ENFORCERS = frozenset({"handler_read_compare"})
+#: The CONFIG Mutations whose native call names a source and a destination per item, so
+#: their contract must carry both paths in ``items[]``. A rename calls
+#: ``system.tag.rename``, which takes a new name and never a destination path, and a
+#: delete names one target: neither is in this set.
+RUNTIME_CONFIG_TWO_PATH_TOOLS = frozenset({"tag_copy", "tag_move"})
+#: The two-end Tools whose source is measured only for readability and NOT against the
+#: Target allowlist, because D30 §6 checks the destination — and for a rename the
+#: destination is its own parent plus the new name. A move measures both ends, so its
+#: contract declares that instead of claiming an exemption it does not have.
+RUNTIME_CONFIG_SOURCE_ALLOWLIST_EXEMPT_TOOLS = frozenset({"tag_copy", "tag_rename"})
 #: The fields the shipped Jython reader requires of every Runtime Target Policy,
 #: whatever Tool reads it. `auditProfile` and `alarmShelveMaxSeconds` are
 #: validated when present.
@@ -647,6 +682,14 @@ def _check_runtime_config_mutation(
             )
     if tool.get("collisionPolicy") != spec["collisionPolicy"]:
         raise ContractError(f"{tool_name}: the handler fixes the Gateway collision policy (D30 §4)")
+    if spec["collisionPolicy"] == "not_applicable":
+        # A Tool whose native call takes no collision policy still has to justify
+        # ``not_applicable`` rather than leave the rule unstated.
+        collision_policy_why = tool.get("collisionPolicyWhy")
+        if not isinstance(collision_policy_why, str) or not collision_policy_why.strip():
+            raise ContractError(
+                f"{tool_name}: a Tool with no native collision policy must say why (D30 §4)"
+            )
     if spec["targetKind"] == "existing_target":
         if tool.get("neverCreatesTarget") != "not_found":
             raise ContractError(f"{tool_name}: a missing target fails with not_found instead of being created")
@@ -681,16 +724,33 @@ def _check_runtime_config_mutation(
     else:
         if "config" in item_properties or refused_keys is not None:
             raise ContractError(f"{tool_name}: this Tool takes no configuration, so it refuses no configuration key")
-        if "sourcePath" not in item_properties or "destinationPath" not in item_properties:
-            raise ContractError(f"{tool_name}: a copy names its source and its destination per item")
+        if tool_name in RUNTIME_CONFIG_TWO_PATH_TOOLS and (
+            "sourcePath" not in item_properties
+            or "destinationPath" not in item_properties
+        ):
+            raise ContractError(
+                f"{tool_name}: a Tool whose native call moves a node names its source and its destination per item"
+            )
     if not isinstance(tool.get("targetPath"), dict):
         raise ContractError(f"{tool_name}: the Tool must declare its target path rules")
     if spec["targetKind"] == "source_and_absent_destination":
         source = tool.get("sourcePath")
-        if not isinstance(source, dict) or "readable" not in str(source) or "notAllowlistChecked" not in str(source):
+        if not isinstance(source, dict) or "readable" not in str(source):
             raise ContractError(
-                f"{tool_name}: D30 §6 checks the destination of a copy, so the source's readability and its "
-                "exemption from the Target allowlist must both be declared"
+                f"{tool_name}: D30 §6 measures the far end of a two-end Tool, so the source's own "
+                "readability must be declared"
+            )
+        # A copy's and a rename's source is exempt from the Target allowlist because the
+        # destination is what D30 §6 checks; a move measures both ends and must say so.
+        if tool_name in RUNTIME_CONFIG_SOURCE_ALLOWLIST_EXEMPT_TOOLS:
+            if "notAllowlistChecked" not in str(source):
+                raise ContractError(
+                    f"{tool_name}: the source's exemption from the Target allowlist must be declared (D30 §6)"
+                )
+        elif "allowlistChecked" not in str(source) or "notAllowlistChecked" in str(source):
+            raise ContractError(
+                f"{tool_name}: this Tool measures its source against the Target allowlist too, so its "
+                "contract must declare that and not an exemption"
             )
 
 

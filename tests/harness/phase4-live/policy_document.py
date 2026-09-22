@@ -504,6 +504,175 @@ def tag_copy_tag_document_bytes(**overrides: Any) -> bytes:
     return json.dumps(document, separators=(",", ":")).encode("utf-8")
 
 
+# --------------------------------------------------------------------------- #
+# Ticket #12 (`tag_delete`, `tag_move` and `tag_rename`) live fixtures
+#
+# The three Mutations run on the same `configurator` profile, against the same
+# probe-seeded Tags, and install their own document over the same reserved
+# provider — one key per Tool, because an absent key means no target for that Tool
+# and each stage proves its own gate.
+#
+# The stages run in the workflow's order: `tag_move` borrows `tag_create`'s
+# `CreateTarget` as its source and moves it into the `Nested` folder the probe
+# project already made, `tag_rename` renames the seeded `TextTarget`, and
+# `tag_delete` runs last because a Folder delete takes everything beneath it.
+# Every leaf name stays unique in the provider export at each point, which is what
+# makes the export usable as an independent presence check.
+# --------------------------------------------------------------------------- #
+
+#: D30 6's `_types_` entry, which lifts the definition refusal for one Tool.
+TAG_TYPES_ALLOWLIST = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}",
+)
+
+#: `tag_delete`: the positive delete, the folder whose dispatch takes the child the
+#: partial-failure batch names second, and the refusals' paths.
+TAG_DELETE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_DELETE_TARGET = TAG_FIXTURE_PATH
+TAG_DELETE_FOLDER = TAG_UPDATE_FOLDER
+TAG_DELETE_FOLDER_CHILD = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/Nested/Inner"
+TAG_DELETE_STALE_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/RenamedText"
+TAG_DELETE_SIBLING_TARGET = TAG_FIXTURE_SIBLING_PATH
+TAG_DELETE_MISSING_TARGET = TAG_FIXTURE_MISSING_PATH
+TAG_DELETE_RESERVED_TARGET = WRITE_PROBE_PATH
+TAG_DELETE_UDT_TARGET = (
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/McpCiDeleteProbe"
+)
+
+#: `tag_move`: source, destination and the refusals' endpoint pairs. Every
+#: destination shares its source's leaf, because one `system.tag.move` call lands
+#: each source under its own name in the destination folder.
+TAG_MOVE_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_MOVE_SOURCE = TAG_CREATE_TARGET
+TAG_MOVE_LEAF = TAG_MOVE_SOURCE.rsplit("/", 1)[-1]
+TAG_MOVE_DESTINATION = f"{TAG_UPDATE_FOLDER}/{TAG_MOVE_LEAF}"
+TAG_MOVE_OCCUPIED_DESTINATION = f"{TAG_UPDATE_FOLDER}/{TAG_FIXTURE_PATH.rsplit('/', 1)[-1]}"
+TAG_MOVE_MISSING_SOURCE = TAG_FIXTURE_MISSING_PATH
+TAG_MOVE_MISSING_DESTINATION = f"{TAG_UPDATE_FOLDER}/{TAG_FIXTURE_MISSING_PATH.rsplit('/', 1)[-1]}"
+TAG_MOVE_LEAF_MISMATCH_DESTINATION = f"{TAG_UPDATE_FOLDER}/OtherLeaf"
+TAG_MOVE_SIBLING_SOURCE = TAG_FIXTURE_SIBLING_PATH
+TAG_MOVE_SIBLING_DESTINATION = (
+    f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_SIBLING_ROOT}/Nested/WriteTarget"
+)
+TAG_MOVE_RESERVED_SOURCE = WRITE_PROBE_PATH
+#: The leaf of the probe Tag, named rather than split off the policy path: that path
+#: has no `/` after the provider bracket, so a split would carry the bracket into the
+#: destination and turn this case into the leaf-rule refusal instead.
+TAG_MOVE_RESERVED_LEAF = "WriteProbe"
+TAG_MOVE_RESERVED_SOURCE_DESTINATION = f"{TAG_UPDATE_FOLDER}/{TAG_MOVE_RESERVED_LEAF}"
+TAG_MOVE_RESERVED_DESTINATION = f"[{POLICY_PROVIDER}]{TAG_MOVE_LEAF}"
+TAG_MOVE_UDT_SOURCE = (
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/McpCiMoveProbe/ProbeType"
+)
+TAG_MOVE_UDT_DESTINATION = (
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/Nested/ProbeType"
+)
+
+#: `tag_rename`: the seeded target and the new name that makes its new path, plus
+#: the refusals. A rename never changes the parent, so a new name is one segment.
+TAG_RENAME_ALLOWLIST = (f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}",)
+TAG_RENAME_TARGET = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/TextTarget"
+TAG_RENAME_TARGET_NEW_NAME = "RenamedText"
+TAG_RENAME_TARGET_NEW_PATH = f"[{TAG_FIXTURE_PROVIDER}]{TAG_FIXTURE_ROOT}/{TAG_RENAME_TARGET_NEW_NAME}"
+#: The path the positive case creates, so the same name is now occupied.
+TAG_RENAME_OCCUPIED_SOURCE = TAG_FIXTURE_PATH
+TAG_RENAME_STALE_NEW_NAME = "StaleRename"
+TAG_RENAME_MISSING_TARGET = TAG_FIXTURE_MISSING_PATH
+TAG_RENAME_MISSING_NEW_NAME = "RenamedMissing"
+TAG_RENAME_SIBLING_TARGET = TAG_FIXTURE_SIBLING_PATH
+TAG_RENAME_SIBLING_NEW_NAME = "RenamedSibling"
+TAG_RENAME_RESERVED_TARGET = WRITE_PROBE_PATH
+TAG_RENAME_RESERVED_NEW_NAME = "RenamedProbe"
+TAG_RENAME_MULTI_SEGMENT_NAME = f"{TAG_FIXTURE_ROOT}/Nested"
+TAG_RENAME_UDT_TARGET = (
+    f"[{TAG_FIXTURE_PROVIDER}]{UDT_NAMESPACE}/{TAG_FIXTURE_ROOT}/McpCiRenameProbe"
+)
+TAG_RENAME_UDT_NEW_NAME = "RenamedProbe"
+
+TAG_DELETE_POLICY_MAX_FIELD = "tagDeleteMaxItems"
+TAG_MOVE_POLICY_MAX_FIELD = "tagMoveMaxItems"
+TAG_RENAME_POLICY_MAX_FIELD = "tagRenameMaxItems"
+TAG_TICKET12_POLICY_MAX_FIELDS = {
+    "tag_delete": TAG_DELETE_POLICY_MAX_FIELD,
+    "tag_move": TAG_MOVE_POLICY_MAX_FIELD,
+    "tag_rename": TAG_RENAME_POLICY_MAX_FIELD,
+}
+
+
+TAG_TICKET12_ALLOWLISTS = {
+    "tag_delete": TAG_DELETE_ALLOWLIST,
+    "tag_move": TAG_MOVE_ALLOWLIST,
+    "tag_rename": TAG_RENAME_ALLOWLIST,
+}
+
+
+def tag_tool_policy(
+    tool: str, *, allowlist: tuple[str, ...] = (), audit_mode: str = "best_effort",
+    max_items: int | None = None,
+) -> dict[str, Any]:
+    """The policy one Ticket #12 Tool's live cases run against.
+
+    Shape-identical to the ticket #7 document with this Tool's own allowlist key,
+    so the shipped reader validates one document shape for every Tag Mutation.
+    `max_items` is the D10 field that Tool's handler reads; absent means the
+    20-target project default.
+    """
+    document = json.loads(json.dumps(POLICY))
+    document["allowlists"][tool] = list(allowlist or TAG_TICKET12_ALLOWLISTS[tool])
+    document["auditMode"] = audit_mode
+    document["auditProfile"] = AUDIT_PROFILE_NAME
+    if max_items is not None:
+        document[TAG_TICKET12_POLICY_MAX_FIELDS[tool]] = max_items
+    return document
+
+
+def tag_delete_policy(**overrides: Any) -> dict[str, Any]:
+    return tag_tool_policy("tag_delete", **overrides)
+
+
+def tag_move_policy(**overrides: Any) -> dict[str, Any]:
+    return tag_tool_policy("tag_move", **overrides)
+
+
+def tag_rename_policy(**overrides: Any) -> dict[str, Any]:
+    return tag_tool_policy("tag_rename", **overrides)
+
+
+def _policy_tag_document(document: dict[str, Any]) -> bytes:
+    text = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return json.dumps({"tags": policy_tags(text)}, separators=(",", ":")).encode("utf-8")
+
+
+def _policy_sha256(document: dict[str, Any]) -> str:
+    text = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def tag_delete_tag_document_bytes(**overrides: Any) -> bytes:
+    return _policy_tag_document(tag_delete_policy(**overrides))
+
+
+def tag_delete_policy_sha256(**overrides: Any) -> str:
+    return _policy_sha256(tag_delete_policy(**overrides))
+
+
+def tag_move_tag_document_bytes(**overrides: Any) -> bytes:
+    return _policy_tag_document(tag_move_policy(**overrides))
+
+
+def tag_move_policy_sha256(**overrides: Any) -> str:
+    return _policy_sha256(tag_move_policy(**overrides))
+
+
+def tag_rename_tag_document_bytes(**overrides: Any) -> bytes:
+    return _policy_tag_document(tag_rename_policy(**overrides))
+
+
+def tag_rename_policy_sha256(**overrides: Any) -> str:
+    return _policy_sha256(tag_rename_policy(**overrides))
+
+
 def alarm_policy_byte_length(**overrides: Any) -> int:
     return len(alarm_policy_json(**overrides).encode("utf-8"))
 
