@@ -170,6 +170,14 @@ with `importDispatched` in the durable row. `test_phase3_safety_structure.py`
 still pins that no code path outside the guarded executor dispatches a Gateway
 write, and `unsafeAutomaticRetryAbsent` is an explicit row field, not a sentence.
 
+**Milestone 4d is verified separately, by its own row.** `setup-native apply` is not an
+L5 case, so it has no row in the table above; D26's G4 acceptance item for it is carried
+by the milestone-4d row instead. Live run
+[35715927983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35715927983) on
+`4b5b0df` completed `plan → apply → verify` on a disposable Gateway on both Gateway rows,
+with the applied endpoint serving the profile's inventory (`ok: true`, no Server Config
+refresh and no verify retry needed). Both evidence rows cite it.
+
 ### Exact inventories
 
 Runtime profiles (`contracts/profiles/*.yaml`, `tooling/contracts/lint.py`
@@ -235,11 +243,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   matches the row's Gateway/Module identity, and deployed the bundle the row declares. The
   cited runs are `35710377211` (G4a, milestone 4a), `35710377243` (G4b, 4b part), `35707687810`
   (G4b, 4b complete), `35713927291` (G4b, milestone 4b on the **final integration head**
-  `0801e51` = `4238653` + #22 + the CI-only workflow change) and `35687123699` (REST mutation,
-  milestone 4c); the row records each run's head, its pull-request test merge revision and the
-  bundle it deployed, because the 4a runs deployed 0.6.0 while the 4b runs deployed 0.7.0 in
-  two builds (`5cdca831…` at `dfa4d08`, before the #7/#8 handler fixes, and `d5382418…` at
-  `0801e51`, the close-out bundle, independently reproduced locally).
+  `0801e51` = `4238653` + #22 + the CI-only workflow change), `35715927983` (apply, milestone 4d)
+  and `35687123699` (REST mutation, milestone 4c); the row records each run's head, its
+  pull-request test merge revision and the artifact it deployed, because the 4a runs deployed
+  0.6.0 while the 4b runs deployed 0.7.0 in two builds (`5cdca831…` at `dfa4d08`, before the
+  #7/#8 handler fixes, and `d5382418…` at `0801e51`, the close-out bundle, independently
+  reproduced locally) and the apply run deployed the `release`-built ZIP of the same version
+  (`c95bd02e…`, which stamps its source revision).
 - **`tooling/compat` gained the gate itself.** `GATES` now includes `G4`, and
   `_apply_g4_rules` enforces, fail-closed: every D26 case recorded on both Planes; a
   limitation for every claim that is not live; a run id for every claim that is; D30's
@@ -262,22 +272,28 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   Gateway row with `compatibilityStatus UNTESTED`; `tooling/native/tests/test_phase3_release.py`
   asserts exactly that (and still refuses any `SUPPORTED` tuple). Two release builds are
   byte-identical.
-- **What these rows do not claim.** Three of D26's acceptance items are recorded as
-  `unsatisfiedAcceptance` or `limitations` rather than met: audit failure (`required` mode) is
-  not proven live on either Plane (the REST plane proves the D18 fail-closed branch by unit
-  tests, and every live Runtime stage runs `auditMode=best_effort`); Runtime cancellation has
-  no evidence at all — no live case and no fixture — which means D30's sentence that the three
-  Runtime cases are "proven with recorded fixtures only" is not satisfied for cancellation;
-  and `setup-native apply`'s confirmation runs on the integration head were cancelled or
-  failed in the harness, so the apply item rests on the run that reached every write plus the
-  fix commit `4aa9471` and the green rehearsal, not on a green live row. The coordinator's
-  replacement runs on `0801e51` were G4b `35713927291` (**green, and now cited by both rows**)
-  and apply `35713927140` (**red in the harness**: `apply_stage.py` reached `run_stage` before
-  its retry helpers were defined, `NameError: name '_reverify' is not defined`, fixed in
-  `5be2767` and pinned by a structural test, but not yet re-run). The apply item therefore
-  stays `run-pending` in both rows rather than claimed.
-  All three are owner questions in this runbook below. The Runtime timeout and
-  ambiguous-outcome cases are limitations with D30's ruling behind them, not gaps.
+- **What these rows do not claim.** Three items are recorded as `unsatisfiedAcceptance` or
+  `limitations` rather than met: audit failure (`required` mode) is not proven live on either
+  Plane (the REST plane proves the D18 fail-closed branch by unit tests, and every live Runtime
+  stage runs `auditMode=best_effort`); Runtime cancellation has no evidence at all — no live
+  case and no fixture — which means D30's sentence that the three Runtime cases are "proven
+  with recorded fixtures only" is not satisfied for cancellation; and the Module's deferred
+  provider pickup stays a recorded hazard even though `apply` now handles it (a Server Config
+  created live can be built before the Project's provider registers, so `apply` re-announces
+  the document, bounded, and the stage keeps one reload as a last-resort fallback — ticket #21,
+  live run `35714215320`). All three are owner questions in this runbook below. The Runtime
+  timeout and ambiguous-outcome cases are limitations with D30's ruling behind them, not gaps.
+- **`setup-native apply` is verified on the integration head.** Live run
+  [35715927983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35715927983) on
+  `4b5b0df` (the #21 fix that makes the applied endpoint serve the profile's Tools, merged
+  upstream in `a0b8bd3`) completed the D20 sequence on a disposable Gateway on **both** rows —
+  `plan`, `apply` (bundle Project, Server Config, Runtime Target Policy) and `verify` — with
+  the endpoint serving its inventory, `ok: true`, and neither a Server Config refresh nor a
+  verify retry needed. It is the sixth cited run in both evidence rows, so the milestone-4d
+  rows for #21 and #22 move from pending to verified. The two runs before it are recorded
+  rather than hidden: `35713927140` died in the harness (the `__main__` guard above its retry
+  helpers, fixed in `5be2767` and pinned by a structural test) and `35714215320` found the
+  Module's deferred pickup, which `4b5b0df` handles and whose root cause is under ticket #21.
 - **Deferred work stays deferred and linked.** The D10 bound-accounting precision the owner
   deferred from the #11 scope cut is [issue #41](https://github.com/sheon-sek/ignition-mcp/issues/41),
   and the flaky `fault-import-after-full-body` live case is
@@ -2198,6 +2214,11 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   - The frozen gates are green on `906d55e`: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
     mutation row (run set `35708881777`–`35708881874`). CI is green on `ffda72d` as well
     (run `35708881794`).
+  - [35715927983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35715927983)
+    (`4b5b0df`, merged in `a0b8bd3`) is the row's **green** close: both Gateway rows ran
+    `plan → apply → verify` on a disposable Gateway with the applied endpoint serving the
+    profile's inventory — `ok: true`, no Server Config re-announcement needed (`refreshes[]`
+    empty) and no verify retry. It is the sixth cited run in both G4 evidence rows.
 
 - **Ticket #21 — the harness's test-only policy provisioning is not replaced yet.**
   The 4a/4b driver stages still call `install_policy`/`install_tag_*_policy` (the
@@ -2505,7 +2526,7 @@ conservative one, and an answer changes it. The detailed entries follow in this 
 | 1 | **`tag_copy` has no new-name parameter.** A copy destination's leaf must equal the source's, because the native call copies each source into a destination *folder* under its own name ([`invalid_argument` / `destinationLeafDiffersFromSource`]; a renaming copy is `tag_copy` + `tag_rename`) | #11 |
 | 2 | **`tag_create`/`tag_update` refuse three configuration keys** D30 §6 does not mention: `value` (that is `tag_write`'s CONTROL operation), `tags` (nested creation is `tag_config_import`'s bulk path) and a `name` that differs from the target's own leaf (`tag_rename`'s job) | #10, #11 |
 | 3 | **The reserved config resource name is compared case-folded** with surrounding whitespace ignored, because Ignition documents no rule for comparing two config resource names ([refused, fail-closed]) | #36 |
-| 4 | **`setup-native apply` needs a Gateway reload before a Server Config it created is served.** The pinned Module answers `tools/list -> -32600` over a config created live on a Project imported live until the Gateway restarts; `verify` now retries read-only, then the *stage* reloads once and re-runs `verify` ([no write is ever re-run]; the CLI's own inline `verify` still has no reload — whether this is a Module defect to raise upstream) | #21 |
+| 4 | **The Module's deferred provider pickup.** A Server Config created live can build a server before the Module registers the Project's provider (its registration rides the Project collection's notification queue), leaving an endpoint with no capabilities until a resource update rebuilds it. `apply` re-announces the document, bounded (3 attempts, 2 s, `refreshes[]`), and the stage keeps one reload as a fallback; a `config_resource_*` or file-copied deployment shares the window ([resolved for `apply` in `4b5b0df`, live run 35715927983; the hazard itself is the Module's and stays recorded]) | #21, #23 |
 | 5 | **The Preflight fingerprint conversion keeps no ceilings.** Building the D28-encoded canonical JSON of a Tag configuration has no bound of its own before the D30 §2 compare ([the item's input bounds are the only limits]) | #10 |
 | 6 | **The Runtime plane's cancellation case is not proven at all**, and its timeout/ambiguous-outcome cases are fixture-only by D30's own ruling. D30 says all three are "proven with recorded fixtures only"; no cancellation fixture exists, because the Jython handlers cannot observe a cancelled call ([recorded as a limitation, never as live]) | #23 |
 | 7 | **Audit failure (`required` mode) is not live on either plane.** The REST plane proves the D18 fail-closed branch only by unit tests, and every live Runtime stage installs `auditMode=best_effort`. G4's acceptance text asks for live proof on both Planes ([recorded as a limitation and in `unsatisfiedAcceptance`]) | #7, #23 |
@@ -3227,30 +3248,33 @@ Two open issues carry whole categories of work rather than one question:
   fault, which the owner's speed ruling excludes from this phase. **For the owner:** accept
   the fixture/unit proof as the G4 record for this case, or name the live case to add and the
   run it may use.
-- **Ticket #23 — `setup-native apply` has no green live run on the integration head.** The
-  milestone-4d confirmation runs were cancelled during the Actions-saturation window
-  (`35712191958`, and the re-run `35713725528`), and the coordinator's replacement
-  `Phase 4 Live Gateway apply` run **35713927140** (`0801e51` = `4238653` + #22 `e34884a` +
-  the CI-only change that stops the live workflows re-running the unit suite) failed **in the
-  harness, not in the product**: `tests/harness/phase4-live/apply_stage.py` raised
-  `NameError: name '_reverify' is not defined`, because the `if __name__ == "__main__"` guard
-  had been left above `_last_verify_ok`, `_reverify`, `_reverify_after_reload` and
-  `_wait_for_rest` — script-mode execution runs top to bottom, so `run_stage` reached the
-  retry branch before those names existed. The rehearsal never caught it, because a successful
-  `apply` skips that branch. Fixed in `5be2767` (the guard moved below the helpers) and now
-  pinned structurally by `tooling/native/tests/test_phase4_harness.py`, but **no run has
-  exercised the fix**, so D26's G4 acceptance item "`setup-native apply` is live-verified with
-  `plan → apply → verify` on a disposable Gateway" is recorded as a `run-pending` limitation in
-  both evidence rows rather than claimed, and #21/#22's milestone-4d row stays pending. The last
-  observation of the product itself is run `35708881821`, which reached every write (bundle
-  Project imported and read back managed, Server Config created with the profile's Tools, policy
-  provider created) and failed only at the two defects `4aa9471` closes — the percent-escaped `/`
-  inside the resource *type* in the provider find path, and `verify` not deriving its endpoint
-  from the Server Config it wrote — both covered by the green rehearsal
-  `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the coordinator's final
-  sweep:** one green `Phase 4 Live Gateway apply` run completes this item for #21, #22 and G4;
-  it then becomes a cited run in both rows (the close document gains it and the rows are
-  regenerated) and the limitation drops off.
+- **Ticket #23 — `setup-native apply` RESOLVED: the Module's deferred provider pickup is a
+  recorded hazard, not a defect in `apply`.** The milestone-4d row is now **verified** by live
+  run [35715927983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35715927983) on
+  `4b5b0df` (`plan → apply → verify` on a disposable Gateway, both rows, the applied endpoint
+  serving the profile's inventory). Two red runs stand behind it and are kept on the record
+  rather than dropped. `35713927140` (`0801e51`) died **in the harness**: `apply_stage.py` had
+  its `if __name__ == "__main__"` guard above the retry helpers #22 added, so script-mode
+  execution reached `run_stage` before `_reverify` existed (`NameError`); fixed in `5be2767`
+  and pinned structurally by
+  `tooling/native/tests/test_phase4_harness.py::test_every_harness_script_ends_with_its_main_guard`.
+  `35714215320` (`5be2767`) recorded the product-side cause: `apply` created a Server Config (13
+  explicit Tools, enabled, read back) for a Project it had just imported, and the Module served
+  the endpoint — `initialize` answered with the config's own name, title and version — while
+  advertising no capabilities at all (`capabilities=[-]`, `tools/list -> -32600`). The pinned
+  Module resolves a Server Config's Tool list from its provider registry **when the resource is
+  written**, and registers a Project's provider on the Project collection's notification queue
+  (an `ExecutionQueue` turn that can land after that write); `register` does not notify an
+  already built server, while an `onResourceUpdated` rebuilds one, so the endpoint stayed empty
+  until something re-announced the document. **Fix (`4b5b0df`):** after the write sequence,
+  `apply` probes the endpoint it announced and, while that endpoint serves no Tool inventory at
+  all, re-announces the same document — bounded at 3 attempts 2 s apart, recorded as
+  `refreshes[]`, an idempotent update of a document the plan already approved — before judging
+  `verify`; the apply stage keeps its one Gateway reload as a last-resort fallback. The hazard
+  is the Module's rather than the CLI's, so it is recorded for the owner: a `config_resource_*`
+  or file-copied deployment over a freshly imported Project has the same window, and the
+  deferred pickup itself is not something `apply` can remove. Both evidence rows carry it as a
+  `product-limitation` entry.
 - **Ticket #23 — G4 closes with `VERIFIED_WITH_LIMITATION`, never `VERIFIED`.** Both evidence
   rows record `gateResult VERIFIED_WITH_LIMITATION`, `compatibilityStatus UNTESTED` and no
   `SUPPORTED` anywhere, and the two items above are `unsatisfiedAcceptance` rather than
@@ -3283,8 +3307,9 @@ its own SHA.
 | 4c | #20 fault-injecting proxy + live timeout / ambiguous / cancellation | `94564a0` | 35672781303 (REST mutation, both rows) |
 | 4c | #35 config Mutations pinned to the `core` collection | `be4dc50` | 35682027818 (REST mutation, both rows) |
 | 4c | #36 reserved `IgnitionMCPPolicy` config resource | `1bfaf8f` | 35687123699 (REST mutation, both rows) |
-| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35708881821 (apply, both rows: every write reached, two defects found and fixed in `4aa9471`) |
-| 4d | #22 opt-in Security Level + API token provisioning | `e34884a` (merged in `72e3402`) | 35713927140 (apply, both rows) — **red in the harness** (`NameError: _reverify`), fixed in `5be2767`; a green run is still owed, see the G4-close open question |
-| G4 | #23 G4 close | `602e68e`, `2ebb7cc` | the five runs the rows cite, above |
+| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`), `4b5b0df` (merged in `a0b8bd3`) | 35715927983 (apply, both rows): `plan → apply → verify` green with the applied endpoint serving the profile's inventory; the earlier red runs are recorded under ticket #21 |
+| 4d | #22 opt-in Security Level + API token provisioning | `e34884a` (merged in `72e3402`) | 35715927983 (apply, both rows): the run creates the dedicated Security Level and the Runtime API token for its profile, reads both back, and requires the second `plan`/`apply` to be `NO CHANGE` |
+| G4 | #23 G4 close | `602e68e`, `2ebb7cc`, `77f8d97`, `702f8ef` | the six runs the rows cite, above |
 | integration | Runtime lane (#7 #8 #10 #11) merged | `ca27b4b` | CI, G4a 35710377211, G4b 35710377243 green |
-| integration | Final integration head (`4238653` + #22 + CI-only) | `0801e51` | G4b 35713927291 **green and cited by both G4 rows**; apply 35713927140 red in the harness (fixed in `5be2767`, not yet re-run). This head also stops the live workflows re-running the unit suite (CI keeps it) |
+| integration | Integration head (`4238653` + #22 + CI-only) | `0801e51` | G4b 35713927291 **green and cited by both G4 rows**; apply 35713927140 red in the harness (fixed in `5be2767`) |
+| integration | Apply fix head (the applied endpoint serves its Tools) | `4b5b0df` (merged in `a0b8bd3`) | apply 35715927983 **green on both rows and cited by both G4 rows** |

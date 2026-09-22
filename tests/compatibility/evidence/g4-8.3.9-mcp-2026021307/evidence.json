@@ -349,10 +349,10 @@
     },
     {
       "case": "setup-native apply live verification",
-      "kind": "run-pending",
+      "kind": "product-limitation",
       "plane": "rest",
-      "reason": "No green live run has exercised `setup-native apply` on the integration head. Its confirmation runs were cancelled during the Actions-saturation window (35712191958 on 4238653, and the re-run 35713725528), and the coordinator's replacement 35713927140 failed in the harness rather than the product: apply_stage.py raised `NameError: name '_reverify' is not defined` because its `if __name__ == \"__main__\"` guard had been left above the retry helpers #22 added, so script-mode execution reached run_stage before they were defined. That is fixed in 5be2767 and pinned by a structural test in tooling/native/tests/test_phase4_harness.py, but no run has exercised the fix yet, so #21, #22 and this D26 acceptance item stay pending. The product's own last live observation is run 35708881821 (head ffda72d), whose two defects - the percent-escaped / inside the resource type in the provider find path, and verify not deriving its endpoint from the Server Config it wrote - were fixed in 4aa9471 and are covered by the green local rehearsal tests/harness/phase4-live/rehearse_apply.py. The writes themselves were reached and observed live on that run (bundle Project imported and read back managed, Server Config created with the profile's Tools, policy provider created), so what is missing is the confirmation, not the write path.",
-      "ruled": "pending: one green `Phase 4 Live Gateway apply` run on the integration head (also recorded in the Phase 4 runbook)"
+      "reason": "Resolved by the #21 fix 4b5b0df and live run 35715927983 (green on both rows, 0 refreshes and 0 verify retries needed), but the hazard underneath is the pinned Module's and is recorded here: the Module resolves a Server Config's Tool list from its provider registry when the resource is written, and it registers a Project's provider on the Project collection's notification queue (an ExecutionQueue turn that can land after that write), so a Server Config created live could build a server that answers initialize with no capabilities at all until a resource update rebuilt it (live run 35714215320). apply now probes the endpoint it announced and re-announces the same document while that endpoint serves no Tool inventory at all (bounded: 3 attempts, 2 s apart, recorded as refreshes[]), and the apply stage keeps its one Gateway reload as a last-resort fallback. A config_resource_* or file-copied deployment has the same window, so the hazard is recorded rather than closed.",
+      "ruled": "recorded for the owner: the hazard is the Module's, not the CLI's (Phase 4, ticket #21)"
     }
   ],
   "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
@@ -452,6 +452,23 @@
       "runRevision": "e8e4d169abf73412a4fdc9b684be80216cf7c5e5",
       "verified": "N stages=8 drift=clean",
       "workflow": "Phase 4 Live Gateway G4b"
+    },
+    {
+      "bundleSha256": "c95bd02e2f0fe7e3a4fa98d2503c360876f948ed48b9aeeac97f045d06d85ac0",
+      "bundleVersion": "0.7.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "harnessDocument": "setup-native-apply.json",
+      "head": "4b5b0df2b3521627756c29fce6f876c60d0343c5",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4d on the integration head: the D20 acceptance sequence on a disposable Gateway - plan, then apply (bundle Project, Server Config with the profile's Tools, Runtime Target Policy) and verify, with the applied endpoint serving the inventory",
+      "runId": "35715927983",
+      "verified": "profile=readonly serverConfig=phase4-apply-runtime",
+      "workflow": "Phase 4 Live Gateway apply"
     }
   ],
   "runtimeMutations": {

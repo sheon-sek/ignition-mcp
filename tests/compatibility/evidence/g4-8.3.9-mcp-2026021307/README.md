@@ -16,6 +16,7 @@ The cited live runs were:
 | [35710377243](https://github.com/sheon-sek/ignition-mcp/actions/runs/35710377243) | Phase 4 Live Gateway G4b | `ca27b4b` | milestone 4b: the fingerprint, `tag_update`, `tag_create` and `tag_copy` |
 | [35707687810](https://github.com/sheon-sek/ignition-mcp/actions/runs/35707687810) | Phase 4 Live Gateway G4b | `dfa4d08` | milestone 4b complete: `tag_delete`, `tag_move`, `tag_rename`, the partial-failure batch, the 19-Tool configurator inventory |
 | [35713927291](https://github.com/sheon-sek/ignition-mcp/actions/runs/35713927291) | Phase 4 Live Gateway G4b | `0801e51` | milestone 4b on the **final integration head** (`4238653` + #22 + the CI-only workflow change): the same cases and inventories, with the head's own bundle |
+| [35715927983](https://github.com/sheon-sek/ignition-mcp/actions/runs/35715927983) | Phase 4 Live Gateway apply | `4b5b0df` | milestone 4d: `plan` → `apply` → `verify` on a disposable Gateway, with the applied endpoint serving the profile's inventory |
 | [35687123699](https://github.com/sheon-sek/ignition-mcp/actions/runs/35687123699) | Phase 4 Live Gateway REST mutation | `98f8f74` | the REST inventories and every allowlist, refused-type and precondition refusal, plus the fault proxy's timeout / ambiguous-outcome / cancellation / partial-write cases |
 
 The candidate row is not required, but it is not weaker either: every case the
@@ -27,11 +28,11 @@ the same MCP Module and the same deployed Runtime Bundle as the required row.
 The L5 matrix, the limitations (`limitations`), the unproven case
 (`unsatisfiedAcceptance`) and `gateResult: VERIFIED_WITH_LIMITATION` are identical
 to the required row's, for the same reasons: Runtime cancellation has no evidence
-at all, audit failure (`required` mode) is not live on either Plane, and
-`setup-native apply`'s confirmation run on the integration head (`35713927140` on
-`0801e51`) failed in the harness — `NameError: _reverify`, fixed in `5be2767` and
-not yet re-run — so #21/#22 and that G4 item stay `run-pending` rather than claimed
-(see the required row's README).
+at all, audit failure (`required` mode) is not live on either Plane, and the
+Module's provider pickup is a recorded hazard rather than a closed one (ticket #21;
+see the required row's README). `setup-native apply` itself **is** verified here as
+well: run `35715927983` completed `plan → apply → verify` on this Gateway row with
+the applied endpoint serving its inventory.
 
 [evidence.json](evidence.json) is copied byte-for-byte from the generator's
 output; the close document it was composed from is
