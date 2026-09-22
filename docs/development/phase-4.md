@@ -452,7 +452,18 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   (`-reserved-name-in-later-segment`, `-reserved-name-not-allowlisted`) fail on the
   old handlers and pass on the new ones, and the two `-reserved-provider` fixtures
   now target the reserved provider itself; the two Alarm suites stand at 57
-  fixtures and 63 cases after the change (53 and 59 before).
+  fixtures and 63 cases after the change (53 and 59 before). Live (run
+  [35676245268](https://github.com/sheon-sek/ignition-mcp/actions/runs/35676245268),
+  workflow `Phase 4 Live Gateway G4a`, both rows green with `drift: {}`, on 8.3.8
+  `2026071409` required and 8.3.9 candidate, head `b2951aa` — the fix commit
+  `58efda5` merged with the `p4/runtime` tip that PR #32 needed): every Alarm case
+  the stage already runs still holds with the changed handlers — the exact-path
+  shelve and unshelve, the policy-cap and D12 hard-maximum refusals, the wildcard
+  and segment-boundary sibling refusals, the whole-batch Preflight refusal, and
+  both audit rows per call with the Service identity as actor. The stage has no
+  reserved-provider or reserved-name Alarm case, so the provider-component rule is
+  proven by the D29 fixtures above and not live; adding that case is left to G4
+  close (#23), where it costs no extra run.
 - Frozen gates, green on the same head that records this evidence (`c68597f`): CI
   [35661498251](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498251),
   Phase 0 G0
