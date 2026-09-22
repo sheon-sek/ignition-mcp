@@ -38,6 +38,15 @@ Matching rules:
   `resource` / `missing` (`system.config.getResource`), and `raise` (a
   `java.lang.RuntimeException`, the shape a handler's `except (Exception, JavaException)`
   catches).
+- A recorded value may also carry a `nativeType` marker for a shape JSON cannot
+  express, so a fixture can replay what a handler distinguishes by duck typing:
+  `{"nativeType": "Dataset", "columns": [...], "rows": [[...]]}` is the Dataset-like
+  object a handler reads through `getColumnCount`/`getColumnName`/`getRowCount`/
+  `getValueAt`; `{"nativeType": "JavaArray", "items": [...]}` is an `Object[]`, which
+  Jython presents to a handler as an `array.array`; and
+  `{"nativeType": "JythonLong"|"BigInteger"|"BigDecimal", "text": "..."}` is the
+  interpreter's own `long` or the Java number itself, whose decimal text is not the
+  JSON number a fixture would otherwise carry.
 - `system.util.jsonEncode`, `jsonDecode` and `getLogger` are real implementations in the
   Jython process; only Gateway state is recorded.
 
@@ -50,7 +59,13 @@ Error and returns the error object (including its `details`), so a test can asse
 ## Requirements
 
 - Java 11. Set `JYTHON_RUNNER_JAVA` to its `java` executable when it is not the default.
-- Network access on the first run. The runner downloads the Maven Central JAR to `build/cache/`, checks its size and SHA-256, and verifies it again on every use. The repository's existing `build/` ignore rule keeps the artifact out of Git.
+- Network access on the first run. The runner downloads the Maven Central JAR to
+  `build/cache/`, checks its size and SHA-256, and verifies it again on every use. The
+  repository's existing `build/` ignore rule keeps the artifact out of Git. A transient
+  failure of that fetch — the CDN has answered `HTTP 404` for the pinned JAR — is
+  retried with bounded backoff (five attempts, 1 s to 8 s); the pinned size and digest
+  still decide what is accepted, so a retry cannot substitute another artifact, and an
+  oversized body is refused without a retry.
 - The repository's locked Python environment, including `jsonschema`.
 
 Fixtures are committed repository files under `fixtures/`. D29 confines the Jython process to repository-controlled inputs, so a fixture path that resolves outside that directory (including through a symlink) is rejected, as is a fixture over 256 KiB. Both checks run before Java starts; a rejection is a loud error, never a skip.

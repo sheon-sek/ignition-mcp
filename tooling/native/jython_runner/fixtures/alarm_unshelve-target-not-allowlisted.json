@@ -57,6 +57,17 @@
           }
         ]
       }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_unshelve",
+        "actionTarget": "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi",
+        "actor": "ignition-mcp-service"
+      },
+      "result": {
+        "kind": "none"
+      }
     }
   ]
 }

@@ -255,6 +255,239 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     correlation ID with `actor` equal to the policy's Service identity.
 - **The harness Server Configs now select their profile's explicit Tool list.** The pinned Module documents the Server Config's `tools` mapping as `"providerId": "[tool1, tool2]"`, with a wildcard as the alternative. The G1–G3 harnesses used the wildcard while the bundle happened to hold exactly the read-only Tools, so the served inventory matched the `readonly` profile by coincidence; once the bundle carries `tag_write` a wildcard would serve a CONTROL Tool from a read-only deployment, and the G3 `setup-native` doctor check (`expected 13, endpoint advertised 14: extra=[tag_write]`) caught it. `phase1-runtime`, `phase2-runtime`, `phase3-runtime` now select the `readonly` list and `phase4-operator` selects the `operator` list (probe projects keep the wildcard). `tooling/native/tests/test_phase1_server_config.py` fails if any product harness config goes back to a Tool wildcard or selects a different list than its profile, and it asserts the read-only selection excludes every Runtime Mutation Tool. This is also the deployment model `setup-native apply` (#21) has to write.
 
+- **Review round 1 fixes** (the ticket report holds the detail; the same three
+  Runtime-plane fixes apply to `alarm_shelve`/`alarm_unshelve` from #8):
+  - **D10 input bounds.** `tag_write` now enforces the 20-write project default
+    inside D10's 100-write hard ceiling, raisable by the Runtime Target Policy's
+    optional `tagWriteMaxWrites`; the Alarm Mutations use the same shape with
+    `alarmMaxPaths`. Both add a per-path byte/character ceiling, a per-string and
+    per-array value ceiling for `tag_write`, and one finite aggregate input-byte
+    budget (64 KiB), all refused before dispatch with `limit_exceeded` and the
+    requested amount plus the limit. Every Runtime Mutation contract declares the
+    numbers as `inputBounds`, and `tooling/contracts/lint.py` keeps the Policy
+    field a document-schema property.
+  - **Denied mutations are audited.** After a usable Policy is read, an allowlist
+    or reserved-provider refusal writes one `decision` row before returning
+    `permission_denied`; `off` still records nothing, and `required` refuses the
+    call (`operation_disabled`/`auditAttemptFailed`, `phase: "decision"`) when the
+    row cannot be written. The ordered D29 fixtures prove the denied case makes no
+    dispatch and one audit call.
+  - **The outcomes outlive the Observed state.** The Observed section carries its
+    own budget (per-value and total) and reports what it cannot return as an
+    explicit `limit_exceeded` observed error; a serializer failure or an
+    over-ceiling payload re-renders the result without the Observed state instead
+    of replacing a known per-item outcome with `outcome_unknown`, and the last
+    resort states the requested bytes, the limit and the outcome counts.
+  - **The G4a 8.3.9 row's provider failure is diagnosed and fixed.** Run
+    35654626095 lost the candidate row because the provision stage imported the
+    policy Tag while the freshly created provider was still performing its initial
+    load: the Gateway logged `Error creating actor for tag ... cleanPath is null`
+    (`ImportTagLoaderAdapter.onInitialLoad`), the Tag kept its config but its actor
+    never started, and the running provider answered every handler read with
+    `Error_Configuration` while `/resources/find` and `/tags/export` stayed 200 —
+    so the 240 s of config-plane re-imports could not heal it and the row died one
+    step before the restart that does. The provision stage now gates the first
+    import on a *handler-scope* read (an absent path in the provider must answer
+    `Bad_NotFound`), the policy-read loop distinguishes "not serving" from "not
+    yet applied" (waiting instead of re-importing in the first case), the gate
+    verification reads the value quality rather than the probe's label, and the
+    workflow gives the stage one bounded Gateway restart — the recorded heal —
+    before failing the job.
+- **Review round 2 fixes** (the ticket report holds the detail):
+  - **A Dataset Observed value is measured by walking its cells.** The estimate
+    charged a fixed cost per cell, so a one-cell Dataset holding an arbitrarily
+    large string passed the check and was materialized by the read-back. The walk
+    now sums the cells' structural sizes under the same byte budget with an early
+    exit and never reads a cell to measure it; an over-budget Dataset becomes an
+    explicit `limit_exceeded` observed error naming its size and the ceiling, and a
+    Dataset inside the budget is still reported as Observed state.
+  - **The provider's QualityCode text is bounded.** `diagnosticMessage` was copied
+    unbounded, so a verbose provider could make `items` alone exceed the 256 KiB
+    ceiling and hide every established outcome behind a counts-only Tool Error. The
+    identifiers (`code`, `name`, `level`, `good`) stay exact, the diagnostic keeps a
+    bounded 512-byte prefix, and `diagnosticMessageOverLimitBytes` states the size
+    it had — present exactly when the text was bounded, and declared in the output
+    schema. The `#8` Alarm Tools need no equivalent change: their per-item outcomes
+    carry no provider text, and their Observed entries' `user`/`expiration` already
+    bound to an explicit `limit_exceeded` observed error.
+  - **The pinned actionlint download is resilient.** Run 35669308034's 8.3.8 row
+    failed before Gateway startup because the release CDN answered `HTTP 500` to
+    the pinned fetch. The fetch now retries a transport failure, and a body whose
+    digest is not the pinned one, with exponential backoff (five attempts, 1 s to
+    8 s); the sha256 still decides what is accepted, so a retry cannot substitute a
+    different artifact, and a body over the pinned size is refused without a retry.
+    **Live evidence (head `ccd0820`, draft PR #32):** `Phase 4 Live Gateway G4a`
+    run
+    [35672150054](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150054)
+    is **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}`, the 8.3.8 row's validation stage (the one that failed on the
+    download) green, the gate serving on its first attempt on both rows, one policy
+    import, one policy read with no repair and a verified gate, and every ticket
+    #7/#8 live case holding. CI
+    [35672150036](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150036),
+    Phase 0 G0
+    [35672150084](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150084),
+    Phase 3 G3
+    [35672150073](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150073),
+    the REST mutation workflow
+    [35672150065](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150065)
+    and `Phase 4 Live Gateway G4b`
+    [35672150067](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672150067)
+    are green on the same head. GitHub Actions created no run between
+    2026-09-21T23:49:41Z and 2026-09-22T00:29:12Z, so the round-2 head was briefly
+    marked `LIVE EVIDENCE PENDING (Actions outage)`; this run replaced that mark.
+- **Review round 3 fixes** (the ticket report holds the detail):
+  - **Every Observed measurement is bounded.** The walk that decides the Observed
+    budget now counts a Dataset's column names as well as its cells (a tiny cell
+    under a very large name was the shape a cell-only estimate let through), counts
+    every text with an incremental UTF-8 counter that stops at the remaining budget
+    instead of encoding the value to measure it, and carries a 16-level depth limit
+    so a pathologically nested Document reaches the structured Observed error
+    instead of exhausting the interpreter stack. The same counter backs the input
+    ceilings, so a caller-supplied 10 MB string is never encoded to be refused; an
+    over-budget message states the counted amount (a lower bound once the count
+    stops at the ceiling) and says so. Fixtures:
+    `tag_write-observed-dataset-column-name-over-budget`,
+    `tag_write-observed-dataset-deep-cell`, and the enlarged
+    `tag_write-observed-dataset-over-budget` cell (60 000 bytes, reported as
+    "at least 8193 bytes", which proves the count stopped rather than measured).
+  - **A Native identifier is exact or omitted, never truncated.** A `name` or
+    `level` over its 128-byte ceiling is now returned as null with
+    `nameOverLimitBytes`/`levelOverLimitBytes` reporting the counted size, because a
+    truncated identifier asserts one the provider never reported (D10); `code` and
+    `good` are always exact, and the free-text diagnostic keeps its bounded prefix
+    plus its marker. Fixtures: `tag_write-native-outcome-oversize-name` and
+    `tag_write-native-outcome-oversize-level`.
+  - **Live evidence (head `0570760`, draft PR #32):** `Phase 4 Live Gateway G4a`
+    run
+    [35679155559](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155559)
+    is **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate)
+    with `drift: {}` on both, and every ticket #7/#8 live case holds with the
+    round-3 handler (allowlisted batch 3 succeeded + 1 Bad, two audit rows, the
+    Alarm shelve and its exact-path state). CI
+    [35679155556](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155556),
+    Phase 0 G0
+    [35679155612](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155612),
+    Phase 3 G3
+    [35679155551](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155551),
+    the REST mutation workflow
+    [35679155548](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155548)
+    and `Phase 4 Live Gateway G4b`
+    [35679155554](https://github.com/sheon-sek/ignition-mcp/actions/runs/35679155554)
+    are green on the same head.
+- **Live evidence for the fix** (head `764744f`, draft PR #32): `Phase 4 Live
+    Gateway G4a` run
+    [35668515373](https://github.com/sheon-sek/ignition-mcp/actions/runs/35668515373)
+    **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}` — the gate passed on its first attempt on both rows
+    (`providerHandlerReadQuality` = `Bad_NotFound`, no import retry, one policy
+    read with `policyReadRepairImports: 0` and a verified gate, and no use of the
+    restart heal), and every ticket #7/#8 live case still holds with the changed
+    handlers (allowlisted batch 3 succeeded + 1 Bad, sibling denial at the segment
+    boundary, Preflight that executed nothing, two audit rows with the Service
+    identity, the Alarm shelve + Observed state, the policy-cap refusal).
+    CI, Phase 0 G0, Phase 3 G3 and the REST mutation workflow are green on the
+    same head. The first push of the fix (head `5d039e0`, runs
+    [35667242361](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667242361)
+    / [35667242363](https://github.com/sheon-sek/ignition-mcp/actions/runs/35667242363))
+    failed both rows of G4a *and* G4b in `policy-provision`: the new gate called
+    the probe Tool without opening its MCP session, and the Module answers
+    `tools/call` with `Session is required for method: tools/call` (HTTP 400) —
+    61 attempts, none served. That is fixed, and a test now drives the gate
+    against an endpoint that enforces the same rule; the recorded Gateway fake
+    does not model the session requirement, which is why the local rehearsal could
+    not catch it (recorded as a residual below). The `Phase 4 Live Gateway G4b`
+    rows are red on that head and on the `p4/runtime` head (`28622ca`,
+    `0b50a52`) for a #10 reason — its `tag-update` stage expects `not_found` for
+    `[default]IgnitionMCP_CI/Missing` but the live Gateway answers
+    `conflict`/`fingerprintMismatch` with an observed fingerprint — so that row is
+    not attributable to this fix's Runtime-plane changes.
+
+- **Review round 4 fixes** (the ticket report holds the detail):
+  - **One bounded walk measures and renders the Observed state.** `valueCost` and
+    `jsonValue` are now a single walk, so what is measured and what is returned cannot
+    diverge, and every shape the old `jsonValue` accepted is counted: each collection
+    member pays a byte of JSON punctuation before its own cost (a list of 3000 empty
+    strings is refused instead of copied), a string pays its quotes and JSON escapes, a
+    Dataset pays its rows and cells as well as its column names, an integer and a Java
+    `BigInteger` are bounded from their width and a `BigDecimal` from its unscaled width
+    and scale instead of a fixed 24 bytes each, and a Java array is a supported shape.
+    Jython hands a handler a Java array as an `array.array` with no `getClass`, so the
+    old `value.getClass().isArray()` branch was unreachable and a Java array came back as
+    `schema_mismatch`; it is now walked member by member under the same depth counter and
+    budget, and returned as a JSON list when it fits. The timestamp is measured by the
+    same walk against what the value left. Fixtures:
+    `tag_write-observed-wide-empty-string-list`,
+    `tag_write-observed-java-array-over-budget`, `tag_write-observed-java-array-small`,
+    `tag_write-observed-jython-long-over-budget`,
+    `tag_write-observed-big-integer-over-budget`,
+    `tag_write-observed-big-decimal-over-budget`; the D29 launcher gained the
+    `JavaArray`, `JythonLong`, `BigInteger` and `BigDecimal` value markers they need.
+  - **The aggregate input walk stops at its budget.** One walk measures each write item
+    against the budget left for that item and refuses as soon as it is crossed, so the
+    two-pass scan (every string against its 16 KiB ceiling, then every array child again
+    against a fresh 64 KiB budget) is gone and a later item's per-item ceiling is never
+    scanned after the refusal point. A reported amount is now a lower bound and the
+    message says so: `tag_write-input-over-byte-budget` reports 65537, the point the
+    count crossed the 65536-byte budget, rather than the batch's 66075 bytes. Fixture:
+    `tag_write-input-aggregate-stops-at-budget`, whose sixth item is over the 16384-byte
+    per-string ceiling — the refusal carries no item index, which is what proves the walk
+    stopped at the fifth item and recorded no native call at all.
+  - **The pinned interpreter fetch survives a transient CDN failure.** The 8.3.9 row of
+    `Phase 4 Live Gateway G4a` run
+    [35684702309](https://github.com/sheon-sek/ignition-mcp/actions/runs/35684702309)
+    failed in "Validate the repository and build the probe fixture" with
+    `urllib.error.HTTPError: HTTP Error 404: Not Found` from
+    `tooling/native/jython_runner/runner.py` — Maven Central's CDN answered `404` for
+    the pinned jython-standalone 2.7.4 JAR, which failed every recorded-Jython test in
+    that job before any handler ran (the 8.3.8 row, CI and the other workflows on the
+    same head were green; the artifact answered `200` minutes later). The fetch now
+    retries a transport failure, a truncated body and a digest mismatch with bounded
+    backoff (five attempts, 1 s to 8 s), keeps the pinned size and digest as what
+    decides acceptance, and refuses an oversized body without a retry — the same shape
+    as the round-2 actionlint fetch fix. `test_artifact_fetch.py` drives the policy
+    with a small payload.
+  - **The quality schema description matches the diagnostic behavior.**
+    `contracts/schemas/tag-write.output.schema.json` now limits the null-on-over-ceiling
+    sentence to `name` and `level` and describes `diagnosticMessage` as a bounded
+    512-byte prefix marked with `diagnosticMessageOverLimitBytes`. The schema is not a
+    published Text Resource, so `tooling.native.sync_schemas` stays a no-op.
+  - **Live evidence (head `1133a9a`, draft PR #32, after the base sync):** `Phase 4 Live
+    Gateway G4a` run
+    [35686795695](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795695) is
+    **green on both rows** (8.3.8 `2026071409` required and 8.3.9 candidate) with
+    `drift: {}` on both, and every ticket #7 live case holds with the round-4 handler: the
+    allowlisted batch reported 3 Good + 1 `Bad_NotFound` with 0 `outcome_unknown` and
+    Observed state equal to what was written, the sibling denial and the whole-batch
+    Preflight refusal held, the reserved provider was refused under an explicit `*` with
+    its value unchanged, the policy Tag stayed unclobbered, and Runtime audit recorded two
+    rows for the correlation with the Service identity as actor. CI
+    [35686795696](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795696),
+    Phase 0 G0
+    [35686795753](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795753),
+    Phase 3 G3
+    [35686795689](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795689) and
+    `Phase 4 Live Gateway G4b`
+    [35686795721](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795721) are
+    green on the same head.
+    - The first `Phase 4 Live Gateway G4a` attempt on the fix head `b7df979` failed the
+      **8.3.9 row in "Validate the repository and build the probe fixture"**: Maven
+      Central's CDN answered `HTTP 404` for the pinned Jython JAR, which failed every
+      recorded-Jython test in that job; the rerun was green on both rows, and the fetch
+      retry above now makes that failure self-healing.
+    - The fix head could carry no `pull_request` runs while the base had moved past it —
+      GitHub computes no merge commit for a conflicting PR — so `origin/p4/runtime` was
+      merged into the fix branch. Both conflicts were additive (the policy document's new
+      budget fields, the runbook's Open questions) and both sides were kept.
+    - The first `Phase 4 Live Gateway REST mutation` attempt on the merged head, run
+      [35686795719](https://github.com/sheon-sek/ignition-mcp/actions/runs/35686795719),
+      failed the required 8.3.8 row in the **fault group only** (class-enabled and
+      class-disabled were green): `DriverError: the delay_response fault never forwarded
+      its request to the Gateway`, raised while `rest_driver.py` waited for the #20 fault
+      proxy. The 8.3.9 row passed on the same attempt, and nothing in this ticket touches
+      the REST plane or the proxy; the rerun was **green on both rows**. This is the same
+      #20 fault-proxy flake the base branch already records twice.
+
 ### Ticket #8: Runtime `alarm_shelve` and `alarm_unshelve` (milestone 4a)
 
 - Fixture-first coverage: 39 recorded-Jython fixtures
@@ -327,6 +560,35 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   with provenance recorded and `__ALARM_ROOT__` / `__CORRELATION__` templated
   (both are run-scoped; the fake substitutes the run's values). The two Ticket #6
   probe recordings stay byte-frozen.
+- **Review round 1 fix: the reserved-provider refusal matches the provider
+  component.** Issue #8's first review found both handlers searching for
+  `IgnitionMCPPolicy` anywhere in the rendered Alarm path, so under an explicit `*`
+  allowlist an allowed target such as `prov:default:/tag:IgnitionMCPPolicyPump:/alm:High`
+  was wrongly refused as `reservedProvider`; the fixtures that "covered" the rule
+  used exactly such a `prov:default:` target, so they proved nothing about the
+  provider. Both handlers now parse the `prov:<provider>:` component — the text
+  between the scheme and the next separator — and compare that value, per D30's
+  owner ruling (`reserved_provider_match: provider_component_only`). A true
+  `prov:IgnitionMCPPolicy:/…` target is still refused before the Target allowlist
+  is consulted and under an explicit `*` (`permission_denied` /
+  `reservedProvider`), and a later Tag or Alarm segment that spells the name is an
+  ordinary allowlist-checked target, refused as `targetNotAllowlisted` when it is
+  outside the allowlist. Fixture-first: two new D29 fixtures per Tool
+  (`-reserved-name-in-later-segment`, `-reserved-name-not-allowlisted`) fail on the
+  old handlers and pass on the new ones, and the two `-reserved-provider` fixtures
+  now target the reserved provider itself; the two Alarm suites stand at 57
+  fixtures and 63 cases after the change (53 and 59 before). Live (run
+  [35676245268](https://github.com/sheon-sek/ignition-mcp/actions/runs/35676245268),
+  workflow `Phase 4 Live Gateway G4a`, both rows green with `drift: {}`, on 8.3.8
+  `2026071409` required and 8.3.9 candidate, head `b2951aa` — the fix commit
+  `58efda5` merged with the `p4/runtime` tip that PR #32 needed): every Alarm case
+  the stage already runs still holds with the changed handlers — the exact-path
+  shelve and unshelve, the policy-cap and D12 hard-maximum refusals, the wildcard
+  and segment-boundary sibling refusals, the whole-batch Preflight refusal, and
+  both audit rows per call with the Service identity as actor. The stage has no
+  reserved-provider or reserved-name Alarm case, so the provider-component rule is
+  proven by the D29 fixtures above and not live; adding that case is left to G4
+  close (#23), where it costs no extra run.
 - Frozen gates, green on the same head that records this evidence (`c68597f`): CI
   [35661498251](https://github.com/sheon-sek/ignition-mcp/actions/runs/35661498251),
   Phase 0 G0
@@ -1436,6 +1698,35 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 
 ## Open questions
 
+- **Ticket #7 — the D10 deployment override is two new optional Policy fields.**
+  D10's budget layers are "project safe default → deployment override → absolute
+  hard ceiling", and the Runtime plane's deployment-owned document is the Runtime
+  Target Policy, so the override is `tagWriteMaxWrites` (1..100) for `tag_write`
+  and `alarmMaxPaths` (1..100) for both Alarm Mutations; each handler validates
+  its own field and fails closed (`operation_disabled`) outside that range, and
+  the contract linter requires the field to be a property of the document schema.
+  D30 §1's list of what the document holds does not name a budget field, so the
+  two names are this ticket's choice, sitting alongside the already-decided
+  `alarmShelveMaxSeconds`. **For the owner:** confirm the field names (a single
+  shared budget key is the alternative).
+- **Ticket #7 — a denied target under `required` audit mode fails closed on the
+  denial row too.** D18 requires denied mutations to be audited and says
+  `required` mode fails during preflight when required audit cannot be provided.
+  A denial is refused either way, so the shipped behavior is: the audit-profile
+  check runs first (as D30 §6 says), a refusal then writes one `decision` row, and
+  when `required` mode cannot write that row the Tool reports
+  `operation_disabled` (`reason: auditAttemptFailed`, `phase: decision`) instead of
+  `permission_denied`. **For the owner:** confirm, or report the denial with
+  `auditRecorded=false` in its details under `required` mode as well.
+- **Ticket #7 — the G4a live assertions still stop before the new bound and
+  audit cases.** The D29 fixtures prove the D10 ceilings, the denial decision row
+  and the Observed-state budget, and the next G4a run exercises the changed
+  handlers through every existing live case on both rows, but no live case submits
+  a 21-write batch or reads a denial's audit rows yet: `tests/fixtures/recorded/gateway-8.3/phase4/`
+  holds payloads recorded before this change, so a driver case asserting the new
+  fields would drift the rehearsal until the payloads are re-recorded from a live
+  run. **For the owner:** acceptable, or spend the next live run recording those
+  payloads so the driver can pin them.
 - **Ticket #11 — a `tag_copy` destination must keep the source's leaf name.** D11 gives
   `tag_copy` no name of its own and D30 §6 checks only the destination, but the native call
   (`system.tag.copy(paths, destination, collisionPolicy)`) copies a path list into one destination
@@ -1595,6 +1886,16 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   refusal (a bundle has no shared modules), and the shared contract text is
   `contracts/shared/tag-config-fingerprint.json` for the token only. **For the owner:** note that
   a future Tool's omission of the rule is caught only by its own tests, not by a shared reader.
+- **Ticket #7 — the recorded Gateway fake does not model the Module's MCP session
+  requirement.** `tests/harness/recorded_gateway.py` answers `tools/list` and
+  `tools/call` without an `Mcp-Session-Id`, while the Module refuses them with
+  HTTP 400 until the caller has initialized — which is how the fix's first live
+  round failed both G4a rows in `policy-provision` after the local rehearsal and
+  the stage's own test were green. The gate now opens its session and a test
+  enforces the rule against a small endpoint, but the fake still cannot catch this
+  class of bug for any other caller. **For the owner:** accept, or model the
+  session in the fake (it needs an `Mcp-Session-Id` response header on
+  `initialize` and a 400 for a session-less request).
 - **Ticket #35 — the lane's draft PR was merged before this ticket's head, so the live
   evidence needed a new PR.** PR #29 (`p4/rest` → `feature/phase-4`) was merged at
   `2026-09-22T01:27:45Z` with head `200c8b9`, so the push of `2368b58` created **no**
@@ -1924,7 +2225,7 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Live proof of the Runtime `required` audit mode is left to G4 close (#23).** Ticket #7 fixture-covers the `required` path (audit profile missing, attempt write failed, and the success shape), and its live stage runs `best_effort` with the audit rows read back from the profile. The G4 acceptance item "audit failure (`required` mode) proven live on both Planes" needs a policy state whose `auditMode` is `required`; the harness can install one with `install_tag_write_policy(audit_mode="required")`, but doing it in this ticket would spend a live run on a case the ticket does not require.
 - **`tag_write` live evidence (ticket #7).** `phase4-live-g4a` run 35653953120, both Gateway rows green (`drift: {}`); the per-case results are in the ticket #7 entry under Results, and the served policy equals what `apply` wrote. The Runtime audit path is verified end to end: `system.util.audit(action=…, actionTarget=…, actionValue=…, auditProfile=…, actor=…)` recorded both rows, so the pinned Module accepts that keyword form.
 - **Ticket #8: the Alarm Target allowlist language.** D30 §1 says allowlist entries are "provider-qualified path prefixes that match only at segment boundaries". The Tag language spells that boundary as `/`; an Alarm path carries a second qualifier separator (`:`), so `alarm_shelve`/`alarm_unshelve` match an entry when the target equals it or continues at the next character with `/` or `:`. That is what makes the ticket #6 finding hold for the allowlist as well: matching is literal, so `…/Exact` never reaches `…/ExactSibling`. The entry grammar is the Alarm path grammar: provider-qualified, no `*` anywhere except a standalone `*`, at most 2048 characters and no whitespace. A deployment that writes a Tag-shaped entry (`[default]AHU`) gets `operation_disabled` (`policyAllowlists`) rather than an allowlist that silently grants nothing. The document stays keyed per Tool (the ticket #7 note above), so `alarm_shelve` and `alarm_unshelve` are separate entries and a deployment can allow shelving without allowing unshelving. **For the owner:** confirm the per-Tool keys and the `:` boundary, or name a different entry language for Alarm targets.
-- **Ticket #8: the reserved-provider refusal covers Alarm paths too.** The shipped rule (ticket #6 open question 1, implemented for Tag Mutations by #7) refuses any target inside `IgnitionMCPPolicy`, whatever the allowlist says, including an explicit `*`. `alarm_shelve`/`alarm_unshelve` apply the same rule to their own target language: an Alarm path that names `IgnitionMCPPolicy` is refused before Preflight with `permission_denied` (`details.items[].reason = "reservedProvider"`). The alternative, a Tag-only rule with an undocumented gap for Alarm paths, would leave one reserved provider with two different reachability rules. **For the owner:** confirm, or scope the rule to Tag Mutations if an Alarm path can never reach the policy document's provider.
+- **Ticket #8: the reserved-provider refusal covers Alarm paths too, by provider component.** The shipped rule (ticket #6 open question 1, implemented for Tag Mutations by #7) refuses any target inside `IgnitionMCPPolicy`, whatever the allowlist says, including an explicit `*`. D30's owner ruling (`reserved_provider_match: provider_component_only`) settles what "inside" means: the `prov:<provider>:` component of the rendered Alarm path, compared as a whole, never a substring of a later segment. `alarm_shelve`/`alarm_unshelve` therefore refuse `prov:IgnitionMCPPolicy:/…` before Preflight with `permission_denied` (`details.items[].reason = "reservedProvider"`), while an allowed `prov:default:` target such as `prov:default:/tag:IgnitionMCPPolicyPump:/alm:High` is an ordinary allowlist-checked target and answers `targetNotAllowlisted` when it is outside the allowlist. The rule stays per Tool (see the #10 bullet above): each handler carries its own copy, and the D29 fixtures `-reserved-name-in-later-segment` and `-reserved-name-not-allowlisted` pin both directions for each Tool.
 - **Ticket #8: a duration above the deployment cap is `invalid_argument`.** D12's Phase 4 amendment says a deployment "may lower the maximum in the Runtime Target Policy but not raise it", and D30 §7 maps a stale Precondition token to `conflict`, an unallowlisted target to `permission_denied` and a missing policy to `operation_disabled`, but has no mapping for the lowered cap. The shipped behavior treats the cap as an argument range, exactly as `tag_write` treats its timeout range: `invalid_argument` with `details = {reason: "durationOverPolicyCap", requested, cap, hardMaximum}`. `limit_exceeded` (D10's over-budget code) stays with request cardinality rather than a value range. **For the owner:** confirm the code, or name a different one for a duration the deployment refuses.
 - **Ticket #8: Observed state does not decide success for the Alarm Mutations.** Shelving a literal pattern that matches nothing is not an error (ticket #6: a pattern without `*` matches only the spelling it names), so an item whose `alarm_shelved_list` entry is absent is still `executed`, with `observed[].shelved = false` reported as data. Making the shelf view the success decision would fail a legal shelve of a pattern whose Alarm is currently clear, and `alarm_unshelve` has the same case in reverse. Every item's outcome comes from its own dispatch, and `outcome_unknown` is reserved for an item whose own dispatch did not report back. **For the owner:** confirm that the shelf view stays Observed state rather than a success criterion for these two Tools.
 

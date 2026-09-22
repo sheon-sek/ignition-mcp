@@ -34,6 +34,12 @@ def _error(name: str, code: str) -> dict:
     return run_recorded_tool_error("tag_write", _fixture(name), expected_code=code)
 
 
+def _recorded_targets(name: str) -> list[str]:
+    """The ordered native calls a fixture replays (the negative half of a case)."""
+    document = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    return [entry["target"] for entry in document["calls"]]
+
+
 def _item_reasons(error: dict) -> list[tuple[str, str]]:
     return [(item.get("path"), item.get("reason")) for item in error["details"]["items"]]
 
@@ -225,6 +231,397 @@ def test_hard_write_ceiling_is_enforced_before_the_policy_read() -> None:
     }
 
 
+def test_the_batch_default_is_twenty_and_a_deployment_may_raise_it_within_the_cap() -> None:
+    """D10: the project safe default is 20 writes, the deployment may raise it up
+    to the 100-item hard ceiling through the Runtime Target Policy."""
+    error = _error("over-policy-limit", "limit_exceeded")
+
+    assert error["details"] == {
+        "reason": "writesOverPolicyLimit",
+        "requested": 21,
+        "limit": 20,
+    }
+    # The same 21 writes run when the document raises the limit to 25, so the
+    # refusal above is the deployment default and not a hidden hard cap.
+    structured = run_recorded_tool(
+        "tag_write", _fixture("policy-raises-write-limit")
+    )["structuredContent"]
+    assert structured["summary"]["requested"] == 21
+    assert structured["summary"]["succeeded"] == 21
+
+
+def test_a_policy_write_limit_outside_the_d10_hard_cap_fails_closed() -> None:
+    error = _error("policy-write-limit-invalid", "operation_disabled")
+
+    assert error["details"]["reason"] == "policyTagWriteMaxWrites"
+
+
+def test_a_path_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("path-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "pathOverLength"
+    assert error["details"]["index"] == 0
+    # The path is 2053 bytes; the count stops one byte past the 2048-byte ceiling,
+    # so the reported amount is a lower bound and the error says so.
+    assert error["details"]["requested"] == 2049
+    assert error["details"]["limit"] == 2048
+    assert "lower bound" in error["message"]
+
+
+def test_a_string_value_over_the_byte_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("string-value-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "stringValueOverLimit"
+    assert error["details"]["index"] == 0
+    assert error["details"]["requested"] == 16385
+    assert error["details"]["limit"] == 16384
+
+
+def test_an_array_over_the_element_ceiling_is_refused_before_any_native_call() -> None:
+    error = _error("array-elements-over-limit", "limit_exceeded")
+
+    assert error["details"]["reason"] == "arrayElementsOverLimit"
+    assert error["details"]["requested"] == 1001
+    assert error["details"]["limit"] == 1000
+
+
+def test_the_aggregate_input_byte_budget_is_finite() -> None:
+    """Every per-item value is inside its own ceiling and the batch is still
+    refused, so the aggregate budget is what bounds the request. The count stops one
+    byte past the 65536-byte budget rather than adding up all 66075 bytes, and the
+    message says the amount is a lower bound."""
+    error = _error("input-over-byte-budget", "limit_exceeded")
+
+    assert error["details"]["reason"] == "inputOverByteBudget"
+    # Five 13200-byte values plus their 15-byte paths, counted only to the budget.
+    assert error["details"]["requested"] == 65537
+    assert error["details"]["limit"] == 65536
+    assert "lower bound" in error["message"]
+
+
+def test_the_aggregate_input_walk_stops_at_the_budget() -> None:
+    """The fifth 13200-byte value crosses the aggregate budget and the sixth item is
+    over the 16384-byte per-string ceiling, so a walk that kept counting would report
+    that sixth item instead. The refused call names no item index, which is the proof
+    that the walk stopped at the budget, and the recorded call list is empty, so
+    nothing reached the policy read or the Gateway."""
+    error = _error("input-aggregate-stops-at-budget", "limit_exceeded")
+
+    assert error["details"] == {"reason": "inputOverByteBudget", "requested": 65537, "limit": 65536}
+    assert _recorded_targets("input-aggregate-stops-at-budget") == []
+
+
+def test_a_denied_target_is_audited_as_a_decision_and_dispatches_no_write() -> None:
+    """D08/D18: a denied mutation is audited. The ordered call list is the proof:
+    one decision row after the policy read, and no `writeBlocking` at all."""
+    assert _recorded_targets("decision-audit-on-denial") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.util.audit",
+    ]
+    error = _error("decision-audit-on-denial", "permission_denied")
+
+    assert error["details"]["reason"] == "preflightTargetRefused"
+    assert error["details"]["auditRecorded"] is True
+
+
+def test_audit_off_still_records_no_denial_row() -> None:
+    assert _recorded_targets("decision-audit-off") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+    ]
+    error = _error("decision-audit-off", "permission_denied")
+
+    assert error["details"]["auditRecorded"] is False
+
+
+def test_required_mode_gates_the_denial_row_on_the_audit_profile() -> None:
+    recorded = _error("decision-audit-required", "permission_denied")
+    assert recorded["details"]["auditRecorded"] is True
+
+    # A required mode whose denial row cannot be written refuses the call rather
+    # than reporting an unaudited denial.
+    failed = _error("decision-audit-required-write-fails", "operation_disabled")
+    assert failed["details"]["reason"] == "auditAttemptFailed"
+    assert failed["details"]["phase"] == "decision"
+
+
+def test_an_observed_value_over_its_budget_does_not_decide_the_item_outcome() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-value-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    # The value is 20000 bytes and the walk stops at the budget, so the message
+    # reports what it counted rather than the size it would have had to encode.
+    assert "at least 8193 bytes, over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+
+
+def test_the_observed_state_budget_marks_only_the_values_it_cannot_return() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-state-budget-exhausted")
+    )["structuredContent"]
+
+    assert [item["status"] for item in structured["items"]] == ["executed"] * 9
+    assert structured["summary"]["succeeded"] == 9
+    assert [entry["status"] for entry in structured["observed"]] == ["ok"] * 8 + ["error"]
+    assert structured["observed"][8]["error"]["code"] == "limit_exceeded"
+
+
+def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
+    """The write completed and its outcome is known; failing to serialize the
+    Observed state must not turn the batch into an `outcome_unknown`."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("serialization-fails")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    assert structured["summary"]["auditRecorded"] is True
+    assert structured["observed"][0]["status"] == "error"
+    assert structured["observed"][0]["error"]["code"] == "schema_mismatch"
+    assert "serializ" in structured["observed"][0]["error"]["message"]
+
+
+def test_the_contract_declares_the_d10_input_bounds() -> None:
+    contract = json.loads(
+        (ROOT / "contracts/tools/runtime/tag_write.contract.json").read_text(encoding="utf-8")
+    )
+
+    assert contract["inputBounds"]["defaultItems"] == 20
+    assert contract["inputBounds"]["hardItems"] == 100
+    assert contract["inputBounds"]["hardItemsPolicyField"] == "tagWriteMaxWrites"
+    assert contract["inputBounds"]["maxInputBytes"] == 65536
+    assert contract["inputBounds"]["overBudgetCode"] == "limit_exceeded"
+
+
+def test_a_dataset_observed_value_is_measured_before_it_is_materialized() -> None:
+    """A one-cell Dataset can hold an arbitrarily large string, so the observed
+    budget has to walk the cells instead of trusting the cell count: measuring a
+    cell by reading it would defeat the budget it is there to enforce."""
+    recorded = json.loads(_fixture("observed-dataset-over-budget").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"]["nativeType"] == "Dataset"
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    # The cell holds 60000 bytes and the walk stops at the budget, so the message
+    # reports what it counted rather than the size it would have had to encode to
+    # learn: a measurement that needed the whole value would be the bug.
+    message = observed["error"]["message"]
+    assert "at least 8193 bytes, over the 8192-byte Observed-state value budget" in message
+    assert "60000" not in message
+
+
+def test_a_dataset_column_name_is_measured_with_its_cells() -> None:
+    """`jsonValue` copies every column name, so a tiny cell under a very large name
+    is exactly the Dataset a cell-only estimate lets through."""
+    recorded = json.loads(
+        _fixture("observed-dataset-column-name-over-budget").read_text(encoding="utf-8")
+    )
+    dataset = recorded["calls"][-1]["result"]["items"][0]["value"]
+    assert len(dataset["columns"][0]) == 20000
+    assert dataset["rows"] == [[1]]
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-column-name-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+
+
+def test_a_deeply_nested_observed_value_is_refused_rather_than_raised() -> None:
+    """The walk carries a depth limit, so a pathologically nested cell reaches the
+    structured Observed budget error instead of exhausting the interpreter stack
+    while it is measured and materialized."""
+    recorded = json.loads(_fixture("observed-dataset-deep-cell").read_text(encoding="utf-8"))
+    cell = recorded["calls"][-1]["result"]["items"][0]["value"]["rows"][0][0]
+    depth = 0
+    while isinstance(cell, list):
+        depth += 1
+        cell = cell[0]
+    assert depth == 40
+
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-deep-cell")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "nests deeper than the 16-level Observed-state depth budget" in observed["error"]["message"]
+
+
+def test_a_dataset_inside_the_budget_is_still_reported_as_observed_state() -> None:
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-dataset-small")
+    )["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["observed"][0]["status"] == "ok"
+    assert structured["observed"][0]["value"] == {
+        "columns": ["Number", "Text"], "rows": [[1, "ok"], [2, "fine"]],
+    }
+
+
+def _refused_observed_value(name: str) -> dict:
+    """The Observed entry of a fixture whose read-back value must be refused, with
+    the item outcome and the summary asserted to be untouched by it."""
+    structured = run_recorded_tool("tag_write", _fixture(name))["structuredContent"]
+
+    assert structured["items"][0]["status"] == "executed"
+    assert structured["summary"]["succeeded"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "over the 8192-byte Observed-state value budget" in observed["error"]["message"]
+    # A refused value is never materialized, so the entry carries no value at all.
+    assert "value" not in observed
+    return observed
+
+
+def test_a_wide_list_of_free_members_cannot_pass_the_observed_budget() -> None:
+    """A list of empty strings costs nothing per member unless the walk charges the
+    member's own JSON punctuation, so the width of a list has to be counted: the
+    depth ceiling cannot bound it, and the pre-fix walk charged only the bracket and
+    then copied all 3000 members."""
+    recorded = json.loads(_fixture("observed-wide-empty-string-list").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"] == [""] * 3000
+
+    _refused_observed_value("observed-wide-empty-string-list")
+
+
+def test_a_java_array_is_measured_with_its_members() -> None:
+    """Jython hands a handler a Java array as an `array.array`, which reports no
+    `getClass`, so the array shape a Gateway returns is this one: it must be measured
+    member by member under the same depth counter and budget instead of being copied
+    whole or reported as unsupported."""
+    recorded = json.loads(_fixture("observed-java-array-over-budget").read_text(encoding="utf-8"))
+    assert recorded["calls"][-1]["result"]["items"][0]["value"] == {
+        "nativeType": "JavaArray", "items": [""] * 3000,
+    }
+
+    _refused_observed_value("observed-java-array-over-budget")
+
+
+def test_a_java_array_inside_the_budget_is_reported_as_a_list() -> None:
+    """The same shape inside the budget is Observed state like any other value, so
+    the array branch is a bounded walk rather than a refusal."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("observed-java-array-small")
+    )["structuredContent"]
+
+    assert structured["observed"][0]["status"] == "ok"
+    assert structured["observed"][0]["value"] == ["a", 1, {"$ignition": "null"}]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "observed-jython-long-over-budget",
+        "observed-big-integer-over-budget",
+        "observed-big-decimal-over-budget",
+    ],
+)
+def test_a_native_number_is_measured_before_its_decimal_text_is_built(name: str) -> None:
+    """A Jython `long`, a Java `BigInteger` and a Java `BigDecimal` each cost a fixed
+    24 bytes in the pre-fix walk, so a 20000-digit value passed the budget and its
+    text was built to be returned. The walk now bounds each from its width - the
+    interpreter long's `bit_length`, the BigInteger's `bitLength`, the BigDecimal's
+    unscaled width and scale - and refuses it before any text exists."""
+    recorded = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    text = recorded["calls"][-1]["result"]["items"][0]["value"]["text"]
+    assert len(text) >= 20000
+
+    observed = _refused_observed_value(name)
+    # The bound is a width, not a count of digits that were written out: no part of
+    # the value's text reaches the caller.
+    assert "1234567890" not in observed["error"]["message"]
+
+
+def test_an_oversize_native_diagnostic_keeps_the_outcome_and_marks_the_limit() -> None:
+    """The provider's free text has no bound of its own, so its representation is
+    bounded before the item is built: code, name, level and good stay exact, the
+    text is a bounded prefix, and the marker carries the size it had."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-diagnostic")
+    )["structuredContent"]
+
+    quality = structured["items"][0]["quality"]
+    assert (quality["code"], quality["name"], quality["level"], quality["good"]) == (
+        260, "Bad_NotFound", "Error", False,
+    )
+    assert quality["diagnosticMessageOverLimitBytes"] == 4000
+    assert quality["diagnosticMessage"] == "d" * 512
+    assert structured["summary"]["failed"] == 1
+
+
+def test_an_over_limit_quality_name_is_omitted_not_truncated() -> None:
+    """A truncated identifier asserts one the provider never reported (D10), so an
+    over-limit name is omitted with its size instead, and the numeric code - which
+    cannot be oversized - still identifies the outcome."""
+    quality = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-name")
+    )["structuredContent"]["items"][0]["quality"]
+
+    assert quality["code"] == 260
+    assert quality["good"] is False
+    assert quality["name"] == {"$ignition": "null"}
+    assert quality["nameOverLimitBytes"] == 200
+    assert "nameOverLimitBytes" not in json.dumps(
+        run_recorded_tool("tag_write", _fixture("allowlisted-batch"))["structuredContent"]
+    )
+
+
+def test_an_over_limit_quality_level_is_omitted_not_truncated() -> None:
+    quality = run_recorded_tool(
+        "tag_write", _fixture("native-outcome-oversize-level")
+    )["structuredContent"]["items"][0]["quality"]
+
+    assert quality["code"] == 260
+    assert quality["level"] == {"$ignition": "null"}
+    assert quality["levelOverLimitBytes"] == 200
+    assert quality["name"] == "Bad_NotFound"
+
+
+def test_long_diagnostics_cannot_hide_a_full_batch_of_outcomes() -> None:
+    """100 Native outcomes each carrying a 1500-byte diagnostic: the bounded
+    representation has to keep every QualityCode inside the 256 KiB ceiling, so
+    the items alone can never become the reason a Tool Error is returned."""
+    structured = run_recorded_tool(
+        "tag_write", _fixture("items-with-long-diagnostics")
+    )["structuredContent"]
+
+    assert len(structured["items"]) == 100
+    assert structured["summary"] == {
+        "requested": 100,
+        "succeeded": 0,
+        "failed": 100,
+        "outcomeUnknown": 0,
+        "auditMode": "best_effort",
+        "auditRecorded": True,
+    }
+    assert all(item["quality"]["name"] == "Bad_NotFound" for item in structured["items"])
+    assert {item["quality"]["diagnosticMessageOverLimitBytes"] for item in structured["items"]} == {1500}
+    assert all(item["quality"]["diagnosticMessage"] == "e" * 512 for item in structured["items"])
+
+
 VALID_POLICY_FIXTURES = (
     "tag_write-allowlisted-batch",
     "tag_write-native-outcome-indeterminate",
@@ -245,11 +642,41 @@ VALID_POLICY_FIXTURES = (
     "tag_write-audit-result-fails",
     "tag_write-audit-off",
     "tag_write-observed-read-fails",
+    # D10 bounds, the denial decision rows and the Observed-state budget.
+    "tag_write-over-policy-limit",
+    "tag_write-policy-raises-write-limit",
+    "tag_write-decision-audit-on-denial",
+    "tag_write-decision-audit-off",
+    "tag_write-decision-audit-required",
+    "tag_write-decision-audit-required-write-fails",
+    "tag_write-observed-value-over-budget",
+    "tag_write-observed-state-budget-exhausted",
+    "tag_write-serialization-fails",
+    # Round 2: Dataset Observed values and an unbounded QualityCode diagnostic.
+    "tag_write-observed-dataset-over-budget",
+    "tag_write-observed-dataset-small",
+    "tag_write-native-outcome-oversize-diagnostic",
+    "tag_write-items-with-long-diagnostics",
+    # Round 3: column names, bounded counting, depth, and the identifiers.
+    "tag_write-observed-dataset-column-name-over-budget",
+    "tag_write-observed-dataset-deep-cell",
+    "tag_write-native-outcome-oversize-name",
+    "tag_write-native-outcome-oversize-level",
+    # Round 4: the width of a list and the shapes Jython presents for a Java array
+    # and for a native number.
+    "tag_write-observed-wide-empty-string-list",
+    "tag_write-observed-java-array-over-budget",
+    "tag_write-observed-java-array-small",
+    "tag_write-observed-jython-long-over-budget",
+    "tag_write-observed-big-integer-over-budget",
+    "tag_write-observed-big-decimal-over-budget",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (
     "tag_write-policy-malformed",
     "tag_write-policy-null-audit-profile",
+    # A policy may not raise the write ceiling above D10's 100-item hard cap.
+    "tag_write-policy-write-limit-invalid",
 )
 
 

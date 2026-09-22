@@ -66,6 +66,17 @@
           }
         ]
       }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.tag_write",
+        "actionTarget": "[default]AHU2/Setpoint",
+        "actor": "ignition-mcp-service"
+      },
+      "result": {
+        "kind": "none"
+      }
     }
   ]
 }

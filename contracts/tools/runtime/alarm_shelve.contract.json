@@ -28,6 +28,21 @@
       "policyCapField": "alarmShelveMaxSeconds"
     }
   },
+  "inputBounds": {
+    "itemsParameter": "paths",
+    "defaultItems": 20,
+    "hardItems": 100,
+    "hardItemsPolicyField": "alarmMaxPaths",
+    "hardItemsPolicyRule": "a deployment may raise the 20-target default through the Runtime Target Policy and never above the 100-target hard ceiling",
+    "pathMaxChars": 2048,
+    "maxInputBytes": 65536,
+    "overBudgetCode": "limit_exceeded",
+    "overBudgetDetails": ["requested", "limit"],
+    "observedStateMaxBytes": 65536,
+    "observedUserMaxChars": 256,
+    "observedExpirationMaxChars": 64,
+    "outputMaxBytes": 262144
+  },
   "outputSchema": "contracts/schemas/alarm-shelve.output.schema.json",
   "nativeRequirements": ["system.tag.readBlocking", "system.alarm.shelve", "system.alarm.getShelvedPaths", "system.util.audit"],
   "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
@@ -49,10 +64,12 @@
     "allowlistKey": "alarm_shelve",
     "allowlistMatch": "provider-qualified alarm path prefix matched at a segment boundary (/ or :); an explicit * allows every alarm path",
     "reservedProvider": "IgnitionMCPPolicy",
-    "reservedProviderRefusal": "any alarm path that names the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *",
+    "reservedProviderRefusal": "any alarm path whose prov:<provider>: component is the reserved IgnitionMCPPolicy provider, whatever the Target allowlist says, including an explicit *; a later Tag or Alarm segment that spells the name is not the provider and stays an allowlist-checked target",
     "reservedProviderRefusalCode": "permission_denied"
   },
   "preflight": "input, reserved provider and Target allowlist for every item before any item executes, with no rollback",
+  "deniedMutationAudit": "after a usable Policy is read, a refused target produces one `decision` row and no dispatch; `off` records nothing, and `required` refuses the call when the denial row cannot be written",
+  "outcomePreservation": "a dispatched batch reports its per-item outcomes whatever the Observed-state budget or the serializer does; an Observed entry that cannot be returned is an explicit `limit_exceeded` observed error, and the result is re-rendered without the Observed state rather than replacing the outcomes",
   "automaticRetryAfterAmbiguousOutcome": false,
   "itemOutcomeUnknownScope": "only items whose own dispatch did not report back",
   "nullEncoding": "ignition-null-v1"

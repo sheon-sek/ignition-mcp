@@ -20,6 +20,6 @@
   "$defs": {
     "null": {"type": "object", "properties": {"$ignition": {"const": "null"}}, "required": ["$ignition"], "additionalProperties": false},
     "nullableString": {"oneOf": [{"type": "string"}, {"$ref": "#/$defs/null"}]},
-    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
+    "observed_error": {"type": "object", "additionalProperties": false, "properties": {"code": {"enum": ["schema_mismatch", "upstream_error", "limit_exceeded"]}, "message": {"type": "string", "minLength": 1}, "correlationId": {"type": "string", "minLength": 1}}, "required": ["code", "message", "correlationId"]}
   }
 }

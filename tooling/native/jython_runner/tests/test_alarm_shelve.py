@@ -28,7 +28,14 @@ EXACT = "prov:default:/tag:MCP_P4_1/Exact:/alm:ProbeHi"
 SIBLING = "prov:default:/tag:MCP_P4_1/ExactSibling:/alm:ProbeHi"
 NESTED = "prov:default:/tag:MCP_P4_1/Fold/ChildA:/alm:ProbeHi"
 WILDCARD_PATH = "prov:default:/tag:MCP_P4_1/*"
-RESERVED_PATH = "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+#: A target *inside* the reserved provider: the `prov:` component is the reserved
+#: name, which is the only thing D30's owner ruling reserves.
+RESERVED_PATH = "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
+#: Targets whose *provider* is `default` while a later Tag segment spells the
+#: reserved name. `RESERVED_NAME_PATH` is the sibling the review named; the two
+#: must never be refused as `reservedProvider`.
+RESERVED_NAME_PATH = "prov:default:/tag:IgnitionMCPPolicyPump:/alm:High"
+RESERVED_SEGMENT_PATH = "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
 
 
 def _fixture(name: str) -> Path:
@@ -41,6 +48,12 @@ def _error(name: str, code: str) -> dict:
 
 def _item_reasons(error: dict) -> list[tuple[str, str]]:
     return [(item.get("path"), item.get("reason")) for item in error["details"]["items"]]
+
+
+def _recorded_targets(name: str) -> list[str]:
+    """The ordered native calls a fixture replays (the negative half of a case)."""
+    document = json.loads(_fixture(name).read_text(encoding="utf-8"))
+    return [entry["target"] for entry in document["calls"]]
 
 
 def test_allowlisted_batch_shelves_each_item_and_reports_the_shelved_state() -> None:
@@ -180,6 +193,31 @@ def test_reserved_policy_provider_is_refused_even_under_an_explicit_wildcard() -
     assert allowed["summary"]["executed"] == 1
 
 
+def test_a_later_segment_that_spells_the_reserved_name_is_not_the_reserved_provider() -> None:
+    """D30's owner ruling matches the provider component only, so a target under an
+    allowed provider is never refused for a Tag or Alarm segment that spells the
+    reserved name (the review's `IgnitionMCPPolicyPump` sibling)."""
+    structured = run_recorded_tool(
+        "alarm_shelve", _fixture("reserved-name-in-later-segment")
+    )["structuredContent"]
+
+    assert structured["items"] == [
+        {"path": RESERVED_NAME_PATH, "status": "executed"},
+        {"path": RESERVED_SEGMENT_PATH, "status": "executed"},
+    ]
+    assert structured["summary"]["executed"] == 2
+    assert [entry["shelved"] for entry in structured["observed"]] == [True, True]
+
+
+def test_a_reserved_name_outside_the_allowlist_is_refused_as_unallowlisted() -> None:
+    """The refusals stay distinct: a target outside the allowlist answers for that
+    reason, even when a later segment spells the reserved name, so a refusal is
+    never misattributed to the provider."""
+    error = _error("reserved-name-not-allowlisted", "permission_denied")
+
+    assert _item_reasons(error) == [(RESERVED_NAME_PATH, "targetNotAllowlisted")]
+
+
 def test_one_bad_item_rejects_the_whole_batch_before_anything_executes() -> None:
     error = _error("preflight-refuses-whole-batch", "permission_denied")
 
@@ -277,6 +315,105 @@ def test_input_limits_are_enforced_before_the_policy_read() -> None:
     }
 
 
+def test_the_target_default_is_twenty_and_a_deployment_may_raise_it_within_the_cap() -> None:
+    """D10: the project safe default is 20 targets, raisable by the deployment up
+    to the 100-target hard ceiling."""
+    error = _error("paths-over-policy-limit", "limit_exceeded")
+
+    assert error["details"] == {
+        "reason": "pathsOverPolicyLimit",
+        "requested": 21,
+        "limit": 20,
+    }
+    structured = run_recorded_tool(
+        "alarm_shelve", _fixture("policy-raises-path-limit")
+    )["structuredContent"]
+    assert structured["summary"]["requested"] == 3
+    assert structured["summary"]["executed"] == 3
+
+
+def test_a_policy_target_limit_outside_the_d10_hard_cap_fails_closed() -> None:
+    error = _error("policy-path-limit-invalid", "operation_disabled")
+
+    assert error["details"]["reason"] == "policyAlarmMaxPaths"
+
+
+def test_the_aggregate_input_byte_budget_is_finite() -> None:
+    error = _error("input-over-byte-budget", "limit_exceeded")
+
+    assert error["details"]["reason"] == "inputOverByteBudget"
+    assert error["details"]["requested"] == 80080  # forty 2002-byte paths
+    assert error["details"]["limit"] == 65536
+
+
+def test_a_denied_target_is_audited_as_a_decision_and_shelves_nothing() -> None:
+    # The ordered call list is the proof: the policy read, one decision row, and
+    # no `system.alarm.shelve` at all.
+    assert _recorded_targets("target-not-allowlisted") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+        "system.util.audit",
+    ]
+    error = _error("target-not-allowlisted", "permission_denied")
+
+    assert error["details"]["reason"] == "preflightTargetRefused"
+    assert error["details"]["auditRecorded"] is True
+
+
+def test_audit_off_still_records_no_denial_row() -> None:
+    assert _recorded_targets("decision-audit-off") == [
+        "system.tag.readBlocking",
+        "system.tag.readBlocking",
+    ]
+    error = _error("decision-audit-off", "permission_denied")
+
+    assert error["details"]["auditRecorded"] is False
+
+
+def test_required_mode_gates_the_denial_row_on_the_audit_profile() -> None:
+    failed = _error("decision-audit-required-write-fails", "operation_disabled")
+
+    assert failed["details"]["reason"] == "auditAttemptFailed"
+    assert failed["details"]["phase"] == "decision"
+
+
+def test_an_oversize_shelving_identity_does_not_decide_the_item_outcome() -> None:
+    structured = run_recorded_tool(
+        "alarm_shelve", _fixture("observed-user-over-budget")
+    )["structuredContent"]
+
+    assert structured["items"] == [{"path": EXACT, "status": "executed"}]
+    assert structured["summary"]["executed"] == 1
+    observed = structured["observed"][0]
+    assert observed["status"] == "error"
+    assert observed["error"]["code"] == "limit_exceeded"
+    assert "400" in observed["error"]["message"]
+    assert "256" in observed["error"]["message"]
+
+
+def test_a_serialization_failure_still_reports_the_native_outcomes() -> None:
+    structured = run_recorded_tool(
+        "alarm_shelve", _fixture("serialization-fails")
+    )["structuredContent"]
+
+    assert structured["items"] == [{"path": EXACT, "status": "executed"}]
+    assert structured["summary"]["executed"] == 1
+    assert structured["observed"][0]["status"] == "error"
+    assert structured["observed"][0]["error"]["code"] == "schema_mismatch"
+
+
+def test_the_contract_declares_the_d10_input_bounds() -> None:
+    contract = json.loads(
+        (ROOT / "contracts/tools/runtime/alarm_shelve.contract.json").read_text(encoding="utf-8")
+    )
+
+    assert contract["inputBounds"]["defaultItems"] == 20
+    assert contract["inputBounds"]["hardItems"] == 100
+    assert contract["inputBounds"]["hardItemsPolicyField"] == "alarmMaxPaths"
+    assert contract["inputBounds"]["maxInputBytes"] == 65536
+    assert contract["inputBounds"]["overBudgetCode"] == "limit_exceeded"
+
+
 VALID_POLICY_FIXTURES = (
     "alarm_shelve-allowlisted-batch",
     "alarm_shelve-observed-not-shelved",
@@ -284,6 +421,8 @@ VALID_POLICY_FIXTURES = (
     "alarm_shelve-duration-over-policy-cap",
     "alarm_shelve-target-not-allowlisted",
     "alarm_shelve-reserved-provider",
+    "alarm_shelve-reserved-name-in-later-segment",
+    "alarm_shelve-reserved-name-not-allowlisted",
     "alarm_shelve-wildcard-allows-target",
     "alarm_shelve-preflight-refuses-whole-batch",
     "alarm_shelve-audit-required-profile-missing",
@@ -296,12 +435,21 @@ VALID_POLICY_FIXTURES = (
     # grammar-checked, while the *entry* in it is what the refusal is about.
     "alarm_shelve-policy-length-mismatch",
     "alarm_shelve-policy-broken-allowlist-entry",
+    # D10 bounds, the denial decision rows and the Observed-state budget.
+    "alarm_shelve-paths-over-policy-limit",
+    "alarm_shelve-policy-raises-path-limit",
+    "alarm_shelve-decision-audit-off",
+    "alarm_shelve-decision-audit-required-write-fails",
+    "alarm_shelve-observed-user-over-budget",
+    "alarm_shelve-serialization-fails",
 )
 #: Fixtures whose whole point is that the document does NOT satisfy the contract.
 INVALID_POLICY_FIXTURES = (
     "alarm_shelve-policy-malformed",
     "alarm_shelve-policy-null-audit-profile",
     "alarm_shelve-policy-cap-invalid",
+    # A policy may not raise the target ceiling above D10's 100-target hard cap.
+    "alarm_shelve-policy-path-limit-invalid",
 )
 
 

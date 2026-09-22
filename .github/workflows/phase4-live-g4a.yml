@@ -268,8 +268,27 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart \
-            | tee "$EVIDENCE_DIR/driver-policy-read.log"
+          if ! uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart \
+            | tee "$EVIDENCE_DIR/driver-policy-read.log"; then
+            # Ticket #6 recorded two provider-startup hazards, and the second one
+            # was hit live: an accepted policy import whose Tag the *running*
+            # provider never serves. `Phase 4 Live Gateway G4a` run 35654626095
+            # (8.3.9) lost the row to it, because the driver can only re-import at
+            # the config plane and cannot restart the Gateway. Give the stage the
+            # one recorded heal — a restart, then the same assertion — before
+            # failing the job; a second failure is the job's failure.
+            echo "the policy-read stage failed; restarting the Gateway once and re-running the same assertion" >&2
+            docker compose -f "$COMPOSE_FILE" restart gateway
+            uv run --no-sync python tests/harness/phase4-live/wait_for_gateway.py \
+              --base-url "$P4_BASE_URL" \
+              --api-token "$CI_API_TOKEN" \
+              --mcp-url "$P4_BASE_URL/data/mcp/phase4-policy-probe" \
+              --mcp-url "$P4_OPERATOR_MCP_URL" \
+              --timeout 480
+            docker compose -f "$COMPOSE_FILE" logs --no-color gateway > "$EVIDENCE_DIR/gateway-after-policy-read-restart.log" 2>&1 || true
+            uv run --no-sync python tests/harness/phase4-live/driver.py policy-read --label before-restart \
+              | tee "$EVIDENCE_DIR/driver-policy-read-retry.log"
+          fi
 
       - name: Restart the Gateway and re-read the policy
         shell: bash
@@ -316,6 +335,7 @@ jobs:
 
       - name: Summarize the characterization
         id: summarize
+        if: always()
         shell: bash
         run: |
           set +e

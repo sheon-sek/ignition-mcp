@@ -6,7 +6,7 @@
   ],
   "arguments": {
     "paths": [
-      "prov:default:/tag:IgnitionMCPPolicy/RuntimeTargetPolicy:/alm:ProbeHi"
+      "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi"
     ]
   },
   "calls": [
@@ -56,6 +56,17 @@
             "value": "{\"alarmShelveMaxSeconds\":3600,\"allowlists\":{\"alarm_shelve\":[\"*\"],\"alarm_unshelve\":[\"*\"]},\"auditMode\":\"best_effort\",\"auditProfile\":\"MCP_CI_AUDIT\",\"schemaVersion\":1,\"serviceIdentity\":\"ignition-mcp-service\"}"
           }
         ]
+      }
+    },
+    {
+      "target": "system.util.audit",
+      "kwargs": {
+        "action": "ignition-mcp.alarm_unshelve",
+        "actionTarget": "prov:IgnitionMCPPolicy:/tag:RuntimeTargetPolicy:/alm:ProbeHi",
+        "actor": "ignition-mcp-service"
+      },
+      "result": {
+        "kind": "none"
       }
     }
   ]

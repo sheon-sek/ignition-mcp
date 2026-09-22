@@ -9,6 +9,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 from typing import Any
 from urllib.request import urlopen
 
@@ -30,10 +31,20 @@ FIXTURE_DIR = Path(__file__).resolve().parent / "fixtures"
 #: that crosses into the Jython process.
 MAX_FIXTURE_BYTES = 256 * 1024
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+#: How many times one pinned artifact fetch is attempted. Maven Central's CDN has
+#: answered a transient `HTTP 404` for the pinned 50 MB JAR, which without a retry
+#: fails every recorded-Jython test in the job; the digest below still decides what
+#: is accepted, so a retry can never substitute another artifact.
+DOWNLOAD_ATTEMPTS = 5
+DOWNLOAD_BACKOFF_SECONDS = 1.0
 
 
 class JythonRunnerError(RuntimeError):
     """The interpreter, recorded call, handler, or output contract failed."""
+
+
+class _OversizeArtifact(JythonRunnerError):
+    """A body larger than the pinned size: refetching it cannot help."""
 
 
 def _sha256(path: Path) -> str:
@@ -56,6 +67,55 @@ def _verify_jar(path: Path) -> None:
         )
 
 
+def _fetch_pinned_jar(url: str, destination: Path) -> None:
+    """One attempt: stream the pinned artifact into `destination`.
+
+    A body larger than the pinned size is refused here without a retry, because
+    refetching cannot turn it into the pinned artifact.
+    """
+
+    with urlopen(url, timeout=30) as response:  # noqa: S310 - the caller passes a fixed HTTPS URL
+        total = 0
+        with destination.open("wb") as stream:
+            while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
+                total += len(chunk)
+                if total > JYTHON_SIZE:
+                    raise _OversizeArtifact(f"Jython download exceeded {JYTHON_SIZE} bytes")
+                stream.write(chunk)
+
+
+def _acquire_pinned_jar(url: str, jar: Path, cache: Path) -> None:
+    """Fetch the pinned interpreter, retrying a transient failure with backoff.
+
+    A transport failure, a truncated body and a digest mismatch are worth retrying;
+    the pinned size and digest still decide what is accepted, so a retry cannot
+    substitute another artifact, and an oversized body is refused at once.
+    """
+
+    last: BaseException | None = None
+    for attempt in range(DOWNLOAD_ATTEMPTS):
+        if attempt:
+            time.sleep(DOWNLOAD_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="jython-", suffix=".jar", dir=cache, delete=False) as stream:
+                temporary = Path(stream.name)
+            _fetch_pinned_jar(url, temporary)
+            _verify_jar(temporary)
+            temporary.replace(jar)
+            return
+        except _OversizeArtifact:
+            raise
+        except (JythonRunnerError, OSError, ValueError) as error:
+            last = error
+        finally:
+            if temporary is not None and temporary.exists():
+                temporary.unlink()
+    raise JythonRunnerError(
+        f"Could not acquire pinned Jython artifact from {url} in {DOWNLOAD_ATTEMPTS} attempts: {last}"
+    ) from last
+
+
 def _ensure_jython_jar() -> Path:
     configured = os.environ.get("IGNITION_MCP_JYTHON_CACHE")
     cache = Path(configured).expanduser() if configured else DEFAULT_CACHE
@@ -65,24 +125,7 @@ def _ensure_jython_jar() -> Path:
         _verify_jar(jar)
         return jar
 
-    temporary: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(prefix="jython-", suffix=".jar", dir=cache, delete=False) as stream:
-            temporary = Path(stream.name)
-            with urlopen(JYTHON_URL, timeout=30) as response:  # noqa: S310 - fixed HTTPS URL above
-                total = 0
-                while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
-                    total += len(chunk)
-                    if total > JYTHON_SIZE:
-                        raise JythonRunnerError(f"Jython download exceeded {JYTHON_SIZE} bytes")
-                    stream.write(chunk)
-        _verify_jar(temporary)
-        temporary.replace(jar)
-    except (OSError, ValueError) as error:
-        raise JythonRunnerError(f"Could not acquire pinned Jython artifact from {JYTHON_URL}: {error}") from error
-    finally:
-        if temporary is not None and temporary.exists():
-            temporary.unlink()
+    _acquire_pinned_jar(JYTHON_URL, jar, cache)
     return jar
 
 

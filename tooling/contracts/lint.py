@@ -526,14 +526,30 @@ def _check_runtime_mutation(tool: dict[str, Any], tool_name: str, repo_root: Pat
         raise ContractError(f"{tool_name}: the reserved-provider refusal must cover an explicit *")
     if policy.get("reservedProviderRefusalCode") != "permission_denied":
         raise ContractError(f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §7)")
+    _check_input_bounds(tool, tool_name)
 
 
 def _check_input_bounds(tool: dict[str, Any], tool_name: str) -> None:
-    """D10's numeric budgets are declared by the contract the handler implements."""
+    """D10's numeric budgets are declared by the contract the handler implements.
+
+    Every Runtime Mutation must state D10's 20-item project default inside the
+    100-item hard ceiling where its caller can read it: in the `inputBounds` block
+    a Tool that also carries byte ceilings and a deployment override, or in the
+    bounded parameter's own `default` and `maxItems`. The richer block is checked
+    in full when it is declared, and `_check_runtime_mutation` keeps every
+    contract of this ticket's Tools to it.
+    """
 
     bounds = tool.get("inputBounds")
     if not isinstance(bounds, dict):
-        raise ContractError(f"{tool_name}: D10 requires declared inputBounds")
+        for name, spec in tool.get("parameters", {}).items():
+            if isinstance(spec, dict) and isinstance(spec.get("maxItems"), int):
+                if spec.get("maxItems") == 100 and spec.get("default") == 20:
+                    return
+                raise ContractError(
+                    f"{tool_name}: {name} must declare D10's 20-item default and 100-item hard ceiling"
+                )
+        raise ContractError(f"{tool_name}: D10 requires declared item bounds")
     if bounds.get("defaultItems") != 20 or bounds.get("hardItems") != 100:
         raise ContractError(
             f"{tool_name}: D10 fixes the 20-item project default and the 100-item hard ceiling"
@@ -758,9 +774,9 @@ def lint_contracts(root: str | Path) -> None:
         ]:
             raise ContractError("Runtime Target Policy audit-mode vocabulary drift")
         # D10's deployment override lives in the Policy document, so the field a
-        # contract names must be part of that document's schema. A contract on this
-        # lane that does not declare D10 bounds yet is skipped: the #7 fix declares
-        # them for the CONTROL Tools, and the merged tree checks every Mutation.
+        # contract names must be part of that document's schema. A contract that
+        # declares no bounds block is skipped; every Phase 4 Runtime Mutation
+        # declares one.
         policy_properties = policy_schema.get("properties", {})
         for mutation_name in CURRENT_RUNTIME_MUTATION_TOOLS:
             mutation = _load(root_path / f"tools/runtime/{mutation_name}.contract.json")
