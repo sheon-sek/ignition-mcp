@@ -40,10 +40,29 @@ CURRENT_REST_READ_TOOLS = [
 CURRENT_REST_STORAGE_TOOLS = frozenset({"artifact_list", "artifact_info", "operation_diagnose"})
 CURRENT_REST_SENSITIVE_EXPORT_TOOLS = frozenset({"project_export", "tag_config_export"})
 SENSITIVE_EXPORT_GATE = "IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED"
+#: D30 owner ruling 4 (issue #36): the Runtime Target Policy's own config resource is
+#: refused **by name** inside an *allowed* type — a rule separate from the Refused
+#: resource types set (D30 §5), so `ignition/tag-provider` stays manageable under every
+#: other name — and it runs before the Target allowlist. ``targets`` names the Target
+#: parameters the rule covers; a rename declares both of its names, because both are
+#: Targets (D30 §3).
+RESERVED_CONFIG_RESOURCE: dict[str, Any] = {
+    "resourceType": "ignition/tag-provider",
+    "collection": "core",
+    "names": ("IgnitionMCPPolicy",),
+    "targets": ("name",),
+}
+#: The rename variant: the reserved name is refused as the source *and* as the
+#: destination the rename would produce.
+RESERVED_CONFIG_RESOURCE_RENAME: dict[str, Any] = {
+    **RESERVED_CONFIG_RESOURCE, "targets": ("name", "newName"),
+}
+
 #: Phase 4 milestone 4c: the REST Mutation Tools implemented so far, with the
 #: per-Tool facts the contract must state: mutation class, scope, deployment gate,
 #: whether it is destructive, its Precondition token (D30 §2 — ``none`` for a create),
-#: how the Gateway enforces it, and the knobs the caller may never choose (D30 §4).
+#: how the Gateway enforces it, the knobs the caller may never choose (D30 §4), and the
+#: reserved config resource it refuses by name (D30 owner ruling 4).
 CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
     "config_resource_update": {
         "mutationClass": "CONFIG_MUTATION",
@@ -55,6 +74,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: choose either — every config Mutation is made in `core`.
         "fixedKnobs": {"allowInvalidReferences": "false", "collection": "core"},
         "refusedResourceTypes": True,
+        #: D30 §5 plus owner ruling 4 (issue #36): an allowed type refuses one *name*.
+        #: A rename declares both of its names, because both are Targets (D30 §3).
+        "reservedResourceNames": RESERVED_CONFIG_RESOURCE,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
     },
@@ -68,6 +90,7 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: choose either — every config Mutation is made in `core`.
         "fixedKnobs": {"allowInvalidReferences": "false", "collection": "core"},
         "refusedResourceTypes": True,
+        "reservedResourceNames": RESERVED_CONFIG_RESOURCE,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
     },
@@ -81,6 +104,7 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: choose either — every config Mutation is made in `core`.
         "fixedKnobs": {"confirm": "never sent", "collection": "core"},
         "refusedResourceTypes": True,
+        "reservedResourceNames": RESERVED_CONFIG_RESOURCE,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
     },
@@ -94,6 +118,7 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         #: choose either — every config Mutation is made in `core`.
         "fixedKnobs": {"references": "ABORT", "collection": "core"},
         "refusedResourceTypes": True,
+        "reservedResourceNames": RESERVED_CONFIG_RESOURCE_RENAME,
         "requestSchemaValidation": True,
         "recoveredSuccess": "unreachable for this Tool",
     },
@@ -460,6 +485,66 @@ def lint_contracts(root: str | Path) -> None:
                     f"{tool_name}: the reserved-provider rule must state that it holds "
                     "whatever the allowlist says, including *"
                 )
+        # D30 owner ruling 4 (issue #36): the Runtime Target Policy's own config resource
+        # is refused by *name* inside an allowed type — a declaration deliberately separate
+        # from the Refused resource types set, so a Tool cannot turn the name rule into a
+        # type rule. Only a config-resource Mutation may declare one.
+        named = spec.get("reservedResourceNames")
+        declared_names = tool.get("reservedResourceNames")
+        if named is None:
+            if "reservedResourceNames" in tool:
+                raise ContractError(
+                    f"{tool_name}: D30 owner ruling 4 governs the config-resource Mutations; "
+                    "this Tool cannot refuse a resource by name"
+                )
+        else:
+            if not isinstance(declared_names, dict):
+                raise ContractError(
+                    f"{tool_name}: the reserved config resource must be declared (D30 owner ruling 4)"
+                )
+            if declared_names.get("resourceType") != named["resourceType"]:
+                raise ContractError(
+                    f"{tool_name}: the reserved config resource type must be declared exactly"
+                )
+            if declared_names.get("collection") != named["collection"]:
+                raise ContractError(
+                    f"{tool_name}: the reserved config resource is addressed in the core collection"
+                )
+            if tuple(declared_names.get("names", ())) != named["names"]:
+                raise ContractError(
+                    f"{tool_name}: the reserved config resource name must be declared exactly"
+                )
+            if tuple(declared_names.get("targets", ())) != named["targets"]:
+                raise ContractError(
+                    f"{tool_name}: every Target name the reserved-name rule covers must be "
+                    "declared exactly (D30 §3)"
+                )
+            if declared_names.get("denialCode") != "permission_denied":
+                raise ContractError(
+                    f"{tool_name}: a reserved-name refusal is permission_denied (D30 §7)"
+                )
+            if declared_names.get("layer") != "target-class":
+                raise ContractError(
+                    f"{tool_name}: a reserved name is refused as a Target class, before "
+                    "the Target allowlist"
+                )
+            rule = str(declared_names.get("rule", ""))
+            if not re.search(r"\*", rule):
+                raise ContractError(
+                    f"{tool_name}: the reserved-name rule must state that it holds whatever "
+                    "the allowlist says, including *"
+                )
+            if "allowed type" not in rule:
+                raise ContractError(
+                    f"{tool_name}: the reserved-name rule must keep the two rules separate: it "
+                    "refuses one name inside an *allowed* type, not the type itself (D30 §5)"
+                )
+            if "newName" in named["targets"] and "D30 §3" not in str(
+                declared_names.get("renameRule", "")
+            ):
+                raise ContractError(
+                    f"{tool_name}: a rename must say that both of its names are covered"
+                )
         if spec["requestSchemaValidation"]:
             schema_validation = tool.get("requestSchemaValidation")
             if not isinstance(schema_validation, dict) or (
@@ -558,6 +643,14 @@ def lint_contracts(root: str | Path) -> None:
         raise ContractError("refused-resource-types: a resource type is both allowed and refused")
     if "com.inductiveautomation.mcp/server-config" not in refused_names:
         raise ContractError("refused-resource-types: the MCP server-config resource must be refused")
+    # D30 owner ruling 4 refuses one *name* inside an allowed type: moving the type into
+    # the refused set would take every other Tag provider down with the policy's own
+    # resource, which is exactly what the ruling keeps separate.
+    if RESERVED_CONFIG_RESOURCE["resourceType"] not in allowed:
+        raise ContractError(
+            "refused-resource-types: the Tag-provider type stays allowed; owner ruling 4 "
+            "refuses one name inside it (D30 §5)"
+        )
 
     for tool_name in CURRENT_REST_STORAGE_TOOLS:
         tool = _load(root_path / f"tools/rest/{tool_name}.contract.json")

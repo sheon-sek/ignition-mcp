@@ -18,6 +18,14 @@ read back with a signature, which is the proof that the live cases have a real
 Precondition token to work with. The name the create case publishes is deliberately
 *not* provisioned. Re-running is safe: an existing resource is left alone.
 
+It also creates the three Tag-provider *config resources* D30 owner ruling 4 (ticket #36)
+is about: the reserved `IgnitionMCPPolicy` provider — the resource the Runtime Target
+Policy lives in — an ordinary provider, and a longer name that only begins with the
+reserved one. Each is read back for its Resource signature, so the reserved-name cases can
+show that a refused call left the reserved resource exactly as it was, and the block
+records how this Gateway answers a read of the reserved name with its case folded
+(Ignition documents no rule for it, so the Tool folds case and fails closed).
+
 It also confirms the two disposable Projects the ``project_import`` cases address
 (installed into the Gateway's data directory by the workflow, which is why this
 harness cannot create them itself): the Target the Project-import allowlist names, and
@@ -56,6 +64,17 @@ TAG_IMPORT_PATH = "/data/api/v1/tags/import"
 TAG_EXPORT_PATH = "/data/api/v1/tags/export"
 TAG_PROVIDER_READY_DEADLINE_SECONDS = 180.0
 TAG_IMPORT_ATTEMPTS = 6
+
+#: Phase 4 ticket #36 (D30 owner ruling 4): the Tag-provider *config resources* the
+#: reserved-name cases address. `IgnitionMCPPolicy` is the provider the Runtime Target
+#: Policy lives in and is refused by name; the other two prove the refusal is by name
+#: inside an *allowed* type — one is a different provider, the other begins with the
+#: reserved name but is a different resource.
+POLICY_PROVIDER = "IgnitionMCPPolicy"
+OTHER_PROVIDER = "MCP_CI_TAG_CONFIG"
+LOOKALIKE_PROVIDER = "IgnitionMCPPolicyStaging"
+PROVIDER_RESOURCES = (POLICY_PROVIDER, OTHER_PROVIDER, LOOKALIKE_PROVIDER)
+PROVIDER_RENAME_PATH = "/data/api/v1/resources/rename/ignition/tag-provider/"
 #: The Tag names the source document holds, which the live cases assert are served at
 #: the destination afterwards.
 TAG_SOURCE_NAMES = ("Folder", "Int", "Inner", "Text", "Sibling")
@@ -83,6 +102,15 @@ REQUIRED_ENDPOINTS = frozenset({
     ("POST", TAG_PROVIDER_PATH),
     ("POST", TAG_IMPORT_PATH),
     ("GET", TAG_EXPORT_PATH),
+    # Phase 4 ticket #36: the Tag-provider *config resource* through the generic config
+    # Mutations. The reserved-name refusal is decided from the Target alone, but the
+    # capability snapshot withholds the update/delete/rename route of a type whose route
+    # is not documented — and a type without a route never reaches the refusal — so the
+    # harness must not run on a Gateway that lacks them.
+    ("GET", f"{TAG_PROVIDER_FIND_PATH}{{name}}"),
+    ("PUT", TAG_PROVIDER_PATH),
+    ("DELETE", f"{TAG_PROVIDER_PATH}/{{name}}/{{signature}}"),
+    ("POST", f"{PROVIDER_RENAME_PATH}{{name}}"),
     # Phase 4 ticket #18: the cancel Tool needs both documented pipeline routes — the
     # status read it verifies with and the cancel itself — or the harness must not spend
     # a live run on a Gateway that cannot expose it.
@@ -222,6 +250,72 @@ def _project_names(base_url: str, token: str) -> set[str]:
     return {
         str(item["name"]) for item in items
         if isinstance(item, dict) and isinstance(item.get("name"), str)
+    }
+
+
+def provision_providers(base_url: str, token: str) -> dict[str, Any]:
+    """The three Tag-provider config resources ticket #36 is about.
+
+    They are ordinary `ignition/tag-provider` resources created through the Gateway's own
+    Native REST API — the same route the deployment-owned `setup-native apply` uses for the
+    policy provider, and the same *type* D30 §5 keeps allowed. Creating
+    ``IgnitionMCPPolicy`` here is deliberately part of the fixture: the cases must be able
+    to show that a refused call left the policy's storage provider exactly as it was, which
+    needs the resource to exist.
+
+    The block also records how this Gateway treats the *case* of a resource name: the
+    reserved name is looked up once with its case folded, and the status the Gateway
+    answers is recorded. Ignition documents no rule for it, which is why the refusal itself
+    folds case (fail-closed); this measurement is what a reader uses to judge the cost of
+    that choice.
+    """
+
+    created: dict[str, Any] = {}
+    for name in PROVIDER_RESOURCES:
+        body = json.dumps([{
+            "name": name,
+            "collection": COLLECTION,
+            "description": f"Disposable Phase 4 CI Tag-provider resource ({name})",
+            "enabled": True,
+            "config": {"profile": {"type": "STANDARD"}, "settings": {}},
+        }], separators=(",", ":")).encode("utf-8")
+        status, _ = _request(
+            base_url, token, "POST", TAG_PROVIDER_PATH, body=body,
+            allowed_error_statuses=frozenset({409}),
+        )
+        if status not in {200, 201, 409}:
+            raise ProvisionError(
+                f"creating the Tag-provider resource {name} returned unexpected HTTP {status}"
+            )
+        read_status, payload = _request(
+            base_url, token, "GET", f"{TAG_PROVIDER_FIND_PATH}{name}?collection={COLLECTION}",
+            allowed_error_statuses=frozenset({404}),
+        )
+        if read_status != 200 or not isinstance(payload, dict):
+            raise ProvisionError(f"reading the Tag-provider resource {name} returned HTTP {read_status}")
+        signature = payload.get("signature")
+        if not isinstance(signature, str) or not signature:
+            raise ProvisionError(f"the Tag-provider resource {name} reports no Resource signature")
+        created[name] = {"createStatus": status, "signature": signature}
+    folded_status, _ = _request(
+        base_url, token, "GET",
+        f"{TAG_PROVIDER_FIND_PATH}{POLICY_PROVIDER.lower()}?collection={COLLECTION}",
+        allowed_error_statuses=frozenset({404}),
+    )
+    return {
+        "resourceType": "ignition/tag-provider",
+        "reserved": POLICY_PROVIDER,
+        "resources": created,
+        "caseFoldedLookup": {
+            "name": POLICY_PROVIDER.lower(),
+            "status": folded_status,
+            "note": (
+                "how this Gateway answers a read of the reserved resource's name with its "
+                "case folded: 200 means the two names address one resource, 404 means they "
+                "do not. The Tool folds case anyway (fail-closed), because Ignition "
+                "documents no rule for it."
+            ),
+        },
     }
 
 
@@ -529,6 +623,7 @@ def provision(
             ),
         },
         "readiness": readiness,
+        "policyProviders": provision_providers(base_url, token),
         "tagProvider": (
             provision_tags(base_url, token, provider=tag_provider, source_path=tag_source_path)
             if tag_provider and tag_source_path
@@ -563,6 +658,11 @@ def main() -> int:
         "resources": {name: item["signature"] for name, item in report["resources"].items()},
         "refusedResourcePresent": report["refusedResourceType"]["present"],
         "singletonTargetPresent": report["singletonTarget"]["present"],
+        "policyProviders": {
+            name: item["signature"]
+            for name, item in report["policyProviders"]["resources"].items()
+        },
+        "caseFoldedLookupStatus": report["policyProviders"]["caseFoldedLookup"]["status"],
         "projects": sorted(
             item["name"] for item in report["projects"].values() if item["present"]
         ),

@@ -40,6 +40,19 @@ SINGLETON_NAME = "cobranding"
 TOKEN_TYPE = "ignition/api-token"
 REFUSED_NAME = "ignition-mcp-ci"
 
+#: D30 §5 / owner ruling 4 (issue #36): an *allowed* resource type refused by one name.
+#: `ignition/tag-provider` stays classified as allowed — this is a refusal by name
+#: *within* an allowed type, kept separate from the Refused resource types set — and
+#: every other Tag provider stays manageable through `config_resource_*`.
+PROVIDER_TYPE = "ignition/tag-provider"
+#: The resource the Runtime Target Policy lives in (D30 §1, ticket #6's location).
+RESERVED_PROVIDER = "IgnitionMCPPolicy"
+#: A second Tag provider of the same type: the rule must not reach it.
+OTHER_PROVIDER = "MCP_CI_TAG_CONFIG"
+#: A longer name that begins with the reserved one: the name matches exactly, never as
+#: a substring, so this resource stays manageable.
+LOOKALIKE_PROVIDER = "IgnitionMCPPolicyStaging"
+
 #: D30 owner ruling 5: the one collection a config Mutation addresses. The cases seed
 #: every Target in it and keep a same-named look-alike in ``OTHER_COLLECTION``, so a
 #: change that reached the wrong resource would be visible in the fixture's state.
@@ -149,8 +162,10 @@ def seed_config_resources(gateway: Any) -> None:
     An allowlisted update/delete/rename Target in ``core``, a look-alike of the same
     name in another collection, a second resource of the same type the Target
     allowlist does *not* name, the refused API token the live CI Gateway really holds,
-    and an allowed singleton. Every Mutation Target is seeded in ``core``, which is
-    the only collection a config Mutation addresses (D30 owner ruling 5).
+    an allowed singleton, and the three Tag providers D30 owner ruling 4 (issue #36)
+    is about: the reserved policy provider and two names that stay manageable. Every
+    Mutation Target is seeded in ``core``, which is the only collection a config
+    Mutation addresses (D30 owner ruling 5).
     """
 
     gateway.seed_resource(
@@ -177,6 +192,19 @@ def seed_config_resources(gateway: Any) -> None:
         SINGLETON_TYPE, SINGLETON_NAME, collection=CORE_COLLECTION,
         config={"enabled": True}, description="CI branding",
     )
+    # D30 owner ruling 4: the Tag-provider resources. The reserved one is the resource
+    # the Runtime Target Policy lives in, and the other two prove the refusal is by
+    # exact name inside an allowed type: one is an ordinary provider, the other begins
+    # with the reserved name but is a different resource.
+    for name, description in (
+        (RESERVED_PROVIDER, "CI policy provider"),
+        (OTHER_PROVIDER, "CI Tag provider"),
+        (LOOKALIKE_PROVIDER, "CI Tag provider (not the reserved name)"),
+    ):
+        gateway.seed_resource(
+            PROVIDER_TYPE, name, collection=CORE_COLLECTION,
+            config={"profile": {"type": "STANDARD"}, "settings": {}}, description=description,
+        )
 
 
 class Session:

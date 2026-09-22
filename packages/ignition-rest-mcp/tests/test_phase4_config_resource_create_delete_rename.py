@@ -25,11 +25,15 @@ from phase4_fixtures import (
     CREATED_RESOURCE,
     CREATE_TOOL,
     DELETE_TOOL,
+    LOOKALIKE_PROVIDER,
     OTHER_COLLECTION,
+    OTHER_PROVIDER,
     PROFILE,
+    PROVIDER_TYPE,
     READ_INVENTORY,
     RENAMED_RESOURCE,
     RENAME_TOOL,
+    RESERVED_PROVIDER,
     RESOURCE,
     SINGLETON_NAME,
     SINGLETON_TYPE,
@@ -1058,6 +1062,224 @@ def test_the_documented_rename_race_window_is_reported_honestly(tmp_path: Path) 
     body = structured(result)
     assert body["name"] == RENAMED_RESOURCE
     assert body["observedState"]["description"] == "changed by the other writer"
+
+
+# ------------------------------------- the reserved policy provider (D30 owner ruling 4)
+
+#: A destination inside the allowed Tag-provider type that is not the reserved name.
+RENAMED_PROVIDER = "MCP_CI_TAG_CONFIG_RENAMED"
+
+
+def test_creating_the_reserved_policy_provider_is_denied(tmp_path: Path) -> None:
+    """Owner ruling 4 covers a create: with a `*` allowlist the reserved name is still
+    refused, before the existence probe — so nothing is dispatched and the provider the
+    deployment already has is untouched."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={CREATE_TOOL: ("*",)})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(CREATE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "name": RESERVED_PROVIDER,
+            })
+
+        posts = write_requests(gateway, "POST")
+        rows = audit_rows(tmp_path)
+
+    error = envelope(result)
+    reserved_id = f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    assert error["code"] == "permission_denied"
+    assert reserved_id in error["message"]
+    assert posts == [], "a reserved name must not reach the Gateway"
+    assert gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER) == before
+    assert rows[0]["outcome"] == f"denied:target-class:reserved-config-resource:{reserved_id}"
+
+
+@pytest.mark.parametrize(
+    "targets",
+    [
+        ("*",),
+        (f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}",),
+    ],
+    ids=["wildcard", "narrow"],
+)
+def test_deleting_the_reserved_policy_provider_is_denied(
+    tmp_path: Path, targets: tuple[str, ...],
+) -> None:
+    """A delete is the destructive case of the rule: the policy's storage provider may
+    not be removed through a generic config Mutation, whatever the allowlist says."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={DELETE_TOOL: targets})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(DELETE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": RESERVED_PROVIDER,
+            })
+
+        deletes = write_requests(gateway, "DELETE")
+        reads = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+
+    assert envelope(result)["code"] == "permission_denied"
+    assert deletes == [] and reads == []
+    assert gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER) == before
+    assert rows[0]["outcome"] == (
+        f"denied:target-class:reserved-config-resource:{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    )
+
+
+def test_deleting_a_provider_whose_name_only_begins_with_the_reserved_name_is_allowed(
+    tmp_path: Path,
+) -> None:
+    """The whole-name rule on the destructive path: the longer look-alike name is a
+    different resource and is deleted normally."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, LOOKALIKE_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={
+            DELETE_TOOL: (f"{PROVIDER_TYPE}/{LOOKALIKE_PROVIDER}",),
+        })
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(DELETE_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": LOOKALIKE_PROVIDER,
+            })
+
+        deletes = write_requests(gateway, "DELETE")
+
+    assert structured(result)["present"] is False
+    assert len(deletes) == 1, deletes
+    with pytest.raises(KeyError):
+        gateway.resource(PROVIDER_TYPE, LOOKALIKE_PROVIDER)
+
+
+def test_renaming_the_reserved_policy_provider_away_is_denied(tmp_path: Path) -> None:
+    """The source of a rename can be the reserved name: renaming the provider away would
+    take the policy's storage with it, so it is refused before the allowlist, the
+    collision check and the Precondition read (the destination here is occupied, and the
+    call still never reaches the Gateway)."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        reserved_before = gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+        other_before = gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={RENAME_TOOL: (
+            f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}", f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",
+        )})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(RENAME_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": reserved_before,
+                "name": RESERVED_PROVIDER, "newName": OTHER_PROVIDER,
+            })
+
+        posts = write_requests(gateway, "POST")
+        reads = resource_route_requests(gateway)
+        rows = audit_rows(tmp_path)
+
+    error = envelope(result)
+    reserved_id = f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    assert error["code"] == "permission_denied"
+    assert reserved_id in error["message"]
+    assert posts == [] and reads == []
+    assert gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER) == reserved_before
+    assert gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER) == other_before
+    assert rows[0]["target_id"] == reserved_id
+    assert rows[0]["outcome"] == f"denied:target-class:reserved-config-resource:{reserved_id}"
+
+
+def test_renaming_another_provider_into_the_reserved_name_is_denied(tmp_path: Path) -> None:
+    """A rename *into* the reserved name is refused too.
+
+    Both names of a rename are Targets (D30 §3), so the rule covers the resource the
+    rename produces as well as the one it changes: renaming an ordinary provider onto the
+    reserved name would otherwise take the policy's storage provider over, and renaming
+    it back would produce a second resource at the reserved name. Both names here are
+    allowlisted, so the refusal is the name rule and not the allowlist.
+    """
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        other_before = gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER)
+        reserved_before = gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={RENAME_TOOL: (
+            f"{PROVIDER_TYPE}/{OTHER_PROVIDER}", f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}",
+        )})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(RENAME_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": other_before,
+                "name": OTHER_PROVIDER, "newName": RESERVED_PROVIDER,
+            })
+
+        posts = write_requests(gateway, "POST")
+        rows = audit_rows(tmp_path)
+
+    error = envelope(result)
+    reserved_id = f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}"
+    assert error["code"] == "permission_denied"
+    assert reserved_id in error["message"]
+    assert posts == [], "the reserved destination must stop the rename before anything moves"
+    assert gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER) == other_before
+    assert gateway.signature(PROVIDER_TYPE, RESERVED_PROVIDER) == reserved_before
+    assert rows[-1]["outcome"] == f"denied:target-class:reserved-config-resource:{reserved_id}"
+
+
+def test_renaming_another_provider_name_is_still_manageable(tmp_path: Path) -> None:
+    """The rule refuses the reserved name, not the type: another Tag provider renames
+    exactly as any other allowed resource does."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        before = gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={RENAME_TOOL: (
+            f"{PROVIDER_TYPE}/{OTHER_PROVIDER}", f"{PROVIDER_TYPE}/{RENAMED_PROVIDER}",
+        )})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(RENAME_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": OTHER_PROVIDER, "newName": RENAMED_PROVIDER,
+            })
+
+        posts = write_requests(gateway, "POST")
+
+    body = structured(result)
+    assert body["previousName"] == OTHER_PROVIDER and body["name"] == RENAMED_PROVIDER
+    assert len(posts) == 1, posts
+    assert posts[0]["path"] == (
+        f"/data/api/v1/resources/rename/{PROVIDER_TYPE}/{OTHER_PROVIDER}?collection={CORE_COLLECTION}"
+    )
+    assert gateway.signature(PROVIDER_TYPE, RENAMED_PROVIDER) == body["signature"]
+
+
+def test_a_rename_destination_that_only_begins_with_the_reserved_name_is_manageable(
+    tmp_path: Path,
+) -> None:
+    """`IgnitionMCPPolicyRenamed` is a different name, so it is a valid rename
+    destination: the comparison is the whole name, never a substring."""
+
+    with RecordedGateway() as gateway:
+        _seed(gateway)
+        destination = f"{RESERVED_PROVIDER}Renamed"
+        before = gateway.signature(PROVIDER_TYPE, OTHER_PROVIDER)
+        settings = _settings(tmp_path, gateway, targets={RENAME_TOOL: (
+            f"{PROVIDER_TYPE}/{OTHER_PROVIDER}", f"{PROVIDER_TYPE}/{destination}",
+        )})
+        with TestClient(server_module.create_server(settings).http_app()) as http:
+            result = Session(http, "cfg-secret").call(RENAME_TOOL, {
+                "resourceType": PROVIDER_TYPE, "expectedSignature": before,
+                "name": OTHER_PROVIDER, "newName": destination,
+            })
+
+        posts = write_requests(gateway, "POST")
+
+    body = structured(result)
+    assert body["previousName"] == OTHER_PROVIDER and body["name"] == destination
+    assert len(posts) == 1, "the rename was dispatched: the name rule let it through"
+    assert gateway.signature(PROVIDER_TYPE, destination) == body["signature"]
 
 
 # ------------------------------------------------------------------ contract

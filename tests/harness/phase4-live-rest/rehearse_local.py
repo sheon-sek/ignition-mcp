@@ -41,11 +41,15 @@ from rest_driver import (  # noqa: E402
     ALARM_CANCEL_TOOL,
     CREATED_RESOURCE,
     DEFAULT_ALARM_EVENT_ID,
+    DEFAULT_LOOKALIKE_PROVIDER,
+    DEFAULT_OTHER_PROVIDER,
+    DEFAULT_PROVIDER_RESOURCE_TYPE,
     DEFAULT_CONTROL_PIPELINE,
     DEFAULT_CONTROL_PROJECT,
     DEFAULT_PIPELINE,
     DEFAULT_PROJECT,
     DEFAULT_TAG_CONTROL_PATH,
+    DEFAULT_RESERVED_TAG_PROVIDER,
     DEFAULT_TAG_PROVIDER,
     DEFAULT_TAG_SOURCE_PATH,
     DEFAULT_TAG_TARGET_PATH,
@@ -74,6 +78,13 @@ TAG_PROVIDER = DEFAULT_TAG_PROVIDER
 TAG_SOURCE_PATH = DEFAULT_TAG_SOURCE_PATH
 TAG_TARGET_PATH = DEFAULT_TAG_TARGET_PATH
 TAG_CONTROL_PATH = DEFAULT_TAG_CONTROL_PATH
+#: The Tag-provider *config resources* the ticket #36 cases address: the reserved provider
+#: the Runtime Target Policy lives in, an ordinary provider, and a longer name that only
+#: begins with the reserved one.
+PROVIDER_TYPE = DEFAULT_PROVIDER_RESOURCE_TYPE
+RESERVED_PROVIDER = DEFAULT_RESERVED_TAG_PROVIDER
+OTHER_PROVIDER = DEFAULT_OTHER_PROVIDER
+LOOKALIKE_PROVIDER = DEFAULT_LOOKALIKE_PROVIDER
 #: The pipeline surface the #18 cases address: the exact path the Target allowlist
 #: names (in the Project the import cases use, so it is run-unique live), a second
 #: pipeline it does not name, and an alarm event no run holds.
@@ -96,20 +107,31 @@ FAULT_RECONCILE_INTERVAL = 2.0
 #: The same per-Tool Target allowlists the live workflow configures: one entry list
 #: per Mutation Tool, and every name a case addresses that must be allowed.
 MUTATION_TARGETS = {
-    "config_resource_update": (f"{RESOURCE_TYPE}/{ALLOWLISTED}", SINGLETON_TYPE),
+    # Ticket #36: the Tag-provider resources are deliberately allowlisted — including the
+    # reserved one the four config Tools must refuse — so a `permission_denied` in those
+    # cases is the name rule and not the Target allowlist.
+    "config_resource_update": (
+        f"{RESOURCE_TYPE}/{ALLOWLISTED}", SINGLETON_TYPE,
+        f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}", f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",
+        f"{PROVIDER_TYPE}/{LOOKALIKE_PROVIDER}",
+    ),
     "config_resource_create": (
         f"{RESOURCE_TYPE}/{CREATED_RESOURCE}",
         f"{RESOURCE_TYPE}/{RENAME_SOURCE}",
         f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
+        f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}", f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",
+        f"{PROVIDER_TYPE}/{LOOKALIKE_PROVIDER}",
     ),
     "config_resource_delete": (
         f"{RESOURCE_TYPE}/{ALLOWLISTED}",
         f"{RESOURCE_TYPE}/{CREATED_RESOURCE}",
+        f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}", f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",
     ),
     "config_resource_rename": (
         f"{RESOURCE_TYPE}/{RENAME_SOURCE}",
         f"{RESOURCE_TYPE}/{RENAME_SOURCE_2}",
         f"{RESOURCE_TYPE}/{RENAMED_RESOURCE}",
+        f"{PROVIDER_TYPE}/{RESERVED_PROVIDER}", f"{PROVIDER_TYPE}/{OTHER_PROVIDER}",
     ),
     # D30 §6: the Target of the Project import is the Project itself.
     "project_import": (PROJECT,),
@@ -300,6 +322,18 @@ def _seed(gateway: RecordedGateway) -> None:
             config={"profile": {"type": "local", "retentionDays": 9}, "settings": {}},
             description="Disposable Phase 4 CI audit profile (rename source)",
         )
+    # Ticket #36: the three Tag-provider resources the reserved-name cases address. The
+    # reserved one is the provider the Runtime Target Policy lives in; the other two prove
+    # the refusal is by name inside an allowed type.
+    for provider, description in (
+        (RESERVED_PROVIDER, "CI policy provider"),
+        (OTHER_PROVIDER, "CI Tag provider"),
+        (LOOKALIKE_PROVIDER, "CI Tag provider (not the reserved name)"),
+    ):
+        gateway.seed_resource(
+            PROVIDER_TYPE, provider,
+            config={"profile": {"type": "STANDARD"}, "settings": {}}, description=description,
+        )
     # An allowed singleton: its documented change item carries no name.
     gateway.seed_resource(
         SINGLETON_TYPE, "cobranding", config={"enabled": True}, description="CI branding",
@@ -360,7 +394,9 @@ def main() -> int:
                     rest_url=url, agent_token=AGENT_TOKEN, proxy_control_url=control_url,
                     data_dir=Path(data_dir), resource_type=RESOURCE_TYPE, allowlisted=ALLOWLISTED,
                     project=PROJECT, tool_timeout_seconds=fault_settings.tool_timeout_seconds,
-                    raw_dir=args.raw_dir,
+                    raw_dir=args.raw_dir, provider_type=PROVIDER_TYPE,
+                    reserved_provider=RESERVED_PROVIDER, other_provider=OTHER_PROVIDER,
+                    lookalike_provider=LOOKALIKE_PROVIDER,
                 ))
 
     cases: list[dict[str, Any]] = [*gate_on["cases"], *gate_off["cases"], *fault["cases"]]
