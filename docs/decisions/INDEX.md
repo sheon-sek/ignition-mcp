@@ -35,7 +35,7 @@ D01–D30 are binding unless explicitly reopened through a new decision or amend
 | D23 | DECIDED | Testing Matrix and Real Ignition Gateway CI | Resource/Prompt protocol and artifact tests |
 | D24 | DECIDED | Canonical Dual-Server Architecture and Optional Unified Facade | future federation must cover Prompts |
 | D25 | DECIDED | Final Monorepo / Package Layout | second product is `ignition-runtime-bundle` |
-| D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0 |
+| D26 | DECIDED | v1 Scope, Milestones, and Implementation Order | dependency-first vertical slices; Native response binding is hard gate G0; Phase 6 amendment (owner ruling 2026-09-23) sets the release scope and what leaves v1 |
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 | D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 | D29 | DECIDED | [Recorded Jython runner for Runtime Tool handlers](D29-recorded-jython-runtime-runner.md) | owner-approved test-only `jython-standalone` 2.7.4 + Java 11, required locally and in CI; adds to D23 L4, does not replace it |
@@ -175,7 +175,7 @@ D26 freezes the first complete product scope and converts D01–D25 into an exec
 4. **Phase 3 / G3:** Artifact, Project, diagnostics, deployment and mutation-safety foundations.
 5. **Phase 4 / G4:** controlled non-Perspective mutations.
 6. **Phase 5 / G5:** typed Perspective authoring on D16/D17 transaction infrastructure.
-7. **Phase 6 / G6:** deployment completion and compatibility-certified release.
+7. **Phase 6 / G6:** deployment completion and compatibility-certified release. The [Phase 6 amendment](D26-v1-scope-and-implementation-order.md) narrows this last phase, and the [Phase 6 runbook](../development/phase-6.md) carries the open checklist.
 
 The critical first implementation rule is that `NATIVE_BINDING_PENDING` must be resolved through a real Gateway + exact MCP Module build before Runtime breadth-first implementation or any production `SUPPORTED` claim.
 
@@ -200,15 +200,22 @@ The original D01–D26 architecture / implementation decision backlog is now com
 
 **G0, G1, G2 and G3 are closed**; see the [Phase 0](../development/phase-0.md), [Phase 1](../development/phase-1.md), [Phase 2](../development/phase-2.md) and [Phase 3](../development/phase-3.md) runbooks for evidence.
 
-**Phase 4 is at G4 close, pending the owner's review.** The
-[Phase 4 runbook](../development/phase-4.md) holds the scope, the L5 case matrix, the per-ticket
-results and the open questions; the two G4 compatibility rows are
-[`tests/compatibility/evidence/g4-8.3.8-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.8-mcp-2026021307/README.md)
-(required) and
-[`g4-8.3.9-mcp-2026021307`](../../tests/compatibility/evidence/g4-8.3.9-mcp-2026021307/README.md)
-(candidate). Every Mutation Tool is implemented and every Mutation stays **disabled by default**;
-no Gateway/Module tuple is `SUPPORTED`. The close-out branch has **no pull request to `main`** — the
-owner opens and merges that, and the close is not final until they do. Phase 5 (Perspective) starts
-only on a new user-directed branch.
+**Phase 4 is closed and merged** (G4). The [Phase 4 runbook](../development/phase-4.md) holds the scope,
+the L5 case matrix, the per-ticket results and the open questions; issues #39 and #41 carry its
+deferred work. Every Mutation Tool is implemented and every Mutation stays **disabled by default**.
+
+**Phase 5 is closed and merged** (G5). The [Phase 5 runbook](../development/phase-5.md) holds the
+Perspective results, and issue #51 carries its deferred work. Each gate's machine-readable
+compatibility rows live under
+[`tests/compatibility/evidence/`](../../tests/compatibility/evidence/), including
+[`g5-8.3.8-mcp-2026021307`](../../tests/compatibility/evidence/g5-8.3.8-mcp-2026021307/README.md)
+and [`g5-8.3.9-mcp-2026021307`](../../tests/compatibility/evidence/g5-8.3.9-mcp-2026021307/README.md).
+
+**Phase 6 is open** on `feature/phase-6`. Its scope comes from the D26 Phase 6 amendment (owner
+ruling, 2026-09-23): `setup-native install-module`, one live stage proving a fresh Module install and
+a Bundle upgrade, and the [v1 operations runbook](../operations/runbook.md). The G6 checklist is open
+in the [Phase 6 runbook](../development/phase-6.md). Issue #57 holds what moved out of v1.
+
+No Gateway/Module tuple is `SUPPORTED`, and G6 never records one.
 
 Treat D01–D30 plus D07-A as binding unless explicitly reopened through a later Decision or Amendment.
