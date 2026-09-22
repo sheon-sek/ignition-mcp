@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "name": "perspective_session_props_get",
+  "server": "ignition-rest",
+  "owner": "rest",
+  "stability": "experimental",
+  "operationKind": "read",
+  "permissionClass": "READ",
+  "requiredScope": "ignition.read",
+  "mutationClass": "NONE",
+  "budgetClass": "ARTIFACT",
+  "parameters": {
+    "projectName": {
+      "type": "string",
+      "required": true,
+      "minLength": 1,
+      "maxLength": 256
+    }
+  },
+  "inputBounds": {
+    "documentMaxBytes": 1048576,
+    "overBudgetCode": "limit_exceeded"
+  },
+  "outputSchema": "contracts/schemas/perspective-session-props-get.output.schema.json",
+  "nativeRequirements": [
+    "GET /data/api/v1/projects/export/{name}"
+  ],
+  "capabilityId": "project_export",
+  "localResourcesOnly": true,
+  "inheritanceLookup": false,
+  "preconditionTokenReturned": "the D16 pcf1 Project fingerprint of the export this document was read from",
+  "exportHandling": "the export is streamed into private staging, read in place and never published as an artifact or passed through the MCP body (D15/D17)",
+  "absentDocument": "not_found",
+  "silentTruncation": false
+}
