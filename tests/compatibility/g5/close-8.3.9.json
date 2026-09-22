@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "gatewayVersion": "8.3.9",
+  "note": "Authored input for `python -m tooling.compat g5`. The run itself (id, head, conclusion) is named on the command line, because a row may only be written once GitHub reports the run green. `transactionServiceUnchanged` is D26's Phase 5 amendment condition for citing the transaction cases instead of running them live: the four Perspective write Tools call ProjectTransactionService and ZIP safety unchanged, which is P5-2's ticket. The coordinator re-confirms it on the integration head before composing the row; if a Phase 5 change touches either, the affected cases return to the live stage.",
+  "transactionServiceUnchanged": true,
+  "citedRow": "g4-8.3.9-mcp-2026021307",
+  "citedTransaction": {
+    "backup failure abort-before-import": {
+      "evidence": "g4-8.3.9-mcp-2026021307",
+      "source": "the D16 pre-import backup abort: packages/ignition-rest-mcp/tests/test_phase3_transactions.py::test_backup_persistence_failure_aborts_pre_import (FAILED_PRE_IMPORT, nothing dispatched). The G4 row's own 'partial failure' and 'audit failure' entries cite the same transaction suite, so this is the evidence those rows already rest on."
+    },
+    "ambiguous import outcome reconciliation": {
+      "evidence": "g4-8.3.9-mcp-2026021307",
+      "source": "the G4 row's l5 'ambiguous outcome' on the rest plane (run 35687123699): fault-import-{mid-body,after-full-body}-* in tests/harness/phase4-live-rest/rest_driver.py, plus packages/ignition-rest-mcp/tests/test_phase4_project_import.py::test_an_ambiguous_dispatch_that_landed_is_reconciled_to_committed and ::test_an_ambiguous_dispatch_that_did_not_land_is_not_applied"
+    },
+    "invalid ZIP, path traversal, duplicate, symlink and bomb rejection": {
+      "evidence": "g4-8.3.9-mcp-2026021307",
+      "source": "packages/ignition-rest-mcp/tests/test_phase3_zip_safety.py (absolute, parent, dot and empty path segments, backslash and drive-letter names, symlink and non-regular entries, per-entry and total ceiling 'bombs') and ::test_phase4_project_import.py::test_the_zip_gate_refuses_an_unsafe_archive_before_dispatch"
+    },
+    "post-import verification failure and the recovery-required path": {
+      "evidence": "g4-8.3.9-mcp-2026021307",
+      "source": "packages/ignition-rest-mcp/tests/test_phase3_safety_executor.py::test_2xx_{unchanged-state,indeterminate-verification,failing-verifier,verification-timeout}-* map to RECOVERY_REQUIRED, and tests/test_phase3_transactions.py::test_bad_or_failed_candidate_never_dispatches pins the D16 post-import verification failure"
+    }
+  },
+  "limitations": [],
+  "unsatisfiedAcceptance": []
+}

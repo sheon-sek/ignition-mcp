@@ -3,7 +3,8 @@
 Live proof for the REST Mutation Tools — `config_resource_update`,
 `config_resource_create`, `config_resource_delete`, `config_resource_rename`,
 `project_import` and `tag_config_import` (CONFIG), `alarm_pipeline_cancel`
-(CONTROL) and `artifact_delete` (CONFIG) — on disposable CI-owned Gateways. Driven
+(CONTROL) and `artifact_delete` (CONFIG), plus the nine D15 Perspective Tools
+since Phase 5, on disposable CI-owned Gateways. Driven
 by `.github/workflows/phase4-live-rest.yml` on pull requests in the trusted
 repository, under the `phase4-live` GitHub environment.
 
@@ -122,6 +123,36 @@ observe:
 | `artifact-delete-oversize-identifier-is-invalid-argument` | D10: the identifier bound, refused with the requested length |
 | `artifact-delete-malformed-identifier-is-invalid-argument` | …and a traversal-shaped identifier is refused as input |
 | `artifact-delete-data-plane-route-is-absent` | D30: `DELETE /artifacts/{id}` is HTTP 405 — the Tool is the only delete path |
+| `perspective-view-list-is-local-only` | the child Project's View list holds its own View and not the one it inherits from its parent (D15: reads are Local-only) |
+| `perspective-view-get-returns-the-provisioned-view` | the View document is served at its Logical path, rooted in a real component type |
+| `perspective-export-fingerprint-is-independent` | the fingerprint `project_export` reports equals this harness's own `pcf1` computation |
+| `perspective-view-get-reports-the-project-fingerprint` | the document read reports that same Project fingerprint, the Precondition token a write presents |
+| `perspective-view-get-missing-view-is-not-found` | a Logical path no Project defines is `not_found`, never an inherited resolution |
+| `perspective-view-validate-accepts-the-provisioned-view` | the document the Gateway serves passes the offline D15 validation |
+| `perspective-view-validate-refuses-a-non-view` | …and a document whose `root` is not an object is `invalid_argument` |
+| `perspective-page-config-get-returns-the-document` | the Page configuration document is served, with the Project fingerprint |
+| `perspective-session-props-get-returns-the-document` | the Session properties document is served, with the Project fingerprint |
+| `perspective-write-tools-are-available` | the four Perspective write Tools this stage drives are registered (a deployment without them fails here, with their names) |
+| `perspective-view-upsert-commits` | a whole-document upsert of the child's own View ends `COMMITTED` |
+| `perspective-view-upsert-dispatches-the-import` | …and the result says an import request left the server |
+| `perspective-view-upsert-reports-the-path` | …and it names the Logical path it wrote |
+| `perspective-view-upsert-verifies-its-own-candidate` | the transaction's C is the Gateway's own post-import export, recomputed here |
+| `perspective-view-upsert-is-observed-by-a-fresh-read` | a fresh `perspective_view_get` serves the document the write published |
+| `perspective-view-upsert-of-the-current-document-is-no-change` | re-sending that document is D16's `NO_CHANGE` |
+| `perspective-view-upsert-no-change-dispatches-nothing` | …and nothing was dispatched |
+| `perspective-view-upsert-preserves-every-other-entry` | every archive entry outside the Target's own directory is byte-identical across the edit: the unrelated resource, the other resources and the manifest |
+| `perspective-view-upsert-of-an-inherited-view-is-invalid-argument` | a write to the View the child inherits is refused as input |
+| `perspective-view-upsert-of-an-inherited-view-names-the-reason` | …and the refusal names `inherited_resource`, so it cannot be read as any other bad input |
+| `perspective-view-upsert-of-an-inherited-view-changes-nothing` | …and the child's View and fingerprint are exactly what they were |
+| `perspective-external-change-commits` | a Session-properties write changes the Project between the read and the write that follows |
+| `perspective-view-upsert-after-an-external-change-is-conflict` | the token read before that change is a stale Precondition token: `conflict` |
+| `perspective-view-upsert-after-an-external-change-imports-nothing` | …and the View still holds the last committed document, at the changed Project's fingerprint |
+| `perspective-view-delete-commits` | the View removal ends `COMMITTED` |
+| `perspective-view-delete-is-observed-by-a-fresh-read` | …and a fresh `perspective_view_get` answers `not_found` |
+| `perspective-page-config-update-commits` | the Page configuration update ends `COMMITTED` |
+| `perspective-page-config-update-is-observed-by-a-fresh-read` | …and a fresh read serves the document it published |
+| `perspective-session-props-update-commits` | the Session properties update ends `COMMITTED` |
+| `perspective-session-props-update-is-observed-by-a-fresh-read` | …and a fresh read serves the document it published |
 
 The candidate archive the import cases upload is the export the Project already had,
 with one SQL comment appended to its first named-query payload. That is the edit the
@@ -183,6 +214,33 @@ must write the explicit `*` (D30 §3), and the **retention-lock `conflict`**, be
 locked RECOVERY artifact comes from a D16 transaction that ended unresolved and no case
 in this harness produces one. `packages/ignition-rest-mcp/tests/test_phase4_artifact_delete.py`
 pins both, and the same fixture pins the crash-safe `DELETING` recovery.
+
+The Perspective cases (Phase 5, ticket P5-3) are the G5 stage of the same run. They need
+no new workflow, job or Gateway service: `provision.py` imports a parent Project and an
+allowlisted child Project through the Gateway's own documented project route, and the
+deployment's Mutation policy enables the four Perspective CONFIG writes for that child.
+The fixture is the smallest one that can hold both halves of the D15 rule. The parent
+defines a View the child does not define locally, so the child *inherits* it, and the
+child defines one View, one Page configuration, one Session-properties document and one
+unrelated named query. Provisioning reads both Projects back through the export route the
+Tools themselves read, so a Gateway without the Perspective module (confirmed by the
+module's own registered route, which the readiness gate requires) or one that dropped a
+resource fails before a case runs.
+
+The archive layout is the one the live 8.3 module resolves, confirmed against a real
+Gateway before these cases were written: `views/<Logical path>/view.json` with its
+`resource.json`, and `page-config/config.json` / `session-props/props.json`, each with its
+own `resource.json`. The metadata file beside each data file is load-bearing. The Gateway's project import
+keeps an entry only when the resource metadata declares it, so a fixture or a write that
+publishes a bare data file publishes nothing at all.
+
+The preservation case is why the fixture carries an unrelated resource: it compares the
+child's export entry by entry across the edit, and every entry outside the Target View's
+own directory has to be byte-identical. That is the case that would catch an edit which
+rebuilds the archive rather than patching the one resource it addresses. It is also why
+the stage runs on the *class-enabled* deployment: the four Perspective writes are CONFIG
+Mutations, so that deployment's inventory is the Phase 4 class-enabled inventory plus
+those four names.
 
 ## Injected transport failures (ticket #20)
 
@@ -297,10 +355,18 @@ than minutes; the deadlines themselves are the production rules, only smaller. I
   one, and a longer name that only begins with the reserved one — reads each back for its
   Resource signature, and records in `policyProviders.caseFoldedLookup` how the Gateway
   answers a read of the reserved name with its case folded (the measurement behind the
-  rule's fail-closed case handling).
+  rule's fail-closed case handling). Phase 5 adds the Perspective fixture: it imports a
+  parent and a child Project through the documented project import route (the import
+  creates a Project that does not exist yet), then reads both back through the export
+  route and fails closed if the module directory, the inherited View, the child's local
+  View, its Page configuration, its Session properties or its unrelated resource did not
+  survive. That read-back is also the live confirmation that the Perspective module is
+  loaded and that the entry names the Tools use are the ones it resolves.
 - `rest_driver.py` — the live cases, in `--mode gate-on`, `--mode gate-off` and
-  `--mode fault` (the D23 injected failures). The two pipeline paths the cancel cases
-  address are derived by the workflow from the disposable Projects
+  `--mode fault` (the D23 injected failures). The Phase 5 Perspective cases run inside
+  `--mode gate-on`, in their own `perspective_cases` section, against the Projects
+  `provision.py` imported (`--parent-project`, `--child-project`). The two pipeline paths
+  the cancel cases address are derived by the workflow from the disposable Projects
   (`project:<Project>:/pipeline:MCP_CI_Notify`), so the Target allowlist entry and the
   paths the driver sends are the same run-unique strings. The fault mode also reads the
   server's own `audit.db` and `state.db` **read-only** for the D18 audit rows and the
@@ -313,7 +379,9 @@ than minutes; the deadlines themselves are the production rules, only smaller. I
 - `rehearse_local.py` — Docker-free rehearsal: starts the real server against
   `tests/harness/recorded_gateway.py`, in front of which it also starts `fault_proxy.py`,
   and runs all three driver modes with the same per-Tool Target allowlists the workflow
-  configures.
+  configures. It seeds the two Perspective Projects the Phase 5 cases address with the
+  same archive builder `provision.py` uses, so the rehearsal exercises the Perspective
+  reads (and reports the four write Tools as missing until P5-2 is in the tree).
 
 ## Rehearsing
 
@@ -339,3 +407,22 @@ No G4 compatibility row is composed here. A G4 row carries the Gateway/Module
 tuple, and this harness deliberately deploys no MCP Module; the REST observations
 are referenced by the G4 close-out, which composes the rows from the harness that
 does deploy the Module.
+
+The class-enabled pass is also the G5 stage's live evidence: it is the document whose
+Perspective cases D26's Phase 5 amendment puts in the live stage. The committed G5 row is
+composed after the run, from that pass plus the run's own identity, with
+
+```bash
+uv run --no-sync python -m tooling.compat g5 \
+  --close tests/compatibility/g5/close-8.3.8.json \
+  --stage <downloaded>/observations.json \
+  --identity <downloaded>/identity.json \
+  --evidence-dir tests/compatibility/evidence \
+  --run-id <run> --workflow "Phase 4 Live Gateway REST mutation" \
+  --head <sha> --conclusion success \
+  --out-dir tests/compatibility/evidence
+```
+
+which refuses anything the artifacts do not corroborate (a failed case, a live case the
+stage does not carry, a citation that is not a committed G3/G4 row), and re-validates the
+row through `tooling.compat.evidence` before writing it.
