@@ -521,3 +521,70 @@ def test_apply_never_reports_the_gateway_token(workdir: Workdir) -> None:
         ))
     assert code == 1
     assert secret not in out and secret not in err
+
+
+# ------------------------------------------- the Module's own primitive pickup
+
+
+def server_config_updates(gateway: RecordedGateway) -> list[dict[str, Any]]:
+    """Every Server Config modification the Gateway was asked to apply, in order."""
+
+    return [
+        json.loads(request["body"])[0]
+        for request in gateway.requests
+        if request["method"] == "PUT" and "server-config" in str(request["path"])
+    ]
+
+
+def test_apply_re_announces_a_server_config_the_module_built_before_the_pickup(
+    workdir: Workdir,
+) -> None:
+    """Live run 35714215320: a Server Config written before the Project's provider landed.
+
+    The Module resolves a Server Config's Tool list from its provider registry when the
+    resource is written, and it registers a Project's provider on the Project
+    collection's own notification thread — a turn that can land after the write. The
+    endpoint then answers ``initialize`` with no capability at all (``capabilities=[-]``,
+    every list ``-32600``) until the resource is written again, which is what the live
+    run recorded for seven read-only attempts. ``apply`` has to finish with an endpoint
+    that serves the profile's Tools, so it re-announces the same document and only stops
+    when the endpoint answers — nothing else is written, and the run stays idempotent.
+    """
+
+    with RecordedGateway(
+        runtime_tools=tuple(TOOLS), runtime_resources=tuple(RESOURCES),
+        source_revision=SOURCE_REVISION, bundle_version=BUNDLE_VERSION,
+        policy_provider="IgnitionMCPPolicy",
+        # The Project this run imports has its primitives picked up 200 ms later, i.e.
+        # after the Server Config's create and enable.
+        primitive_pickup_delay=0.2,
+    ) as gateway:
+        argv = workdir.argv(
+            "apply", gateway.base_url, policy_file=workdir.policy, permissions_file=workdir.permissions,
+        )
+        code, out, err = run_cli(argv)
+        assert code == 0, out + err
+        assert "REFRESH server-config" in out
+        assert "verify: verified=true => exit 0" in out
+        assert "apply: wrote=3 skipped=0 failed=0 refreshes=1 => exit 0" in out
+
+        # The re-announcement is the create's own document, written again: the Tool list,
+        # the permissions and the enablement the plan approved — never a different config.
+        updates = server_config_updates(gateway)
+        assert len(updates) == 2
+        assert updates[0]["config"] == updates[1]["config"]
+        assert updates[0]["config"]["tools"] == {f"project/{PROJECT}": sorted(TOOLS)}
+        assert [update["enabled"] for update in updates] == [True, True]
+
+        # A deployment that now serves its inventory is idempotent: the next plan is a
+        # NO CHANGE run and the next apply writes nothing at all (no refresh either).
+        before = writes(gateway)
+        code, out, _ = run_cli(workdir.argv(
+            "plan", gateway.base_url, policy_file=workdir.policy, permissions_file=workdir.permissions,
+        ))
+        assert code == 0
+        assert f"NO CHANGE server-config {SERVER_CONFIG}" in out
+        code, out, _ = run_cli(argv)
+        assert code == 0
+        assert "refreshes=" not in out
+        assert writes(gateway) == before

@@ -16,10 +16,19 @@ and is confirmed by a read-back before the next one starts. There is no rollback
 (D20 states setup is not atomic); a failed write stops the sequence and is
 reported with everything written before it. The run always ends with the ``verify``
 sequence (D20), whose report is embedded in this command's own report.
+
+The Module resolves a Server Config's Tool list against its provider registry at the
+moment the resource is written, and it registers a Project's provider on the Project
+collection's own notification thread — which can land after that write. Such a server
+serves ``initialize`` but no primitives at all, and only a *resource update* makes the
+Module build it again (ticket #21, live run 35714215320). So a run that wrote a Server
+Config and can see no Tool at its endpoint re-announces the same document, bounded,
+until the endpoint serves the profile's inventory.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -42,10 +51,19 @@ from ignition_rest_mcp.cli.setup_native.doctor import (
     GatewayObservation,
     emit,
     make_gateway,
+    make_mcp,
     probe_gateway,
 )
 from ignition_rest_mcp.cli.setup_native.inputs import API_TOKEN_TYPE, SECURITY_LEVELS_TYPE, Inputs
+from ignition_rest_mcp.cli.setup_native.mcp_http import McpProbeError
 from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter, WriteError
+
+#: How many times a run may re-announce the Server Config it wrote while the endpoint it
+#: built serves no Tool at all, and how long to give the Module's own thread to register
+#: the Project's provider before each re-announcement. Bounded (D10): at most that many
+#: idempotent updates of the document the plan already approved, and no other write.
+SERVER_CONFIG_REFRESH_ATTEMPTS = 3
+SERVER_CONFIG_REFRESH_WAIT_SECONDS = 2.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +98,7 @@ def apply_report(
     *,
     exit_code: int,
     error: str | None,
+    refreshes: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     report: dict[str, Any] = {
         "command": "apply",
@@ -95,6 +114,10 @@ def apply_report(
         "verify": verify_report,
         "exitCode": exit_code,
     }
+    if refreshes:
+        # Every re-announcement of the Server Config document the plan already approved,
+        # so a run that had to wait for the Module to serve its Tools says so.
+        report["refreshes"] = [dict(refresh) for refresh in refreshes]
     if error is not None:
         report["error"] = error
     if inputs.policy_file is not None:
@@ -121,10 +144,13 @@ def _emit(
     exit_code: int,
     error: str | None,
     verify_report: dict[str, Any] | None,
+    refreshes: Sequence[dict[str, Any]] = (),
 ) -> int:
     """Report one apply run, ending with the same promise ``plan`` makes."""
 
-    report = apply_report(inputs, actions, writes, verify_report, exit_code=exit_code, error=error)
+    report = apply_report(
+        inputs, actions, writes, verify_report, exit_code=exit_code, error=error, refreshes=refreshes,
+    )
     if inputs.as_json:
         emit(inputs, report, [])
     else:
@@ -132,16 +158,19 @@ def _emit(
             print(action.as_line())
         for write in writes:
             print(write.as_line())
+        for refresh in refreshes:
+            print(f"REFRESH server-config {refresh.get('name')}: {refresh.get('detail')}")
         if error is not None:
             print(f"apply could not proceed: {error}")
         if verify_lines:
             print("")
             for line in verify_lines:
                 print(line)
+        counted = "" if not refreshes else f" refreshes={len(refreshes)}"
         print(
             f"apply: wrote={sum(1 for w in writes if w.ok and w.action in (CREATE, UPDATE))} "
             f"skipped={sum(1 for w in writes if w.action not in (CREATE, UPDATE))} "
-            f"failed={sum(1 for w in writes if not w.ok)} => exit {exit_code}"
+            f"failed={sum(1 for w in writes if not w.ok)}{counted} => exit {exit_code}"
         )
     if not any(write.action in (CREATE, UPDATE) for write in writes):
         print(plan.PLAN_SENTINEL)
@@ -308,6 +337,51 @@ async def _backup_project(inputs: Inputs, writer: GatewayWriter) -> str:
     return f"; backed up {len(archive)} bytes to {path}"
 
 
+def _desired_server_config(
+    inputs: Inputs, observation: GatewayObservation, documents: docs.Documents
+) -> tuple[dict[str, Any], list[str]]:
+    """The Server Config document this run owns, and the explicit Tool list it carries."""
+
+    observed = observation.server_config or {}
+    held = observed.get("config") if isinstance(observed.get("config"), dict) else None
+    permissions = documents.permissions
+    if permissions is None and isinstance(held, dict):
+        candidate = held.get("permissions")
+        permissions = candidate if isinstance(candidate, dict) else None
+    if permissions is None:  # pragma: no cover - plan_actions BLOCKs this case first
+        raise WriteError("no permissions tree is available for the Server Config")
+    config = docs.desired_server_config(inputs, held, permissions)
+    return config, list(config["tools"][f"project/{inputs.bundle_project}"])
+
+
+async def _update_server_config(
+    writer: GatewayWriter,
+    inputs: Inputs,
+    name: str,
+    config: dict[str, Any],
+    desired: Sequence[str],
+    *,
+    signature: str | None = None,
+    enabled: bool | None = None,
+) -> dict[str, Any]:
+    """Write ``config`` over the Server Config's current signature and read it back.
+
+    The signature read here is what makes the write a precondition check rather than a
+    blind overwrite (D30): a document that changed under apply is refused, not clobbered.
+    """
+
+    current = await writer.reads.server_config_document(name)
+    if current is None:
+        raise WriteError(f"server config {name} reads back absent")
+    held_enabled = current.get("enabled")
+    if signature is None:
+        signature = str(current.get("signature") or "")
+    if enabled is None:
+        enabled = True if not isinstance(held_enabled, bool) else held_enabled
+    await writer.update_server_config(name, config, signature=signature, enabled=enabled)
+    return await _require_server_config(writer, inputs, name, desired)
+
+
 async def _write_server_config(
     inputs: Inputs,
     observation: GatewayObservation,
@@ -318,36 +392,95 @@ async def _write_server_config(
     action = _action_of(actions, "server-config")
     if action.action not in (CREATE, UPDATE):
         return Write(action.kind, action.name, action.action, "nothing to write")
-    observed = observation.server_config or {}
-    held = observed.get("config") if isinstance(observed.get("config"), dict) else None
-    permissions = documents.permissions
-    if permissions is None and isinstance(held, dict):
-        candidate = held.get("permissions")
-        permissions = candidate if isinstance(candidate, dict) else None
-    if permissions is None:  # pragma: no cover - plan_actions BLOCKs this case first
-        raise WriteError("no permissions tree is available for the Server Config")
-    config = docs.desired_server_config(inputs, held, permissions)
-    desired = config["tools"][f"project/{inputs.bundle_project}"]
+    config, desired = _desired_server_config(inputs, observation, documents)
     if action.action == CREATE:
         await writer.create_server_config(action.name, config, enabled=False)
         created = await _require_server_config(writer, inputs, action.name, desired)
-        signature = created.get("signature")
-        await writer.update_server_config(action.name, config, signature=str(signature or ""), enabled=True)
-        document = await _require_server_config(writer, inputs, action.name, desired)
+        document = await _update_server_config(
+            writer, inputs, action.name, config, desired,
+            signature=str(created.get("signature") or ""), enabled=True,
+        )
         state = "enabled" if document.get("enabled") is not False else "still disabled"
         detail = f"created {len(desired)} Tools for project/{inputs.bundle_project}, {state}"
     else:
-        enabled = observed.get("enabled")
-        await writer.update_server_config(
-            action.name,
-            config,
-            signature=str(observed.get("signature") or ""),
-            enabled=True if not isinstance(enabled, bool) else enabled,
-        )
-        document = await _require_server_config(writer, inputs, action.name, desired)
+        document = await _update_server_config(writer, inputs, action.name, config, desired)
         note = "" if document.get("enabled") is not False else "; left disabled as observed"
         detail = f"reconciled {len(desired)} Tools for project/{inputs.bundle_project}{note}"
     return Write(action.kind, action.name, action.action, detail)
+
+
+def _server_config_written(writes: Sequence[Write]) -> bool:
+    """Whether this run announced a Server Config the Module should be serving."""
+
+    return any(
+        write.kind == "server-config" and write.ok and write.action in (CREATE, UPDATE)
+        for write in writes
+    )
+
+
+async def _serves_tool_inventory(
+    inputs: Inputs, mcp_transport: httpx.AsyncBaseTransport | None
+) -> bool:
+    """Whether the endpoint advertises a Tool at all, i.e. the Module resolved the list.
+
+    An endpoint the Module built before the Project's provider was registered answers
+    ``initialize`` and then advertises no Tool capability, with every list answering
+    ``-32600`` — the shape live run 35714215320 recorded for seven read-only attempts.
+    A probe that cannot be made at all (an unreachable endpoint, a refused credential) is
+    reported as ``True``: that is ``verify``'s business, never a rebuild trigger.
+    """
+
+    if not inputs.profile_inventory("tools") or inputs.runtime_endpoint() is None:
+        return True
+    try:
+        client = make_mcp(inputs, mcp_transport)
+        async with client:
+            await client.initialize()
+            if not client.advertises("tools"):
+                return False
+            return len(await client.tools_list()) > 0
+    except (McpProbeError, httpx.HTTPError):
+        return True
+
+
+async def _refresh_server_config(
+    inputs: Inputs,
+    observation: GatewayObservation,
+    documents: docs.Documents,
+    actions: Sequence[Action],
+    writer: GatewayWriter,
+    mcp_transport: httpx.AsyncBaseTransport | None,
+) -> list[dict[str, Any]]:
+    """Re-announce the Server Config while the endpoint it built serves no Tool (bounded).
+
+    The Module resolves a Server Config's Tool list from its provider registry when the
+    resource is written, and it registers the Project's provider on the Project
+    collection's notification thread (an ``ExecutionQueue`` turn that can land after the
+    write). A provider that registers afterwards does not refresh a server that already
+    exists, while a resource *update* makes the Module build the server again — so
+    re-writing the document the plan already approved is what makes the endpoint serve
+    the profile's Tools. Nothing but that update is written, and a plan after it is still
+    a NO CHANGE run.
+    """
+
+    action = _action_of(actions, "server-config")
+    config, desired = _desired_server_config(inputs, observation, documents)
+    refreshes: list[dict[str, Any]] = []
+    for attempt in range(1, SERVER_CONFIG_REFRESH_ATTEMPTS + 1):
+        if await _serves_tool_inventory(inputs, mcp_transport):
+            break
+        # Give the Module's own thread its turn before announcing the document again.
+        await asyncio.sleep(SERVER_CONFIG_REFRESH_WAIT_SECONDS)
+        await _update_server_config(writer, inputs, action.name, config, desired)
+        refreshes.append({
+            "name": action.name,
+            "attempt": attempt,
+            "detail": (
+                f"the endpoint served no Tools after the write; re-announced the same "
+                f"document (attempt {attempt} of {SERVER_CONFIG_REFRESH_ATTEMPTS})"
+            ),
+        })
+    return refreshes
 
 
 async def _require_server_config(
@@ -521,15 +654,23 @@ async def run(
 
     # `make_gateway` above already applied the plain-HTTP/loopback rule to this
     # endpoint, so the writer cannot carry the token anywhere the read client would not.
+    refreshes: list[dict[str, Any]] = []
     async with GatewayWriter(
         inputs.gateway_url, inputs.gateway_token, timeout_seconds=inputs.timeout_seconds,
         transport=gateway_transport,
     ) as writer:
         writes = await _execute(inputs, documents, observation, policy, observed, actions, writer)
+        # A Server Config this run announced is only deployed when the endpoint it
+        # creates really serves the profile's Tools; a Module that built the server
+        # before the Project's provider registered needs the document again.
+        if _server_config_written(writes):
+            refreshes = await _refresh_server_config(
+                inputs, observation, documents, actions, writer, mcp_transport,
+            )
 
     verify_report, verify_lines, verify_code = await verify.collect(inputs, mcp_transport=mcp_transport)
     failed = any(not write.ok for write in writes) or verify_code != 0
     return _emit(
         inputs, actions, writes, verify_lines,
-        exit_code=1 if failed else 0, error=None, verify_report=verify_report,
+        exit_code=1 if failed else 0, error=None, verify_report=verify_report, refreshes=refreshes,
     )

@@ -107,9 +107,13 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
   wrote, the credential file must be `0600`, and the secret is judged absent from
   every command output and from the evidence (which is redacted rather than uploaded
   if it ever appears). A verify that fails right after the write is re-run, bounded
-  and read-only, because a Gateway whose Module has not yet picked the new Project
-  or Server Config up answers the endpoint before it can serve it; a *write* is
-  never re-run. `--expected-origin` refuses any Gateway but the compose one.
+  and read-only; the CLI itself now makes the endpoint serve its Tools (it
+  re-announces a Server Config the Module built before the Project's provider
+  registered, which is why a live row's first apply can need a moment), and the
+  stage judges the *last* verify it ran, never only the report `apply` embedded.
+  `--compose-file` adds one last-resort Gateway reload if the CLI could not make the
+  endpoint serve; no *write* of the plan is ever re-run by the stage.
+  `--expected-origin` refuses any Gateway but the compose one.
 - `rehearse_apply.py`: builds the release into a temporary directory, starts the
   recorded Gateway fake and runs `apply_stage.py` against it, so the stage is
   rehearsed — writes, read-backs, idempotency — before a live Gateway is spent.

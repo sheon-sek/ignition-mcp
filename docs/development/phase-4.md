@@ -2051,14 +2051,10 @@ are real gaps the reviewer named and they are **not** fixed in this round:
       `mcp-initialize` passed with `server={"name": "phase4-apply-runtime", "version":
       "0.6.0"}` — but it advertised no primitives at all (`capabilities=[-]`,
       `tools/list -> -32600`, `tools/call -> -32600`), through seven read-only verify
-      attempts over ~70 s. The 4a/4b rows never judge an endpoint the Gateway started
-      without: they install the Project and the Server Config by file copy and restart
-      before any case runs. The stage now reloads the disposable Gateway once
-      (`--compose-file`, recorded in the evidence as `gatewayReload`) after its read-only
-      retries are exhausted and re-runs verify, which is the harness's own discipline
-      rather than a product claim; no *write* is ever re-run. Recorded as an open
-      question for the owner (whether the pinned Module is expected to serve a Server
-      Config created live, over a Project imported live, without a reload).
+      attempts over ~70 s. Root cause found in run
+      [35714215320](https://github.com/sheon-sek/ignition-mcp/actions/runs/35714215320)
+      (see the ticket #21 open question below), and fixed in the CLI: a Server Config
+      this run announced is re-announced, bounded, while its endpoint serves no Tools.
   - The frozen gates are green on `906d55e`: CI, Phase 3 G3, Phase 4 G4a, G4b and the REST
     mutation row (run set `35708881777`–`35708881874`). CI is green on `ffda72d` as well
     (run `35708881794`).
@@ -2317,21 +2313,37 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   (issue #39). Every Target the cases address is provisioned by `provision.py`, so the
   reserved provider they refuse really exists and "changed nothing" is observable.
 
-- **Ticket #21 — a Server Config created live is served without primitives until the
-  Gateway reloads.** The ticket #21 row's evidence: `apply` created a Server Config (13
-  explicit Tools, enabled, read back) for a Project it had just imported, and the Module
-  served the endpoint — `initialize` answered with the config's own name and version —
-  while advertising no capabilities at all (`capabilities=[-]`, `tools/list -> -32600`)
-  for the whole 70 s of read-only verify attempts. Every 4a/4b row judges an endpoint the
-  Gateway started with, because the harness installs the Project and the Server Config by
-  file copy before startup. The apply stage therefore reloads the disposable Gateway once
-  before it judges the endpoint, and records the reload; the CLI's own inline verify still
-  reports what it observed. **For the owner:** say whether the pinned Module is expected to
-  serve a Server Config created through Native REST, over a Project imported through Native
-  REST, without a Gateway reload. If it is, this is a Module defect to raise upstream and the
-  reload can be dropped from the stage; if it is not, `apply`'s "ends by running verify"
-  (D20) is only true for a deployment whose Project was already present, and the row should
-  say so.
+- **Ticket #21 — a Server Config created live is served without primitives: root-caused and
+  fixed in `apply`.** [35714215320](https://github.com/sheon-sek/ignition-mcp/actions/runs/35714215320)
+  (head `5be2767`) recorded it: `apply` created a Server Config (13 explicit Tools, enabled, read
+  back) for a Project it had just imported, and the Module served the endpoint — `initialize`
+  answered with the config's own name, title and version — while advertising no capabilities at
+  all (`capabilities=[-]`, `tools/list -> -32600`) for six read-only verify attempts. The stage's
+  post-reload verify of the same run was **green** (`capabilities=[resources, tools]`, 13 of 13
+  Tools, `bundle-info` PASS); the prior reading that the endpoint stayed empty "even after a
+  restart" was wrong, and the stage also judged the *embedded* apply report instead of the last
+  verify it had run, so it reported red on a green deployment (both fixed).
+  Root cause, from the pinned Module's own bytecode (`McpServerConfigHandler`,
+  `McpProjectProvider$ProjectPrimitiveLifecycleFactory`, `PrimitiveLifecycle`) and the
+  platform's (`ResourceCollectionLifecycleFactory`): the Module resolves a Server Config's Tool
+  list from its provider registry **when the resource is written**, and it registers a Project's
+  provider when that Project's `ResourceCollectionLifecycle` starts — which the
+  `ResourceCollectionManagerImpl` dispatches through an **`ExecutionQueue`**
+  (`fireCollectionChanged` → `submitToQueue`), i.e. off the import's thread. In the run, the
+  Project's start was logged 2 ms after the import read-back and `apply` wrote the Server Config
+  (create + enable) inside the same ~150 ms, so both writes snapshotted a registry that did not
+  yet hold `project/<name>`; `PrimitiveRegistryImpl.register` deliberately does **not** notify
+  already built servers, while `McpServerConfigHandler.onResourceUpdated` rebuilds one. Nothing
+  re-announced the document, so the endpoint stayed empty until the process restarted.
+  **Fix:** after the write sequence, `apply` probes the endpoint it just created and, while the
+  endpoint serves no Tool inventory at all, re-announces the same document (bounded: 3 attempts,
+  a 2 s pause each, `refreshes[]` in the report) before judging `verify` — an idempotent update of
+  a document the plan already approved, after which a further `plan` is still `NO CHANGE`.
+  Recorded-Gateway case: `test_apply_re_announces_a_server_config_the_module_built_before_the_pickup`
+  (the fake models the pickup as the Module's own deferred turn, `primitive_pickup_delay`).
+  **For the owner:** the hazard is the Module's, not the CLI's — a `config_resource_*` or
+  file-copied deployment has the same window, and the stage's one reload stays as a last-resort
+  fallback that now only runs if the CLI could not make the endpoint serve.
 - **Ticket #21 — a percent-escaped resource type in a find path is a 404, and only the live
   row could see it.** `resource_document` had escaped the `/` inside `ignition/tag-provider`;
   the recorded fake unquotes the path before routing (as the Gateway does), so the
