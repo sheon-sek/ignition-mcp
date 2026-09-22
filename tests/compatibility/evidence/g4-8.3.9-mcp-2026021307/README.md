@@ -27,9 +27,10 @@ The L5 matrix, the limitations (`limitations`), the unproven case
 (`unsatisfiedAcceptance`) and `gateResult: VERIFIED_WITH_LIMITATION` are identical
 to the required row's, for the same reasons: Runtime cancellation has no evidence
 at all, audit failure (`required` mode) is not live on either Plane, and
-`setup-native apply`'s milestone-4d confirmation run on the integration head
-(`35713927140` on `0801e51`) is still pending, so #21/#22 and that G4 item are not
-claimed as live here either (see the required row's README).
+`setup-native apply`'s confirmation run on the integration head (`35713927140` on
+`0801e51`) failed in the harness — `NameError: _reverify`, fixed in `5be2767` and
+not yet re-run — so #21/#22 and that G4 item stay `run-pending` rather than claimed
+(see the required row's README).
 
 [evidence.json](evidence.json) is copied byte-for-byte from the generator's
 output; the close document it was composed from is

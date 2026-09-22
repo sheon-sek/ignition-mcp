@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import http.server
 import importlib.util
 import json
@@ -2472,3 +2473,50 @@ def test_the_forbidden_profile_never_carries_a_mutation_of_another_class() -> No
     assert "tag_update" not in operator["tools"]["project/ignition_runtime"]
     assert "tag_write" in operator["tools"]["project/ignition_runtime"]
     assert "tag_write" not in configurator["tools"]["project/ignition_runtime"]
+
+
+def _is_main_guard(node: ast.stmt) -> bool:
+    return (
+        isinstance(node, ast.If)
+        and isinstance(node.test, ast.Compare)
+        and isinstance(node.test.left, ast.Name)
+        and node.test.left.id == "__name__"
+        and any(
+            isinstance(comparator, ast.Constant) and comparator.value == "__main__"
+            for comparator in node.test.comparators
+        )
+    )
+
+
+def test_every_harness_script_ends_with_its_main_guard() -> None:
+    """A script executes top to bottom, so a guard above the definitions its own call
+    path needs is a run-time ``NameError``, not an import-time one.
+
+    `apply_stage.py` shipped that way: `_reverify` and `_reverify_after_reload` sat
+    below `if __name__ == "__main__": raise SystemExit(main())`, so the live apply
+    row's retry branch raised `NameError: name '_reverify' is not defined` (run
+    35713927140, head `0801e51`) while the rehearsal stayed green, because a
+    successful `apply` never reaches that branch. Fixed in `5be2767`; this pin keeps
+    a later helper from being appended below a guard again.
+    """
+
+    directories = [
+        ROOT / "tests/harness/phase4-live",
+        ROOT / "tests/harness/phase4-live-rest",
+        ROOT / "tests/harness/phase3-live",
+        ROOT / "tests/harness/runtime-binding",
+    ]
+    checked = 0
+    for directory in directories:
+        for path in sorted(directory.glob("*.py")):
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            body = [node for node in tree.body if not isinstance(node, ast.Expr)]
+            guards = [node for node in body if _is_main_guard(node)]
+            if not guards:
+                continue
+            checked += 1
+            assert body[-1] is guards[-1], (
+                f"{path.relative_to(ROOT)}: the `__main__` guard must be the last statement, "
+                "or a script-mode run cannot reach the helpers defined after it"
+            )
+    assert checked >= 5, "expected to check the harness entry points"

@@ -150,12 +150,12 @@ committed evidence rows are composed from.
 
 | D26 case | REST plane | Runtime plane |
 |---|---|---|
-| partial failure | **LIVE** (35687123699): the transport partial write — `fault-mid-body-{is-not-attributed-to-this-call,never-reaches-the-gateway,attempts-the-write-once,changes-nothing,audits-the-attempt,audits-not-applied,audits-the-refusal}` (`tests/harness/phase4-live-rest/rest_driver.py:1806`, `:1824`). Per-item batch partial reporting has no REST live case because every REST Mutation Tool is single-resource; the one batch-shaped Tool, `tag_config_import`, pins its partial rule as `recovery_required` in `test_phase4_tag_config_import.py::test_a_partial_import_is_recovery_required_and_never_a_success` | **LIVE** (35707687810): the `tag_delete` stage's "a partial-failure batch after Preflight" — `tagDeletePartialBatchSucceeded=1`, `tagDeletePartialBatchFailed=1`, `tagDeletePartialBatchFirstOutcome=Good`, `tagDeletePartialBatchSecondOutcome=Bad_NotFound`, `tagDeletePartialBatchRetriedNothing=true` (`tests/harness/phase4-live/driver.py:3504`); fixture `tag_write-allowlisted-batch.json` |
+| partial failure | **LIVE** (35687123699): the transport partial write — `fault-mid-body-{is-not-attributed-to-this-call,never-reaches-the-gateway,attempts-the-write-once,changes-nothing,audits-the-attempt,audits-not-applied,audits-the-refusal}` (`tests/harness/phase4-live-rest/rest_driver.py:1806`, `:1824`). Per-item batch partial reporting has no REST live case because every REST Mutation Tool is single-resource; the one batch-shaped Tool, `tag_config_import`, pins its partial rule as `recovery_required` in `test_phase4_tag_config_import.py::test_a_partial_import_is_recovery_required_and_never_a_success` | **LIVE** (35707687810, 35713927291): the `tag_delete` stage's "a partial-failure batch after Preflight" — `tagDeletePartialBatchSucceeded=1`, `tagDeletePartialBatchFailed=1`, `tagDeletePartialBatchFirstOutcome=Good`, `tagDeletePartialBatchSecondOutcome=Bad_NotFound`, `tagDeletePartialBatchRetriedNothing=true` (`tests/harness/phase4-live/driver.py:3504`); fixture `tag_write-allowlisted-batch.json` |
 | timeout | **LIVE** (35687123699): `fault-deadline-{is-a-timeout,fires-at-the-deployment-deadline,never-retries,audits-a-cancelled-dispatch,left-a-possibly-applied-change,leaves-a-usable-service}` (`rest_driver.py:1868`) through the `delay_response` proxy fault | **FIXTURE ONLY** — D30's owner ruling. Live: only the input-range refusals (`alarmShelveCapRefusalReason=durationOverPolicyCap`, `alarmShelveHardMaxRefusalReason=durationOutOfRange`). Fixture: `tag_write-timeout-out-of-range.json`, `alarm_shelve-duration-{out-of-range,over-hard-max,over-policy-cap,null}.json` |
 | ambiguous outcome | **LIVE** (35687123699): `fault-after-full-body-{is-ambiguous,reaches-the-gateway,was-answered-before-the-drop,is-never-a-success,audits-an-unresolved-outcome}` (`rest_driver.py:1834`) and the D16 import variants `fault-import-{mid-body,after-full-body}-*` (`rest_driver.py:2338`) | **FIXTURE ONLY** — D30's owner ruling. The live Runtime stages assert only that no ambiguity occurred (`tagWriteBatchOutcomeUnknown=0`, `tagDeletePartialBatchRetriedNothing`, `alarmShelveOutcomeUnknown=0`). Fixtures: `*-native-outcome-indeterminate.json`, `tag_write-native-outcome-count-mismatch.json`, `*-dispatch-raises.json` (14) |
-| permission denied | **LIVE** (35687123699, 35682027818): the refused resource types, the Target-allowlist denials for all eight Tools, the reserved `IgnitionMCPPolicy` provider (update/delete/create/rename-into/rename-away), the read-only credential on `artifact_delete`, and the disabled-class calls — 30 case ids, e.g. `refused-resource-type-is-permission-denied` (`rest_driver.py:1076`), `reserved-provider-update-is-permission-denied` (`:2105`) | **LIVE** (35710377211, 35707687810): every Mutation Tool's segment-boundary sibling denial and reserved-provider refusal; `tag_write` `targetNotAllowlisted` / `reservedProvider` (`driver.py:1292`, `:1336`), the whole-batch Preflight refusal, and the fail-closed `operation_disabled` with no policy at all |
-| oversize | **LIVE** (35687123699): `pipeline-cancel-oversize-{path,event}-is-limit-exceeded` (`rest_driver.py:833`), `artifact-delete-oversize-identifier-is-invalid-argument` (`:958`), `pipeline-cancel-blank-path-is-invalid-argument` (`:841`) | **LIVE** (35710377211, 35707687810): the policy size gate (`oversizePolicyDeclaredLength=39967` over the 32 KiB cap, `oversizePolicyGateState="oversize"`, `oversizePolicyMaterialized=false` — the document is never read) and each Tool's D10 ceilings (`pathOverLength`, `itemsOverPolicyLimit`, `itemsOverHardLimit`, the value/byte budgets) |
-| concurrent modification | **LIVE** (35687123699): the stale signature on update/delete/rename, the occupied destination on create/rename, the stale Project fingerprint, the occupied Tag-import destination (`rest_driver.py:1066`, `:1183`, `:1240`, `:1296`, `:1309`, `:546`, `:710`) | **LIVE** (35710377243, 35707687810): the stale Tag config fingerprint → `conflict` / `fingerprintMismatch` with the target unchanged (`driver.py:1646`, `:3057`, `:3330`, `:3586`), and the raced collision (`tag_create` existing target, `tag_copy` occupied destination) |
+| permission denied | **LIVE** (35687123699, 35682027818): the refused resource types, the Target-allowlist denials for all eight Tools, the reserved `IgnitionMCPPolicy` provider (update/delete/create/rename-into/rename-away), the read-only credential on `artifact_delete`, and the disabled-class calls — 30 case ids, e.g. `refused-resource-type-is-permission-denied` (`rest_driver.py:1076`), `reserved-provider-update-is-permission-denied` (`:2105`) | **LIVE** (35710377211, 35707687810, 35713927291): every Mutation Tool's segment-boundary sibling denial and reserved-provider refusal; `tag_write` `targetNotAllowlisted` / `reservedProvider` (`driver.py:1292`, `:1336`), the whole-batch Preflight refusal, and the fail-closed `operation_disabled` with no policy at all |
+| oversize | **LIVE** (35687123699): `pipeline-cancel-oversize-{path,event}-is-limit-exceeded` (`rest_driver.py:833`), `artifact-delete-oversize-identifier-is-invalid-argument` (`:958`), `pipeline-cancel-blank-path-is-invalid-argument` (`:841`) | **LIVE** (35710377211, 35707687810, 35713927291): the policy size gate (`oversizePolicyDeclaredLength=39967` over the 32 KiB cap, `oversizePolicyGateState="oversize"`, `oversizePolicyMaterialized=false` — the document is never read) and each Tool's D10 ceilings (`pathOverLength`, `itemsOverPolicyLimit`, `itemsOverHardLimit`, the value/byte budgets) |
+| concurrent modification | **LIVE** (35687123699): the stale signature on update/delete/rename, the occupied destination on create/rename, the stale Project fingerprint, the occupied Tag-import destination (`rest_driver.py:1066`, `:1183`, `:1240`, `:1296`, `:1309`, `:546`, `:710`) | **LIVE** (35710377243, 35707687810, 35713927291): the stale Tag config fingerprint → `conflict` / `fingerprintMismatch` with the target unchanged (`driver.py:1646`, `:3057`, `:3330`, `:3586`), and the raced collision (`tag_create` existing target, `tag_copy` occupied destination) |
 | audit failure | **FIXTURE ONLY (unit)** — no live case exists: the fault proxy has no storage fault, so the D18 fail-closed branch is proven by `test_phase3_safety_executor.py::test_failed_decision_audit_fails_closed_before_dispatch` (`:577`), `test_phase3_invocation.py::{test_decision_failure_fails_closed_before_dispatch,test_attempt_failure_prevents_dispatch,test_missing_result_marks_record_not_outcome}`, `test_phase4_scope_enforcement.py::test_a_denial_survives_an_unwritable_audit_sink`, all raising `AuditWriteError` from a monkeypatched `SqliteAuditSink.write`. Live proves the audit *trail* of every fault outcome (13 `fault-*-audits-*` case ids read from the server's own `audit.db`) | **FIXTURE ONLY** — the live stages install every policy with `auditMode=best_effort` (`driver.py:1105`, `:1386`, `:1950`, `:1967`, `:2834`) and verify the success pair only. Fixtures: `tag_write-{audit-required-attempt-fails,audit-required-profile-missing,audit-result-fails,decision-audit-required-write-fails}.json` and the same four for `tag_update`, `tag_create`, `tag_copy`, `alarm_shelve`/`alarm_unshelve` |
 | cancellation | **LIVE** (35687123699): `fault-cancellation-{answers-request-cancelled,cancels-the-request-it-sent,never-retries,audits-a-cancelled-dispatch,leaves-the-change-in-place}` (`rest_driver.py:1928`) and `fault-import-cancellation-*` (`:2417`) — the caller cancels its own in-flight request and the Tool answers JSON-RPC `-32800` | **NOT PROVEN** — there is no live case and no recorded fixture: `grep -ri cancel` returns nothing under `tests/harness/phase4-live/`, `packages/ignition-runtime-bundle/project/` and `tooling/native/jython_runner/`. D30's Consequences say the three cases are "proven with recorded fixtures only" on the Runtime plane; that sentence is not satisfied for cancellation (see Open questions) |
 
@@ -234,10 +234,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   its document proves it ran green (every stage `ok`, `drift: {}`; every REST case `ok`),
   matches the row's Gateway/Module identity, and deployed the bundle the row declares. The
   cited runs are `35710377211` (G4a, milestone 4a), `35710377243` (G4b, 4b part), `35707687810`
-  (G4b, 4b complete) and `35687123699` (REST mutation, milestone 4c); the row records each
-  run's head, its pull-request test merge revision and the bundle it deployed, because the
-  4a runs deployed 0.6.0 while the 4b runs deployed the close-out bundle 0.7.0
-  (`5cdca831…`, independently reproduced from head `dfa4d08`).
+  (G4b, 4b complete), `35713927291` (G4b, milestone 4b on the **final integration head**
+  `0801e51` = `4238653` + #22 + the CI-only workflow change) and `35687123699` (REST mutation,
+  milestone 4c); the row records each run's head, its pull-request test merge revision and the
+  bundle it deployed, because the 4a runs deployed 0.6.0 while the 4b runs deployed 0.7.0 in
+  two builds (`5cdca831…` at `dfa4d08`, before the #7/#8 handler fixes, and `d5382418…` at
+  `0801e51`, the close-out bundle, independently reproduced locally).
 - **`tooling/compat` gained the gate itself.** `GATES` now includes `G4`, and
   `_apply_g4_rules` enforces, fail-closed: every D26 case recorded on both Planes; a
   limitation for every claim that is not live; a run id for every claim that is; D30's
@@ -266,11 +268,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   tests, and every live Runtime stage runs `auditMode=best_effort`); Runtime cancellation has
   no evidence at all — no live case and no fixture — which means D30's sentence that the three
   Runtime cases are "proven with recorded fixtures only" is not satisfied for cancellation;
-  and `setup-native apply`'s confirmation runs on the integration head were cancelled, so the
-  apply item rests on the run that reached every write plus the fix commit `4aa9471` and the
-  green rehearsal, not on a confirmed live row. The coordinator's replacement runs
-  (`0801e51`: G4b `35713927291`, apply `35713927140`) were still running when the rows were
-  composed, and are recorded here and in the Execution log as **pending**, not as evidence.
+  and `setup-native apply`'s confirmation runs on the integration head were cancelled or
+  failed in the harness, so the apply item rests on the run that reached every write plus the
+  fix commit `4aa9471` and the green rehearsal, not on a green live row. The coordinator's
+  replacement runs on `0801e51` were G4b `35713927291` (**green, and now cited by both rows**)
+  and apply `35713927140` (**red in the harness**: `apply_stage.py` reached `run_stage` before
+  its retry helpers were defined, `NameError: name '_reverify' is not defined`, fixed in
+  `5be2767` and pinned by a structural test, but not yet re-run). The apply item therefore
+  stays `run-pending` in both rows rather than claimed.
   All three are owner questions in this runbook below. The Runtime timeout and
   ambiguous-outcome cases are limitations with D30's ruling behind them, not gaps.
 - **Deferred work stays deferred and linked.** The D10 bound-accounting precision the owner
@@ -3210,22 +3215,30 @@ Two open issues carry whole categories of work rather than one question:
   fault, which the owner's speed ruling excludes from this phase. **For the owner:** accept
   the fixture/unit proof as the G4 record for this case, or name the live case to add and the
   run it may use.
-- **Ticket #23 — `setup-native apply` has no confirmed green live run on the integration head.**
-  The milestone-4d confirmation runs were cancelled during the Actions-saturation window
-  (`35712191958`, and the apply re-run `35713725528`), and the coordinator's replacement,
-  `Phase 4 Live Gateway apply` run **35713927140** on `0801e51` (= `4238653` + #22 `e34884a` +
-  the CI-only change that stops the live workflows re-running the unit suite), was still running
-  when the rows were composed. D26's G4 acceptance item "`setup-native apply` is live-verified
-  with `plan → apply → verify` on a disposable Gateway" is therefore recorded as a limitation in
-  both evidence rows rather than claimed, and the milestone-4d row is **pending the coordinator's
-  confirmation**. What is already live: run `35708881821` reached every write (the bundle Project
-  was imported and read back managed, the Server Config was created with the profile's Tool list,
-  the policy provider and Tag were written) and failed only at the two defects `4aa9471` closes —
-  the percent-escaped `/` inside the resource *type* in the provider find path, and `verify` not
-  deriving its endpoint from the Server Config it wrote — both covered by the green rehearsal
-  `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the coordinator's final sweep:**
-  that one green run completes this item for #21, #22 and G4; it then becomes a cited run in both
-  rows (the close document gains it and the rows are regenerated) and the limitation drops off.
+- **Ticket #23 — `setup-native apply` has no green live run on the integration head.** The
+  milestone-4d confirmation runs were cancelled during the Actions-saturation window
+  (`35712191958`, and the re-run `35713725528`), and the coordinator's replacement
+  `Phase 4 Live Gateway apply` run **35713927140** (`0801e51` = `4238653` + #22 `e34884a` +
+  the CI-only change that stops the live workflows re-running the unit suite) failed **in the
+  harness, not in the product**: `tests/harness/phase4-live/apply_stage.py` raised
+  `NameError: name '_reverify' is not defined`, because the `if __name__ == "__main__"` guard
+  had been left above `_last_verify_ok`, `_reverify`, `_reverify_after_reload` and
+  `_wait_for_rest` — script-mode execution runs top to bottom, so `run_stage` reached the
+  retry branch before those names existed. The rehearsal never caught it, because a successful
+  `apply` skips that branch. Fixed in `5be2767` (the guard moved below the helpers) and now
+  pinned structurally by `tooling/native/tests/test_phase4_harness.py`, but **no run has
+  exercised the fix**, so D26's G4 acceptance item "`setup-native apply` is live-verified with
+  `plan → apply → verify` on a disposable Gateway" is recorded as a `run-pending` limitation in
+  both evidence rows rather than claimed, and #21/#22's milestone-4d row stays pending. The last
+  observation of the product itself is run `35708881821`, which reached every write (bundle
+  Project imported and read back managed, Server Config created with the profile's Tools, policy
+  provider created) and failed only at the two defects `4aa9471` closes — the percent-escaped `/`
+  inside the resource *type* in the provider find path, and `verify` not deriving its endpoint
+  from the Server Config it wrote — both covered by the green rehearsal
+  `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the coordinator's final
+  sweep:** one green `Phase 4 Live Gateway apply` run completes this item for #21, #22 and G4;
+  it then becomes a cited run in both rows (the close document gains it and the rows are
+  regenerated) and the limitation drops off.
 - **Ticket #23 — G4 closes with `VERIFIED_WITH_LIMITATION`, never `VERIFIED`.** Both evidence
   rows record `gateResult VERIFIED_WITH_LIMITATION`, `compatibilityStatus UNTESTED` and no
   `SUPPORTED` anywhere, and the two items above are `unsatisfiedAcceptance` rather than
@@ -3259,7 +3272,7 @@ its own SHA.
 | 4c | #35 config Mutations pinned to the `core` collection | `be4dc50` | 35682027818 (REST mutation, both rows) |
 | 4c | #36 reserved `IgnitionMCPPolicy` config resource | `1bfaf8f` | 35687123699 (REST mutation, both rows) |
 | 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35708881821 (apply, both rows: every write reached, two defects found and fixed in `4aa9471`) |
-| 4d | #22 opt-in Security Level + API token provisioning | `e34884a` (merged in `72e3402`) | 35713927140 (apply, both rows) — **pending the coordinator's confirmation**, see the G4-close open question |
-| G4 | #23 G4 close | `602e68e`, `2ebb7cc` | the four runs the rows cite, above |
+| 4d | #22 opt-in Security Level + API token provisioning | `e34884a` (merged in `72e3402`) | 35713927140 (apply, both rows) — **red in the harness** (`NameError: _reverify`), fixed in `5be2767`; a green run is still owed, see the G4-close open question |
+| G4 | #23 G4 close | `602e68e`, `2ebb7cc` | the five runs the rows cite, above |
 | integration | Runtime lane (#7 #8 #10 #11) merged | `ca27b4b` | CI, G4a 35710377211, G4b 35710377243 green |
-| integration | Final integration head (#7 #8 #10 #11 #12 #21 #22) | `0801e51` | G4b 35713927291, apply 35713927140 — **pending the coordinator's confirmation**; this head also stops the live workflows re-running the unit suite (CI keeps it) |
+| integration | Final integration head (`4238653` + #22 + CI-only) | `0801e51` | G4b 35713927291 **green and cited by both G4 rows**; apply 35713927140 red in the harness (fixed in `5be2767`, not yet re-run). This head also stops the live workflows re-running the unit suite (CI keeps it) |

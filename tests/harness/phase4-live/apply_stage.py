@@ -491,8 +491,6 @@ def main(argv: list[str] | None = None) -> int:
     return asyncio.run(run_stage(args))
 
 
-if __name__ == "__main__":
-    raise SystemExit(main())
 
 
 def _last_verify_ok(evidence: dict[str, Any]) -> bool:
@@ -571,3 +569,7 @@ def _wait_for_rest(base_url: str, api_token: str, deadline_seconds: float = 300.
             pass
         time.sleep(3.0)
     return False
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

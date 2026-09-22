@@ -1,9 +1,9 @@
 {
-  "bundleSha256": "5cdca831b1a421ecf83a86d2ad889a76f757da9ed2451e8a11b51e8dacd743a6",
+  "bundleSha256": "d5382418c0d1b3f28ce89bc789373f9ee5020ba9daac9fe6f8bd158b3459ffd5",
   "bundleVersion": "0.7.0",
   "compatibilityStatus": "UNTESTED",
   "d27ExceptionApplied": false,
-  "deployedBundleSha256": "5cdca831b1a421ecf83a86d2ad889a76f757da9ed2451e8a11b51e8dacd743a6",
+  "deployedBundleSha256": "d5382418c0d1b3f28ce89bc789373f9ee5020ba9daac9fe6f8bd158b3459ffd5",
   "gate": "G4",
   "gateResult": "VERIFIED_WITH_LIMITATION",
   "gatewayBuild": "2026082511",
@@ -351,8 +351,8 @@
       "case": "setup-native apply live verification",
       "kind": "run-pending",
       "plane": "rest",
-      "reason": "The milestone-4d confirmation runs on the integration head were cancelled during the Actions-saturation window (35712191958 on 4238653, and the apply re-run 35713725528), and the coordinator's replacement - run 35713927140 on 0801e51 (= 4238653 + #22 e34884a + the CI-only change that stops the live workflows re-running the unit suite) - was still running when this row was composed, so #21, #22 and this item stay pending its confirmation. The only live apply observation is run 35708881821 (head ffda72d), whose two defects - the percent-escaped / inside the resource type in the provider find path, and verify not deriving its endpoint from the Server Config it wrote - were fixed in 4aa9471 and are covered by the green local rehearsal tests/harness/phase4-live/rehearse_apply.py. The writes themselves were reached and observed live on that run (bundle Project imported and read back managed, Server Config created with the profile's Tools, policy provider created), so what is missing is the confirmation, not the write path.",
-      "ruled": "pending: the coordinator's confirmation of run 35713927140 (also recorded in the Phase 4 runbook)"
+      "reason": "No green live run has exercised `setup-native apply` on the integration head. Its confirmation runs were cancelled during the Actions-saturation window (35712191958 on 4238653, and the re-run 35713725528), and the coordinator's replacement 35713927140 failed in the harness rather than the product: apply_stage.py raised `NameError: name '_reverify' is not defined` because its `if __name__ == \"__main__\"` guard had been left above the retry helpers #22 added, so script-mode execution reached run_stage before they were defined. That is fixed in 5be2767 and pinned by a structural test in tooling/native/tests/test_phase4_harness.py, but no run has exercised the fix yet, so #21, #22 and this D26 acceptance item stay pending. The product's own last live observation is run 35708881821 (head ffda72d), whose two defects - the percent-escaped / inside the resource type in the provider find path, and verify not deriving its endpoint from the Server Config it wrote - were fixed in 4aa9471 and are covered by the green local rehearsal tests/harness/phase4-live/rehearse_apply.py. The writes themselves were reached and observed live on that run (bundle Project imported and read back managed, Server Config created with the profile's Tools, policy provider created), so what is missing is the confirmation, not the write path.",
+      "ruled": "pending: one green `Phase 4 Live Gateway apply` run on the integration head (also recorded in the Phase 4 runbook)"
     }
   ],
   "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
@@ -434,6 +434,24 @@
       "runId": "35687123699",
       "verified": "217 cases, modes=['gate-on', 'gate-off', 'fault']",
       "workflow": "Phase 4 Live Gateway REST mutation"
+    },
+    {
+      "bundleSha256": "d5382418c0d1b3f28ce89bc789373f9ee5020ba9daac9fe6f8bd158b3459ffd5",
+      "bundleVersion": "0.7.0",
+      "conclusion": "success",
+      "gatewayBuild": "2026082511",
+      "gatewayVersion": "8.3.9",
+      "harnessDocument": "evidence.json",
+      "head": "0801e51a935fc44d13e01aa2cb23b1fe35911999",
+      "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+      "mcpModuleBuild": "2026021307",
+      "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+      "mcpModuleVersion": "1.3.5-SNAPSHOT",
+      "purpose": "milestone 4b on the final integration head 0801e51 (4238653 + #22 + the CI-only change): the fingerprint, tag_update, tag_create, tag_copy, tag_delete, tag_move, tag_rename and the 19-Tool configurator inventory, plus the configurator/operator inventory split",
+      "runId": "35713927291",
+      "runRevision": "e8e4d169abf73412a4fdc9b684be80216cf7c5e5",
+      "verified": "N stages=8 drift=clean",
+      "workflow": "Phase 4 Live Gateway G4b"
     }
   ],
   "runtimeMutations": {
