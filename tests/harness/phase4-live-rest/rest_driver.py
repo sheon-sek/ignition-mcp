@@ -2005,10 +2005,13 @@ async def fault_import_cases(
         _check(cases, "fault-import-not-sent-dispatched-nothing", 0, (row or {}).get("import_dispatched"))
         _check(cases, "fault-import-not-sent-records-the-boundary", "not_sent",
                (row or {}).get("import_outcome"))
-        _check(
-            cases, "fault-import-not-sent-holds-no-recovery-lock", True,
-            str((row or {}).get("state")) in {"NOT_APPLIED", "FAILED_PRE_IMPORT"},
-        )
+        # The state names the failure phase, and it is FAILED_PRE_IMPORT rather than
+        # NOT_APPLIED because the hop stays down for the whole call: D16 finalizes
+        # NOT_APPLIED only after its drift re-export, which needs the same hop. Still a
+        # release-set state — no recovery lock, no replay — with `importDispatched: false`
+        # and the boundary above on the row.
+        _check(cases, "fault-import-not-sent-finalizes-as-a-release-set-state",
+               "FAILED_PRE_IMPORT", (row or {}).get("state"))
         _check(cases, "fault-import-not-sent-reports-the-transport-error", "gateway_unavailable",
                (row or {}).get("error_code"))
         rows = evidence.audit_rows(mark, IMPORT_TOOL)

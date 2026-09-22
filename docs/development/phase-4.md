@@ -826,17 +826,41 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   saw. Both cases fail on the pre-change code (the boundary row's absence/error code) and
   pass after it. The two result rows per invocation are the frozen D18 shape the Phase 3/4
   suite pins (`_outcomes()[-1]` is the caller's D06 code); this ticket did not change it.
-- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **170/170 cases**
+- **Local rehearsal**: `tests/harness/phase4-live-rest/rehearse_local.py` — **182/182 cases**
   against the recorded Gateway through the real proxy, covering all three driver modes
   (gate-on, gate-off, fault).
-- **`LIVE EVIDENCE PENDING (Actions outage)`.** The live `Phase 4 Live Gateway REST
-  mutation` rows cannot be produced: no workflow run has been created for this repository
-  since `2026-09-21T23:49:41Z` (see Open questions). The workflow, the compose service and
-  the three driver modes are wired (`pull → wait → run → enforce`), the fault row's exit
-  code is part of the gate, and the `AGENTS.md` block plus the rehearsal are green on the
-  pushed head. The live checks still owed: the fault-mode `observations.json` and
-  `fault-proxy-state.json` on 8.3.8 and 8.3.9, and the proxy image digest recorded in
-  `identity.json`.
+- **Live** ([run 35672781303](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781303),
+  workflow `Phase 4 Live Gateway REST mutation`): both rows green, **182/182 live cases on
+  8.3.8 (`2026071409`, required) and on 8.3.9 (`2026082511`, candidate)** — 80 of them
+  fault cases. What the rows recorded:
+  - the proxy reached by a second `ignition-rest` instance saw 78 requests and applied
+    every fault once per case (`dropped_before_upstream: 2`, `dropped_after_full_body: 2`,
+    `delayed_responses: 3`, two whole-hop refusals), with `listeners_closed: 2` — the two
+    `refuse_after_forward` aims, reopened by the driver afterwards;
+  - the deadline case fired at **8.008 s** against `IGNITION_MCP_TOOL_TIMEOUT_SECONDS=8`
+    and left the change in place (the caller's `timeout` and the audit's `cancelled` row
+    disagree by design: the write did apply);
+  - the D16 rows say exactly what the faults did: a refused dispatch is
+    `FAILED_PRE_IMPORT`/`import_dispatched: false`/`import_outcome: not_sent`; a dropped
+    mid-body write is `NOT_APPLIED` on the read-back (both Gateway versions classified
+    that boundary as `sent_complete_no_response` — a small body is already in the socket
+    when the RST lands — which is why the case asserts the read-back rather than the
+    class); a dropped answer is `COMMITTED` with `resultFingerprint == candidateFingerprint`;
+    a cancelled dispatch is left for the reconcile loop, which ends it `OUTCOME_UNKNOWN`
+    with the candidate preserved;
+  - the not-sent import finalizes `FAILED_PRE_IMPORT` on both rows (see Open questions for
+    the state-name reading), and the unreachable-hop case starts **no** transaction row at
+    all;
+  - the `fault-proxy` image digest and the Gateway image digest are in each row's
+    `identity.json`.
+
+- **Frozen gates, green on the pushed head (`f486d30`, plus the tightened assertion in the
+  commit that follows it): CI
+  [35672781330](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781330),
+  Phase 3 Live Gateway G3
+  [35672781253](https://github.com/sheon-sek/ignition-mcp/actions/runs/35672781253), and the
+  Phase 4 Live Gateway REST mutation run above.** The first push after the outage (see Open
+  questions) produced all three.
 
 ## Open questions
 
@@ -1149,15 +1173,14 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
 - **Policy read bound (ticket #6 follow-up).** The Runtime Target Policy is a `String` Tag, and Ignition documents no maximum length for a Tag value; `system.tag.readBlocking` takes only paths and a timeout, so a post-read length check is not a bound (the reasoning D12's Phase 2 amendment applied to `alarm_status`). The recommendation is therefore conditional on a product-enforced cap: the policy Tag carries a companion `RuntimeTargetPolicyLength` Int4 Tag that `setup-native apply` writes in the same import, and the reader refuses a document whose declared length is missing, non-integer or over `IgnitionMcpPolicyMaxBytes` (32 KiB) **without reading the value at all**, then re-checks the value's byte length after reading. The harness measures both the served, length-verified read and a deliberately oversize pair that must be skipped unmaterialized. **For the owner to approve or reject:** the cap value and the rule that `apply` is the only writer of that provider (which is what makes the declared length an enforced maximum). If the cap is rejected, the fail-closed default is to keep Runtime Mutations disabled and move the policy to a mechanism with a native bound.
 - **`phase4-live` environment reuse.** The new `phase4-live` GitHub environment was created with no protection rules, reusing the owner-accepted deviation recorded for `phase3-live`. The compensating controls are the trusted-repo guard, no repository or environment secrets in the job, compose-localhost endpoints only, run-unique Alarm paths, and the driver-enforced CI marker plus Gateway-identity check that fails closed before any probe call. Recorded in every evidence row (`ownerAcceptedDeviations`).
 
-- **Ticket #20 — GitHub Actions created no runs after `2026-09-21T23:49:41Z`.** The live
-  `Phase 4 Live Gateway REST mutation` rows for this ticket cannot be produced: `GET
-  /repos/…/actions/runs` shows nothing created repo-wide after that timestamp, the API
-  reports Actions enabled, and the status page shows it operational. Per the brief's outage
-  rule, the ticket finished on the full `AGENTS.md` block plus the local rehearsals, pushed
-  as usual, and marks the live row `LIVE EVIDENCE PENDING (Actions outage)`; it does not
-  claim a live pass. **For the coordinator:** run the live sweep over `feature/phase-4` once
-  runs appear again, and re-check the fault row's evidence (`observations.json` including the
-  `fault-*` cases, and `fault-proxy-state.json`) on both Gateway rows.
+- **Ticket #20 — GitHub Actions created no runs after `2026-09-21T23:49:41Z`; recovered.**
+  The live rows for this ticket were produced once runs resumed: the first push after the
+  gap (`f486d30`) created all three workflows, and the Phase 4 REST row ran 182/182 live
+  cases on both Gateway versions. CI and Phase 3 G3 are green on the same head. Nothing was
+  claimed while the gap was open; the ticket was marked `LIVE EVIDENCE PENDING (Actions
+  outage)` in the body above only for the interval in which no run existed. **For the
+  coordinator:** the run IDs are in the Results section and the ticket report.
+
 - **Ticket #20 — a refused-connect import that also fails its drift re-export ends
   `FAILED_PRE_IMPORT`, not `NOT_APPLIED`.** D16 finalizes a dispatched-and-unchanged import as
   `NOT_APPLIED` after a diagnostic re-export; when the same fault keeps the hop down for the
@@ -1165,11 +1188,12 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   handler finalizes the row as `FAILED_PRE_IMPORT` — the state it uses for "a row still in
   `IMPORT_SENT` after a raise". Both are release-set states (no recovery lock, no replay), and
   the row still carries `importDispatched: false`, the `not_sent` boundary and the transport
-  error, which is what the case asserts. Naming the failure *phase* accurately in that corner
-  would need a tri-state `externalDrift` column and a change to a reviewed D16 module, which
-  this ticket did not take on. **For the owner:** accept the state name as characterized, or
-  amend D16 to finalize `NOT_APPLIED` with an explicit "drift unknown" marker when the
-  diagnostic re-export fails.
+  error, which is what the case asserts. The live rows observed `FAILED_PRE_IMPORT` on 8.3.8
+  and 8.3.9, so the case now asserts that exact state. Naming the failure *phase* accurately
+  in that corner would need a tri-state `externalDrift` column and a change to a reviewed D16
+  module, which this ticket did not take on. **For the owner:** accept the state name as
+  characterized and live-proven, or amend D16 to finalize `NOT_APPLIED` with an explicit
+  "drift unknown" marker when the diagnostic re-export fails.
 - **Ticket #20 — the fault proxy runs on the host network inside the compose stack.** The
   issue asks for the proxy "in the `phase4-live` compose network". It is a compose service
   (`fault-proxy`) in that stack, but with `network_mode: host`, because a *published* data
