@@ -10,10 +10,10 @@ covers, D27 and D28 for Runtime wire behavior, and D30 for the Mutation contract
 Module install, Module upgrade and Bundle upgrade are defined in `CONTEXT.md`; this file uses them
 with those meanings.
 
-Every flag below was checked against `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup_native/`
-at the time of writing, and the sample output is a real run. The one exception is
-`setup-native install-module`, which ticket #54 is implementing in parallel; its flags are the names
-recorded in that ticket.
+Every flag was checked against the shipped source in
+`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup_native/` and confirmed against each
+subcommand's `--help` output. The `doctor`, `plan` and `verify` samples below are real run output. The
+`install-module` examples show the format the command prints, read off its source.
 
 ## Prerequisites
 
@@ -74,50 +74,80 @@ The commands take no repository path. `--bundle-manifest` is the only source of 
 
 ## Install the MCP Module
 
-Ticket #54 delivers `setup-native install-module`. Until it merges, the group refuses it, and
-installing the Module is a Gateway-administrator task:
+`setup-native install-module` puts one trusted local `.modl` on a Gateway through the Gateway's own
+module routes. It takes no bundle manifest: the Module id and build it reasons about come from the
+archive's own `module.xml`. It downloads nothing.
 
-```console
-$ ignition-mcp setup-native install-module
-ignition-mcp: error: install-module is not implemented: module installation is Phase 6 (doctor, plan, apply and verify are implemented)
-usage: ignition-mcp setup-native [-h] {doctor,plan,verify,apply} ...
+```bash
+ignition-mcp setup-native install-module \
+  --file ~/downloads/MCP-module-1.3.5.2026021307-SNAPSHOT.modl \
+  --sha256 b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365 \
+  --gateway-token-file ~/.config/ignition-mcp/gateway.token
 ```
 
-The command is documented here so an operator can plan against one interface. It uses the Gateway's
-own module REST flow and takes these flags in addition to the shared ones:
+Add `--accept-certificate` and `--accept-eula` to accept what the Module carries, `--restart` to
+restart the Gateway and wait for the Module to come back, and `--acknowledge-upgrade` to install a
+build higher than the installed one.
 
 | Flag | Meaning |
 | --- | --- |
-| `--file PATH` | the trusted local Module file. Nothing is downloaded |
-| `--sha256 HEX` | the expected SHA-256 of that file |
-| `--accept-certificate` | accept the Module certificate after you have read it |
-| `--accept-eula` | accept the Module EULA after you have read it |
-| `--acknowledge-upgrade` | allow a higher Module build to replace an installed one |
-| `--restart` | restart the Gateway and wait for it to serve the Module again |
+| `--file PATH` | required. The local `.modl`. Nothing is uploaded until its hash matches |
+| `--sha256 HEX` | required. The 64 hex digits this file must hash to. Case is folded to lowercase |
+| `--accept-certificate` | accept the Module certificate. Without it the run prints the certificate and installs nothing |
+| `--accept-eula` | accept the Module EULA. Without it the run says where to read the EULA and installs nothing |
+| `--acknowledge-upgrade` | allow a Module build higher than the installed one |
+| `--restart` | restart the Gateway after the install and wait for the Module to come back |
 
-`--file` is the spelling in D26's Phase 6 list; the other five flags are named in #54. If #54 lands
-with different names, that ticket's help output is authoritative and this table changes with it.
+The command also shares `--gateway-url`, `--gateway-token-file`, `--timeout-seconds`,
+`--allow-insecure-authorize` and `--json`.
 
-The sequence is fixed:
+The sequence is fixed, and every step is refused before it happens rather than undone afterwards:
 
-1. Hash the local file and compare it with `--sha256`. A mismatch is refused before any upload.
-2. Read `GET /data/api/v1/modules/healthy`. The same Module id and build already installed means NO
-   CHANGE and exit 0 with no upload. A higher build is refused unless `--acknowledge-upgrade` is
-   passed. A lower build is always refused.
-3. `POST /data/api/v1/modules/upload?fileName=...` with the raw bytes.
-4. Read the certificate and the EULA for that Module id. Without both acceptance flags, the command
-   prints the certificate subject, issuer and validity dates, says where the EULA can be read, and
-   exits non-zero before installing anything. With the flags it posts each acceptance, and a `409`
-   meaning already accepted counts as accepted.
+1. Read the file, hash it, and open its `module.xml`. Every failure here exits 2 with no request sent:
+   the hash does not match `--sha256`; the file passes the 67108864 byte bound for a `.modl`, or is
+   not a ZIP, or holds no `module.xml`, or declares no `<id>` or `<version>`, or spells a version with
+   no 10-digit build to compare; the basename is not a name this CLI will upload as `fileName`; or the
+   archive's `<id>` is not `com.inductiveautomation.mcp`. This command installs the MCP Module and
+   nothing else, so a foreign Module artifact is refused before any Gateway call.
+2. Read `GET /data/api/v1/modules/healthy` in pages of 500, at most four pages, and find the identity
+   the Gateway reports for that Module id. The same build installed is `NO CHANGE` with exit 0 and no
+   upload. A newer build on the Gateway is refused with exit 1, and an installed build that cannot be
+   compared is refused too rather than replaced blind. A higher build in the file needs
+   `--acknowledge-upgrade`, or the run stops with exit 3. When the inventory cannot be read to its
+   end, because the Gateway does not page through its reported total or answers with no item list, the
+   run refuses with exit 1 before uploading instead of treating the Module as absent.
+3. `POST /data/api/v1/modules/upload?fileName=...` with the raw bytes, where `fileName` is the file's
+   basename. A Gateway that answers with a different `moduleId` is a refusal with exit 1, and nothing
+   is installed.
+4. Read `GET /data/api/v1/modules/certificate` and `GET /data/api/v1/modules/eula`. With either
+   acceptance flag missing, the run prints the certificate subject, issuer and validity dates, says
+   where the EULA can be read, and stops with exit 3. The archive is uploaded at that point, so that
+   run leaves an upload with nothing installed. With the flags it posts each acceptance, and a `409`
+   means the Gateway already holds one. A Module that carries no certificate or no EULA reports that
+   step as skipped rather than asking for an acceptance.
 5. `POST /data/api/v1/modules/install?moduleId=...`.
-6. Without `--restart`, report that a restart is pending and tell you to restart the Gateway and run
-   `verify`. With `--restart`, call the documented restart route, wait for the Gateway to answer
-   again, and confirm the Module id and build appear in `modules/healthy`.
+6. Without `--restart`, exit 0 with outcome `INSTALL` or `UPGRADE`, a pending-restart line, and the
+   instruction to restart the Gateway and run `verify`. With `--restart`, confirm the restart with
+   `confirm=true`, then poll `modules/healthy` every 5 seconds for up to 600 seconds until the Module
+   is served with the installed build. A Gateway that never comes back with that build exits 1 and
+   says the install is still waiting on a restart.
 
-Two rules matter for the operator: `install-module` does not consult the compatibility matrix, because
-`doctor` reports that, and it never accepts a certificate or an EULA without its own flag. A Module
-upgrade, meaning a higher build, is the acknowledged path in step 2. The repository holds one Module
-build, so v1 proves that logic with refusals and unit tests rather than with a live second build.
+Text output is one line per step, `<MARKER> <step>: <detail>`, with the markers `DONE`, `SKIPPED`,
+`NEEDS-ACK`, `REFUSED` and `FAILED`, then a summary line:
+
+```console
+install-module: INSTALL com.inductiveautomation.mcp build=2026021307 => exit 0
+```
+
+`--json` reports the same run as one object with `outcome`, `steps[]`, `moduleId`, `moduleVersion`,
+`moduleBuild`, `installedBefore`, `restart`, and the `certificate` and `eula` views when the step
+reached them. The certificate view carries only the subject, issuer, validity window and self-signed
+flag, and no output carries a credential.
+
+Two operator facts: `install-module` does not consult the compatibility matrix, because `doctor`
+reports that, and it never accepts a certificate or an EULA without its own flag. A Module upgrade,
+meaning a higher build, is the acknowledged path in step 2. The repository holds one Module build, so
+v1 proves that logic with refusals and unit tests rather than with a live second build.
 
 ## Diagnose a deployment with `doctor`
 
@@ -456,10 +486,10 @@ decide. D06 forbids automatic replay of an ambiguous Mutation.
 
 | Code | Meaning |
 | --- | --- |
-| 0 | completed with no `FAIL` (`doctor`, `verify`), no `BLOCKED` (`plan`), or all writes applied and verified (`apply`) |
-| 1 | a check failed, a write failed, or a transport error occurred |
-| 2 | usage error: bad flag, unreadable or invalid manifest, artifact hash mismatch, rejected credential file |
-| 3 | `plan` reports at least one `BLOCKED` line. `apply` writes nothing and exits 3 |
+| 0 | `doctor` or `verify` finished with no `FAIL`; `plan` finished with no `BLOCKED`; `apply` wrote everything and verified; `install-module` installed or upgraded the Module, reported `NO CHANGE`, or completed an install whose restart is still pending |
+| 1 | a check failed, a write failed, or a transport error occurred. `install-module` also answers 1 when the Gateway runs a newer build than the file, when the healthy-module inventory cannot be read to its end, when the Gateway refuses the upload, an acceptance or the install, or when the Gateway never came back with the installed build after `--restart` |
+| 2 | usage error: bad flag, unreadable or invalid manifest, artifact hash mismatch, rejected credential file. `install-module` also answers 2 for an artifact problem that stops the run before any request: a SHA-256 mismatch, a file over the `.modl` bound, an archive with no readable `module.xml`, a version with no 10-digit build, and a Module id that is not `com.inductiveautomation.mcp` |
+| 3 | the run needs a decision it was not given. `plan` reports a `BLOCKED` line and `apply` writes nothing. `install-module` installs nothing, and in the certificate or EULA case it has already uploaded the archive |
 
 An interrupted run exits 2. An unexpected crash exits 1 and prints only the exception type, so a
 credential cannot leak through a traceback.
