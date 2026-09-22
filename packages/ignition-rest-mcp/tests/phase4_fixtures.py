@@ -25,6 +25,7 @@ from test_config import _settings
 
 READ = "ignition.read"
 CONFIG = "ignition.config"
+CONTROL = "ignition.control"
 
 #: An allowed non-singleton resource type, and the names the cases give its resources.
 PROFILE = "ignition/audit-profile"
@@ -42,8 +43,19 @@ UPDATE_TOOL = "config_resource_update"
 CREATE_TOOL = "config_resource_create"
 DELETE_TOOL = "config_resource_delete"
 RENAME_TOOL = "config_resource_rename"
-#: Every Phase 4 REST Mutation Tool, in the order the milestone introduced them.
-MUTATION_TOOLS = (UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL)
+IMPORT_TOOL = "project_import"
+TAG_IMPORT_TOOL = "tag_config_import"
+#: D26 milestone 4c's CONTROL Mutation Tool (ticket #18): its Target is an exact
+#: Alarm Notification Pipeline path, and it is gated by the CONTROL class.
+ALARM_CANCEL_TOOL = "alarm_pipeline_cancel"
+#: Every Phase 4 *CONFIG*-class REST Mutation Tool, in the order the milestone
+#: introduced them. The class decides discovery and scope, so the modules that pin an
+#: inventory use the lane they actually enable.
+CONFIG_MUTATION_TOOLS = (
+    UPDATE_TOOL, CREATE_TOOL, DELETE_TOOL, RENAME_TOOL, IMPORT_TOOL, TAG_IMPORT_TOOL,
+)
+CONTROL_MUTATION_TOOLS = (ALARM_CANCEL_TOOL,)
+MUTATION_TOOLS = CONFIG_MUTATION_TOOLS + CONTROL_MUTATION_TOOLS
 
 ACCEPT = "application/json, text/event-stream"
 PROTOCOL_VERSION = "2025-06-18"
@@ -78,13 +90,18 @@ def mutation_settings(
 ) -> Any:
     """Deployment settings with the named mutation operations enabled.
 
-    Defaults to every Phase 4 config Mutation Tool, with the Target list these modules
+    Defaults to every Phase 4 CONFIG Mutation Tool, with the Target list these modules
     share: the allowlisted resources and the singleton. ``OTHER_RESOURCE`` is
     deliberately *not* allowlisted, so a Target-allowlist denial case only has to name
     the resource it refuses.
+
+    Three named credentials are always configured, because D07 assigns scope by
+    operation effect: ``reader-secret`` (read only), ``cfg-secret`` (read + config) and
+    ``op-secret`` (read + control). A CONTROL Mutation is therefore unreachable with
+    the config credential and vice versa, whatever the class gates say.
     """
 
-    enabled = operations or MUTATION_TOOLS
+    enabled = operations or CONFIG_MUTATION_TOOLS
     allowed = (
         f"{PROFILE}/{RESOURCE}",
         f"{PROFILE}/{CREATED_RESOURCE}",
@@ -96,6 +113,7 @@ def mutation_settings(
         "static_tokens": (
             StaticToken(name="reader", token="reader-secret", scopes=(READ,)),
             StaticToken(name="config-agent", token="cfg-secret", scopes=(READ, CONFIG)),
+            StaticToken(name="operator-agent", token="op-secret", scopes=(READ, CONTROL)),
         ),
         "config_mutation_enabled": True,
         "mutation_operations": tuple(enabled),

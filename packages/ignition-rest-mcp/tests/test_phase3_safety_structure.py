@@ -205,10 +205,10 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
 def test_destructive_registrations_match_the_tool_contracts() -> None:
     """A Tool's ``_invoke`` declaration must be the one its contract publishes.
 
-    Phase 3 registered no destructive Tool at all; Phase 4 adds exactly one
-    (``config_resource_delete``, D26). Rather than weakening that invariant, the
-    scan now ties every registration to the contract it ships with, so a destructive
-    Tool can never be registered as harmless — or the reverse — anywhere.
+    Phase 3 registered no destructive Tool at all; Phase 4 adds
+    ``config_resource_delete`` and ``project_import`` (D26). Rather than weakening that
+    invariant, the scan ties every registration to the contract it ships with, so a
+    destructive Tool can never be registered as harmless — or the reverse — anywhere.
     """
 
     repo_root = SRC_ROOT.parents[3]
@@ -244,7 +244,9 @@ def test_destructive_registrations_match_the_tool_contracts() -> None:
         if contracts.get(name) is not declared
     }
     assert mismatched == {}, f"registrations disagree with their contracts: {mismatched}"
-    assert [name for name, declared in registered.items() if declared] == ["config_resource_delete"]
+    assert [name for name, declared in registered.items() if declared] == [
+        "config_resource_delete", "project_import", "alarm_pipeline_cancel",
+    ]
 
 
 # ------------------------------------------------------------------ 5. zero-mutation inventory

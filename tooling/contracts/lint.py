@@ -54,6 +54,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "destructive": False,
         "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
         "fixedKnobs": {"allowInvalidReferences": "false"},
+        "refusedResourceTypes": True,
+        "requestSchemaValidation": True,
+        "recoveredSuccess": "unreachable for this Tool",
     },
     "config_resource_create": {
         "mutationClass": "CONFIG_MUTATION",
@@ -62,6 +65,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "destructive": False,
         "precondition": {"kind": "none"},
         "fixedKnobs": {"allowInvalidReferences": "false"},
+        "refusedResourceTypes": True,
+        "requestSchemaValidation": True,
+        "recoveredSuccess": "unreachable for this Tool",
     },
     "config_resource_delete": {
         "mutationClass": "CONFIG_MUTATION",
@@ -70,6 +76,9 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "destructive": True,
         "precondition": {"kind": "resource_signature", "enforcedBy": "gateway"},
         "fixedKnobs": {"confirm": "never sent"},
+        "refusedResourceTypes": True,
+        "requestSchemaValidation": True,
+        "recoveredSuccess": "unreachable for this Tool",
     },
     "config_resource_rename": {
         "mutationClass": "CONFIG_MUTATION",
@@ -78,10 +87,88 @@ CURRENT_REST_MUTATION_TOOLS: dict[str, dict[str, Any]] = {
         "destructive": False,
         "precondition": {"kind": "resource_signature", "enforcedBy": "server_read_compare"},
         "fixedKnobs": {"references": "ABORT"},
+        "refusedResourceTypes": True,
+        "requestSchemaValidation": True,
+        "recoveredSuccess": "unreachable for this Tool",
+    },
+    "project_import": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        "destructive": True,
+        "precondition": {"kind": "project_fingerprint", "enforcedBy": "server_read_compare"},
+        "fixedKnobs": {"overwrite": "true"},
+        #: D30 §5 Refused resource types govern config-resource Mutations; this Tool
+        #: changes a Project, whose only policy is the D30 §2 Target allowlist.
+        "refusedResourceTypes": False,
+        #: D03 request-schema validation governs the config-resource write bodies; this
+        #: Tool sends an archive, gated by D15 ZIP safety and the D16 fingerprint.
+        "requestSchemaValidation": False,
+        #: D16 legitimately reaches a recovered success, and only through its own
+        #: reconcile rule (an ambiguous dispatch whose C equals B).
+        "recoveredSuccess": (
+            "reachable only through the D16 reconciliation of an ambiguous dispatch (C == B)"
+        ),
+    },
+    "tag_config_import": {
+        "mutationClass": "CONFIG_MUTATION",
+        "scope": "ignition.config",
+        "gate": "IGNITION_MCP_CONFIG_MUTATION_ENABLED",
+        #: D11's Phase 4 amendment: the import creates Tags only (D26 ticket #17).
+        "destructive": False,
+        #: D30 §2/D11: the collision policy is this Tool's concurrency rule, not a
+        #: caller-supplied Precondition token.
+        "precondition": {"kind": "none"},
+        #: D30 §4: the caller can never choose a collision policy.
+        "fixedKnobs": {"collisionPolicy": "Abort"},
+        #: D30 §5 governs config-resource Mutations; a Tag import's Target is a
+        #: provider-qualified path, not a config resource.
+        "refusedResourceTypes": False,
+        #: D30 §1/D08: the Target is a provider-qualified Tag path, so its allowlist
+        #: entries match as prefixes at segment boundaries.
+        "targetMatch": "provider_qualified_prefix_at_segment_boundaries",
+        #: D30 §1: the Runtime Target Policy's own provider, refused whatever the
+        #: allowlist says.
+        "reservedTagProviders": ("IgnitionMCPPolicy",),
+        #: D03 request-schema validation governs the config-resource write bodies; this
+        #: Tool sends a Tag export document, gated by its own byte cap and JSON parse.
+        "requestSchemaValidation": False,
+        #: No pre-dispatch read can attribute a created Tag to this call, so a claimed
+        #: success is the only thing the bounded re-export can confirm.
+        "recoveredSuccess": "unreachable for this Tool",
+    },
+    "alarm_pipeline_cancel": {
+        #: D12/D26: cancelling a notification pipeline run is a CONTROL operation.
+        "mutationClass": "CONTROL_MUTATION",
+        "scope": "ignition.control",
+        "gate": "IGNITION_MCP_CONTROL_MUTATION_ENABLED",
+        #: D12: a cancel stops the notification work the Alarm Event is running.
+        "destructive": True,
+        #: D30 §2 gives this Tool no Precondition token (D26's REST table lists none):
+        #: its concurrency rule is the pre-dispatch read plus the bounded verification.
+        "precondition": {"kind": "none"},
+        #: The documented route takes exactly path and alarmEventId, so there is no
+        #: D30 §4 knob to fix.
+        "fixedKnobs": {},
+        #: D30 §5 governs config-resource Mutations; this Tool's Target is a pipeline.
+        "refusedResourceTypes": False,
+        #: D03 request-schema validation governs config-resource write bodies; this Tool
+        #: sends its own two bounded fields, not a caller-supplied document.
+        "requestSchemaValidation": False,
+        #: A destructive cancel's post-state is absence, which another operator's cancel
+        #: also produces, so no read-back can attribute it to this call.
+        "recoveredSuccess": "unreachable for this Tool",
     },
 }
 REST_MUTATION_CLASSES = frozenset({"CONFIG_MUTATION", "CONTROL_MUTATION", "ADMIN_MUTATION"})
-PRECONDITION_KINDS = frozenset({"resource_signature", "none"})
+#: D07 assigns scope by operation effect: one scope, and one permission class, per
+#: mutation class. The contracts and the registrations must agree with this map.
+MUTATION_CLASS_SURFACE = {
+    "CONFIG_MUTATION": ("CONFIG", "ignition.config"),
+    "CONTROL_MUTATION": ("CONTROL", "ignition.control"),
+    "ADMIN_MUTATION": ("ADMIN", "ignition.admin"),
+}
+PRECONDITION_KINDS = frozenset({"resource_signature", "project_fingerprint", "none"})
 PRECONDITION_ENFORCERS = frozenset({"gateway", "server_read_compare"})
 REFUSED_RESOURCE_TYPES_CONTRACT = "contracts/shared/refused-resource-types.json"
 EXPECTED_ARTIFACT_KINDS = ("project_archive", "project_export", "tag_config_export")
@@ -97,6 +184,11 @@ EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES = frozenset({
 })
 EXPECTED_RECOVERY_LOCK_RELEASED_ON = frozenset({"COMMITTED", "NOT_APPLIED", "CONFLICTED", "FAILED_PRE_IMPORT"})
 EXPECTED_RECOVERY_LOCK_HELD_ON = frozenset({"OUTCOME_UNKNOWN", "RECOVERY_REQUIRED"})
+#: The durable dispatch classification a restart reconciles from (#16). Every value is a
+#: distinct conclusion about one attempt, and restart recovery acts on all five.
+EXPECTED_DISPATCH_BOUNDARIES = (
+    "not_sent", "refused", "claimed", "attributable", "unattributable",
+)
 
 CURRENT_RUNTIME_READ_TOOLS = [
     "bundle_info",
@@ -606,7 +698,12 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: mutation class drift")
         if mutation_class not in REST_MUTATION_CLASSES or mutation_class not in declared_mutation_classes:
             raise ContractError(f"{tool_name}: undeclared mutation class")
-        if tool.get("permissionClass") != "CONFIG" or tool.get("requiredScope") != spec["scope"]:
+        # D07: the permission class and the scope follow the mutation class, so a
+        # CONTROL Tool can never be declared with a CONFIG surface (or the reverse).
+        permission_class, scope = MUTATION_CLASS_SURFACE[mutation_class]
+        if tool.get("permissionClass") != permission_class or tool.get("requiredScope") != scope:
+            raise ContractError(f"{tool_name}: mutation scope drift")
+        if tool.get("requiredScope") != spec["scope"]:
             raise ContractError(f"{tool_name}: mutation scope drift")
         if tool.get("deploymentGate") != spec["gate"] or tool.get("audited") is not True:
             raise ContractError(f"{tool_name}: mutation gate/audit drift")
@@ -619,7 +716,7 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: D30 §2 requires the Precondition token to be declared")
         if precondition.get("kind") != spec["precondition"]["kind"]:
             raise ContractError(f"{tool_name}: Precondition token kind drift")
-        if precondition.get("kind") == "resource_signature":
+        if precondition.get("kind") in {"resource_signature", "project_fingerprint"}:
             enforcer = precondition.get("enforcedBy")
             if enforcer not in PRECONDITION_ENFORCERS:
                 raise ContractError(f"{tool_name}: a Precondition token must say what enforces it")
@@ -629,8 +726,31 @@ def lint_contracts(root: str | Path) -> None:
                 raise ContractError(f"{tool_name}: a Gateway-enforced token must also be read-compared")
             if precondition.get("raceWindowDocumented") is not True:
                 raise ContractError(f"{tool_name}: the Precondition race window must be documented")
-        if tool.get("refusedResourceTypes", {}).get("unclassified") != "refused":
-            raise ContractError(f"{tool_name}: unclassified resource types must be refused")
+        if spec["refusedResourceTypes"]:
+            if tool.get("refusedResourceTypes", {}).get("unclassified") != "refused":
+                raise ContractError(f"{tool_name}: unclassified resource types must be refused")
+        elif "refusedResourceTypes" in tool:
+            raise ContractError(
+                f"{tool_name}: D30 §5 governs config resources; this Tool changes a Project, "
+                "so the Refused resource types rule does not apply"
+            )
+        if precondition.get("kind") == "project_fingerprint":
+            if precondition.get("mismatch") != "conflict":
+                raise ContractError(f"{tool_name}: a stale Project fingerprint must be a conflict (D30 §7)")
+            # D30 §6/D17: the archive this Tool consumes is as much a contract as the
+            # Target is, so the declaration is required and checked.
+            consumed = tool.get("artifactInput")
+            if not isinstance(consumed, dict):
+                raise ContractError(f"{tool_name}: the consumed Project archive must be declared")
+            if consumed.get("state") != "READY":
+                raise ContractError(f"{tool_name}: only a READY artifact may be consumed")
+            kinds = consumed.get("kinds")
+            if not isinstance(kinds, list) or not kinds or not set(kinds) <= set(EXPECTED_ARTIFACT_KINDS):
+                raise ContractError(f"{tool_name}: the consumed archive kinds must be declared exactly")
+            if consumed.get("otherKindDisposition") != "invalid_argument":
+                raise ContractError(f"{tool_name}: a non-archive artifact must be refused")
+            if "not_found" not in str(consumed.get("visibility", "")):
+                raise ContractError(f"{tool_name}: a non-visible artifact must answer not_found (D30 §6)")
         if tool.get("fixedKnobs") != spec["fixedKnobs"]:
             raise ContractError(f"{tool_name}: the D30 §4 fixed knobs must be declared exactly")
         target = tool.get("targetId")
@@ -638,13 +758,98 @@ def lint_contracts(root: str | Path) -> None:
             raise ContractError(f"{tool_name}: D30 §7 decides permission_denied for a Target denial")
         if target.get("wildcard") != "*" or target.get("denyByDefault") is not True:
             raise ContractError(f"{tool_name}: the Target allowlist stays deny-by-default with an explicit *")
-        schema_validation = tool.get("requestSchemaValidation")
-        if not isinstance(schema_validation, dict) or (
-            schema_validation.get("source") != "gateway-openapi-capability-snapshot"
-        ):
-            raise ContractError(f"{tool_name}: D03 request-schema validation must be declared")
-        if schema_validation.get("unavailableDisposition") is None:
-            raise ContractError(f"{tool_name}: an unusable request schema must fail closed")
+        if target.get("match", "exact") != spec.get("targetMatch", "exact"):
+            raise ContractError(
+                f"{tool_name}: the Target match rule must be declared exactly (D08/D30 §1)"
+            )
+        # D30 §1: a Tool whose Target can write Tags must declare the reserved provider
+        # it refuses, and no other Tool may claim one.
+        reserved = spec.get("reservedTagProviders")
+        declared_reserved = tool.get("reservedTagProviders")
+        if reserved is None:
+            if "reservedTagProviders" in tool:
+                raise ContractError(
+                    f"{tool_name}: D30 §1's reserved provider governs Tag Mutations; "
+                    "this Tool's Target is not a Tag path"
+                )
+        else:
+            if not isinstance(declared_reserved, dict) or tuple(
+                declared_reserved.get("providers", ())
+            ) != tuple(reserved):
+                raise ContractError(
+                    f"{tool_name}: the reserved Tag providers must be declared exactly (D30 §1)"
+                )
+            if declared_reserved.get("denialCode") != "permission_denied":
+                raise ContractError(
+                    f"{tool_name}: a reserved-provider refusal is permission_denied (D30 §1/§7)"
+                )
+            if declared_reserved.get("layer") != "target-class":
+                raise ContractError(
+                    f"{tool_name}: a reserved provider is refused as a Target class, before "
+                    "the Target allowlist"
+                )
+            if not re.search(r"\*", str(declared_reserved.get("rule", ""))):
+                raise ContractError(
+                    f"{tool_name}: the reserved-provider rule must state that it holds "
+                    "whatever the allowlist says, including *"
+                )
+        if spec["requestSchemaValidation"]:
+            schema_validation = tool.get("requestSchemaValidation")
+            if not isinstance(schema_validation, dict) or (
+                schema_validation.get("source") != "gateway-openapi-capability-snapshot"
+            ):
+                raise ContractError(f"{tool_name}: D03 request-schema validation must be declared")
+            if schema_validation.get("unavailableDisposition") is None:
+                raise ContractError(f"{tool_name}: an unusable request schema must fail closed")
+        elif "requestSchemaValidation" in tool:
+            raise ContractError(
+                f"{tool_name}: this Tool dispatches no OpenAPI request body, so D03 body "
+                "validation does not apply; the archive gate must be declared instead"
+            )
+        if precondition.get("kind") == "project_fingerprint":
+            transaction = tool.get("transaction")
+            if not isinstance(transaction, dict) or transaction.get("decision") != "D16":
+                raise ContractError(f"{tool_name}: the D16 transaction must be declared")
+            surface = transaction.get("terminalStateSurface")
+            if not isinstance(surface, dict) or (
+                set(surface) != EXPECTED_PROJECT_TRANSACTION_TERMINAL_STATES
+            ):
+                raise ContractError(
+                    f"{tool_name}: every D16 terminal state must say how this Tool surfaces it"
+                )
+            if surface.get("COMMITTED") != "result" or surface.get("NO_CHANGE") != "result":
+                raise ContractError(f"{tool_name}: a satisfied transaction is returned as data")
+            if surface.get("CONFLICTED") != "error: conflict":
+                raise ContractError(f"{tool_name}: D30 §7 maps a conflict to the conflict code")
+            if surface.get("OUTCOME_UNKNOWN") != "error: outcome_unknown":
+                raise ContractError(f"{tool_name}: an unresolved outcome stays outcome_unknown")
+            # D30 §2 across a restart: the durable dispatch classification is what makes a
+            # known refusal stay NOT_APPLIED, and its vocabulary decides what a restart may
+            # attribute, so the contract declares it exactly (a Tool cannot quietly widen
+            # what a re-export may be credited with).
+            boundaries = transaction.get("dispatchBoundary")
+            if not isinstance(boundaries, dict) or (
+                tuple(boundaries.get("values", ())) != EXPECTED_DISPATCH_BOUNDARIES
+            ):
+                raise ContractError(
+                    f"{tool_name}: the durable dispatch classification must be declared "
+                    "exactly (D30 §2, D16 restart reconciliation)"
+                )
+            if boundaries.get("durable") is not True:
+                raise ContractError(f"{tool_name}: the dispatch classification must be durable")
+            if "NOT_APPLIED" not in str(boundaries.get("restartRule", "")):
+                raise ContractError(
+                    f"{tool_name}: restart reconciliation must state what a recorded "
+                    "refusal becomes"
+                )
+            # D16 `importAttempted` is not this field: `importDispatched` answers whether a
+            # dispatch happened at all, and the schema's own description is the client's
+            # contract, so the declaration is required.
+            dispatched = transaction.get("importDispatched")
+            if not isinstance(dispatched, str) or not dispatched:
+                raise ContractError(
+                    f"{tool_name}: the importDispatched semantics must be declared"
+                )
         rejection = tool.get("rejectionPolicy")
         if not isinstance(rejection, dict) or "D30 §2" not in str(rejection.get("rule", "")):
             raise ContractError(f"{tool_name}: a mutation must declare the D30 §2 rejection policy")
@@ -652,8 +857,14 @@ def lint_contracts(root: str | Path) -> None:
         # so every mutation's rejection policy must say so.
         if not re.search(r"conflict", str(rejection.get("rule", ""))):
             raise ContractError(f"{tool_name}: the rejection policy must state the D30 §7 conflict mapping")
-        if rejection.get("recoveredSuccess") != "unreachable for this Tool":
-            raise ContractError(f"{tool_name}: rejection_is_final forbids a recovered success")
+        # The Tool's own rule must appear in the contract verbatim; the contract may
+        # elaborate on it, but it can never soften what the policy says.
+        if spec["recoveredSuccess"] not in str(rejection.get("recoveredSuccess")):
+            raise ContractError(f"{tool_name}: the recovered-success rule must state the Tool's own policy")
+        if not spec["recoveredSuccess"].startswith("unreachable") and "D16" not in str(
+            rejection.get("recoveredSuccess")
+        ):
+            raise ContractError(f"{tool_name}: a reachable recovered success must cite the D16 reconcile rule")
         output_schema = tool.get("outputSchema")
         if not isinstance(output_schema, str) or not (repo_root / output_schema).is_file():
             raise ContractError(f"{tool_name}: outputSchema must reference a committed schema")

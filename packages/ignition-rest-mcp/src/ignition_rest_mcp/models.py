@@ -177,6 +177,37 @@ class ConfigResourceRenameResult(StrictModel):
     observedState: dict[str, Any]
 
 
+class ProjectImportResult(StrictModel):
+    """D16: the terminal transaction state of a Project import, as data.
+
+    Only a satisfied outcome is a result: ``COMMITTED`` (the import landed and the
+    post-import export C equals the candidate) or ``NO_CHANGE`` (the candidate was
+    semantically equal to the baseline, so nothing was backed up or imported). Every
+    other D16 terminal state is a Tool error carrying the D30 §7 code, and its message
+    names the state and the ``transactionId`` reported here.
+    """
+
+    correlationId: str
+    projectName: str
+    transactionId: str
+    state: str = Field(pattern="^(COMMITTED|NO_CHANGE)$")
+    #: Baseline A: the Project's content fingerprint at the start of the transaction.
+    baselineFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    #: Candidate B: the fingerprint of the archive this call staged and dispatched.
+    candidateFingerprint: str = Field(pattern="^pcf1:[0-9a-f]{64}$")
+    #: Re-export C after the import; equal to the candidate on a commit, and absent only
+    #: on a no-op, where nothing was imported.
+    resultFingerprint: str | None = Field(default=None, pattern="^pcf1:[0-9a-f]{64}$")
+    #: True when this call dispatched an import request: the request left the server and
+    #: the Gateway may have applied it — whether the response confirmed the import or an
+    #: ambiguous dispatch was recovered as a success. False only when nothing was sent:
+    #: ``NO_CHANGE``, or a refusal or non-attempt that ended the transaction before any
+    #: byte left the process. It is never false when the Project may hold the candidate.
+    importDispatched: bool
+    #: True when the designer-session policy is ``warn`` and a Designer session was open.
+    designerWarning: bool
+
+
 class AuditRecord(StrictModel):
     action: str
     actionTarget: str
@@ -226,6 +257,34 @@ class AlarmPipelineStatusResult(StrictModel):
     path: str
     items: list[AlarmPipelineInstance] = Field(max_length=500)
     page: PageMetadata
+
+
+class AlarmPipelineCancelObservedState(StrictModel):
+    """D30 §6: the bounded ``alarm_pipeline_status`` re-read of the same pipeline path.
+
+    ``items`` is what that read returned (one page, at most the Tool's own page size),
+    and ``alarmEventReported`` is the comparison the verification made: whether a run
+    for the requested Alarm Event is still among them. A successful cancel is confirmed
+    by the run being gone, so the flag is False on every result this Tool returns.
+    """
+
+    items: list[AlarmPipelineInstance] = Field(max_length=100)
+    alarmEventReported: bool
+
+
+class AlarmPipelineCancelResult(StrictModel):
+    """D12/D30: a pipeline cancel addresses one exact pipeline path and one Alarm Event.
+
+    Only a satisfied outcome is returned as data — the Gateway claimed the cancel and
+    the bounded re-read no longer reports that run. Every other outcome is a Tool error
+    (D06), and the observed state it carries is the re-read that was taken.
+    """
+
+    correlationId: str
+    #: The exact pipeline path the cancel addressed (D30 §6: never a prefix).
+    path: str = Field(min_length=1, max_length=512)
+    alarmEventId: str = Field(min_length=1, max_length=128)
+    observedState: AlarmPipelineCancelObservedState
 
 
 class CapabilitiesResource(StrictModel):
@@ -315,6 +374,35 @@ class TagConfigExportResult(StrictModel):
     provider: str = Field(min_length=1, max_length=256)
     path: str = Field(max_length=1024)
     artifact: ArtifactRefModel
+
+
+class TagImportObservedState(StrictModel):
+    """The bounded re-export's comparison (D30 §6 Observed state, D10 bounded).
+
+    Both lists hold the provider-relative Tag paths the import document declares: the
+    ones the re-export of the same provider and path showed, and the ones it did not.
+    """
+
+    present: list[str] = Field(max_length=500)
+    missing: list[str] = Field(max_length=500)
+
+
+class TagConfigImportResult(StrictModel):
+    """D11/D30: a Tag config import creates Tags only, and its verification is the
+    bounded re-export of the same provider and path.
+
+    Only a satisfied outcome is a result: the Gateway claimed the import succeeded and
+    the re-export showed every Tag the document declares. A claimed success that does
+    not is ``recovery_required`` — an error whose message names the Tags the re-export
+    was not showing — so ``missing`` is empty on every result this Tool returns.
+    """
+
+    correlationId: str
+    provider: str = Field(min_length=1, max_length=256)
+    path: str = Field(max_length=1024)
+    #: The READY Tag export the import consumed (D17/D30 §6).
+    artifact: ArtifactRefModel
+    observedState: TagImportObservedState
 
 
 class OpenApiInfoResource(StrictModel):
