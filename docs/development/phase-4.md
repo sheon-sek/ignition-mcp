@@ -1020,7 +1020,25 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
     [35680756395](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756395), and
     Phase 4 Live Gateway G4a
     [35680756382](https://github.com/sheon-sek/ignition-mcp/actions/runs/35680756382) —
-    all green.
+    all green. The documentation head (`822cd99`) re-ran the same four workflows; CI
+    [35681209151](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209151),
+    Phase 3 G3 [35681209126](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209126)
+    and G4a [35681209123](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209123)
+    are green, and the REST mutation run
+    [35681209098](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209098) needed one
+    recorded retry — see the flake note below.
+  - **The known `#20` flake, seen once and rerun.** The first attempt of the docs head's REST
+    mutation run (`822cd99`, run
+    [35681209098](https://github.com/sheon-sek/ignition-mcp/actions/runs/35681209098) attempt 1)
+    failed the required 8.3.8 row on the four `fault-import-after-full-body-*` cases: the
+    `project_import` pre-flight answered `not_found` for the archive it consumes
+    (`afterBodyImportResult: "not_found"`, transaction `FAILED_PRE_IMPORT` with
+    `import_dispatched: 0`), inside that fault instance's 8 s tool budget; the candidate 8.3.9
+    row passed **194/194** in the same attempt, the same code head `ca08e92` had passed both
+    rows 194/194 first try (run 35680756386), and this head changes
+    `docs/development/phase-4.md` alone. Rerunning the failed job was green: **194/194 on both
+    rows** (attempt 2, same run id, artifacts re-read). Recorded rather than hidden; nothing
+    in this ticket touches the Project-import path.
 
 ## Open questions
 
