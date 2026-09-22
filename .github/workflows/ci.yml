@@ -37,7 +37,7 @@ jobs:
       - name: Mypy
         run: uv run --locked --package ignition-rest-mcp --with mypy==2.3.1 mypy packages/ignition-rest-mcp/src tooling
       - name: Unit and contract tests
-        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+        run: uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 --with pytest-xdist==3.8.0 pytest -q -n auto --dist loadfile tooling packages/ignition-rest-mcp/tests
       - name: Build external Python distribution
         run: uv build --package ignition-rest-mcp
       - name: Validate Runtime Designer project
