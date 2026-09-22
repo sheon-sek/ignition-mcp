@@ -12,7 +12,7 @@ Language-neutral Tool contracts, shared taxonomies, and output schemas live unde
 ## Governance: Decisions and Phase Gates
 
 - `docs/decisions/D01–D30` plus `INDEX.md` are **binding**. Read the relevant decision before changing behavior. Changing a decided rule needs an explicit new decision or amendment section. Never make silent edits.
-- Delivery is phase-gated (D26). Phases 0–3 (G0/G1/G2/G3) are closed and frozen; see `docs/development/phase-{0,1,2,3}.md`. **Phase 4 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
+- Delivery is phase-gated (D26). Phases 0–3 (G0/G1/G2/G3) are closed and frozen; see `docs/development/phase-{0,1,2,3}.md`. Phase 4 (G4) is closed and merged; see `docs/development/phase-4.md`. Its deferred items are tracked in issues #39 and #41. **Phase 5 starts only on a new user-directed branch.** Don't begin next-phase work on `main` without being told to.
 - Key rules that cut across files:
   - No duplicate equivalent operation across the two servers. Native REST owns an operation whenever a semantically complete official REST endpoint exists. Runtime MCP owns everything else (D02).
   - No arbitrary REST-request Tool, no arbitrary SQL (Named Queries only, D14), no WebDev bridge.
@@ -100,6 +100,21 @@ Use four spaces for normal Python and two spaces for JSON, YAML, and TOML. Runti
 ## Testing Guidelines
 
 Pytest discovers `test_*.py`; name tests after observable behavior. Add focused tests beside the affected package or tooling module, including contract-shape and bound/error cases. No numeric coverage threshold is configured. Use Docker live harnesses only when Gateway behavior changes, and preserve evidence under `tests/compatibility/evidence/`.
+
+## Delivery Speed Rules (owner-mandated; bind every delegated agent)
+
+These rules come from Phase 4, where unnecessary tests, validation and CI runs made delivery slow. They override any stricter-sounding guidance elsewhere in this file or in a ticket.
+
+- **The bar is working Tools with correct input and output.** A Tool must run, return the right result or error code, never overwrite or mutate unintentionally, and keep the safety rules: Target allowlist, reserved provider, `_types_`, Precondition token, no secrets in output. Secondary rigor, such as exact byte accounting or error-message wording, goes into a tracked issue as deferred. It never blocks a ticket (D30 owner ruling 6).
+- **Never `git push`.** Commit locally. The coordinator pushes once per integration head and chooses which workflows run. Never start, re-run or wait on GitHub workflows yourself, and never push a docs-only commit.
+- **Never run the full test suite.** Run only the tests for the files you changed, plus `ruff`, `mypy` (strict) and `tooling.contracts.lint`. The coordinator runs the full suite once per integration head.
+- **Keep tests proportionate.** Cover the happy path, each safety refusal, and one conflict or collision case. Don't build large fixture matrices for precision details.
+- **No real sleeps in tests.** Retry and poll loops take an injectable clock or interval, as `tests/harness/phase4-live/driver.py` does with `CLOCK`. Tests use a virtual clock, and live runs keep their real waits.
+- **Don't add CI workflows or heavy live cases** unless a Tool cannot be shown to work any other way. A live check extends an existing stage.
+- **Stop measuring once the result is clear.** Don't re-run baselines or benchmarks repeatedly. Report the numbers you have and finish.
+- **Diagnose from evidence.** Read the logs and artifacts of a failure before you change code for it, and state the evidence in your report.
+- **Stay in your ticket and worktree.** Never touch another agent's worktree or branch. When your change touches a file other lanes also edit (the Jython launcher, `tooling/contracts/lint.py`, the phase runbook, `BUNDLE_VERSION`, the policy schema), keep your edits additive and say so in the report.
+- **Finish cleanly.** Write the report to the path you were given: what changed, the commit SHA, the tests you ran, and open questions. End with the requested `DONE <path>` line.
 
 ## Commit & Pull Request Guidelines
 
