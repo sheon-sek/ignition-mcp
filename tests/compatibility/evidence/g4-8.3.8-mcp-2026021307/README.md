@@ -71,18 +71,23 @@ things are not claimed:
   proves the D18 fail-closed branch by unit tests that raise `AuditWriteError`,
   and every live Runtime stage installs its policy with `auditMode=best_effort`.
   D26's G4 acceptance text asks for this case live on both Planes.
-- **`setup-native apply` has no post-fix green live run.** Its confirmation run on
-  the final integration head (`35712191958`) was cancelled during the
-  Actions-saturation window. The last live observation is run `35708881821`, which
-  reached the writes (bundle Project imported and read back managed, Server Config
-  created with the profile's Tools, policy provider created) and found two defects
-  — the percent-escaped resource type in the provider find path, and `verify`
-  needing an endpoint derive — both fixed in `4aa9471` and covered by the green
-  local rehearsal. What is missing is the confirmation, not the write path.
+- **`setup-native apply` has no confirmed live run on the integration head yet.** Its
+  milestone-4d confirmation runs were cancelled during the Actions-saturation window
+  (`35712191958`, and the re-run `35713725528`), and the coordinator's replacement —
+  run `35713927140` on `0801e51` (= `4238653` + #22 `e34884a` + the CI-only change
+  that stops the live workflows re-running the unit suite) — was still running when
+  this row was composed. So the milestone-4d row (#21 and #22) is **pending that
+  confirmation**, not claimed. The last live observation is run `35708881821`, which
+  reached every write (bundle Project imported and read back managed, Server Config
+  created with the profile's Tools, policy provider created) and found two defects —
+  the percent-escaped `/` inside the resource *type* in the provider find path, and
+  `verify` needing an endpoint derive — both fixed in `4aa9471` and covered by the
+  green local rehearsal. What is missing is the confirmation, not the write path.
 
-The first two are recorded as owner questions in the Phase 4 runbook. The
-D30-sanctioned Runtime fixture-only cases (timeout, ambiguous outcome) are
-limitations with a ruling behind them, not gaps.
+All three are recorded as owner questions in the Phase 4 runbook; the third is
+pending the coordinator's confirmation of run `35713927140`. The D30-sanctioned
+Runtime fixture-only cases (timeout, ambiguous outcome) are limitations with a
+ruling behind them, not gaps.
 
 ## Inventories and default state
 

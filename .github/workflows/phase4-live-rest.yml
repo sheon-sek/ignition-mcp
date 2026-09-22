@@ -131,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           uv lock --check
-          uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling packages/ignition-rest-mcp/tests
+          uv sync --locked --package ignition-rest-mcp
           mkdir -p "$EVIDENCE_DIR/raw" "$RUNNER_TEMP/ignition-mcp-data"
 
       - name: Mask the run-scoped credentials

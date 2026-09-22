@@ -266,11 +266,13 @@ Run the full command block in `AGENTS.md` (Commands) after every ticket. Before 
   tests, and every live Runtime stage runs `auditMode=best_effort`); Runtime cancellation has
   no evidence at all — no live case and no fixture — which means D30's sentence that the three
   Runtime cases are "proven with recorded fixtures only" is not satisfied for cancellation;
-  and `setup-native apply`'s confirmation run on the final integration head was cancelled, so
-  the apply item rests on the run that reached every write plus the fix commit `4aa9471` and
-  the green rehearsal, not on a post-fix live row. All three are owner questions in this
-  runbook below. The Runtime timeout and ambiguous-outcome cases are limitations with D30's
-  ruling behind them, not gaps.
+  and `setup-native apply`'s confirmation runs on the integration head were cancelled, so the
+  apply item rests on the run that reached every write plus the fix commit `4aa9471` and the
+  green rehearsal, not on a confirmed live row. The coordinator's replacement runs
+  (`0801e51`: G4b `35713927291`, apply `35713927140`) were still running when the rows were
+  composed, and are recorded here and in the Execution log as **pending**, not as evidence.
+  All three are owner questions in this runbook below. The Runtime timeout and
+  ambiguous-outcome cases are limitations with D30's ruling behind them, not gaps.
 - **Deferred work stays deferred and linked.** The D10 bound-accounting precision the owner
   deferred from the #11 scope cut is [issue #41](https://github.com/sheon-sek/ignition-mcp/issues/41),
   and the flaky `fault-import-after-full-body` live case is
@@ -2227,6 +2229,101 @@ are real gaps the reviewer named and they are **not** fixed in this round:
   fails. Without the flag there is no local copy and no rollback (the ticket's rule),
   and the Gateway's own configuration backup remains the operator's safety net.
   **For the owner:** confirm the opt-in shape, or make the backup mandatory.
+### Ticket #22 — `setup-native apply`: opt-in Security Level and Runtime API token (milestone 4d)
+
+- **Both writes are opt-in and both are `BLOCKED` before either runs.** D20 keeps
+  `security_levels.auto_modify_by_default` and `runtime_api_token.auto_create_by_default`
+  false, so `--provision-security-levels` and `--create-runtime-token` are the only way to
+  reach them, and a run without them is unchanged: the same three deployment lines, and not
+  a single read of the security planes (the API-token find route and the Security Levels
+  singleton are never addressed). Each flag has its own line kind, `security-level` and
+  `runtime-token`, so `plan` reports `CREATE` / `NO CHANGE` / `BLOCKED` for them exactly as
+  it does for the deployment.
+- **The Security Level is a dedicated per-profile level (D09).** The default name is
+  `IgnitionMcpRuntime<Profile>` (`IgnitionMcpRuntimeReadonly`, `…Operator`, `…Configurator`,
+  `…Full`), overridable with `--security-level-name`, and it is placed as a *leaf child of
+  `Authenticated`* — the live tree the G0 run recorded (`securityTreePlacement: "Authenticated
+  child; sibling of Authenticated/Roles"`). The write follows D20's sequence literally: read
+  the singleton, keep the existing tree, insert one node, `PUT` under the Resource signature
+  read moments before, then read the singleton back and verify structurally — the node is at
+  the expected path, it is a leaf, and no level the tree had before is missing afterwards. A
+  Gateway that serves no readable `securityLevels` tree, no signature, no `Authenticated`
+  parent, or two of them, is a `BLOCKED` line: D20 forbids guessing an unknown topology.
+- **An existing level is never modified.** A level of our name anywhere else in the tree, or
+  one that carries child levels, is reported and left alone; only a leaf of exactly our name
+  under `Authenticated` is `NO CHANGE`. The CLI does not compare descriptions: a level of the
+  right name and shape is treated as ours and left exactly as it is.
+- **The token is granted exactly that level, and its secret goes to one file.** The Gateway
+  generates the credential (`POST /data/api/v1/api-token/generate`), and the CLI cross-checks
+  the returned pair against the derivation the live G0 bootstrap recorded — a 32-byte key in
+  unpadded Base64URL, whose unpadded Base64URL SHA-256 digest is the stored hash — before it
+  writes anything: a pair that disagrees, or a key it cannot decode, is a `FAILED` write and
+  no credential is stored. The created resource is one `basic-token` profile granted the
+  dedicated level's path (`Authenticated/<level>`, siblings dropped: a grant of the whole
+  subtree would be the broad credential D09 rules out), `secureChannelRequired=true` unless
+  `--runtime-token-insecure-channel` says this is a plain-HTTP lab, and the hash the Gateway
+  generated. The raw key is written once, to the operator-named `--runtime-token-file`, created
+  with `O_CREAT|O_EXCL|O_NOFOLLOW` at mode `0600` and `fchmod`ed to `0600`, and it appears in no
+  report, no log and no evidence.
+- **The second run is `NO CHANGE` because the file is the proof of ownership.** A run that
+  finds the token already there hashes the secret in `--runtime-token-file` and compares it
+  with the token hash the Gateway serves: a match is `NO CHANGE` and the file is left untouched.
+  Every other case fails closed with a remediation in the line — no readable stored hash, no
+  credential file, a file holding another credential's name, a secret that does not hash to the
+  stored hash, a file that already holds a credential while no token exists — because D20
+  forbids creating a token twice and the owner's rule for this ticket is that nothing is ever
+  overwritten silently.
+- **Where they run.** `apply` executes in D20's transaction order: Security Level → credential →
+  bundle Project → Server Config → Runtime Target Policy. Each write is confirmed by a read-back
+  before the next starts, and the run still ends with the `verify` sequence.
+- **Fixture-first coverage.** `tests/harness/recorded_gateway.py` models the Security Levels
+  singleton (seeded with the stock `Authenticated`/`Roles` tree the live evidence records), the
+  API-token collection create and the generate route, which answers the *recorded* pair from the
+  G0 evidence file. 33 cases in
+  `packages/ignition-rest-mcp/tests/test_phase4_setup_native_credentials.py` drive the shipped
+  CLI end to end: no flags leave the plan and the Gateway untouched; the flags plan and write
+  both lines in order; the created level keeps its sibling and the token carries the dedicated
+  grant and the Gateway's hash; the secret lands in a `0600` file and appears in no output (text
+  and `--json`); a second run is `NO CHANGE` with a byte-identical, same-inode file; an existing
+  token (with and without a matching file), an existing level of another shape, a level of our
+  name elsewhere, a missing `Authenticated` parent, an unreadable singleton, an existing
+  credential file, a group-readable file and a missing output directory are all `BLOCKED` with
+  nothing written; a stale tree signature, an inconsistent generated pair and a Gateway refusal
+  stop the sequence with the secret never stored; and the flags are validated as usage errors.
+  The Phase 3 structural pin gained the generator route, and the CLI's allowed stdlib roots
+  gained `base64` (both deliberate).
+- **Live.** The milestone-4d row (`.github/workflows/phase4-live-apply.yml`,
+  `tests/harness/phase4-live/apply_stage.py`) now always passes the two flags on its disposable
+  Gateway, so the same run creates the level and the credential for its own profile. The stage
+  reads both back over Native REST with its admin token, judges that the stored token hash equals
+  the secret the CLI wrote and that the file is `0600`, asserts that the secret appears in no
+  command output and nowhere in the evidence (and redacts it rather than uploading it if it ever
+  does), and requires the second `plan`/`apply` to be `NO CHANGE` with the file untouched. No new
+  workflow and no new stage: the flags ride the existing row, and
+  `tests/harness/phase4-live/rehearse_apply.py` rehearses the whole thing against the recorded
+  fake (five `CREATE`s, `verifyAttempts: 1`, five `NO CHANGE`s, green).
+
+- **Ticket #22 — a credential created by `apply` is not proven to *enter* the MCP endpoint
+  live.** The Server Config the stage creates carries the harness's permissions tree, which
+  names the CI security level, so a token granted only this run's dedicated level is expected
+  to be refused by the Server Config (D09: the Server Config's permissions decide who enters
+  the profile). The stage records that probe (`createdTokenMcpProbe`, marked as not judged)
+  rather than asserting it, and the ownership proof it does judge is the Gateway's own stored
+  hash. **For the owner:** accept the hash read-back as the live proof of the credential, or
+  ask for a stage that writes a permissions tree naming the provisioned level so the created
+  credential can be used to `initialize`.
+- **Ticket #22 — the credential is never rotated.** `apply` creates a token or leaves one
+  alone; there is no update path, no rotation and no delete (D20: no repeated token creation).
+  An operator who wants a new secret passes a new `--runtime-token-name`, or deletes the
+  resource outside this CLI. **For the owner:** confirm that rotation is deliberately out of
+  scope for `setup-native`.
+- **Ticket #22 — the Security Levels singleton is written in the collection it was read in.**
+  The change item names the observed collection (the live singleton reports `core`), so the
+  write addresses the same resource the read did. A Gateway that serves the singleton in another
+  collection is written back in that collection rather than `core`. **For the owner:** confirm
+  the reading, or pin the collection to `core` as D30's owner ruling 5 does for the generic
+  config Mutations.
+
 ### Ticket #36 — refuse the `IgnitionMCPPolicy` Tag-provider config resource by name (milestone 4c)
 
 - **Rule (D30 §5 and owner ruling 4, `reserved_provider_config_resource`).** The
@@ -3113,20 +3210,22 @@ Two open issues carry whole categories of work rather than one question:
   fault, which the owner's speed ruling excludes from this phase. **For the owner:** accept
   the fixture/unit proof as the G4 record for this case, or name the live case to add and the
   run it may use.
-- **Ticket #23 — `setup-native apply` has no post-fix green live run.** The milestone-4d
-  confirmation run for the final integration head (`Phase 4 Live Gateway apply` run
-  35712191958 on `4238653`) was **cancelled** during the Actions-saturation window, so D26's
-  G4 acceptance item "`setup-native apply` is live-verified with `plan → apply → verify` on a
-  disposable Gateway" is recorded as a limitation in both evidence rows rather than claimed.
-  What *is* live: run 35708881821 reached every write (the bundle Project was imported and
-  read back managed, the Server Config was created with the profile's Tool list, the policy
-  provider and Tag were written) and failed at the two defects the fix commit `4aa9471`
-  closes — the percent-escaped `/` inside the resource *type* in the provider find path, and
-  `verify` not deriving its endpoint from the Server Config it wrote — both covered by the
-  green rehearsal `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the
-  coordinator's final sweep:** one green `Phase 4 Live Gateway apply` run on the integration
-  head completes this item; the row then takes that run as a cited run (the close document
-  gains it and the row is regenerated), and the limitation drops off.
+- **Ticket #23 — `setup-native apply` has no confirmed green live run on the integration head.**
+  The milestone-4d confirmation runs were cancelled during the Actions-saturation window
+  (`35712191958`, and the apply re-run `35713725528`), and the coordinator's replacement,
+  `Phase 4 Live Gateway apply` run **35713927140** on `0801e51` (= `4238653` + #22 `e34884a` +
+  the CI-only change that stops the live workflows re-running the unit suite), was still running
+  when the rows were composed. D26's G4 acceptance item "`setup-native apply` is live-verified
+  with `plan → apply → verify` on a disposable Gateway" is therefore recorded as a limitation in
+  both evidence rows rather than claimed, and the milestone-4d row is **pending the coordinator's
+  confirmation**. What is already live: run `35708881821` reached every write (the bundle Project
+  was imported and read back managed, the Server Config was created with the profile's Tool list,
+  the policy provider and Tag were written) and failed only at the two defects `4aa9471` closes —
+  the percent-escaped `/` inside the resource *type* in the provider find path, and `verify` not
+  deriving its endpoint from the Server Config it wrote — both covered by the green rehearsal
+  `tests/harness/phase4-live/rehearse_apply.py`. **For the owner / the coordinator's final sweep:**
+  that one green run completes this item for #21, #22 and G4; it then becomes a cited run in both
+  rows (the close document gains it and the rows are regenerated) and the limitation drops off.
 - **Ticket #23 — G4 closes with `VERIFIED_WITH_LIMITATION`, never `VERIFIED`.** Both evidence
   rows record `gateResult VERIFIED_WITH_LIMITATION`, `compatibilityStatus UNTESTED` and no
   `SUPPORTED` anywhere, and the two items above are `unsatisfiedAcceptance` rather than
@@ -3159,8 +3258,8 @@ its own SHA.
 | 4c | #20 fault-injecting proxy + live timeout / ambiguous / cancellation | `94564a0` | 35672781303 (REST mutation, both rows) |
 | 4c | #35 config Mutations pinned to the `core` collection | `be4dc50` | 35682027818 (REST mutation, both rows) |
 | 4c | #36 reserved `IgnitionMCPPolicy` config resource | `1bfaf8f` | 35687123699 (REST mutation, both rows) |
-| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35708881821 (apply, both rows: every write reached, two defects found and fixed in `4aa9471`); the confirmation run 35712191958 was cancelled |
-| 4d | #22 opt-in Security Level + API token provisioning | (in flight on `p4/setup-22`; merged after this runbook snapshot) | — |
-| G4 | #23 G4 close | `602e68e` | the four runs the rows cite, above |
+| 4d | #21 `setup-native apply` | `4aa9471` (merged in `4238653`) | 35708881821 (apply, both rows: every write reached, two defects found and fixed in `4aa9471`) |
+| 4d | #22 opt-in Security Level + API token provisioning | `e34884a` (merged in `72e3402`) | 35713927140 (apply, both rows) — **pending the coordinator's confirmation**, see the G4-close open question |
+| G4 | #23 G4 close | `602e68e`, `2ebb7cc` | the four runs the rows cite, above |
 | integration | Runtime lane (#7 #8 #10 #11) merged | `ca27b4b` | CI, G4a 35710377211, G4b 35710377243 green |
-| integration | Final integration head (#7 #8 #10 #11 #12 #21) | `4238653` | G4b 35712192001, apply 35712191958 (the apply run was cancelled; the G4b re-run's result did not change any recorded case) |
+| integration | Final integration head (#7 #8 #10 #11 #12 #21 #22) | `0801e51` | G4b 35713927291, apply 35713927140 — **pending the coordinator's confirmation**; this head also stops the live workflows re-running the unit suite (CI keeps it) |

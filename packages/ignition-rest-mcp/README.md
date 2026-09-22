@@ -255,14 +255,20 @@ remains an operator obligation** (surfaced by `gateway_diagnose` and `setup-nati
 
 `ignition-mcp setup-native` detects, plans, applies and verifies an `ignition-runtime-bundle`
 deployment across its documented REST and MCP endpoints. It is code-separated from the server (D25)
-and ships as the `ignition-mcp` console script. `install-module` (Phase 6) is deliberately **not
-implemented**. `apply` (Phase 4) is the only command here that writes, it stops on any `BLOCKED`
-plan line, it never rolls back, and it ends by running the `verify` sequence.
+and ships as the `ignition-mcp` console script. Phase 4 added `apply`, which writes the planned
+bundle Project, the MCP Server Config, the Runtime Target Policy and — only when the matching flags
+are passed — a dedicated Runtime Security Level and a Runtime API token. Nothing else in this group
+mutates a Gateway: `install-module` (Phase 6) is deliberately **not implemented**. `apply` stops on
+any `BLOCKED` plan line, it never rolls back, and it ends by running the `verify` sequence; `plan`
+prints intentions and always ends with the line `No changes have been applied.`
 
 ```bash
 ignition-mcp setup-native doctor --bundle-manifest release/ignition-runtime-bundle-0.2.0.manifest.json \
   --bundle-zip release/ignition-runtime-bundle-0.2.0.zip --profile readonly
 ignition-mcp setup-native plan   --bundle-manifest ... --server-config-name production --json
+ignition-mcp setup-native apply  --bundle-manifest ... --bundle-zip ... --policy-file policy.json \
+  --server-config-permissions-file permissions.json --server-config-name production \
+  --provision-security-levels --create-runtime-token --runtime-token-file ~/secrets/runtime.token
 ignition-mcp setup-native verify --bundle-manifest ... --mcp-url http://127.0.0.1:8000/mcp
 ```
 
@@ -275,59 +281,66 @@ repo-relative paths such as `contracts/` or `packages/ignition-runtime-bundle/`)
 | `--bundle-zip PATH` | none | Bundle ZIP; its SHA-256 must equal `artifact.sha256` or the run fails as a usage error |
 | `--profile NAME` | none | `readonly` (default), `operator`, `configurator` or `full` inventory to check against |
 | `--gateway-url URL` | `IGNITION_MCP_SETUP_GATEWAY_URL` | Gateway base URL |
-| `--mcp-url URL` | `IGNITION_MCP_SETUP_MCP_URL` | Runtime MCP endpoint URL (required by `doctor` and `verify`; `plan` never touches that plane) |
+| `--mcp-url URL` | `IGNITION_MCP_SETUP_MCP_URL` | Runtime MCP endpoint URL (required by `doctor` and `verify`; they derive it from `--server-config-name` when it is absent) |
 | `--gateway-token-file PATH` | `IGNITION_MCP_SETUP_GATEWAY_TOKEN` | Ignition API token; the file must be a regular, non-symlink `0600` file holding one line |
 | `--mcp-token-file PATH` | `IGNITION_MCP_SETUP_MCP_TOKEN` | Optional MCP endpoint token: sent as bearer; when shaped like an Ignition API token (`name:key`) also as `X-Ignition-API-Token`, the header the Gateway module endpoint authenticates |
 | `--bundle-project NAME` | none | Project the bundle deploys into (default `ignition_runtime`) |
-| `--server-config-name NAME` | none | Expected MCP server-config resource; presence only, never written |
+| `--server-config-name NAME` | none | Expected MCP server-config resource: `apply` writes it, `doctor`/`verify` read it |
 | `--timeout-seconds N` | none | Per-request HTTP budget (default 10; `initialize` is bounded at 30) |
+| `--policy-file PATH` | none | Runtime Target Policy JSON that `apply` writes into the reserved provider (canonicalized, 32 KiB cap) |
+| `--server-config-permissions-file PATH` | none | Permissions tree for a Server Config this run creates; never invented by the CLI |
+| `--acknowledge-upgrade` | none | Accept a MAJOR or downgrade bundle change (`apply` refuses without it) |
+| `--backup-dir PATH` | none | Export the deployed Project into this directory before `apply` overwrites it |
+| `--provision-security-levels` | none | Create the dedicated Runtime Security Level for `--profile` (default name `IgnitionMcpRuntime<Profile>`, a child of `Authenticated`); an existing level is never modified |
+| `--security-level-name NAME` | none | Override that Security Level's name, or name the existing one a created token should be granted |
+| `--create-runtime-token` | none | Create the Runtime API token for this profile, granted exactly that Security Level; an existing token is never overwritten |
+| `--runtime-token-file PATH` | none | Where the created token's secret is written: created with mode `0600`, never world-readable, never reported (required with `--create-runtime-token`) |
+| `--runtime-token-name NAME` | none | The token resource's name (default: `--server-config-name`) |
+| `--runtime-token-insecure-channel` | none | Create the token with `secureChannelRequired=false` (plain-HTTP lab Gateways only) |
 | `--allow-insecure-authorize` | none | Permit sending the API token over plain HTTP to a non-loopback Gateway |
 | `--json` | none | Machine-readable report on stdout (`plan` still ends with the promise line) |
 
 Tokens are never echoed: they stay out of reports, and any Gateway or MCP error body is truncated
-and scrubbed. Plain HTTP to a non-loopback Gateway is refused until `--allow-insecure-authorize` is
-passed. Gateway probes are bounded GETs with redirects disabled (1 MiB per JSON response, 16 MiB
-for `/openapi.json`, which is hashed and scanned for path keys only); MCP capability presence is
-read from the OpenAPI path inventory, so write routes are never called. `initialize` gets exactly
-one attempt; `doctor` and `verify` diagnose and do not wait for a starting Gateway. That
-readiness waiting belongs to the live harness.
+and scrubbed. The credential `apply` creates follows the same rule — the Gateway's raw API key is
+written once to the operator's `--runtime-token-file` (mode `0600`, created with `0600`) and never
+appears in a report, a log or the plan text; a second run proves ownership by hashing the file's
+secret and comparing it with the token hash the Gateway serves, so re-running is a `NO CHANGE` run
+rather than a rotation. Plain HTTP to a non-loopback Gateway is refused until
+`--allow-insecure-authorize` is passed. Gateway probes are bounded GETs with redirects disabled
+(1 MiB per JSON response, 16 MiB for `/openapi.json`, which is hashed and scanned for path keys
+only); MCP capability presence is read from the OpenAPI path inventory, so write routes are never
+called. `initialize` gets exactly one attempt; `doctor` and `verify` diagnose and do not wait for a
+starting Gateway. That readiness waiting belongs to the live harness.
 
 Commands: `doctor` runs the ordered read-only checks (`gateway-info`, `openapi-sha256`,
 `module-installed`, `capabilities.*`, `bundle-project` ownership classification,
 `server-config-presence`, `mcp-initialize`, exact `inventory-tools`/`inventory-resources`/
 `inventory-prompts`, `bundle-info`, `compatibility`), `plan` reports `CREATE` / `UPDATE` /
 `NO CHANGE` / `BLOCKED` intentions including the D21 change class (`patch`, `minor`, `major`,
-`downgrade`; `apply` needs an explicit acknowledgement for the last two), and `verify` runs the D20
-acceptance sequence (reachable → `initialize` → exact inventories → `resources/read` and
-`prompts/get` smokes → `bundle_info`). Compatibility is mapped deterministically from
+`downgrade`; `apply` needs an explicit acknowledgement for the last two), `apply` writes them in
+D20's order (Security Level, credential, Project, Server Config, Runtime Target Policy), each
+confirmed by a read-back, and ends by running the `verify` sequence, and `verify` runs that
+acceptance sequence on its own (reachable → `initialize` → exact inventories → `resources/read`
+and `prompts/get` smokes → `bundle_info`). Compatibility is mapped deterministically from
 `testedTuples` and is never upgraded: an incomplete identity or an unmatched tuple yields
 `UNKNOWN`/`UNTESTED`.
 
 `apply` (Phase 4, D20) observes the Gateway exactly as `plan` does, refuses to write while any line
-is `BLOCKED`, then executes the printed intentions in order: the bundle Project (`CREATE`, or an
-`UPDATE` of a MANAGED Project), the MCP Server Config for the selected profile, and the Runtime
-Target Policy in the reserved `IgnitionMCPPolicy` provider. Every write goes through one curated
-writer with a documented route constant per operation — never through `config_resource_*` — and the
-guards run before dispatch: a name must match the CLI's grammar, a Server Config Tool list must be
+is `BLOCKED`, then executes the printed intentions in D20's order — the opt-in Runtime Security
+Level and API token (only when those flags are passed), the bundle Project (`CREATE`, or an `UPDATE`
+of a MANAGED Project), the MCP Server Config for the selected profile, and the Runtime Target
+Policy in the reserved `IgnitionMCPPolicy` provider. Every write goes through one curated writer
+with a documented route constant per operation — never through `config_resource_*` — and the guards
+run before dispatch: a name must match the CLI's grammar, a Server Config Tool list must be
 explicit (never `*`), a Server Config is never written without a permissions tree, and the policy is
 validated against `contracts/shared/runtime-target-policy.schema.json` and refused above the
-product-enforced 32 KiB cap before anything is written. A `CREATE` writes the Server Config disabled,
-reads it back and then enables it with the signature that read returned; an `UPDATE` reconciles the
-Tool list in one write and preserves the observed `enabled` and every other operator-held field. The
-policy write is confirmed by a `/tags/export` read-back (repaired once if it disagrees). `apply` ends
-by running `verify` and embeds that report in its own.
-
-```bash
-ignition-mcp setup-native apply --bundle-manifest ... --bundle-zip ... --profile configurator \
-  --policy-file runtime-target-policy.json --server-config-permissions-file permissions.json \
-  --backup-dir ./backup --json
-```
-
-Additional `apply` flags: `--policy-file PATH` (the Runtime Target Policy document),
-`--server-config-permissions-file PATH` (the Security Level tree a `CREATE` needs),
-`--acknowledge-upgrade` (required for a MAJOR change or a downgrade), `--backup-dir PATH` (export the
-deployed Project before an overwrite; without it there is no local copy and no rollback, and the
-Gateway's own configuration backup remains the operator's safety net).
+product-enforced 32 KiB cap before anything is written. A `CREATE` writes the Server Config
+disabled, reads it back and then enables it with the signature that read returned; an `UPDATE`
+reconciles the Tool list in one write and preserves the observed `enabled` and every other
+operator-held field. Every action is confirmed by a read-back (the policy through a `/tags/export`
+read-back, repaired once if it disagrees), and the run ends by executing `verify` and embedding that
+report in its own. Without `--backup-dir` there is no local copy and no rollback: the Gateway's own
+configuration backup remains the operator's safety net.
 
 Exit codes: `0` success with no `FAIL` (and no `BLOCKED` for `plan`), `1` a failed check or
 transport error, `2` usage error (bad flags, rejected manifest, unreadable artifact, credential

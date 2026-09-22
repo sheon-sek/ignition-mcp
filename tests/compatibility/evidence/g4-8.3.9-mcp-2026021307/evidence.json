@@ -349,10 +349,10 @@
     },
     {
       "case": "setup-native apply live verification",
-      "kind": "run-cancelled",
+      "kind": "run-pending",
       "plane": "rest",
-      "reason": "The apply verification on the final integration head has no green live run: run 35712191958 (head 4238653) was cancelled during the Actions-saturation window, and the only live apply observation is run 35708881821 (head ffda72d), whose two defects - the percent-escaped resource type in the provider find path and verify needing an endpoint derive - were fixed in 4aa9471 and are covered by the green local rehearsal tests/harness/phase4-live/rehearse_apply.py. The writes themselves were reached and observed live on that run (bundle Project imported and read back managed, Server Config created with the profile's 13 Tools, policy provider created), so what is missing is the post-fix confirmation, not the write path.",
-      "ruled": "pending: the coordinator's final live sweep (recorded for the owner in the Phase 4 runbook)"
+      "reason": "The milestone-4d confirmation runs on the integration head were cancelled during the Actions-saturation window (35712191958 on 4238653, and the apply re-run 35713725528), and the coordinator's replacement - run 35713927140 on 0801e51 (= 4238653 + #22 e34884a + the CI-only change that stops the live workflows re-running the unit suite) - was still running when this row was composed, so #21, #22 and this item stay pending its confirmation. The only live apply observation is run 35708881821 (head ffda72d), whose two defects - the percent-escaped / inside the resource type in the provider find path, and verify not deriving its endpoint from the Server Config it wrote - were fixed in 4aa9471 and are covered by the green local rehearsal tests/harness/phase4-live/rehearse_apply.py. The writes themselves were reached and observed live on that run (bundle Project imported and read back managed, Server Config created with the profile's Tools, policy provider created), so what is missing is the confirmation, not the write path.",
+      "ruled": "pending: the coordinator's confirmation of run 35713927140 (also recorded in the Phase 4 runbook)"
     }
   ],
   "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
