@@ -147,9 +147,11 @@ def _java_executable() -> str:
 
     java_home_11 = os.environ.get("JAVA_HOME_11_X64")
     if java_home_11:
-        java_home_path = Path(java_home_11) / "bin/java"
-        if java_home_path.is_file():
-            return str(java_home_path)
+        java_home_bin = Path(java_home_11) / "bin"
+        for name in ("java", "java.exe"):  # java.exe on Windows, java elsewhere
+            java_home_path = java_home_bin / name
+            if java_home_path.is_file():
+                return str(java_home_path)
 
     resolved = shutil.which("java")
     if resolved is None:
