@@ -53,5 +53,19 @@ class ValidationFailureTest(unittest.TestCase):
                 validate_project(project)
 
 
+    def test_rejects_crlf_data_bin_with_line_ending_message(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = self._copy(temporary)
+            relative = "com.inductiveautomation.mcp/resources/contracts/bundle-info-output/data.bin"
+            payload = project / relative
+            payload.write_bytes(payload.read_bytes().replace(b"\n", b"\r\n"))
+            with self.assertRaises(ValidationError) as caught:
+                validate_project(project)
+            message = str(caught.exception)
+            self.assertTrue(message.startswith(relative + ": must use LF line endings"), message)
+            self.assertIn("D31 section 5", message)
+            self.assertNotIn("size must match", message)
+
+
 if __name__ == "__main__":
     unittest.main()
