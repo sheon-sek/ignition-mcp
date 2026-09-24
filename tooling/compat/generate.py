@@ -127,6 +127,10 @@ def build_row(observations: dict[str, Any], identity: dict[str, str], *,
         "openapiSha256": openapi_sha,
         "deployedBundleSha256": deployed_sha,
         "runtime": runtime,
+        # P7-6 deleted the old deployment command and the G3 driver's setup stage with
+        # it, so a run made now observes no setup section. The key stays in the row and
+        # is null there, so every G3 row keeps one shape and the committed rows keep the
+        # section the old stage recorded.
         "setupNative": observations.get("setupNative"),
         "restPlane": rest_plane,
         "gateOffInventory": gate_off_report or "not-captured",
@@ -146,9 +150,10 @@ def build_row(observations: dict[str, Any], identity: dict[str, str], *,
         # was verified, never a SUPPORTED promotion.
         "compatibilityStatus": "UNTESTED",
     }
-    for key in ("setupNative", "authzDenials"):
-        if not isinstance(row[key], dict):
-            raise GenerateError(f"observations: {key} section missing")
+    # ``authzDenials`` is still observed live, so a run that does not record it is a
+    # broken run and is refused here.
+    if not isinstance(row["authzDenials"], dict):
+        raise GenerateError("observations: authzDenials section missing")
     return row
 
 

@@ -96,7 +96,7 @@ can sit side by side, one per Gateway. Every command takes `--deployment NAME`, 
 
 | Path | Contents |
 | --- | --- |
-| `deployment.toml` | The Gateway URL, the environment, the roles, the generated REST settings, and the record of what `setup` created and which risks were accepted |
+| `deployment.toml` | The Gateway URL, the environment, the roles, the generated REST settings, the record of what `setup` created and which risks were accepted, and a `bind` entry when someone saved one by hand |
 | `runtime-policy.json` | The generated Runtime Target Policy |
 | `gateway-token.secret` | The setup key you supplied, kept for re-runs |
 | `runtime-<role>.secret` | Each role's Runtime token |
@@ -234,7 +234,7 @@ ignition-mcp start --bind 127.0.0.1:8000 --yes
 
 | Flag | Meaning |
 | --- | --- |
-| `--bind HOST:PORT` | The address the REST server listens on. Default `127.0.0.1:8000`. Another host needs `--yes`, because it exposes the server beyond this computer. |
+| `--bind HOST:PORT` | The address the REST server listens on. Default `127.0.0.1:8000`. A `bind` entry saved in `deployment.toml` is used when `--bind` is absent. Another host needs `--yes`, because it exposes the server beyond this computer. |
 
 Agents reach the endpoint at `http://<bind>/mcp`. The server also answers `/health/live`,
 `/health/ready` and `/metrics` on the same port. If the port is taken, `start` names the conflict and

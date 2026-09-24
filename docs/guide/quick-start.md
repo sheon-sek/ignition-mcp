@@ -175,7 +175,7 @@ both roles' endpoints before it serves, so you can see that it is ready. Agents 
 
 | Flag | Meaning |
 | --- | --- |
-| `--bind HOST:PORT` | The address the REST server listens on. Default `127.0.0.1:8000`. Another host needs `--yes`. |
+| `--bind HOST:PORT` | The address the REST server listens on. Default `127.0.0.1:8000`. A `bind` entry saved in `deployment.toml` is used when `--bind` is absent. Another host needs `--yes`. |
 
 ```bash
 ignition-mcp start

@@ -31,7 +31,7 @@ from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment, save_deployment, write_secret
 from ignition_rest_mcp.cli.engine.report import JsonReporter, RichReporter
 from ignition_rest_mcp.cli.engine.resolve import Secret as EngineSecret
-from ignition_rest_mcp.cli.setup import connect, reset, rest, runtime, status
+from ignition_rest_mcp.cli.setup import connect, reset, rest, runtime, start, status
 from ignition_rest_mcp.cli.gateway_ops import documents as docs
 from ignition_rest_mcp.cli.gateway_ops import gateway as gw
 from ignition_rest_mcp.cli.gateway_ops import security
@@ -396,6 +396,28 @@ def test_connect_registers_both_endpoints_with_claude_and_never_prints_a_token(
     for secret in (token, token.partition(":")[2], ROLE_SECRETS["analysis"][1], REST_KEY):
         assert secret not in raw
     assert "Claude Code" in reasons(document)["client"]
+
+
+def test_connect_registers_the_rest_endpoint_at_the_deployment_s_bind(
+    tmp_path: Path, gateway: CliGateway, client_binaries: FakeRunner
+) -> None:
+    """``start`` listens on the ``bind`` a deployment saved, so ``connect`` registers it.
+
+    The wildcard ``0.0.0.0`` is not an address a client can dial, so the registered
+    URL names the loopback address the same way ``start``'s own health check does.
+    """
+
+    healthy(tmp_path, gateway)
+    save_deployment(deployment(tmp_path), {"bind": "0.0.0.0:9000"})
+
+    code, document, _ = run_json(
+        ["connect", "analysis", "--client", "claude", "--deployment", "default"], tmp_path / "deployments"
+    )
+
+    assert code == 0, document
+    adds = [call for call in client_binaries.calls if call[1:3] == ["mcp", "add"]]
+    assert [call[6] for call in adds] == [f"{URL}/data/mcp/analysis", "http://127.0.0.1:9000/mcp"]
+    assert start.parse_bind(start.saved_bind(deployment(tmp_path).values)) == ("0.0.0.0", 9000)
 
 
 def test_connect_offers_a_client_that_is_not_installed_but_refuses_it(

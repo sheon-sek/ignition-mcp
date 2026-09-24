@@ -241,6 +241,30 @@ def test_a_non_loopback_bind_needs_acceptance(
     assert environment["IGNITION_MCP_DEPLOYMENT_PROFILE"] == "trusted-internal"
 
 
+def test_start_uses_the_bind_the_deployment_saved(
+    tmp_path: Path, gateway: RecordedGateway, cli: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A ``bind`` saved in ``deployment.toml`` decides where ``start`` listens, like ``--bind``."""
+
+    root = tmp_path / "deployments"
+    assert run_json(setup_argv(tmp_path, gateway, "--yes"), root)[0] == 0
+    save_deployment(open_deployment("default", root), {"bind": "127.0.0.1:8123"})
+    served: list[Settings] = []
+
+    def fake_serve(settings: Settings, report: start.HealthReport) -> None:
+        served.append(settings)
+        report(200, {"registryState": "OK", "storageReady": True})
+
+    monkeypatch.setattr(start, "SERVE", fake_serve)
+
+    code, document, _ = run_json(["start"], root)
+
+    assert code == 0, document
+    assert (served[0].bind_host, served[0].bind_port) == ("127.0.0.1", 8123)
+    endpoints = {step["step"]: step["reason"] for step in document["steps"]}
+    assert "http://127.0.0.1:8123/mcp" in endpoints["endpoint analysis"]
+
+
 def test_start_before_setup_names_setup(tmp_path: Path, cli: None) -> None:
     code, document, _ = run_json(["start"], tmp_path / "deployments")
 
