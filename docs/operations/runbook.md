@@ -1,5 +1,7 @@
 # v1 operations runbook
 
+> Chinese translation: [`runbook.zh-CN.md`](runbook.zh-CN.md)
+
 This runbook covers the operator path for one `ignition-runtime-bundle` deployment: installing the MCP
 Module, then diagnosing, planning, applying and verifying the deployment, upgrading the Bundle,
 maintaining the Runtime Target Policy, enabling Mutation classes, and reading

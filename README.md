@@ -1,5 +1,7 @@
 # Ignition MCP
 
+> 中文版：[`README.zh-CN.md`](README.zh-CN.md)
+
 Two MCP servers that let AI agents read and, under layered safety rules, change an
 [Inductive Automation Ignition](https://inductiveautomation.com/) Gateway.
 
