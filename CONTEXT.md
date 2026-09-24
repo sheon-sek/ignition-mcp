@@ -30,6 +30,28 @@ _Avoid_: update, reinstall
 An `apply` that replaces a managed Runtime Bundle Project with a newer bundle version. It needs explicit acknowledgement. The v1 "upgrade path" means this, not a Module upgrade.
 _Avoid_: redeploy, bundle update
 
+### Setup
+
+**Deployment environment**:
+The named stance a setup run takes, `dev` or `prod`. It decides the defaults only: `dev` defaults to the widest Profile and generates every credential and document the endpoint needs; `prod` keeps the conservative defaults. The safety rules apply in both.
+_Avoid_: mode, stage, preset
+
+**Explicit acceptance**:
+The operator's recorded yes to one named risk or legal term (a certificate, a EULA, a wide Target allowlist, an unencrypted token channel), given in the same run that needs it. A default never counts as acceptance, and nothing the operator accepted is left out of the run's report.
+_Avoid_: confirmation (when a named risk is meant), consent, opt-in
+
+**Assistant role**:
+A kind of AI agent the deployment serves, with its own endpoint, Security Level and credential. There are two: the Analysis Assistant and the Engineer Assistant.
+_Avoid_: persona, agent type, user
+
+**Analysis Assistant**:
+The Assistant role that inspects and troubleshoots a Gateway as an engineer would. It reads and diagnoses; it never performs a Mutation.
+_Avoid_: read-only agent, monitor agent
+
+**Engineer Assistant**:
+The Assistant role that develops Ignition projects as an Application Engineer would. It may perform Mutations within the Target allowlists.
+_Avoid_: developer agent, admin agent
+
 ### Mutation safety
 
 **Mutation**:
