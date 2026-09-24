@@ -10,7 +10,7 @@ Until this patch the repository assumed Linux. On a Windows checkout the bundle 
 
 Windows is **not broken**, but it is **not a supported platform**. The support level is `NOT_BROKEN`. The patch removes the known hard failures. It does not add Windows to any compatibility claim, test matrix or release gate.
 
-**Nothing in this repository has been executed on Windows yet.** Every Windows statement in this decision comes from code analysis on Linux and from upstream documentation. None of it was observed on Windows. The checklist in §6 has not been run by anyone.
+**Nothing in this repository has been executed on Windows yet.** Every Windows statement in this decision comes from code analysis on Linux and from upstream documentation. None of it was observed on Windows. The checklist in §6 has not been run by anyone. The runbook's `Prerequisites` and `Environment and credential files` sections are the operator path for a Windows start, and their Windows instructions carry the same not-run-on-Windows-yet marker.
 
 ## 2. What the patch guarantees
 

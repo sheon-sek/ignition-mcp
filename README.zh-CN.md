@@ -85,6 +85,17 @@ Runtime Target Policy，缺失时一律 fail closed。
 
 ### 前置条件
 
+工具链按平台区分；下面的 Gateway 与 Module 输入为两个平台共用。
+
+| 工具链项目 | Linux/macOS | Windows |
+| --- | --- | --- |
+| Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器 | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
+| Shell | 一个 POSIX shell | PowerShell 7 —— D31 清单第 6 步使用 `-SkipHttpErrorCheck`，需要 7 |
+| Git for Windows | 不需要 | 仅用于基于 `bash` 的检查：`tooling.ci.check_workflows` 与内置的 bash 向导 |
+| Java 11 | 仅用于录制式 Jython 测试（D29）；两个 server 都不需要 | 同上 |
+
+本仓库中的 Windows 指令都标记为**尚未在 Windows 上运行**；见 [D31](docs/decisions/D31-windows-support-scope.md)。
+
 - Python 3.11+ 和 [`uv`](https://docs.astral.sh/uv/)。
 - 一个可通过 HTTP(S) 访问的 Ignition 8.3.8/8.3.9 Gateway，且已有 `ignition/api-token` 资源。
   REST server 会向外连接它；Runtime bundle 会安装到它上面。
@@ -93,7 +104,7 @@ Runtime Target Policy，缺失时一律 fail closed。
   `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`。
 
 ```bash
-uv sync --all-packages   # 安装 workspace 包及其 console script
+uv sync --all-packages   # 两个平台的安装步骤
 ```
 
 ### 平面 1 — 启动 REST server
@@ -102,6 +113,16 @@ uv sync --all-packages   # 安装 workspace 包及其 console script
 export IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088
 export IGNITION_MCP_GATEWAY_API_TOKEN=<your-ignition-api-token>
 export IGNITION_MCP_DATA_DIR=$HOME/.local/state/ignition-mcp   # 持久化 SQLite + artifact 存储
+
+uv run --no-sync ignition-rest-mcp
+```
+
+同样的变量在 PowerShell 中（**尚未在 Windows 上运行**；见 [D31](docs/decisions/D31-windows-support-scope.md)）：
+
+```powershell
+$env:IGNITION_MCP_GATEWAY_URL = "http://127.0.0.1:8088"
+$env:IGNITION_MCP_GATEWAY_API_TOKEN = "<your-ignition-api-token>"
+$env:IGNITION_MCP_DATA_DIR = "C:\ProgramData\ignition-mcp"   # 持久化 SQLite + artifact 存储
 
 uv run --no-sync ignition-rest-mcp
 ```
@@ -193,6 +214,9 @@ ignition-mcp setup-native verify --bundle-manifest dist/release/ignition-runtime
 
 Windows 不会出错，但不是受支持的平台。范围与已声明的限制见
 [D31](docs/decisions/D31-windows-support-scope.md)。本仓库的内容尚未在 Windows 上运行过。
+
+[前置条件](#前置条件) 表格与 [平面 1 — 启动 REST server](#平面-1--启动-rest-server) 中的 PowerShell
+区块就是 Windows 的前置条件与启动路径，其中的每条指令都带有同样的**尚未在 Windows 上运行**标记。
 
 - **校验和。** Windows 没有内置的 `sha256sum -c`。请使用 `certutil -hashfile <file> SHA256` 或
   `Get-FileHash <file> -Algorithm SHA256`，并把结果与 `.sha256` 文件中的哈希比对。
