@@ -65,7 +65,7 @@ A setup run has a Deployment environment, `dev` or `prod`. `dev` is the default.
 | --- | --- | --- |
 | Assistant roles deployed | Analysis and Engineer | Analysis only |
 | Security Levels | created | changed only with `--provision-security-levels` |
-| Runtime and REST credentials | created | created only when named |
+| Runtime and REST credentials | created for every deployed role | created only for the roles named with `--roles` |
 | Server Config permissions tree | generated from the role | generated from the role |
 | Runtime Target Policy allowlists | `*` for every Runtime Mutation Tool | empty |
 | Alarm shelve cap | 3600 seconds | 3600 seconds |
@@ -136,6 +136,8 @@ Each deployment is a named directory, `~/.config/ignition-mcp/deployments/<name>
 - **A lost secret file.** When a local secret file is missing but its Gateway token still exists, `status` and `setup` report the mismatch. `setup` deletes the Gateway token and creates a new one after confirmation, or with `--recreate-tokens` in one-line mode.
 - **A hand edit on the Gateway.** When someone changed a Server Config's permissions, the Runtime Target Policy or another managed resource by hand, `setup` reports what differs and restores the desired state after confirmation, because that overwrites the other person's change.
 - **Permissions drift is a change.** A Server Config whose Tool list matches but whose permissions tree differs is reported as `CHANGED`, never `NO CHANGE`.
+
+In Phase 7 the hand-edit rule does not yet cover the content of the managed bundle project, and replacing that project does not yet take the D16 lock or compare `pcf1` fingerprints. `setup-native` had the same gaps. Both are deferred to issue #80.
 
 ## 11. Amendments to D20
 
