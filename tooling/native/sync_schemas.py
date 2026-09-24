@@ -12,10 +12,10 @@ def main() -> None:
         payload = (ROOT / f"contracts/schemas/{name}.output.schema.json").read_bytes()
         target = ROOT / "packages/ignition-runtime-bundle/project/com.inductiveautomation.mcp/resources/contracts" / f"{name}-output"
         metadata_path = target / "resource.json"
-        metadata = json.loads(metadata_path.read_text())
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
         metadata["attributes"]["size"] = len(payload)
         (target / "data.bin").write_bytes(payload)
-        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n")
+        metadata_path.write_text(json.dumps(metadata, indent=2) + "\n", encoding="utf-8", newline="\n")
 
 
 if __name__ == "__main__":

@@ -125,7 +125,10 @@ def asset_for(system: str, machine: str) -> Asset:
     asset = ASSETS.get(key)
     if asset is None:
         supported = ", ".join(f"{name}/{arch}" for name, arch in sorted(ASSETS))
-        raise ActionlintError(f"no pinned actionlint {VERSION} for {system}/{machine}; supported: {supported}")
+        raise ActionlintError(
+            f"no pinned actionlint {VERSION} for {system}/{machine}; supported: {supported}. "
+            "The workflow lint only runs on those platforms; run it on Linux, WSL or macOS, or leave it to CI"
+        )
     return asset
 
 
