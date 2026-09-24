@@ -461,6 +461,20 @@ Mutation 做自动重放。
 
 被中断的运行退出码为 2。非预期的崩溃退出码为 1，且只打印异常类型，因此凭证不会通过 traceback 泄露。
 
+## Windows
+
+Windows 不会出错，但不是受支持的平台。[D31](../decisions/D31-windows-support-scope.md) 记录了范围、
+已声明的限制，以及一份尚无人执行过的手动验证清单。
+
+- **校验和。** Windows 没有内置的 `sha256sum -c`。在 `dist/release` 中运行
+  `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` 或
+  `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`，并把结果与
+  `ignition-runtime-bundle-<version>.sha256` 中的哈希比对。
+- **向导。** `scripts/deploy-runtime-bundle.sh` 是 bash 向导，需要 Git Bash 或 WSL。
+  `ignition-mcp setup-native doctor|plan|apply` 命令是原生命令，不需要它。
+- **凭证文件与数据目录。** 在 Windows 上不检查 token 文件的 `0600` 规则和数据目录的 `0700` 规则，改为记录一条
+  WARNING。请用文件系统 ACL 保护每个 token 文件和 `IGNITION_MCP_DATA_DIR`，只让服务账户能读取。
+
 ## 已知 v1 限制
 
 - 三个 Alarm Tool 被搁置，这是 Runtime 平面已知的 v1 缺口。`alarm_status` 和 `alarm_journal` 依据 D12

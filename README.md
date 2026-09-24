@@ -193,6 +193,18 @@ ignition-mcp setup-native verify --bundle-manifest dist/release/ignition-runtime
 The complete operator procedure — every flag, exit code, certificate/EULA rule and failure
 diagnosis — is in [`docs/operations/runbook.md`](docs/operations/runbook.md).
 
+## Windows
+
+Windows is not broken, but it is not a supported platform. [D31](docs/decisions/D31-windows-support-scope.md)
+records the scope and the declared limitations. Nothing here has been run on Windows yet.
+
+- **Checksums.** Windows has no built-in `sha256sum -c`. Use `certutil -hashfile <file> SHA256` or
+  `Get-FileHash <file> -Algorithm SHA256`, and compare the result with the hash in the `.sha256` file.
+- **Wizard.** `scripts/deploy-runtime-bundle.sh` is a bash wizard, so it needs Git Bash or WSL. The
+  `ignition-mcp setup-native doctor|plan|apply` commands are native and do not need it.
+- **Secrets and the data directory.** POSIX-mode checks are skipped on Windows, and one WARNING is
+  logged instead. Protect `IGNITION_MCP_DATA_DIR` and every credential file with filesystem ACLs.
+
 ## Safety model
 
 - **Bounded everything.** Every input, execution and output is bounded; oversize fails explicitly
@@ -228,7 +240,7 @@ Contributor rules, delegation policy and delivery conventions are in
 
 ## Documentation
 
-- [`docs/decisions/INDEX.md`](docs/decisions/INDEX.md) — binding architecture decisions D01–D30.
+- [`docs/decisions/INDEX.md`](docs/decisions/INDEX.md) — binding architecture decisions D01–D31.
 - [`docs/operations/runbook.md`](docs/operations/runbook.md) — v1 operator runbook.
 - [`docs/development/`](docs/development/) — per-phase delivery records and gate evidence.
 - [`contracts/README.md`](contracts/README.md) — the contract source of truth.
