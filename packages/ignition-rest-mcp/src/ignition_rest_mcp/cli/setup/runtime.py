@@ -99,6 +99,13 @@ PROJECT = DEFAULT_BUNDLE_PROJECT
 
 SERVICE_IDENTITY = "ignition-mcp-service"
 SHELVE_CAP_SECONDS = 3600
+
+#: ``created`` record entries for the resources this stage creates (issue #76 review).
+#: ``reset`` deletes only what a record names, so an entry is written after the write
+#: that created the resource, never for one that was already there.
+MODULE_RECORD = "module"
+POLICY_RECORD = "policy"
+PROJECT_RECORD = f"project:{PROJECT}"
 POLICY_FILE = "runtime-policy.json"
 PERMISSIONS_FILE = "permissions-{role}.json"
 BACKUP_DIR = "backups"
@@ -147,6 +154,24 @@ class Role:
     def level_path(self) -> str:
         return f"{SECURITY_LEVEL_PARENT}/{self.level}"
 
+    @property
+    def level_record(self) -> str:
+        """The ``created`` entry for this role's Security Level (issue #76 review)."""
+
+        return f"level:{self.level_path}"
+
+    @property
+    def token_record(self) -> str:
+        """The ``created`` entry for this role's Gateway API token."""
+
+        return f"runtime-token:{self.token}"
+
+    @property
+    def config_record(self) -> str:
+        """The ``created`` entry for this role's Server Config."""
+
+        return f"server-config:{self.server_config}"
+
     def permissions(self) -> dict[str, Any]:
         """The Server Config permissions tree, generated from the role's level."""
 
@@ -162,6 +187,34 @@ ROLES = {
     "analysis": Role("analysis", "readonly", "IgnitionMcpAnalysis"),
     "engineer": Role("engineer", "full", "IgnitionMcpEngineer"),
 }
+
+
+def saved_roles(ctx: Context) -> list[Role]:
+    """The Assistant roles the saved deployment serves, in this module's order.
+
+    ``status`` and ``reset`` read the roles from ``deployment.toml`` rather than from
+    this run's flags: both report or remove what a previous ``setup`` created.
+    """
+
+    names = ctx.deployment.values.get("roles")
+    saved = [str(name) for name in names] if isinstance(names, list) else []
+    return [role for name, role in ROLES.items() if name in saved]
+
+
+#: The setup key as ``status`` and ``reset`` take it: a file, with no Gateway check.
+#: Both must report or refuse before they contact the Gateway, so a probe and the D32
+#: section 9 permission check would come too early: an unreachable Gateway would mask
+#: ``reset``'s prod refusal and ``status``'s own lines.
+OBSERVED_TOKEN_INPUT = InputSpec(
+    name="gateway_token",
+    flag="--gateway-token-file",
+    question=(
+        "file that holds the Gateway API key whose Security Level is ticked under every "
+        "permission in Security > General Settings"
+    ),
+    kind=Kind.SECRET,
+    secret_name="gateway-token",
+)
 
 
 @dataclass(slots=True)
@@ -543,7 +596,20 @@ class RuntimePlan:
         return "none" if self.project.bundle_version == self.bundle.version else "update"
 
 
-def role_inputs(plan: RuntimePlan, role: Role, mcp_token: str | None = None) -> Inputs:
+@dataclass(frozen=True, slots=True)
+class RuntimeTargets:
+    """What a read-only role check needs from a Runtime plan.
+
+    :func:`role_inputs` and :func:`closing_check` take this or a whole
+    :class:`RuntimePlan`, so ``status`` checks a deployment without building a plan.
+    """
+
+    bundle: Bundle
+    endpoint: Endpoint
+    insecure_channel: bool
+
+
+def role_inputs(plan: RuntimePlan | RuntimeTargets, role: Role, mcp_token: str | None = None) -> Inputs:
     """The ``setup_native`` inputs for one role. Only ``verify`` gets the role's token."""
 
     return Inputs(
@@ -884,7 +950,7 @@ def _plan_token(
         return TokenPlan("create", create + ("; the stale file there is replaced" if stale else ""), None, stale)
     stored = security.stored_token_hash(document)
     if secret.exists and secret.name == role.token and secret.hashes_to(stored):
-        drift = _token_drift(plan, role, document)
+        drift = _token_drift(role, document, insecure_channel=plan.insecure_channel)
         if not drift:
             return TokenPlan("none", "", document)
         if not (plan.previous_environment and drift.startswith("it has secureChannelRequired")):
@@ -913,14 +979,14 @@ def _plan_token(
     return TokenPlan("recreate", reason, document, secret.exists or bool(secret.error))
 
 
-def _token_drift(plan: RuntimePlan, role: Role, document: dict[str, Any]) -> str:
+def _token_drift(role: Role, document: dict[str, Any], *, insecure_channel: bool) -> str:
     config = document.get("config")
     profile = config.get("profile") if isinstance(config, dict) else None
     secure = profile.get("secureChannelRequired") if isinstance(profile, dict) else None
     held = token_levels(document)
     if held != [(SECURITY_LEVEL_PARENT, role.level)]:
         return f"it grants {_dotted(held)}, not {role.level_path}"
-    if secure is not (not plan.insecure_channel):
+    if secure is not (not insecure_channel):
         return f"it has secureChannelRequired={str(secure).lower()}"
     return ""
 
@@ -1027,6 +1093,10 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
     with ctx.reporter.step("runtime module", f"MCP Module build {plan.artifact.build}") as end:
         if plan.install_module:
             asyncio.run(_install_module(ctx, plan))
+            if plan.installed is None:
+                # A fresh install is this deployment's resource. A replaced older build
+                # is not: the Module existed before this run.
+                ctx.record_created(MODULE_RECORD)
             end.set(Status.CHANGED, f"installed build {plan.artifact.build} from {plan.module_file}; restarted")
         else:
             end.set(Status.OK, f"build {plan.artifact.build} is installed; the pinned file is {plan.module_file}")
@@ -1034,7 +1104,10 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
         if plan.project_action == "none":
             end.set(Status.OK, f"managed bundle {plan.bundle.version} is deployed")
         else:
-            end.set(Status.CHANGED, asyncio.run(_deploy_bundle(ctx, plan)))
+            result = asyncio.run(_deploy_bundle(ctx, plan))
+            if plan.project_action == "create":
+                ctx.record_created(PROJECT_RECORD)
+            end.set(Status.CHANGED, result)
     for removal in plan.removals:
         with ctx.reporter.step(f"runtime remove {removal.role.name}", "a role this run no longer deploys") as end:
             end.set(Status.CHANGED, asyncio.run(_remove_role(ctx, removal)))
@@ -1042,6 +1115,7 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
     with ctx.reporter.step("runtime security levels", ", ".join(r.level_path for r in plan.roles)) as end:
         if plan.new_levels or removed_levels:
             asyncio.run(_write_levels(ctx, plan, removed_levels))
+            ctx.record_created(*(role.level_record for role in plan.new_levels))
             done = [f"created {r.level_path}" for r in plan.new_levels]
             done += [f"removed {r.level_path}" for r in removed_levels]
             end.set(Status.CHANGED, ", ".join(done))
@@ -1053,18 +1127,29 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
             if token.action == "none":
                 end.set(Status.OK, f"exists and matches {ctx.deployment.secret_path(role.secret)}")
             else:
-                end.set(Status.CHANGED, asyncio.run(_write_token(ctx, plan, role, token)))
+                result = asyncio.run(_write_token(ctx, plan, role, token))
+                if token.action in ("create", "recreate"):
+                    # A recreated token is this run's resource: the served one is the new
+                    # one, and the old one is gone.
+                    ctx.record_created(role.token_record)
+                end.set(Status.CHANGED, result)
         config = plan.configs[role.name]
         with ctx.reporter.step(f"runtime server config {role.name}", role.server_config) as end:
             if config.action == "none":
                 end.set(Status.OK, f"{len(plan.bundle.tools(role))} Tools and the generated permissions tree")
             else:
-                end.set(Status.CHANGED, asyncio.run(_write_config(ctx, plan, role, config)))
+                result = asyncio.run(_write_config(ctx, plan, role, config))
+                if config.action == "create":
+                    ctx.record_created(role.config_record)
+                end.set(Status.CHANGED, result)
     with ctx.reporter.step("runtime policy", docs.POLICY_PATH) as end:
         if plan.policy_action == "none":
             end.set(Status.OK, "the served document is the generated one")
         else:
-            end.set(Status.CHANGED, asyncio.run(_write_policy(ctx, plan)))
+            result = asyncio.run(_write_policy(ctx, plan))
+            if plan.policy_action == "create":
+                ctx.record_created(POLICY_RECORD)
+            end.set(Status.CHANGED, result)
     with ctx.reporter.step("runtime documents", str(ctx.deployment.directory)) as end:
         written = [name for name, text in plan.documents.items() if _write_local(ctx, name, text)]
         end.set(Status.CHANGED if written else Status.OK, ", ".join(written) or "unchanged")
@@ -1344,6 +1429,19 @@ async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
     refreshes = 0
     if plan.configs[role.name].action != "none" and token:
         refreshes = await _await_tools(ctx, plan, role, token)
+    summary = await closing_check(ctx, plan, role, token)
+    note = f", after {refreshes} re-announcement(s) of the Server Config this run wrote" if refreshes else ""
+    return summary + note
+
+
+async def closing_check(ctx: Context, plan: RuntimePlan | RuntimeTargets, role: Role, token: str) -> str:
+    """The verify sequence at the role's endpoint with the role's token. Reads only.
+
+    ``status`` reports this as a check of its own, so it must not write: the
+    re-announcement :func:`_check_role` may make stays there.
+    """
+
+    ctx.reporter.hide(token)
     report, _, code = await verify.collect(
         role_inputs(plan, role, mcp_token=token or None), mcp_transport=SETTINGS.transport
     )
@@ -1351,13 +1449,12 @@ async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
     if code != 0:
         failed = [check for check in checks if check.get("status") not in ("PASS", "NOT_APPLICABLE")]
         if any("HTTP 403" in str(check.get("detail")) for check in failed):
-            raise _failed(await _explain_403(ctx, plan, role, bool(token)), ctx)
+            raise _failed(await _explain_403(ctx, plan.endpoint, role, bool(token)), ctx)
         detail = "; ".join(f"{check.get('name')}: {check.get('detail')}" for check in failed[:3])
         raise _failed(f"the {role.name} endpoint failed {len(failed)} check(s): {detail}", ctx)
-    note = f", after {refreshes} re-announcement(s) of the Server Config this run wrote" if refreshes else ""
     return (
         f"{len(checks)} checks passed with the role's token: initialize, the exact Tool, Resource and "
-        f"Prompt inventories of {role.profile}, resources/read, prompts/get and bundle_info{note}"
+        f"Prompt inventories of {role.profile}, resources/read, prompts/get and bundle_info"
     )
 
 
@@ -1395,7 +1492,7 @@ async def _reannounce(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> None:
             raise _failed(f"the Server Config {role.server_config} could not be announced again: {error}", ctx) from error
 
 
-async def _explain_403(ctx: Context, plan: RuntimePlan, role: Role, token_sent: bool) -> str:
+async def _explain_403(ctx: Context, endpoint: Endpoint, role: Role, token_sent: bool) -> str:
     """D32 section 4: a 403 is reported as its cause, never as the status alone."""
 
     prefix = f"the {role.name} endpoint refused initialize because "
@@ -1408,7 +1505,7 @@ async def _explain_403(ctx: Context, plan: RuntimePlan, role: Role, token_sent: 
     except gw.GatewayProbeError as error:
         return prefix + f"of a cause the CLI could not read ({error})"
     profile = ((token or {}).get("config") or {}).get("profile") or {}
-    if plan.endpoint.scheme == "http" and profile.get("secureChannelRequired") is True:
+    if endpoint.scheme == "http" and profile.get("secureChannelRequired") is True:
         return prefix + "the token requires a secure channel and the Gateway URL is http"
     held = token_levels(token)
     permissions = ((config or {}).get("config") or {}).get("permissions")

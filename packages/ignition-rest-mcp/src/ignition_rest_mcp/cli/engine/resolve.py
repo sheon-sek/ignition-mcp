@@ -459,9 +459,12 @@ def accept(needed: Sequence[Needed], flags: AcceptFlags, prompter: Prompter | No
     if uncovered and prompter is None:
         wanted = sorted({acceptance_flag(item.risk) for item in uncovered})
         names = ", ".join(item.risk.value for item in uncovered)
+        details = "; ".join(item.detail for item in uncovered if item.detail)
         raise CliError(
             ErrorCode.ACCEPTANCE_REQUIRED,
-            f"this run needs acceptance of {names}; pass {' '.join(wanted)}. Nothing was written",
+            f"this run needs acceptance of {names}"
+            + (f" ({details})" if details else "")
+            + f"; pass {' '.join(wanted)}. Nothing was written",
         )
     accepted = [Accepted(item.risk, item.detail, "flag") for item in needed if flags.covers(item.risk)]
     for item in uncovered:

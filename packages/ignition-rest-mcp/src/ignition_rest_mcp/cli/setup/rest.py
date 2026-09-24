@@ -61,6 +61,10 @@ STAGE_NAME = "rest"
 
 #: The Gateway API token of the REST server (D32 section 9).
 REST_TOKEN_NAME = "ignition-mcp-rest"
+#: The ``created`` record entry for the REST server's Gateway API token (issue #76
+#: review). ``reset`` deletes only what a record names, and a restored token was not
+#: created by this run.
+REST_TOKEN_RECORD = f"rest-token:{REST_TOKEN_NAME}"
 REST_TOKEN_SECRET = "rest-gateway-token"
 REST_TOKEN_DESCRIPTION = "ignition-mcp REST server credential (deployment-owned)."
 
@@ -454,6 +458,7 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
             )
         else:
             asyncio.run(_create_rest_token(ctx, rest_plan, ctx.gateway_writer()))
+            ctx.record_created(REST_TOKEN_RECORD)
             end.set(
                 Status.CHANGED,
                 f"{'recreated' if rest_plan.token_action == 'recreate' else 'created'} with the Security Levels "
