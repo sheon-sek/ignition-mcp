@@ -387,6 +387,10 @@ class Risk(StrEnum):
     ADMIN_CLASS = "admin_mutation_class"
     NON_LOOPBACK_BIND = "non_loopback_bind"
     OVERWRITE_HAND_EDIT = "overwrite_hand_edit"
+    #: An older installed MCP Module build replaced by the pinned one.
+    MODULE_UPGRADE = "module_upgrade"
+    #: A MAJOR Runtime bundle upgrade or any downgrade (D20's acknowledgement rule).
+    BUNDLE_UPGRADE = "bundle_upgrade"
 
 
 #: What accepting each item allows, as the wizard's yes or no question states it.
@@ -399,6 +403,8 @@ RISK_QUESTIONS: dict[Risk, str] = {
     Risk.ADMIN_CLASS: "Turn on ADMIN Mutations, which change the Gateway's own configuration?",
     Risk.NON_LOOPBACK_BIND: "Bind the REST server to an address other hosts can reach?",
     Risk.OVERWRITE_HAND_EDIT: "Overwrite a change someone made on the Gateway by hand?",
+    Risk.MODULE_UPGRADE: "Replace the installed MCP Module with the pinned newer build?",
+    Risk.BUNDLE_UPGRADE: "Replace the deployed Runtime bundle across a MAJOR version or with an older one?",
 }
 
 #: The items ``--yes`` never covers.

@@ -15,8 +15,15 @@ writes nothing. Its apply runs these steps in order, each with a start and an en
    a permissions tree generated from the role's level;
 6. the Runtime Target Policy generated from the environment;
 7. the generated documents, stored in the deployment directory;
-8. per role, the closing check: ``initialize`` and ``tools/list`` at the role's
-   endpoint with the role's own token. A 403 names its cause.
+8. per role, the closing check: ``setup_native``'s verify sequence at the role's
+   endpoint with the role's own token, which checks the exact Tool, Resource and
+   Prompt inventories, reads each Resource, gets each Prompt and calls
+   ``bundle_info``. A 403 names its cause.
+
+A role the saved deployment served and this run does not, as after a move from
+``dev`` to ``prod``, is removed before step 3: its Server Config, its token, its
+local files, and in step 3 its Security Level. A Module upgrade and a MAJOR or
+downgrade Bundle change each need their own Explicit acceptance.
 
 The Gateway writes go through ``setup_native``'s curated writer, so the guards, the
 optimistic preconditions and the read-backs Phases 4 to 6 verified still apply. The
@@ -43,7 +50,7 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 import httpx
 
@@ -55,13 +62,15 @@ from ignition_rest_mcp.cli.engine.main import (
     Context,
     Plan,
     Stage,
+    _default_roles,
     register_stage,
 )
 from ignition_rest_mcp.cli.engine.report import Status
-from ignition_rest_mcp.cli.engine.resolve import PROG, TOKEN_CHECKS, InputSpec, Kind, Needed, Risk
+from ignition_rest_mcp.cli.engine.resolve import PROG, TOKEN_CHECKS, InputSpec, Kind, Needed, Risk, Source
 from ignition_rest_mcp.cli.setup_native import documents as docs
 from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import install_module, security
+from ignition_rest_mcp.cli.setup_native import install_module, security, verify
+from ignition_rest_mcp.cli.setup_native.action import needs_acknowledgement, upgrade_class
 from ignition_rest_mcp.cli.setup_native.apply import _confirm_policy
 from ignition_rest_mcp.cli.setup_native.inputs import (
     API_TOKEN_TYPE,
@@ -104,6 +113,7 @@ REFRESH_WAIT_SECONDS = 2.0
 
 SECURITY_PROPERTIES_PATH = "/data/api/v1/resources/singleton/ignition/security-properties"
 API_TOKEN_DELETE_PATH = "/data/api/v1/resources/ignition/api-token/{name}/{signature}"
+SERVER_CONFIG_DELETE_PATH = "/data/api/v1/resources/com.inductiveautomation.mcp/server-config/{name}/{signature}"
 #: The permissions of Security > General Settings, as the page labels them.
 GATEWAY_PERMISSIONS = (
     ("accessPermissions", "Gateway Access"),
@@ -207,9 +217,13 @@ class Bundle:
 
     @property
     def manifest(self) -> dict[str, Any]:
-        """The manifest subset ``setup_native``'s document builders read."""
+        """The manifest subset ``setup_native``'s document builders and ``verify`` read.
 
-        return {"bundleVersion": self.version, "profileInventories": self.inventories}
+        The build is stamped with the checkout's revision, but a deployed bundle of the
+        same version may carry an older one, so ``bundle_info`` compares the version only.
+        """
+
+        return {"bundleVersion": self.version, "sourceRevision": "UNSTAMPED", "profileInventories": self.inventories}
 
     def tools(self, role: Role) -> list[str]:
         return list(self.inventories[role.profile]["tools"])
@@ -224,6 +238,11 @@ def read_bundle(checkout: Path) -> Bundle:
             inventories[profile] = {
                 key: [str(item) for item in document.get(key, [])] for key in ("tools", "resources", "prompts")
             }
+        # Every Server Config serves the bundle's Resources and Prompts with "*", so each
+        # role's endpoint lists the bundled ones, which the readonly profile names.
+        for profile in inventories:
+            for key in ("resources", "prompts"):
+                inventories[profile][key] = list(inventories["readonly"][key])
         mutation_tools = []
         for tool in inventories["full"]["tools"]:
             contract = json.loads(
@@ -478,6 +497,17 @@ class ConfigPlan:
 
 
 @dataclass(slots=True)
+class RemovalPlan:
+    """A role this deployment no longer serves, and what of it the Gateway still holds."""
+
+    role: Role
+    config_signature: str = ""
+    token_signature: str = ""
+    level: bool = False
+    files: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class RuntimePlan:
     endpoint: Endpoint
     bundle: Bundle
@@ -498,6 +528,9 @@ class RuntimePlan:
     #: ``none``, ``create`` or ``update``.
     policy_action: str
     documents: dict[str, str]
+    #: The saved environment, when this run moves the deployment to another one.
+    previous_environment: str = ""
+    removals: list[RemovalPlan] = field(default_factory=list)
 
     @property
     def install_module(self) -> bool:
@@ -510,8 +543,8 @@ class RuntimePlan:
         return "none" if self.project.bundle_version == self.bundle.version else "update"
 
 
-def role_inputs(plan: RuntimePlan, role: Role) -> Inputs:
-    """The ``setup_native`` inputs one role's documents are built from. No secret in it."""
+def role_inputs(plan: RuntimePlan, role: Role, mcp_token: str | None = None) -> Inputs:
+    """The ``setup_native`` inputs for one role. Only ``verify`` gets the role's token."""
 
     return Inputs(
         command="apply",
@@ -524,7 +557,7 @@ def role_inputs(plan: RuntimePlan, role: Role) -> Inputs:
         bundle_project=PROJECT,
         server_config_name=role.server_config,
         gateway_token="",
-        mcp_token=None,
+        mcp_token=mcp_token,
         timeout_seconds=10.0,
         allow_insecure_authorize=True,
         as_json=False,
@@ -562,11 +595,12 @@ def plan_runtime(ctx: Context) -> Plan:
     checkout = _require_checkout(ctx)
     bundle = read_bundle(checkout)
     environment = ctx.resolved.values["environment"]
+    previous = _environment_change(ctx)
     roles = [ROLES[name] for name in ctx.resolved.list("roles")]
     endpoint = _endpoint_of(ctx.resolved.values["gateway_url"])
     module_file = Path(ctx.resolved.values["module_file"])
     artifact = _artifact(module_file, endpoint)
-    observed = asyncio.run(_observe(ctx, roles))
+    observed = asyncio.run(_observe(ctx, list(ROLES.values())))
     installed, project, levels_doc, token_docs, config_docs, policy = observed
 
     if installed is not None and install_module.classify_build(installed, artifact) == install_module.REFUSED:
@@ -612,9 +646,12 @@ def plan_runtime(ctx: Context) -> Plan:
         policy_text=policy_document(bundle, environment),
         policy_action="none",
         documents={},
+        previous_environment=previous,
     )
     changes: list[str] = []
     needed: list[Needed] = []
+    if previous:
+        changes.append(f"move the deployment from {previous} to {environment} and use the {environment} defaults")
     if plan.install_module:
         verb = "install" if installed is None else f"upgrade build {installed.build} to"
         changes.append(
@@ -623,15 +660,32 @@ def plan_runtime(ctx: Context) -> Plan:
         )
         detail = f"MCP Module build {artifact.build}"
         needed += [Needed(Risk.CERTIFICATE, detail), Needed(Risk.EULA, detail), Needed(Risk.RESTART, detail)]
+        if installed is not None:
+            needed.append(Needed(Risk.MODULE_UPGRADE, f"build {installed.build} to {artifact.build}"))
     if plan.project_action == "create":
         changes.append(f"deploy the Runtime bundle {bundle.version} as the managed project {PROJECT}")
     elif plan.project_action == "update":
+        kind = upgrade_class(project.bundle_version, bundle.version)
         changes.append(
-            f"replace the managed bundle {project.bundle_version} with {bundle.version} in project {PROJECT}, "
-            f"after a backup into {ctx.deployment.directory / BACKUP_DIR}"
+            f"replace the managed bundle {project.bundle_version} with {bundle.version} ({kind}) in project "
+            f"{PROJECT}, after a backup into {ctx.deployment.directory / BACKUP_DIR}"
         )
+        if needs_acknowledgement(kind):
+            needed.append(Needed(Risk.BUNDLE_UPGRADE, f"{kind}: {project.bundle_version} to {bundle.version}"))
     for role in new_levels:
         changes.append(f"create the Security Level {role.level_path}")
+    for removal in _plan_removals(ctx, roles, tree, token_docs, config_docs):
+        plan.removals.append(removal)
+        what = [
+            name
+            for name, present in (
+                (f"the Server Config {removal.role.server_config}", removal.config_signature),
+                (f"the API token {removal.role.token}", removal.token_signature),
+                (f"the Security Level {removal.role.level_path}", removal.level),
+            )
+            if present
+        ] + [str(ctx.deployment.directory / name) for name in removal.files]
+        changes.append(f"remove the {removal.role.name} role, which this run no longer deploys: {', '.join(what)}")
 
     for role in roles:
         token = _plan_token(ctx, plan, role, token_docs.get(role.name), needed)
@@ -655,6 +709,61 @@ def plan_runtime(ctx: Context) -> Plan:
         if _read_local(ctx.deployment.directory / name) != text:
             changes.append(f"write the generated {name} into {ctx.deployment.directory}")
     return Plan(changes=changes, needed=needed, data=plan)
+
+
+def _environment_change(ctx: Context) -> str:
+    """The saved environment when this run changes it, else ``""``.
+
+    D32 section 5: the new environment's defaults replace the saved roles, unless
+    ``--roles`` sets them in this run. The policy allowlists always follow the
+    environment, so they need nothing here.
+    """
+
+    saved = ctx.deployment.values.get("environment")
+    environment = ctx.resolved.values["environment"]
+    if not isinstance(saved, str) or saved == environment:
+        return ""
+    if ctx.resolved.sources.get("roles") is Source.SAVED:
+        ctx.resolved.values["roles"] = _default_roles(ctx.resolved.values)
+        ctx.resolved.sources["roles"] = Source.DEFAULT
+    return saved
+
+
+def _plan_removals(
+    ctx: Context,
+    roles: list[Role],
+    tree: list[dict[str, Any]],
+    token_docs: dict[str, dict[str, Any] | None],
+    config_docs: dict[str, dict[str, Any] | None],
+) -> list[RemovalPlan]:
+    """The saved roles this run no longer deploys, with what of each is still there."""
+
+    saved = ctx.deployment.values.get("roles")
+    keep = {role.name for role in roles}
+    removals: list[RemovalPlan] = []
+    for name in saved if isinstance(saved, list) else []:
+        role = ROLES.get(name)
+        if role is None or name in keep:
+            continue
+        found = security.find_level(tree, role.level)
+        level = found is not None and found[0] == [SECURITY_LEVEL_PARENT, role.level] and not (
+            security.level_shape_problem(found[1])
+        )
+        files = [
+            file
+            for file in (ctx.deployment.secret_path(role.secret).name, PERMISSIONS_FILE.format(role=role.name))
+            if (ctx.deployment.directory / file).exists()
+        ]
+        removal = RemovalPlan(
+            role,
+            config_signature=str((config_docs.get(name) or {}).get("signature") or ""),
+            token_signature=str((token_docs.get(name) or {}).get("signature") or ""),
+            level=level,
+            files=files,
+        )
+        if removal.config_signature or removal.token_signature or removal.level or removal.files:
+            removals.append(removal)
+    return removals
 
 
 Observed = tuple[
@@ -778,7 +887,8 @@ def _plan_token(
         drift = _token_drift(plan, role, document)
         if not drift:
             return TokenPlan("none", "", document)
-        needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"API token {role.token}: {drift}"))
+        if not (plan.previous_environment and drift.startswith("it has secureChannelRequired")):
+            needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"API token {role.token}: {drift}"))
         return TokenPlan(
             "recreate", f"delete the API token {role.token} and create it again, because {drift}", document, True
         )
@@ -897,7 +1007,8 @@ def _plan_policy(ctx: Context, plan: RuntimePlan, policy: docs.PolicyObservation
             f"restore the Runtime Target Policy ({plan.environment}: {summary}); the served document is not the "
             "one setup wrote, so someone changed it by hand"
         )
-    return f"replace the Runtime Target Policy with the {plan.environment} one ({summary})"
+    narrowing = "narrow" if plan.environment == "prod" else "replace"
+    return f"{narrowing} the Runtime Target Policy to the {plan.environment} one ({summary})"
 
 
 def _json(document: Any) -> str:
@@ -924,10 +1035,16 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
             end.set(Status.OK, f"managed bundle {plan.bundle.version} is deployed")
         else:
             end.set(Status.CHANGED, asyncio.run(_deploy_bundle(ctx, plan)))
+    for removal in plan.removals:
+        with ctx.reporter.step(f"runtime remove {removal.role.name}", "a role this run no longer deploys") as end:
+            end.set(Status.CHANGED, asyncio.run(_remove_role(ctx, removal)))
+    removed_levels = [removal.role for removal in plan.removals if removal.level]
     with ctx.reporter.step("runtime security levels", ", ".join(r.level_path for r in plan.roles)) as end:
-        if plan.new_levels:
-            asyncio.run(_write_levels(ctx, plan))
-            end.set(Status.CHANGED, "created " + ", ".join(r.level_path for r in plan.new_levels))
+        if plan.new_levels or removed_levels:
+            asyncio.run(_write_levels(ctx, plan, removed_levels))
+            done = [f"created {r.level_path}" for r in plan.new_levels]
+            done += [f"removed {r.level_path}" for r in removed_levels]
+            end.set(Status.CHANGED, ", ".join(done))
         else:
             end.set(Status.OK, "every role's level is present")
     for role in plan.roles:
@@ -1046,13 +1163,80 @@ async def _backup(ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter) -
     return path
 
 
-async def _write_levels(ctx: ApplyContext, plan: RuntimePlan) -> None:
+async def _remove_role(ctx: ApplyContext, removal: RemovalPlan) -> str:
+    """Delete a dropped role's Server Config and token, then its local files."""
+
+    role = removal.role
+    done: list[str] = []
+    async with ctx.gateway_writer(SETTINGS.transport) as writer:
+        try:
+            # The writer has no named delete; its single write method still checks the gate.
+            if removal.config_signature:
+                await writer._write(
+                    "DELETE",
+                    SERVER_CONFIG_DELETE_PATH.format(
+                        name=role.server_config, signature=quote(removal.config_signature, safe="")
+                    ),
+                    body=b"", content_type="application/json", action="delete server config",
+                )
+                done.append(f"Server Config {role.server_config}")
+            if removal.token_signature:
+                await writer._write(
+                    "DELETE",
+                    API_TOKEN_DELETE_PATH.format(name=role.token, signature=quote(removal.token_signature, safe="")),
+                    body=b"", content_type="application/json", action="delete API token",
+                )
+                done.append(f"API token {role.token}")
+        except WriteError as error:
+            raise _failed(f"the {role.name} role was not removed: {error}", ctx) from error
+    for name in removal.files:
+        (ctx.deployment.directory / name).unlink(missing_ok=True)
+        done.append(name)
+    return "removed " + ", ".join(done)
+
+
+def _without_level(tree: list[dict[str, Any]], level: str) -> list[dict[str, Any]]:
+    """The tree without one leaf under ``Authenticated``; every other node travels verbatim."""
+
+    result: list[dict[str, Any]] = []
+    for node in tree:
+        children = node.get("children")
+        if node.get("name") == SECURITY_LEVEL_PARENT and isinstance(children, list):
+            node = {**node, "children": [c for c in children if not (isinstance(c, dict) and c.get("name") == level)]}
+        result.append(node)
+    return result
+
+
+def _levels_problem(
+    served: dict[str, Any] | None, before: list[dict[str, Any]], created: list[Role], removed: list[Role]
+) -> str:
+    """How the served tree differs from the edit; ``""`` when it landed as written."""
+
+    tree = security.level_tree(served)
+    if tree is None:
+        return "the Security Level tree is not readable after the write"
+    paths = security.level_paths(tree)
+    for role in created:
+        if (SECURITY_LEVEL_PARENT, role.level) not in paths:
+            return f"{role.level_path} is not in the served tree"
+    gone = {(SECURITY_LEVEL_PARENT, role.level) for role in removed}
+    if paths & gone:
+        return "a removed level is still in the served tree"
+    dropped = sorted(security.level_paths(before) - paths - gone)
+    if dropped:
+        return "the write dropped other levels: " + ", ".join("/".join(path) for path in dropped)
+    return ""
+
+
+async def _write_levels(ctx: ApplyContext, plan: RuntimePlan, removed: list[Role]) -> None:
     tree = plan.levels
     for role in plan.new_levels:
         merged, reason = security.with_managed_level(tree, _level_inputs(role))
         if merged is None:
             raise _failed(reason, ctx)
         tree = merged
+    for role in removed:
+        tree = _without_level(tree, role.level)
     async with ctx.gateway_writer(SETTINGS.transport) as writer:
         try:
             await writer.update_security_levels(
@@ -1061,10 +1245,9 @@ async def _write_levels(ctx: ApplyContext, plan: RuntimePlan) -> None:
             served = await writer.reads.singleton_document(SECURITY_LEVELS_TYPE)
         except (WriteError, gw.GatewayProbeError) as error:
             raise _failed(f"the Security Level edit stopped: {error}", ctx) from error
-    for role in plan.roles:
-        problem = security.verify_readback(served, plan.levels, _level_inputs(role))
-        if problem:
-            raise _failed(f"the Security Level edit was accepted but {problem}", ctx)
+    problem = _levels_problem(served, plan.levels, plan.new_levels, removed)
+    if problem:
+        raise _failed(f"the Security Level edit was accepted but {problem}", ctx)
 
 
 async def _write_token(ctx: ApplyContext, plan: RuntimePlan, role: Role, token: TokenPlan) -> str:
@@ -1145,7 +1328,12 @@ async def _write_policy(ctx: ApplyContext, plan: RuntimePlan) -> str:
 
 
 async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
-    """``initialize`` and ``tools/list`` at the role's endpoint with the role's own token."""
+    """D20's verify sequence at the role's endpoint, with the role's own token.
+
+    The check reads only. The one exception is a Server Config this same run wrote:
+    when its endpoint serves no Tool yet, the planned document is announced again,
+    because the Module built the server before the project's Tools registered.
+    """
 
     path = ctx.deployment.secret_path(role.secret)
     try:
@@ -1153,36 +1341,44 @@ async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
     except CliError:
         token = ""
     ctx.reporter.hide(token)
-    endpoint = _endpoint_of(plan.endpoint.url, f"/data/mcp/{role.server_config}")
-    expected = plan.bundle.tools(role)
-    tools: list[str] = []
     refreshes = 0
+    if plan.configs[role.name].action != "none" and token:
+        refreshes = await _await_tools(ctx, plan, role, token)
+    report, _, code = await verify.collect(
+        role_inputs(plan, role, mcp_token=token or None), mcp_transport=SETTINGS.transport
+    )
+    checks = [check for check in report["checks"] if isinstance(check, dict)]
+    if code != 0:
+        failed = [check for check in checks if check.get("status") not in ("PASS", "NOT_APPLICABLE")]
+        if any("HTTP 403" in str(check.get("detail")) for check in failed):
+            raise _failed(await _explain_403(ctx, plan, role, bool(token)), ctx)
+        detail = "; ".join(f"{check.get('name')}: {check.get('detail')}" for check in failed[:3])
+        raise _failed(f"the {role.name} endpoint failed {len(failed)} check(s): {detail}", ctx)
+    note = f", after {refreshes} re-announcement(s) of the Server Config this run wrote" if refreshes else ""
+    return (
+        f"{len(checks)} checks passed with the role's token: initialize, the exact Tool, Resource and "
+        f"Prompt inventories of {role.profile}, resources/read, prompts/get and bundle_info{note}"
+    )
+
+
+async def _await_tools(ctx: ApplyContext, plan: RuntimePlan, role: Role, token: str) -> int:
+    """Wait, bounded, until the endpoint of a Server Config written in this run serves Tools."""
+
+    endpoint = _endpoint_of(plan.endpoint.url, f"/data/mcp/{role.server_config}")
     for attempt in range(REFRESH_ATTEMPTS + 1):
         try:
-            async with McpHttpClient(endpoint, token or None, transport=SETTINGS.transport) as client:
+            async with McpHttpClient(endpoint, token, transport=SETTINGS.transport) as client:
                 await client.initialize()
                 tools = await client.tools_list() if client.advertises("tools") else []
         except McpMethodNotFound:
             tools = []
-        except McpProbeError as error:
-            if "HTTP 403" in str(error):
-                raise _failed(await _explain_403(ctx, plan, role, bool(token)), ctx) from error
-            raise _failed(f"the {role.name} endpoint failed: {error}", ctx) from error
+        except McpProbeError:
+            return attempt  # verify reports the failure and its cause
         if tools or attempt == REFRESH_ATTEMPTS:
-            break
-        # The endpoint came up before the project's Tools registered; announcing the
-        # same document again makes the Module build it once more.
+            return attempt
         await SETTINGS.sleep(REFRESH_WAIT_SECONDS)
         await _reannounce(ctx, plan, role)
-        refreshes += 1
-    if sorted(tools) != sorted(expected):
-        raise _failed(
-            f"the {role.name} endpoint lists {len(tools)} Tools and {_tool_drift(tools, expected)} "
-            f"compared with the {role.profile} profile",
-            ctx,
-        )
-    note = f", after {refreshes} re-announcement(s)" if refreshes else ""
-    return f"initialize with the role's token; tools/list matches the {len(expected)} Tools of {role.profile}{note}"
+    return REFRESH_ATTEMPTS
 
 
 async def _reannounce(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> None:

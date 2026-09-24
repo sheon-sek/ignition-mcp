@@ -8,6 +8,7 @@ opens a socket or sleeps.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -27,6 +28,7 @@ from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.report import JsonReporter
 from ignition_rest_mcp.cli.setup import runtime
 from ignition_rest_mcp.cli.setup_native import security
+from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpProbeError
 
 ROOT = Path(__file__).resolve().parents[3]
 MODULES = ROOT / "tests/fixtures/modules"
@@ -62,6 +64,12 @@ class FakeGateway:
         self.configs: dict[str, dict[str, Any]] = {}
         self.provider = False
         self.tags: dict[str, Any] = {}
+        #: An endpoint that answers but serves no Tool, as a Module does before the
+        #: project's provider registers.
+        self.serve_no_tools = False
+        #: What ``bundle_info`` reports, when it should differ from the deployed marker.
+        self.bundle_info_version = ""
+        self.bundle_resources = runtime.read_bundle(ROOT).inventories["readonly"]["resources"]
 
     # ---------------------------------------------------------------- helpers
 
@@ -103,6 +111,8 @@ class FakeGateway:
         query = {key: values[0] for key, values in parse_qs(urlsplit(str(request.url)).query).items()}
         self.requests.append((request.method, path))
         if path.startswith("/data/mcp/"):
+            if request.method == "GET":
+                return httpx.Response(415, json={"message": "Unsupported Media Type"})
             return self._mcp(request, path.rsplit("/", 1)[-1])
         if self._token_for(request.headers.get("X-Ignition-API-Token")) is None:
             return httpx.Response(403, json={"message": "Forbidden"})
@@ -156,6 +166,13 @@ class FakeGateway:
         return httpx.Response(404, json={"message": f"no route {path}"})
 
     def _delete(self, path: str) -> httpx.Response:
+        prefix = f"/data/api/v1/resources/{MCP_TYPE}/"
+        if path.startswith(prefix):
+            name, signature = path[len(prefix):].split("/")
+            if self.configs.get(name, {}).get("signature") != signature:
+                return httpx.Response(409, json={"message": "signature mismatch"})
+            del self.configs[name]
+            return httpx.Response(200, json={"success": True})
         prefix = "/data/api/v1/resources/ignition/api-token/"
         if path.startswith(prefix):
             name, signature = path[len(prefix):].split("/")
@@ -231,13 +248,25 @@ class FakeGateway:
         message = json.loads(request.content)
         if "id" not in message:
             return httpx.Response(202)
-        if message["method"] == "initialize":
+        method = message["method"]
+        if method == "initialize":
+            capabilities: dict[str, Any] = {"resources": {}} if self.serve_no_tools else {"tools": {}, "resources": {}}
             result: dict[str, Any] = {
-                "protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": name},
+                "protocolVersion": "2025-06-18", "capabilities": capabilities, "serverInfo": {"name": name},
             }
-        elif message["method"] == "tools/list":
+        elif method == "tools/list" and self.serve_no_tools:
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32600}})
+        elif method == "tools/list":
             tools = config["config"]["tools"][f"project/{runtime.PROJECT}"]
             result = {"tools": [{"name": tool} for tool in tools]}
+        elif method == "resources/list":
+            result = {"resources": [{"uri": uri} for uri in self.bundle_resources]}
+        elif method == "resources/read":
+            result = {"contents": [{"uri": message["params"]["uri"], "text": "{}"}]}
+        elif method == "tools/call" and message["params"]["name"] == "bundle_info":
+            marker = (self.project_json(runtime.PROJECT) or {}).get("description", "").splitlines()[-1]
+            version = self.bundle_info_version or marker.rsplit("=", 1)[-1]
+            result = {"structuredContent": {"bundleVersion": version}, "content": []}
         else:
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601}})
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "result": result})
@@ -275,10 +304,12 @@ def _probe(_url: str, token: str) -> str:
     return "" if token == SETUP_TOKEN else "the Gateway does not know this key"
 
 
-def setup(tmp_path: Path, *extra: str, environment: str = "dev") -> tuple[int, dict[str, Any], str]:
+def setup(
+    tmp_path: Path, *extra: str, environment: str = "dev", url: str = URL
+) -> tuple[int, dict[str, Any], str]:
     stream = io.StringIO()
     argv = [
-        "setup", "--gateway-url", URL, "--environment", environment,
+        "setup", "--gateway-url", url, "--environment", environment,
         "--gateway-token-file", str(_token_file(tmp_path)), "--json", *extra,
     ]
     code = engine.run(
@@ -524,3 +555,128 @@ def test_the_setup_key_check_reads_levels_below_a_required_level() -> None:
     assert hashlib.sha256((MODULES / next(MODULES.glob("*.modl")).name).read_bytes()).hexdigest() == (
         runtime.PINNED_MODULE_SHA256
     )
+
+
+# ------------------------------------------------------------- review round 1
+
+
+def _set_marker(gateway: FakeGateway, version: str) -> None:
+    old = gateway.projects["ignition_runtime"]
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(old)) as source, zipfile.ZipFile(buffer, "w") as target:
+        for name in source.namelist():
+            data = source.read(name)
+            if name == "project.json":
+                project = json.loads(data)
+                lines = project["description"].splitlines()
+                lines[-1] = lines[-1].rsplit("=", 1)[0] + "=" + version
+                project["description"] = "\n".join(lines)
+                data = json.dumps(project).encode()
+            target.writestr(name, data)
+    gateway.projects["ignition_runtime"] = buffer.getvalue()
+
+
+def test_a_module_upgrade_needs_its_own_acceptance(tmp_path: Path, gateway: FakeGateway) -> None:
+    gateway.module_build = "2020010100"
+
+    code, document, _ = setup(tmp_path, "--accept-certificate", "--accept-eula")
+
+    assert code == 2
+    assert "module_upgrade" in document["error"]["message"]
+    assert gateway.writes == []
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 0, document
+    assert "module_upgrade" in {item["item"] for item in document["accepted"]}
+    assert gateway.module_build == runtime.PINNED_MODULE_BUILD
+
+
+def test_a_bundle_downgrade_needs_its_own_acceptance(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _set_marker(gateway, "9.0.0")
+
+    code, document, _ = setup(tmp_path, "--accept-certificate")
+
+    assert code == 2
+    assert "bundle_upgrade" in document["error"]["message"]
+    assert any("(downgrade)" in change["change"] for change in document["plan"])
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 0, document
+    assert "bundle_upgrade" in {item["item"] for item in document["accepted"]}
+    assert (deployment(tmp_path) / "backups" / "ignition_runtime-9.0.0.zip").is_file()
+
+
+def test_moving_to_prod_narrows_the_roles_and_the_policy(tmp_path: Path, gateway: FakeGateway) -> None:
+    secure = "https://gw.test:8043"
+    assert setup(tmp_path, *ACCEPT, url=secure)[0] == 0
+    assert "engineer" in gateway.configs
+
+    code, document, _ = setup(tmp_path, "--yes", environment="prod", url=secure)
+
+    assert code == 0, document
+    changes = " | ".join(change["change"] for change in document["plan"])
+    assert "remove the engineer role" in changes and "narrow the Runtime Target Policy" in changes
+    assert steps(document)["runtime remove engineer"] == "CHANGED"
+    assert "engineer" not in gateway.configs and "ignition-mcp-engineer" not in gateway.tokens
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Setup", "IgnitionMcpAnalysis"]
+    assert not (deployment(tmp_path) / "runtime-engineer.secret").exists()
+    assert not (deployment(tmp_path) / "permissions-engineer.json").exists()
+    assert json.loads(gateway.tags["RuntimeTargetPolicy"])["allowlists"] == {}
+    assert 'roles = ["analysis"]' in (deployment(tmp_path) / "deployment.toml").read_text()
+    assert steps(document)["runtime check analysis"] == "OK"
+
+
+def test_the_closing_check_never_writes_to_a_config_it_did_not_plan(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    gateway.serve_no_tools = True
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path)
+
+    assert code == 1
+    assert steps(document)["runtime check analysis"] == "FAILED"
+    assert "inventory-tools" in document["error"]["message"]
+    assert document["error"]["next_action"]
+    assert gateway.writes == []
+
+
+def test_the_closing_check_runs_the_whole_verify_sequence(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    gateway.bundle_resources = gateway.bundle_resources[:-1]
+
+    code, document, _ = setup(tmp_path)
+
+    assert code == 1
+    assert "inventory-resources" in document["error"]["message"]
+
+    gateway.bundle_resources = runtime.read_bundle(ROOT).inventories["readonly"]["resources"]
+    gateway.bundle_info_version = "0.0.9"
+    code, document, _ = setup(tmp_path)
+
+    assert code == 1
+    assert "bundle-info" in document["error"]["message"]
+    assert any(method == "POST" and "/data/mcp/" in path for method, path in gateway.requests)
+
+
+def test_each_role_token_is_refused_on_the_other_role_endpoint(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    transport = runtime.SETTINGS.transport
+
+    async def initialize(role: str, token_of: str) -> str:
+        token = (deployment(tmp_path) / f"runtime-{token_of}.secret").read_text().strip()
+        endpoint = runtime._endpoint_of(URL, f"/data/mcp/{role}")
+        try:
+            async with McpHttpClient(endpoint, token, transport=transport) as client:
+                await client.initialize()
+        except McpProbeError as error:
+            return str(error)
+        return "OK"
+
+    assert asyncio.run(initialize("analysis", "analysis")) == "OK"
+    assert asyncio.run(initialize("engineer", "engineer")) == "OK"
+    assert "HTTP 403" in asyncio.run(initialize("engineer", "analysis"))
+    assert "HTTP 403" in asyncio.run(initialize("analysis", "engineer"))
