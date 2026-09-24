@@ -99,6 +99,13 @@ PROJECT = DEFAULT_BUNDLE_PROJECT
 
 SERVICE_IDENTITY = "ignition-mcp-service"
 SHELVE_CAP_SECONDS = 3600
+
+#: ``created`` record entries for the resources this stage creates (issue #76 review).
+#: ``reset`` deletes only what a record names, so an entry is written after the write
+#: that created the resource, never for one that was already there.
+MODULE_RECORD = "module"
+POLICY_RECORD = "policy"
+PROJECT_RECORD = f"project:{PROJECT}"
 POLICY_FILE = "runtime-policy.json"
 PERMISSIONS_FILE = "permissions-{role}.json"
 BACKUP_DIR = "backups"
@@ -146,6 +153,24 @@ class Role:
     @property
     def level_path(self) -> str:
         return f"{SECURITY_LEVEL_PARENT}/{self.level}"
+
+    @property
+    def level_record(self) -> str:
+        """The ``created`` entry for this role's Security Level (issue #76 review)."""
+
+        return f"level:{self.level_path}"
+
+    @property
+    def token_record(self) -> str:
+        """The ``created`` entry for this role's Gateway API token."""
+
+        return f"runtime-token:{self.token}"
+
+    @property
+    def config_record(self) -> str:
+        """The ``created`` entry for this role's Server Config."""
+
+        return f"server-config:{self.server_config}"
 
     def permissions(self) -> dict[str, Any]:
         """The Server Config permissions tree, generated from the role's level."""
@@ -1068,6 +1093,10 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
     with ctx.reporter.step("runtime module", f"MCP Module build {plan.artifact.build}") as end:
         if plan.install_module:
             asyncio.run(_install_module(ctx, plan))
+            if plan.installed is None:
+                # A fresh install is this deployment's resource. A replaced older build
+                # is not: the Module existed before this run.
+                ctx.record_created(MODULE_RECORD)
             end.set(Status.CHANGED, f"installed build {plan.artifact.build} from {plan.module_file}; restarted")
         else:
             end.set(Status.OK, f"build {plan.artifact.build} is installed; the pinned file is {plan.module_file}")
@@ -1075,7 +1104,10 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
         if plan.project_action == "none":
             end.set(Status.OK, f"managed bundle {plan.bundle.version} is deployed")
         else:
-            end.set(Status.CHANGED, asyncio.run(_deploy_bundle(ctx, plan)))
+            result = asyncio.run(_deploy_bundle(ctx, plan))
+            if plan.project_action == "create":
+                ctx.record_created(PROJECT_RECORD)
+            end.set(Status.CHANGED, result)
     for removal in plan.removals:
         with ctx.reporter.step(f"runtime remove {removal.role.name}", "a role this run no longer deploys") as end:
             end.set(Status.CHANGED, asyncio.run(_remove_role(ctx, removal)))
@@ -1083,6 +1115,7 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
     with ctx.reporter.step("runtime security levels", ", ".join(r.level_path for r in plan.roles)) as end:
         if plan.new_levels or removed_levels:
             asyncio.run(_write_levels(ctx, plan, removed_levels))
+            ctx.record_created(*(role.level_record for role in plan.new_levels))
             done = [f"created {r.level_path}" for r in plan.new_levels]
             done += [f"removed {r.level_path}" for r in removed_levels]
             end.set(Status.CHANGED, ", ".join(done))
@@ -1094,18 +1127,29 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
             if token.action == "none":
                 end.set(Status.OK, f"exists and matches {ctx.deployment.secret_path(role.secret)}")
             else:
-                end.set(Status.CHANGED, asyncio.run(_write_token(ctx, plan, role, token)))
+                result = asyncio.run(_write_token(ctx, plan, role, token))
+                if token.action in ("create", "recreate"):
+                    # A recreated token is this run's resource: the served one is the new
+                    # one, and the old one is gone.
+                    ctx.record_created(role.token_record)
+                end.set(Status.CHANGED, result)
         config = plan.configs[role.name]
         with ctx.reporter.step(f"runtime server config {role.name}", role.server_config) as end:
             if config.action == "none":
                 end.set(Status.OK, f"{len(plan.bundle.tools(role))} Tools and the generated permissions tree")
             else:
-                end.set(Status.CHANGED, asyncio.run(_write_config(ctx, plan, role, config)))
+                result = asyncio.run(_write_config(ctx, plan, role, config))
+                if config.action == "create":
+                    ctx.record_created(role.config_record)
+                end.set(Status.CHANGED, result)
     with ctx.reporter.step("runtime policy", docs.POLICY_PATH) as end:
         if plan.policy_action == "none":
             end.set(Status.OK, "the served document is the generated one")
         else:
-            end.set(Status.CHANGED, asyncio.run(_write_policy(ctx, plan)))
+            result = asyncio.run(_write_policy(ctx, plan))
+            if plan.policy_action == "create":
+                ctx.record_created(POLICY_RECORD)
+            end.set(Status.CHANGED, result)
     with ctx.reporter.step("runtime documents", str(ctx.deployment.directory)) as end:
         written = [name for name, text in plan.documents.items() if _write_local(ctx, name, text)]
         end.set(Status.CHANGED if written else Status.OK, ", ".join(written) or "unchanged")

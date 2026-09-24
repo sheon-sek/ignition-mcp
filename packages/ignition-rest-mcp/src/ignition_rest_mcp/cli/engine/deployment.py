@@ -29,6 +29,10 @@ DEPLOYMENT_FILE = "deployment.toml"
 SECRET_SUFFIX = ".secret"
 DIRECTORY_MODE = 0o700
 NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+#: The key in ``deployment.toml`` that lists the Gateway resources this deployment
+#: created, one ``<kind>:<name>`` entry each (D32 section 10, issue #76 review).
+#: ``setup`` writes it as it creates a resource; ``reset`` deletes only what it names.
+CREATED_KEY = "created"
 
 #: A value ``deployment.toml`` can hold. Nested tables are not needed yet.
 Value = str | bool | int | list[str]

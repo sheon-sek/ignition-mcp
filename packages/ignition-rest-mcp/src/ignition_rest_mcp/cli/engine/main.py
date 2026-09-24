@@ -27,6 +27,7 @@ deletes them.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -36,7 +37,14 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, open_deployment, save_deployment, write_secret
+from ignition_rest_mcp.cli.engine.deployment import (
+    CREATED_KEY,
+    Deployment,
+    Value,
+    open_deployment,
+    save_deployment,
+    write_secret,
+)
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.prompter import Prompter, default_prompter, is_terminal
 from ignition_rest_mcp.cli.engine.report import JsonReporter, PlannedChange, Reporter, RichReporter, Status
@@ -198,6 +206,38 @@ class ApplyContext(Context):
 
         self._gate.check(f"writing the {secret} secret file")
         return write_secret(self.deployment, secret, value)
+
+    def record_created(self, *resources: str) -> list[str]:
+        """Record the Gateway resources this run created, and return the whole record.
+
+        ``reset`` deletes only what this record names, so a stage records a resource
+        after the write that created it, never what it found already there and left
+        alone or updated. ``resources`` are ``<kind>:<name>`` entries.
+        """
+
+        self._gate.check("recording the created resources")
+        saved = self.deployment.values.get(CREATED_KEY)
+        known = [str(item) for item in saved] if isinstance(saved, list) else []
+        record = list(dict.fromkeys([*known, *resources]))
+        if record != known:
+            self.save({CREATED_KEY: record})
+        return record
+
+    def remove_deployment_directory(self) -> int:
+        """Delete the deployment directory itself, through the gate. Returns the entries removed.
+
+        A stage never removes the directory with :mod:`shutil` directly: the removal is
+        a write like any other, so it happens only after the plan was shown, accepted
+        and confirmed.
+        """
+
+        self._gate.check("deleting the deployment directory")
+        directory = self.deployment.directory
+        if not directory.is_dir():
+            return 0
+        entries = sum(1 for _ in directory.rglob("*"))
+        shutil.rmtree(directory)
+        return entries
 
     def gateway_writer(self, transport: httpx.AsyncBaseTransport | None = None) -> GatewayWriter:
         """The curated Gateway write path, with every write checked against the gate."""

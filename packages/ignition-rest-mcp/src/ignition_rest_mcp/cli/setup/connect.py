@@ -19,6 +19,13 @@ wizard's equivalent command carries the answer:
   for a Gateway API token;
 * ``none`` registers nothing.
 
+Before anything is written, the entry a name already holds is read from that client's
+own configuration. An identical entry is a no change; a different one is named with
+the fields that differ, never their values, and is replaced only after the D32
+section 6 overwrite acceptance, which ``--yes`` covers in one-line mode. Claude Code's
+different entry keeps its place until the new content is registered under a temporary
+name, and is put back if the registration under the real name fails.
+
 A token never appears in this command's output, its report or its equivalent command.
 It is passed to the client through the client's own configuration and the report names
 where it went. Tests replace :data:`SETTINGS`, so no test runs the real ``claude`` or
@@ -41,7 +48,7 @@ from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.deployment import Deployment, read_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.report import Status
-from ignition_rest_mcp.cli.engine.resolve import PROG, InputSpec, Kind
+from ignition_rest_mcp.cli.engine.resolve import PROG, InputSpec, Kind, Needed, Risk, accept
 from ignition_rest_mcp.cli.setup import rest, runtime, start
 
 NONE = "none"
@@ -55,6 +62,9 @@ CLAUDE_SCOPE = "user"
 COMMAND_TIMEOUT_SECONDS = 60.0
 #: How much of a client's own failure output is quoted back, in characters.
 SNIPPET_LENGTH = 200
+#: The name a replacement is registered under first, so the new content is known to
+#: work before the existing entry under the real name is touched.
+TEMP_SUFFIX = "-ignition-mcp-tmp"
 
 #: The credential header the MCP Module reads (D32 section 8). The bearer scheme is
 #: not accepted for a Gateway API token, which is why Codex needs ``http_headers``.
@@ -191,44 +201,185 @@ def _snippet(result: RunResult) -> str:
     return ""
 
 
-def _register_claude(ctx: engine.Context, items: Sequence[Registration]) -> tuple[list[str], str]:
+def claude_config_path() -> Path:
+    """Claude Code's user-scope state file, which holds the entries ``--scope user`` writes."""
+
+    if SETTINGS.home is not None:
+        return SETTINGS.home / ".claude.json"
+    directory = os.environ.get("CLAUDE_CONFIG_DIR")
+    if directory:
+        return Path(directory).expanduser() / ".claude.json"
+    return Path.home() / ".claude.json"
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    """The JSON object at ``path``; an absent file is ``{}`` and an unreadable one is refused."""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return {}
+    except (OSError, UnicodeDecodeError) as error:
+        raise CliError(
+            ErrorCode.INVALID_INPUT,
+            f"{path} cannot be read ({type(error).__name__}); fix it before connecting",
+            next_action=f"{PROG} connect --help",
+        ) from error
+    try:
+        document = json.loads(text)
+    except ValueError as error:
+        raise CliError(
+            ErrorCode.INVALID_INPUT,
+            f"{path} is not valid JSON ({error}); fix it before connecting",
+            next_action=f"{PROG} connect --help",
+        ) from error
+    return document if isinstance(document, dict) else {}
+
+
+def _claude_entries() -> dict[str, Any]:
+    """Every MCP entry Claude Code holds at the user scope, by name.
+
+    Reading its own state file is how this CLI learns whether a name is already taken;
+    the writes still go through ``claude mcp add``.
+    """
+
+    servers = _read_json_object(claude_config_path()).get("mcpServers")
+    return servers if isinstance(servers, dict) else {}
+
+
+def _diff(client: str, entry: dict[str, Any], item: Registration) -> list[str]:
+    """What differs between an existing entry and ours, naming fields and never values."""
+
+    drift: list[str] = []
+    if entry.get("url") != item.url:
+        drift.append("its url")
+    headers = entry.get("headers") if client == "claude" else entry.get("http_headers")
+    if headers != {item.header: item.value}:
+        drift.append(f"its {item.header} header")
+    return drift
+
+
+def existing_entries(client: str) -> dict[str, Any]:
+    """Every entry the client already holds under our names, as one snapshot."""
+
+    if client == "claude":
+        return _claude_entries()
+    return _codex_servers(_read_codex())
+
+
+def _collisions(client: str, entries: dict[str, Any], items: Sequence[Registration]) -> list[Needed]:
+    """The acceptance items the existing entries of this client need, if any."""
+
+    needed: list[Needed] = []
+    for item in items:
+        entry = entries.get(item.name)
+        if not isinstance(entry, dict):
+            continue
+        drift = _diff(client, entry, item)
+        if drift:
+            needed.append(
+                Needed(Risk.OVERWRITE_HAND_EDIT, f"the {LABELS[client]} entry {item.name}: {', '.join(drift)}")
+            )
+    return needed
+
+
+def _connect_next(ctx: engine.Context) -> str:
+    return f"{PROG} connect {getattr(ctx.args, 'role', '<role>')} --deployment {ctx.deployment.name}"
+
+
+def _client(ctx: engine.Context, argv: Sequence[str], what: str) -> RunResult:
+    """Run one client command, and stop the run when the client refuses it."""
+
+    result = SETTINGS.run(argv)
+    if result.code != 0:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"{what} (exit {result.code}){_snippet(result)}",
+            next_action=_connect_next(ctx),
+        )
+    return result
+
+
+def _add_argv(binary: str, name: str, item: Registration) -> list[str]:
+    return [
+        binary,
+        "mcp",
+        "add",
+        "--transport",
+        "http",
+        name,
+        item.url,
+        "--scope",
+        CLAUDE_SCOPE,
+        "--header",
+        item.line,
+    ]
+
+
+def _remove_argv(binary: str, name: str) -> list[str]:
+    return [binary, "mcp", "remove", name, "--scope", CLAUDE_SCOPE]
+
+
+def _restore_claude(ctx: engine.Context, item: Registration, old: dict[str, Any], temp: str) -> str:
+    """Put the previous entry back with the client's own JSON form; returns what happened."""
+
+    binary = BINARIES["claude"]
+    SETTINGS.run(_remove_argv(binary, temp))
+    result = SETTINGS.run([binary, "mcp", "add-json", item.name, json.dumps(old), "--scope", CLAUDE_SCOPE])
+    if result.code != 0:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"the previous entry {item.name} was not restored (exit {result.code}){_snippet(result)}",
+            next_action=_connect_next(ctx),
+        )
+    return f"the previous entry {item.name} was restored"
+
+
+def _register_claude(
+    ctx: engine.Context, items: Sequence[Registration], entries: dict[str, Any]
+) -> tuple[list[str], str]:
     """Register through ``claude mcp add``, its own configuration mechanism."""
 
     binary = BINARIES["claude"]
     registered: list[str] = []
     for item in items:
         with ctx.reporter.step(f"claude {item.name}", item.url) as end:
-            # claude mcp add refuses a name that is already registered, so a previous
-            # registration goes first. A remove that finds nothing is not a failure.
-            SETTINGS.run([binary, "mcp", "remove", item.name, "--scope", CLAUDE_SCOPE])
-            result = SETTINGS.run(
-                [
-                    binary,
-                    "mcp",
-                    "add",
-                    "--transport",
-                    "http",
-                    item.name,
-                    item.url,
-                    "--scope",
-                    CLAUDE_SCOPE,
-                    "--header",
-                    item.line,
-                ]
-            )
-            if result.code != 0:
-                raise CliError(
-                    ErrorCode.STEP_FAILED,
-                    f"Claude Code refused the registration (exit {result.code}){_snippet(result)}",
-                    next_action=_connect_next(ctx),
+            old = entries.get(item.name)
+            if isinstance(old, dict) and not _diff("claude", old, item):
+                end.set(Status.OK, f"already registered in {claude_config_path()} as this deployment wants it")
+                registered.append(item.name)
+                continue
+            if not isinstance(old, dict):
+                _client(ctx, _add_argv(binary, item.name, item), f"Claude Code refused the registration of {item.name}")
+                end.set(Status.CHANGED, f"registered with Claude Code, scope {CLAUDE_SCOPE}")
+                registered.append(item.name)
+                continue
+            # A different entry owns this name and someone else may depend on it. The new
+            # content is registered under a temporary name first, so the old entry is only
+            # removed once the new one is known to work, and is restored if the rename fails.
+            temp = f"{item.name}{TEMP_SUFFIX}"
+            _client(ctx, _add_argv(binary, temp, item), f"Claude Code refused the registration of {temp}")
+            try:
+                _client(ctx, _remove_argv(binary, item.name), f"Claude Code would not replace {item.name}")
+            except CliError:
+                # The existing entry is still there, so only the temporary one goes.
+                SETTINGS.run(_remove_argv(binary, temp))
+                raise
+            try:
+                _client(
+                    ctx, _add_argv(binary, item.name, item), f"Claude Code refused the registration of {item.name}"
                 )
-            end.set(Status.CHANGED, f"registered with Claude Code, scope {CLAUDE_SCOPE}")
+            except CliError as error:
+                note = _restore_claude(ctx, item, old, temp)
+                raise CliError(error.code, f"{error.message}; {note}", error.next_action) from error
+            _client(ctx, _remove_argv(binary, temp), f"Claude Code would not remove the temporary entry {temp}")
+            end.set(
+                Status.CHANGED,
+                f"replaced a different entry of the same name in {claude_config_path()}, which was restored "
+                "first if the registration had failed",
+            )
             registered.append(item.name)
     return registered, f"Claude Code's own configuration, scope {CLAUDE_SCOPE}"
-
-
-def _connect_next(ctx: engine.Context) -> str:
-    return f"{PROG} connect {getattr(ctx.args, 'role', '<role>')} --deployment {ctx.deployment.name}"
 
 
 # --------------------------------------------------------------------------- Codex
@@ -297,10 +448,11 @@ def _replace_table(text: str, item: Registration) -> str:
             body += "\n"
         separator = "\n" if body.strip() else ""
         return body + separator + "\n".join(block) + "\n"
+    own = f"[mcp_servers.{item.name}."
     end = start + 1
     while end < len(lines):
         stripped = lines[end].strip()
-        if stripped.startswith("[") and not stripped.startswith(f"{header}."):
+        if stripped.startswith("[") and not stripped.startswith(own):
             break
         end += 1
     return "\n".join([*lines[:start], *block, *lines[end:]]) + "\n"
@@ -331,6 +483,22 @@ def _codex_next() -> str:
     return f"{PROG} connect --help"
 
 
+def _read_codex() -> str:
+    """Codex's configuration as text; an absent file is empty."""
+
+    path = codex_config_path()
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeDecodeError) as error:
+        raise CliError(
+            ErrorCode.INVALID_INPUT,
+            f"{path} cannot be read ({type(error).__name__})",
+            next_action=_codex_next(),
+        ) from error
+
+
 def _write_codex(path: Path, text: str) -> None:
     """Write the configuration atomically, with mode ``0600`` because it holds a token."""
 
@@ -341,29 +509,23 @@ def _write_codex(path: Path, text: str) -> None:
     os.replace(staging, path)
 
 
-def _register_codex(ctx: engine.Context, items: Sequence[Registration]) -> tuple[list[str], str]:
-    """Register in Codex's own configuration file."""
+def _register_codex(
+    ctx: engine.Context, items: Sequence[Registration], entries: dict[str, Any]
+) -> tuple[list[str], str]:
+    """Register in Codex's own configuration file, leaving every other table alone."""
 
     path = codex_config_path()
     registered: list[str] = []
     for item in items:
         with ctx.reporter.step(f"codex {item.name}", item.url) as end:
-            try:
-                text = path.read_text(encoding="utf-8")
-            except FileNotFoundError:
-                text = ""
-            except (OSError, UnicodeDecodeError) as error:
-                raise CliError(
-                    ErrorCode.INVALID_INPUT,
-                    f"{path} cannot be read ({type(error).__name__})",
-                    next_action=_codex_next(),
-                ) from error
-            updated = codex_config_text(text, [item])
+            replaced = isinstance(entries.get(item.name), dict) and _diff("codex", entries[item.name], item)
+            updated = codex_config_text(_read_codex(), [item])
             if updated is None:
-                end.set(Status.OK, f"{item.name} is already registered in {path}")
+                end.set(Status.OK, f"{item.name} is already registered in {path} as this deployment wants it")
             else:
                 _write_codex(path, updated)
-                end.set(Status.CHANGED, f"registered in {path}, mode 0600, header {item.header}")
+                what = "replaced a different entry of the same name" if replaced else "registered"
+                end.set(Status.CHANGED, f"{what} in {path}, mode 0600, header {item.header}")
             registered.append(item.name)
     return registered, str(path)
 
@@ -398,7 +560,16 @@ def connect(ctx: engine.Context) -> None:
         ctx.reporter.end("client", Status.SKIPPED, "none was chosen, so nothing was registered")
         return
     items = registrations(ctx, role, deployment)
-    registered, location = _register_claude(ctx, items) if client == "claude" else _register_codex(ctx, items)
+    entries = existing_entries(client)
+    # A name this client already holds with different content is someone else's entry
+    # until the operator says otherwise, so the acceptance is taken before any write.
+    accepted = accept(_collisions(client, entries, items), ctx.accept_flags, ctx.prompter)
+    ctx.accepted.extend(accepted)
+    ctx.reporter.accepted(accepted)
+    if client == "claude":
+        registered, location = _register_claude(ctx, items, entries)
+    else:
+        registered, location = _register_codex(ctx, items, entries)
     ctx.reporter.end(
         "client",
         Status.OK,

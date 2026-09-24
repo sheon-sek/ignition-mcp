@@ -11,6 +11,7 @@ socket, sleeps, or runs the real ``claude`` or ``codex`` binary.
 
 from __future__ import annotations
 
+import argparse
 import base64
 import io
 import json
@@ -29,8 +30,10 @@ from rich.console import Console
 from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment, save_deployment, write_secret
 from ignition_rest_mcp.cli.engine.report import JsonReporter, RichReporter
+from ignition_rest_mcp.cli.engine.resolve import Secret as EngineSecret
 from ignition_rest_mcp.cli.setup import connect, reset, rest, runtime, status
 from ignition_rest_mcp.cli.setup_native import documents as docs
+from ignition_rest_mcp.cli.setup_native import gateway as gw
 from ignition_rest_mcp.cli.setup_native import security
 from test_phase7_setup_runtime import (
     ACCEPT,
@@ -38,6 +41,7 @@ from test_phase7_setup_runtime import (
     ROOT,
     SETUP_KEY,
     SETUP_LEVEL,
+    SETUP_TOKEN,
     URL,
     FakeGateway,
     _no_sleep,
@@ -178,6 +182,15 @@ def deployment(tmp_path: Path) -> Deployment:
     return open_deployment("default", tmp_path / "deployments")
 
 
+def record(tmp_path: Path, *resources: str) -> None:
+    """Add to the deployment's ``created`` record the way a stage does."""
+
+    served = deployment(tmp_path)
+    saved = served.values.get(engine.CREATED_KEY)
+    known = [str(item) for item in saved] if isinstance(saved, list) else []
+    save_deployment(served, {engine.CREATED_KEY: list(dict.fromkeys([*known, *resources]))})
+
+
 def _seed_rest(tmp_path: Path, gateway: CliGateway, roles: Sequence[str]) -> None:
     """Add the REST plane state the REST stage writes: the token, the secrets, the settings."""
 
@@ -197,6 +210,7 @@ def _seed_rest(tmp_path: Path, gateway: CliGateway, roles: Sequence[str]) -> Non
             rest.RECORD_KEY: ["wildcard_target_allowlist:config,control"],
         },
     )
+    record(tmp_path, rest.REST_TOKEN_RECORD)
 
 
 def healthy(tmp_path: Path, gateway: CliGateway, *, roles: Sequence[str] = ("analysis", "engineer")) -> Deployment:
@@ -377,11 +391,8 @@ def test_connect_registers_both_endpoints_with_claude_and_never_prints_a_token(
     token = (deployment(tmp_path).directory / "runtime-analysis.secret").read_text(encoding="utf-8").strip()
     assert runtime_header == f"{connect.RUNTIME_HEADER}: {token}"
     assert rest_header == f"Authorization: Bearer ignition-mcp-analysis:{ROLE_SECRETS['analysis'][1]}"
-    # A name that is already registered is removed before the add.
-    assert [call[3] for call in client_binaries.calls if call[1:3] == ["mcp", "remove"]] == [
-        "ignition-runtime-analysis",
-        "ignition-rest-analysis",
-    ]
+    # Nothing is removed for a name this client does not hold.
+    assert [call[1:3] for call in client_binaries.calls if len(call) > 2 and call[2] == "remove"] == []
     for secret in (token, token.partition(":")[2], ROLE_SECRETS["analysis"][1], REST_KEY):
         assert secret not in raw
     assert "Claude Code" in reasons(document)["client"]
@@ -612,3 +623,314 @@ def _unmanaged_project() -> bytes:
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("project.json", json.dumps({"title": "mine", "description": "hand made"}))
     return buffer.getvalue()
+
+
+# --------------------------------------------- ownership: only what setup created
+
+
+def test_reset_keeps_a_pre_existing_security_level_and_module(
+    tmp_path: Path, gateway: CliGateway
+) -> None:
+    """The Module and the analysis level are there before setup, so setup creates neither."""
+
+    gateway.module_build = runtime.PINNED_MODULE_BUILD
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    authenticated["children"].append({"name": "IgnitionMcpAnalysis", "children": []})
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+    assert code == 0, document
+    _seed_rest(tmp_path, gateway, ("analysis", "engineer"))
+    created = deployment(tmp_path).values[engine.CREATED_KEY]
+    assert isinstance(created, list)
+    assert runtime.MODULE_RECORD not in created
+    assert "level:Authenticated/IgnitionMcpAnalysis" not in created
+    assert "level:Authenticated/IgnitionMcpEngineer" in created
+    gateway.requests.clear()
+
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 0, document
+    changes = " | ".join(change["change"] for change in document["plan"])
+    assert "leave the Security Level Authenticated/IgnitionMcpAnalysis in place" in changes
+    assert f"leave MCP Module build {runtime.PINNED_MODULE_BUILD} in place" in changes
+    assert steps(document)["reset module"] == "OK"
+    assert steps(document)["reset analysis"] == "CHANGED"
+    assert steps(document)["reset security levels"] == "CHANGED"
+    # The Gateway keeps what it had: the Module is not uninstalled and nothing restarts.
+    assert gateway.module_build == runtime.PINNED_MODULE_BUILD
+    assert gateway.uninstalled == []
+    assert not any(path.endswith("/restart-tasks/restart") for _, path in gateway.requests)
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Setup", "IgnitionMcpAnalysis"]
+    # What setup did create goes.
+    assert "ignition-mcp-analysis" not in gateway.tokens
+    assert gateway.projects == {} and gateway.policy_provider is None
+
+
+def test_reset_keeps_a_server_config_setup_left_alone(tmp_path: Path, gateway: CliGateway) -> None:
+    """A matching Server Config survives setup, so it is not recorded and not deleted."""
+
+    # The Module is there first, so the Server Config resource type is observable.
+    gateway.module_build = runtime.PINNED_MODULE_BUILD
+    gateway.configs["analysis"] = _pre_existing_server_config("analysis")
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+    assert code == 0, document
+    _seed_rest(tmp_path, gateway, ("analysis", "engineer"))
+    created = deployment(tmp_path).values[engine.CREATED_KEY]
+    assert isinstance(created, list)
+    assert runtime.ROLES["analysis"].config_record not in created
+    assert runtime.ROLES["engineer"].config_record in created
+    gateway.requests.clear()
+
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 0, document
+    assert any(
+        "leave the Server Config analysis in place" in change["change"] for change in document["plan"]
+    )
+    assert "analysis" in gateway.configs and "engineer" not in gateway.configs
+    assert "ignition-mcp-analysis" not in gateway.tokens
+    assert reasons(document)["reset analysis"] == "removed API token ignition-mcp-analysis"
+
+
+def _pre_existing_server_config(role_name: str) -> dict[str, Any]:
+    """A Server Config exactly as ``setup`` would write it, so setup leaves it alone."""
+
+    targets = runtime.RuntimeTargets(
+        bundle=runtime.read_bundle(ROOT), endpoint=runtime._endpoint_of(URL), insecure_channel=True
+    )
+    role = runtime.ROLES[role_name]
+    inputs = runtime.role_inputs(targets, role)
+    return {
+        "name": role.server_config,
+        "collection": "core",
+        "enabled": True,
+        "signature": "pre-existing-1",
+        "config": docs.desired_server_config(inputs, None, role.permissions()),
+    }
+
+
+# --------------------------------------------------------- the write gate
+
+
+def test_the_deployment_directory_is_removed_through_the_gate(tmp_path: Path, gateway: CliGateway) -> None:
+    directory = tmp_path / "deployments" / "default"
+    save_deployment(
+        Deployment("default", directory), {"environment": "dev", "gateway_url": URL, "roles": ["analysis"]}
+    )
+    (directory / "notes.txt").write_text("keep me\n", encoding="utf-8")
+    gateway.module_build = None
+    ctx = _context(tmp_path)
+
+    plan = reset.plan(ctx)
+
+    assert plan.changes == [f"delete the deployment directory {directory} (2 entries)"]
+    with pytest.raises(engine.WriteBeforeAcceptance):
+        reset.apply(_apply_context(tmp_path), plan)
+    assert (directory / "notes.txt").is_file()
+
+
+def _resolved(tmp_path: Path) -> Any:
+    resolved = engine.Resolved(deployment(tmp_path))
+    resolved.values["gateway_url"] = URL
+    resolved.secrets["gateway_token"] = EngineSecret(SETUP_TOKEN)
+    return resolved
+
+
+def _context(tmp_path: Path) -> engine.Context:
+    return engine.Context(
+        command="reset",
+        args=argparse.Namespace(),
+        specs=[],
+        resolved=_resolved(tmp_path),
+        prompter=None,
+        reporter=JsonReporter("reset", io.StringIO()),
+        accept_flags=engine.AcceptFlags(True, False, False),
+    )
+
+
+def _apply_context(tmp_path: Path) -> engine.ApplyContext:
+    ctx = _context(tmp_path)
+    return engine.ApplyContext(
+        command=ctx.command,
+        args=ctx.args,
+        specs=ctx.specs,
+        resolved=ctx.resolved,
+        prompter=ctx.prompter,
+        reporter=ctx.reporter,
+        accept_flags=ctx.accept_flags,
+    )
+
+
+# ------------------------------------------------------------- the environment
+
+
+def test_reset_refuses_anything_but_a_dev_environment(tmp_path: Path, gateway: CliGateway) -> None:
+    directory = healthy(tmp_path, gateway).directory
+    argv = ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"]
+
+    for value in ("production", "prod", ""):
+        save_deployment(deployment(tmp_path), {"environment": value})
+        gateway.requests.clear()
+        code, document, _ = run_json(argv, tmp_path / "deployments", token_probe=_probe)
+        assert code == 2, document
+        assert document["error"]["code"] == "invalid_input"
+        assert "refused outside dev" in document["error"]["message"]
+        assert gateway.requests == []
+        assert directory.exists()
+
+    path = directory / "deployment.toml"
+    path.write_text(
+        "".join(line for line in path.read_text(encoding="utf-8").splitlines(keepends=True)
+                if not line.startswith("environment")),
+        encoding="utf-8",
+    )
+    code, document, _ = run_json(argv, tmp_path / "deployments", token_probe=_probe)
+    assert code == 2, document
+    assert "no environment at all" in document["error"]["message"]
+    assert gateway.requests == []
+
+
+# --------------------------------------------------------- client collisions
+
+
+def _claude_entries(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))["mcpServers"]
+
+
+def test_connect_keeps_a_different_claude_entry_without_acceptance(
+    tmp_path: Path, gateway: CliGateway, client_binaries: FakeRunner
+) -> None:
+    healthy(tmp_path, gateway)
+    path = tmp_path / ".claude.json"
+    other = {
+        "type": "http",
+        "url": "http://another-gateway:9000/data/mcp/analysis",
+        "headers": {"X-Ignition-API-Token": "another:key"},
+    }
+    path.write_text(
+        json.dumps({"mcpServers": {"ignition-runtime-analysis": other, "someone-else": {"url": "http://x/mcp"}}}),
+        encoding="utf-8",
+    )
+
+    code, document, raw = run_json(
+        ["connect", "analysis", "--client", "claude", "--deployment", "default"], tmp_path / "deployments"
+    )
+
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert "overwrite_hand_edit" in document["error"]["message"]
+    assert "ignition-runtime-analysis" in document["error"]["message"]
+    assert "its url" in document["error"]["message"]
+    assert client_binaries.calls == []
+    assert _claude_entries(path)["ignition-runtime-analysis"] == other
+    assert other["headers"]["X-Ignition-API-Token"] not in raw
+
+
+def test_connect_restores_the_claude_entry_when_the_registration_fails(
+    tmp_path: Path, gateway: CliGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    healthy(tmp_path, gateway)
+    path = tmp_path / ".claude.json"
+    other = {
+        "type": "http",
+        "url": "http://another-gateway:9000/data/mcp/analysis",
+        "headers": {"X-Ignition-API-Token": "another:key"},
+    }
+    path.write_text(json.dumps({"mcpServers": {"ignition-runtime-analysis": other}}), encoding="utf-8")
+    calls: list[list[str]] = []
+    state = {"fail": True}
+
+    def run(argv: Sequence[str]) -> connect.RunResult:
+        calls.append(list(argv))
+        if list(argv[2:3]) == ["add"] and argv[5] == "ignition-runtime-analysis" and state["fail"]:
+            state["fail"] = False
+            return connect.RunResult(code=1, stderr="the name is already in use")
+        return connect.RunResult(code=0)
+
+    monkeypatch.setattr(
+        connect,
+        "SETTINGS",
+        connect.Settings(which=lambda name: f"/usr/bin/{name}", run=run, home=tmp_path),
+    )
+
+    code, document, raw = run_json(
+        ["connect", "analysis", "--client", "claude", "--yes", "--deployment", "default"],
+        tmp_path / "deployments",
+    )
+
+    assert code == 1
+    assert steps(document)["claude ignition-runtime-analysis"] == "FAILED"
+    assert "was restored" in reasons(document)["claude ignition-runtime-analysis"]
+    assert [item["item"] for item in document["accepted"]] == ["overwrite_hand_edit"]
+    added = [call[5] for call in calls if call[2:3] == ["add"]]
+    # The new content is registered under a temporary name first, then under the real name.
+    assert added == ["ignition-runtime-analysis-ignition-mcp-tmp", "ignition-runtime-analysis"]
+    restore = [call for call in calls if call[2:3] == ["add-json"]]
+    assert len(restore) == 1
+    assert restore[0][3] == "ignition-runtime-analysis"
+    assert json.loads(restore[0][4]) == other
+    assert other["headers"]["X-Ignition-API-Token"] not in raw
+
+
+def test_connect_replaces_a_different_codex_entry_only_with_acceptance(
+    tmp_path: Path, gateway: CliGateway, client_binaries: FakeRunner
+) -> None:
+    healthy(tmp_path, gateway)
+    path = tmp_path / ".codex" / "config.toml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    kept = '# a comment someone wrote\n[mcp_servers.other]\nurl = "http://other/mcp"\n\n'
+    other = (
+        "[mcp_servers.ignition-runtime-analysis]\n"
+        'url = "http://another-gateway:9000/data/mcp/analysis"\n\n'
+        "[mcp_servers.ignition-runtime-analysis.http_headers]\n"
+        '"X-Ignition-API-Token" = "another:key"\n'
+    )
+    path.write_text(kept + other, encoding="utf-8")
+    argv = ["connect", "analysis", "--client", "codex", "--deployment", "default"]
+
+    code, document, _ = run_json(argv, tmp_path / "deployments")
+
+    assert code == 2 and document["error"]["code"] == "acceptance_required"
+    assert path.read_text(encoding="utf-8") == kept + other
+
+    code, document, raw = run_json([*argv, "--yes"], tmp_path / "deployments")
+
+    assert code == 0, document
+    assert [item["item"] for item in document["accepted"]] == ["overwrite_hand_edit"]
+    text = path.read_text(encoding="utf-8")
+    assert text.startswith(kept)
+    assert "http://another-gateway:9000/data/mcp/analysis" not in text
+    assert "another:key" not in raw
+    token = (deployment(tmp_path).directory / "runtime-analysis.secret").read_text(encoding="utf-8").strip()
+    assert f'"X-Ignition-API-Token" = {json.dumps(token)}' in text
+    assert "replaced a different entry of the same name" in reasons(document)["codex ignition-runtime-analysis"]
+
+
+# ------------------------------------------------------- status next actions
+
+
+def test_status_gives_the_unreadable_checks_a_specific_next_action(
+    tmp_path: Path, gateway: CliGateway
+) -> None:
+    healthy(tmp_path, gateway)
+    gateway.levels = "not a tree"
+    gateway.tokens["setup"]["config"]["profile"].pop("securityLevels")
+
+    code, document, _ = run_json(status_argv(tmp_path), tmp_path / "deployments", token_probe=_probe)
+
+    assert code == 1
+    assert steps(document)["level analysis"] == "FAILED"
+    assert next_actions(document)["level analysis"] == f"curl -sS {URL}{gw.SECURITY_LEVELS_PATH}"
+    assert steps(document)["rest token"] == "FAILED"
+    key = next_actions(document)["rest token"]
+    assert key.startswith("curl -sS ") and key.endswith("/data/api/v1/resources/find/ignition/api-token/setup")

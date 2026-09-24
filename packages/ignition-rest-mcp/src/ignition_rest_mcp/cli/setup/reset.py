@@ -32,13 +32,12 @@ from __future__ import annotations
 
 import asyncio
 import json
-import shutil
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import quote
 
 from ignition_rest_mcp.cli.engine import main as engine
-from ignition_rest_mcp.cli.engine.deployment import DEPLOYMENT_FILE
+from ignition_rest_mcp.cli.engine.deployment import CREATED_KEY, DEPLOYMENT_FILE
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, Needed, Risk
@@ -140,8 +139,26 @@ async def _observe(
     return installed, project, levels, tokens, configs, rest_token, provider
 
 
+def _recorded(ctx: engine.Context) -> set[str]:
+    """The Gateway resources ``deployment.toml`` records as created by ``setup``."""
+
+    saved = ctx.deployment.values.get(CREATED_KEY)
+    if not isinstance(saved, list):
+        return set()
+    return {str(item) for item in saved}
+
+
+def _left(what: str) -> str:
+    return f"leave {what} in place: the deployment does not record that setup created it"
+
+
 def plan(ctx: engine.Context) -> engine.Plan:
-    """Read the Gateway and the deployment directory, and list every removal."""
+    """Read the Gateway and the deployment directory, and list every removal.
+
+    Only a resource the deployment's own record names is deleted. A matching resource
+    the record does not name is listed as left in place, with the reason, because
+    ``setup`` may have found it already there and left it alone.
+    """
 
     deployment = ctx.deployment
     if not deployment.exists:
@@ -150,17 +167,19 @@ def plan(ctx: engine.Context) -> engine.Plan:
             f"{deployment.directory} has no {DEPLOYMENT_FILE}; there is no deployment to reset",
             next_action=f"{PROG} setup --deployment {deployment.name}",
         )
-    environment = str(deployment.values.get("environment") or "dev")
-    if environment == "prod":
+    saved_environment = deployment.values.get("environment")
+    if saved_environment != "dev":
+        recorded = repr(saved_environment) if isinstance(saved_environment, str) else "no environment at all"
         raise CliError(
             ErrorCode.INVALID_INPUT,
-            f"the deployment {deployment.name} is {environment}; reset removes every managed resource and "
+            f"the deployment {deployment.name} records {recorded}; reset removes every managed resource and "
             "is refused outside dev",
             next_action=f"{PROG} setup --deployment {deployment.name} --environment dev",
         )
     url = str(ctx.resolved.values["gateway_url"]).rstrip("/")
     endpoint = runtime._endpoint_of(url)
     roles = runtime.saved_roles(ctx)
+    created = _recorded(ctx)
     installed, project, levels_doc, tokens, configs, rest_token, provider = asyncio.run(_observe(ctx, roles))
     if project.managed and project.inheritable is True:
         raise CliError(
@@ -169,28 +188,35 @@ def plan(ctx: engine.Context) -> engine.Plan:
             next_action=f"curl -sS {url}{gw.PROJECT_FIND_PATH.format(name=runtime.PROJECT)}",
         )
     tree, signature, collection = runtime._levels(levels_doc, endpoint)
+    build = "" if installed is None else (installed.build or installed.raw_version)
+    project_owned = project.managed and runtime.PROJECT_RECORD in created
     reset_plan = ResetPlan(
-        installed=installed,
+        installed=installed if runtime.MODULE_RECORD in created else None,
         project=project,
         levels=tree,
         levels_signature=signature,
         levels_collection=collection,
-        rest_token=rest_token,
-        provider=provider,
-        project_version=str(project.bundle_version or "") if project.managed else "",
+        rest_token=rest_token if rest.REST_TOKEN_RECORD in created else None,
+        provider=provider if runtime.POLICY_RECORD in created else None,
+        project_version=str(project.bundle_version or "") if project_owned else "",
     )
     changes: list[str] = []
     needed: list[Needed] = []
     for role in roles:
+        config_signature = str((configs.get(role.name) or {}).get("signature") or "")
+        token_signature = str((tokens.get(role.name) or {}).get("signature") or "")
+        for signature, owned, what, extra in (
+            (config_signature, role.config_record in created, f"the Server Config {role.server_config}", ""),
+            (token_signature, role.token_record in created, f"the API token {role.token}", " and its local secret"),
+        ):
+            if not signature:
+                continue
+            changes.append(f"delete {what}{extra}" if owned else _left(what))
         removal = RemovalPlan(
             role,
-            config_signature=str((configs.get(role.name) or {}).get("signature") or ""),
-            token_signature=str((tokens.get(role.name) or {}).get("signature") or ""),
+            config_signature=config_signature if role.config_record in created else "",
+            token_signature=token_signature if role.token_record in created else "",
         )
-        if removal.config_signature:
-            changes.append(f"delete the Server Config {role.server_config}")
-        if removal.token_signature:
-            changes.append(f"delete the API token {role.token} and its local secret")
         if removal.config_signature or removal.token_signature:
             reset_plan.removals.append(removal)
         found = security.find_level(tree, role.level)
@@ -199,21 +225,30 @@ def plan(ctx: engine.Context) -> engine.Plan:
             and found[0] == [SECURITY_LEVEL_PARENT, role.level]
             and not security.level_shape_problem(found[1])
         ):
-            reset_plan.removed_levels.append(role)
-            changes.append(f"remove the Security Level {role.level_path}")
+            what = f"the Security Level {role.level_path}"
+            if role.level_record in created:
+                reset_plan.removed_levels.append(role)
+                changes.append(f"remove {what}")
+            else:
+                changes.append(_left(what))
     if rest_token is not None:
-        changes.append(f"delete the Gateway API token {rest.REST_TOKEN_NAME}")
+        what = f"the Gateway API token {rest.REST_TOKEN_NAME}"
+        changes.append(f"delete {what}" if reset_plan.rest_token is not None else _left(what))
     if provider is not None:
-        changes.append(f"delete the Runtime Target Policy, the reserved {docs.PROVIDER} Tag provider")
+        what = f"the Runtime Target Policy, the reserved {docs.PROVIDER} Tag provider"
+        changes.append(f"delete {what}" if reset_plan.provider is not None else _left(what))
     if reset_plan.project_version:
         changes.append(f"delete the managed project {runtime.PROJECT} (bundle {reset_plan.project_version})")
+    elif project.managed:
+        changes.append(_left(f"the managed project {runtime.PROJECT}"))
     elif reset_plan.unmanaged:
         changes.append(f"leave the project {runtime.PROJECT} alone: it carries {_unmanaged_detail(project)}")
     if installed is not None:
-        changes.append(
-            f"uninstall MCP Module build {reset_plan.module_build} and restart the Gateway, which applies it"
-        )
-        needed.append(Needed(Risk.RESTART, f"uninstalling MCP Module build {reset_plan.module_build}"))
+        if reset_plan.installed is None:
+            changes.append(_left(f"MCP Module build {build}"))
+        else:
+            changes.append(f"uninstall MCP Module build {build} and restart the Gateway, which applies it")
+            needed.append(Needed(Risk.RESTART, f"uninstalling MCP Module build {build}"))
     reset_plan.entries = sorted(
         str(path.relative_to(deployment.directory)) for path in deployment.directory.rglob("*")
     )
@@ -291,8 +326,7 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
         if not reset_plan.entries:
             end.set(Status.OK, "the deployment directory holds nothing")
         else:
-            shutil.rmtree(ctx.deployment.directory)
-            end.set(Status.CHANGED, f"deleted {len(reset_plan.entries)} entries")
+            end.set(Status.CHANGED, f"deleted {ctx.remove_deployment_directory()} entries")
 
 
 async def _delete_rest_token(ctx: engine.ApplyContext, reset_plan: ResetPlan) -> str:

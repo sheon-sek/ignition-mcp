@@ -283,6 +283,7 @@ def _level_reason(ctx: engine.Context, facts: Observation, role: Role) -> str:
         raise CliError(
             ErrorCode.STEP_FAILED,
             "the Gateway's Security Level tree is not readable, so nothing can be compared with it",
+            next_action=f"curl -sS {facts.url}{gw.SECURITY_LEVELS_PATH}",
         )
     found = security.find_level(tree, role.level)
     if found is None:
@@ -466,6 +467,10 @@ def _rest_token_reason(ctx: engine.Context, facts: Observation) -> str:
         raise CliError(
             ErrorCode.STEP_FAILED,
             f"the setup key {facts.setup_key} reads back no Security Level grant to compare against",
+            next_action=(
+                f"curl -sS {facts.url}"
+                + gw.RESOURCE_FIND_PATH.format(resource_type=API_TOKEN_TYPE, name=facts.setup_key)
+            ),
         )
     drift = rest.token_drift(document, grant, facts.rest_requires_secure_channel)
     if drift:
