@@ -29,6 +29,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import time
 from typing import Any, Callable
 
@@ -229,7 +230,13 @@ class LocalArtifactStore:
 
     def _open_staging(self, artifact_id: str) -> int:
         self._staging.mkdir(parents=True, mode=0o700, exist_ok=True)
-        return os.open(self._staging_path(artifact_id), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        # O_BINARY: the CRT would otherwise translate every 0x0A to CRLF on Windows,
+        # and _replace_object re-hashes the staged bytes against the writer's digest.
+        return os.open(
+            self._staging_path(artifact_id),
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600,
+        )
 
     def _write_chunk(self, fd: int, data: bytes) -> None:
         view = memoryview(data)
@@ -371,14 +378,16 @@ class LocalArtifactStore:
         await self._db.run(_mark_publishing)
         self._fail_hook("publishing")
         fd, writer._fd, writer._closed = writer._fd, None, True  # fd ownership -> replace step
-        try:
-            await asyncio.to_thread(self._replace_object, writer.artifact_id, size, sha256)
-        finally:
-            if fd is not None:
-                try:
-                    os.close(fd)
-                except OSError:
-                    pass
+        # Close before the rename: a Windows handle grants no delete sharing, so
+        # os.replace would fail with a sharing violation while the fd is open.
+        # _seal fsynced the bytes, and the fd is already detached from the writer,
+        # so a failure in _replace_object cannot leak it.
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:  # pragma: no cover
+                pass
+        await asyncio.to_thread(self._replace_object, writer.artifact_id, size, sha256)
         self._fail_hook("replaced")
 
         def _ready(conn: Any) -> None:
@@ -469,7 +478,7 @@ class LocalArtifactStore:
             if row is None or row[2] != "READY":
                 return None, None
             try:
-                fd = os.open(self._object_path(artifact_id), os.O_RDONLY)
+                fd = os.open(self._object_path(artifact_id), os.O_RDONLY | getattr(os, "O_BINARY", 0))
             except OSError as error:
                 if error.errno == errno.ENOENT:
                     conn.execute(
@@ -790,6 +799,10 @@ class LocalArtifactStore:
 
 
 def _fsync_dir(path: Path) -> None:
+    if sys.platform == "win32":
+        # _wopen cannot open a directory, so there is no Windows directory fsync.
+        # NTFS metadata is journalled; the file bytes are fsynced by _seal.
+        return
     fd = os.open(path, os.O_RDONLY)
     try:
         os.fsync(fd)
