@@ -28,6 +28,17 @@ D28 为准，Mutation 契约以 D30 为准。Module 安装（Module install）�
 | Runtime Target Policy 文档 | 由部署方编写，schema 为 `contracts/shared/runtime-target-policy.schema.json` |
 | Server Config 权限树 | 由部署方编写；当 `apply` 需要创建 Server Config，或已部署的 Server Config 没有可保留的权限树时必须提供 |
 
+工具链按平台区分；上面的部署输入为两个平台共用。
+
+| 工具链项目 | Linux/macOS | Windows |
+| --- | --- | --- |
+| Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器 | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
+| Shell | 一个 POSIX shell | PowerShell 7 —— D31 清单第 6 步使用 `-SkipHttpErrorCheck`，需要 7 |
+| Git for Windows | 不需要 | 仅用于基于 `bash` 的检查：`tooling.ci.check_workflows` 与内置的 bash 向导 |
+| Java 11 | 仅用于录制式 Jython 测试（D29）；两个 server 都不需要 | 同上 |
+
+本 runbook 中的 Windows 指令都标记为**尚未在 Windows 上运行**；见 [D31](../decisions/D31-windows-support-scope.md)。
+
 从一份 checkout 构建发布产物：
 
 ```bash
@@ -47,6 +58,23 @@ V=$(cat packages/ignition-runtime-bundle/BUNDLE_VERSION)
 `sha256sum -c`。构建器是确定性的，因此同一 revision 上运行两次会得到逐字节相同的归档；并且 `release`
 只读取 `tests/compatibility/evidence/`，不会改写它。
 
+### 在 Windows 上构建发布产物
+
+**尚未在 Windows 上运行**；见 [D31](../decisions/D31-windows-support-scope.md)。先把 revision 存入变量，
+再以 `--source-revision $rev` 传入；并用 `Get-FileHash` 或 `certutil` 校验和，而不是 `sha256sum -c`：
+
+```powershell
+$rev = git rev-parse HEAD
+uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+uv run --no-sync python -m tooling.native.cli release `
+  --project-dir packages/ignition-runtime-bundle/project `
+  --out-dir dist/release `
+  --source-revision $rev `
+  --evidence-dir tests/compatibility/evidence
+$V = Get-Content packages/ignition-runtime-bundle/BUNDLE_VERSION
+Get-FileHash "dist/release/ignition-runtime-bundle-$V.zip" -Algorithm SHA256
+```
+
 ## 环境变量与凭证文件
 
 `IGNITION_MCP_SETUP_*` 系列变量只是兜底值，flag 永远优先于对应的变量。
@@ -59,6 +87,17 @@ umask 077
 printf '%s\n' '<your-ignition-api-token>' > ~/.config/ignition-mcp/gateway.token
 chmod 0600 ~/.config/ignition-mcp/gateway.token
 ```
+
+在 Windows 上（**尚未在 Windows 上运行**；见 [D31](../decisions/D31-windows-support-scope.md)）：
+
+```powershell
+$env:IGNITION_MCP_SETUP_GATEWAY_URL = "http://127.0.0.1:8088"
+$env:IGNITION_MCP_SETUP_MCP_URL = "$env:IGNITION_MCP_SETUP_GATEWAY_URL/data/mcp/production"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\ignition-mcp"
+Set-Content "$env:USERPROFILE\.config\ignition-mcp\gateway.token" -Value "<your-ignition-api-token>"
+```
+
+在 Windows 上不强制 `0600` 规则，因此 token 文件需要一个文件系统 ACL，只允许服务账户读取。
 
 token 文件必须是常规文件（非符号链接）、没有 group/other 权限位（mode `0600`）、且恰好包含一行非空内容。
 符号链接、权限过宽、或包含零行/两行 token，都属于用法错误并以退出码 2 结束。请优先使用
@@ -465,6 +504,9 @@ Mutation 做自动重放。
 
 Windows 不会出错，但不是受支持的平台。[D31](../decisions/D31-windows-support-scope.md) 记录了范围、
 已声明的限制，以及一份尚无人执行过的手动验证清单。
+
+[前置条件](#前置条件) 中的工具链表与 [环境变量与凭证文件](#环境变量与凭证文件) 中的 PowerShell 区块
+就是 Windows 的前置条件与启动路径，两者都带有同样的**尚未在 Windows 上运行**标记。
 
 - **校验和。** Windows 没有内置的 `sha256sum -c`。在 `dist/release` 中运行
   `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` 或

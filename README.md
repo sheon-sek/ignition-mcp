@@ -87,7 +87,17 @@ Known v1 limitation: `alarm_status`, `alarm_journal` (D12 Phase 2 amendment) and
 
 ### Prerequisites
 
-- Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
+The toolchain differs by platform; the Gateway and Module inputs below are shared.
+
+| Toolchain item | Linux/macOS | Windows |
+| --- | --- | --- |
+| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | the [official installer](https://docs.astral.sh/uv/) or a package manager | `winget install --id=astral-sh.uv -e`, or the same official installer |
+| Shell | a POSIX shell | PowerShell 7 — the D31 checklist step 6 uses `-SkipHttpErrorCheck`, which needs 7 |
+| Git for Windows | not needed | only for the `bash`-based checks: `tooling.ci.check_workflows` and the bundled bash wizard |
+| Java 11 | only for the recorded-Jython tests (D29); neither server needs it | same |
+
+Windows instructions in this repository are marked **not run on Windows yet**; see [D31](docs/decisions/D31-windows-support-scope.md).
+
 - An Ignition 8.3.8/8.3.9 Gateway reachable over HTTP(S), with an `ignition/api-token` resource.
   The REST server connects to it outbound; the Runtime bundle is installed on it.
 - For the Runtime plane only: the official MCP Module `.modl` file and its SHA-256, from the
@@ -95,7 +105,7 @@ Known v1 limitation: `alarm_status`, `alarm_journal` (D12 Phase 2 amendment) and
   `2026021307`, SHA-256 `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`.
 
 ```bash
-uv sync --all-packages   # installs the workspace package and its console scripts
+uv sync --all-packages   # the install step on both platforms
 ```
 
 ### Plane 1 — launch the REST server
@@ -104,6 +114,16 @@ uv sync --all-packages   # installs the workspace package and its console script
 export IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088
 export IGNITION_MCP_GATEWAY_API_TOKEN=<your-ignition-api-token>
 export IGNITION_MCP_DATA_DIR=$HOME/.local/state/ignition-mcp   # durable SQLite + artifact store
+
+uv run --no-sync ignition-rest-mcp
+```
+
+The same variables in PowerShell (**not run on Windows yet**; see [D31](docs/decisions/D31-windows-support-scope.md)):
+
+```powershell
+$env:IGNITION_MCP_GATEWAY_URL = "http://127.0.0.1:8088"
+$env:IGNITION_MCP_GATEWAY_API_TOKEN = "<your-ignition-api-token>"
+$env:IGNITION_MCP_DATA_DIR = "C:\ProgramData\ignition-mcp"   # durable SQLite + artifact store
 
 uv run --no-sync ignition-rest-mcp
 ```
@@ -197,6 +217,10 @@ diagnosis — is in [`docs/operations/runbook.md`](docs/operations/runbook.md).
 
 Windows is not broken, but it is not a supported platform. [D31](docs/decisions/D31-windows-support-scope.md)
 records the scope and the declared limitations. Nothing here has been run on Windows yet.
+
+The [Prerequisites](#prerequisites) table and the PowerShell block in
+[Plane 1 — launch the REST server](#plane-1--launch-the-rest-server) are the Windows prerequisites and
+start path, and every instruction there carries the same **not run on Windows yet** marker.
 
 - **Checksums.** Windows has no built-in `sha256sum -c`. Use `certutil -hashfile <file> SHA256` or
   `Get-FileHash <file> -Algorithm SHA256`, and compare the result with the hash in the `.sha256` file.

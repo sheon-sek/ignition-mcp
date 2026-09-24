@@ -30,6 +30,17 @@ You need these before any command runs.
 | Runtime Target Policy document | written by the deployment owner, schema `contracts/shared/runtime-target-policy.schema.json` |
 | Server Config permissions tree | written by the deployment owner, required when `apply` creates a Server Config or when the deployed one carries no tree to preserve |
 
+The toolchain differs by platform; the deployment inputs above are shared.
+
+| Toolchain item | Linux/macOS | Windows |
+| --- | --- | --- |
+| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | the [official installer](https://docs.astral.sh/uv/) or a package manager | `winget install --id=astral-sh.uv -e`, or the same official installer |
+| Shell | a POSIX shell | PowerShell 7 — the D31 checklist step 6 uses `-SkipHttpErrorCheck`, which needs 7 |
+| Git for Windows | not needed | only for the `bash`-based checks: `tooling.ci.check_workflows` and the bundled bash wizard |
+| Java 11 | only for the recorded-Jython tests (D29); neither server needs it | same |
+
+Windows instructions in this runbook are marked **not run on Windows yet**; see [D31](../decisions/D31-windows-support-scope.md).
+
 Build the release artifacts from a checkout:
 
 ```bash
@@ -49,6 +60,24 @@ V=$(cat packages/ignition-runtime-bundle/BUNDLE_VERSION)
 `sha256sum -c` compatible. The builder is deterministic, so two runs on one revision produce
 byte-identical archives, and `release` reads `tests/compatibility/evidence/` without rewriting it.
 
+### Building the release on Windows
+
+**Not run on Windows yet**; see [D31](../decisions/D31-windows-support-scope.md). Capture the revision
+into a variable first and pass it as `--source-revision $rev`, and verify the checksum with
+`Get-FileHash` or `certutil` instead of `sha256sum -c`:
+
+```powershell
+$rev = git rev-parse HEAD
+uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+uv run --no-sync python -m tooling.native.cli release `
+  --project-dir packages/ignition-runtime-bundle/project `
+  --out-dir dist/release `
+  --source-revision $rev `
+  --evidence-dir tests/compatibility/evidence
+$V = Get-Content packages/ignition-runtime-bundle/BUNDLE_VERSION
+Get-FileHash "dist/release/ignition-runtime-bundle-$V.zip" -Algorithm SHA256
+```
+
 ## Environment and credential files
 
 The `IGNITION_MCP_SETUP_*` variables are fallbacks, and a flag always wins over its variable.
@@ -61,6 +90,18 @@ umask 077
 printf '%s\n' '<your-ignition-api-token>' > ~/.config/ignition-mcp/gateway.token
 chmod 0600 ~/.config/ignition-mcp/gateway.token
 ```
+
+On Windows (**not run on Windows yet**; see [D31](../decisions/D31-windows-support-scope.md)):
+
+```powershell
+$env:IGNITION_MCP_SETUP_GATEWAY_URL = "http://127.0.0.1:8088"
+$env:IGNITION_MCP_SETUP_MCP_URL = "$env:IGNITION_MCP_SETUP_GATEWAY_URL/data/mcp/production"
+New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\ignition-mcp"
+Set-Content "$env:USERPROFILE\.config\ignition-mcp\gateway.token" -Value "<your-ignition-api-token>"
+```
+
+The `0600` rule is not enforced on Windows, so the token file needs a filesystem ACL that grants read
+access only to the service account.
 
 A token file must be a regular non-symlink file with no group or other bits (mode `0600`) holding
 exactly one non-empty line. A symlink, a loose mode, or zero or two token lines is a usage error and
@@ -500,6 +541,10 @@ credential cannot leak through a traceback.
 
 Windows is not broken, but it is not a supported platform. [D31](../decisions/D31-windows-support-scope.md)
 records the scope, the declared limitations and a manual verification checklist that nobody has run yet.
+
+The toolchain table in [Prerequisites](#prerequisites) and the PowerShell block in
+[Environment and credential files](#environment-and-credential-files) are the Windows prerequisites and
+start path, and both carry the same **not run on Windows yet** marker.
 
 - **Checksums.** Windows has no built-in `sha256sum -c`. In `dist/release`, run
   `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
