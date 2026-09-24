@@ -6,11 +6,24 @@ from dataclasses import dataclass, field
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
+import sys
+import tempfile
 from typing import Any
 from urllib.parse import urlparse
 
 TEMP_FILESYSTEM_PREFIXES = ("/tmp", "/var/tmp", "/dev/shm")
+
+
+def temp_filesystem_prefixes() -> tuple[str, ...]:
+    """Temporary-filesystem prefixes refused for persistent data. On Windows the
+    platform temp directory is added; on POSIX it is not, because
+    ``tempfile.gettempdir()`` honours ``TMPDIR`` there."""
+
+    if sys.platform == "win32":
+        return (*TEMP_FILESYSTEM_PREFIXES, tempfile.gettempdir())
+    return TEMP_FILESYSTEM_PREFIXES
 
 # D07 canonical authorization scopes. No hierarchy: membership is the only rule.
 READ_SCOPE = "ignition.read"
@@ -267,12 +280,13 @@ class Settings:
         # D17/D18: the persistent data directory is mandatory in every profile.
         if not self.data_dir or not self.data_dir.strip():
             raise ConfigurationError("IGNITION_MCP_DATA_DIR is required in every deployment profile")
-        if not self.data_dir.startswith("/"):
+        if not Path(self.data_dir).is_absolute():
             raise ConfigurationError("IGNITION_MCP_DATA_DIR must be an absolute path")
         if self.deployment_profile in {"trusted-internal", "secured"}:
-            normalized = os.path.normpath(self.data_dir)
-            for prefix in TEMP_FILESYSTEM_PREFIXES:
-                if normalized == prefix or normalized.startswith(prefix + "/"):
+            normalized = os.path.normcase(os.path.normpath(self.data_dir))
+            for prefix in temp_filesystem_prefixes():
+                folded = os.path.normcase(os.path.normpath(prefix))
+                if normalized == folded or normalized.startswith(folded.rstrip(os.sep) + os.sep):
                     raise ConfigurationError(
                         f"IGNITION_MCP_DATA_DIR must not live on a temporary filesystem path ({prefix}) "
                         "in trusted-internal or secured deployments"
