@@ -14,8 +14,9 @@ name: Phase 4 Live Gateway apply
 # a Gateway with the milestone 4a/4b Mutation evidence. The `phase4-live` environment
 # is the same one G4a/G4b use and exists WITHOUT protection rules, reusing the
 # owner-accepted deviation recorded for `phase3-live`; the compensating controls are
-# the trusted-repo guard, no repository or environment secrets in the job, and
-# localhost/compose-only Gateway endpoints.
+# the trusted-repo guard, no repository or environment secrets in the job,
+# localhost/compose-only Gateway endpoints, and the G7 stage's exact-origin check,
+# which refuses any Gateway but the compose one before it sends a request.
 on:
   pull_request:
     paths:
@@ -64,6 +65,8 @@ jobs:
       GATEWAY_VERSION: ${{ matrix.gateway_version }}
       EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
       P4_BASE_URL: http://127.0.0.1:8093
+      # The G7 stage's exact-origin check refuses any Gateway but the compose one.
+      P4_ORIGIN: 127.0.0.1:8093
       MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
       MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
       MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
