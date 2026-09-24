@@ -43,8 +43,9 @@ One engine resolves every input. It has two front ends.
 3. When a value is missing and stdin is not a terminal, the command exits with an error that lists every missing flag. It never waits for input.
 4. When the wizard finishes, it prints the one-line command with the same values, so the run can be repeated or handed to an agent.
 5. A wrong input is asked again. A path that does not exist, an unreadable file or a Gateway token the Gateway rejects gets the reason and a new prompt. The run does not exit and the operator does not start over.
-6. Under mintty without a pseudo console, the wizard falls back to plain line prompts with the same questions and validation.
+6. Under mintty without a pseudo console, the wizard falls back to plain line prompts with the same questions and validation. Those prompts cannot turn terminal echo off, so a pasted secret shows on screen while it is typed. The question says so, and the secret still never reaches the CLI's output.
 7. Output is in English.
+8. `--json` never prompts, even when stdin is a terminal, because a program reads its output. A missing value fails as in item 3. The coordinator added this rule on 2026-09-25 after the P7-2 review, and the owner may overrule it.
 
 ## 4. Feedback contract
 
