@@ -296,6 +296,11 @@ def check_gateway_url(value: str, _values: Mapping[str, str]) -> str:
 #: Checks a Gateway API key against a Gateway URL; ``""`` when the Gateway accepts it.
 TokenProbe = Callable[[str, str], str]
 
+#: Further checks of a key the probe accepted, such as the D32 section 9 check that
+#: its Security Level is ticked under every Gateway permission. A stage ticket adds
+#: its check here, and the resolver asks again when one returns a reason.
+TOKEN_CHECKS: list[TokenProbe] = []
+
 
 def gateway_token_check(probe: TokenProbe | None = None) -> Check:
     """A check that asks the Gateway at ``gateway_url`` whether it accepts the key.
@@ -311,7 +316,12 @@ def gateway_token_check(probe: TokenProbe | None = None) -> Check:
         url = values.get("gateway_url")
         if not url:
             return ""
-        return use(url.rstrip("/"), value)
+        reason = use(url.rstrip("/"), value)
+        for extra in TOKEN_CHECKS if not reason else ():
+            reason = extra(url.rstrip("/"), value)
+            if reason:
+                break
+        return reason
 
     return check
 

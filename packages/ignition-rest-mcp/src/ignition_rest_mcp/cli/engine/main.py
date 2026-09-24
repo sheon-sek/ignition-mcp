@@ -282,6 +282,10 @@ class Stage:
     plan: Callable[[Context], Plan]
     apply: Callable[[ApplyContext, Plan], None]
     inputs: tuple[InputSpec, ...] = ()
+    #: Adds the stage's own switches, such as ``--recreate-tokens``, to its command.
+    flags: Callable[[argparse.ArgumentParser], None] | None = None
+    #: The stage's switches as words for the equivalent one-line command.
+    words: Callable[[argparse.Namespace], list[str]] | None = None
 
 
 def _run_stages(ctx: Context) -> None:
@@ -444,6 +448,9 @@ def build_parser(specs: Mapping[str, InputSpec] | None = None) -> argparse.Argum
         parser.add_argument("--accept-eula", action="store_true", help="accept the Module EULA")
         if command.configure is not None:
             command.configure(parser)
+        for stage in command.stages:
+            if stage.flags is not None:
+                stage.flags(parser)
     return root
 
 
@@ -524,6 +531,9 @@ def _command_words(ctx: Context) -> tuple[list[str], list[str]]:
 
     positional = [ctx.args.role] if ctx.command == "connect" else []
     extra = ["--dry-run"] if ctx.dry_run else []
+    for stage in COMMANDS[ctx.command].stages:
+        if stage.words is not None:
+            extra += stage.words(ctx.args)
     return positional, extra
 
 
@@ -535,6 +545,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ignition_rest_mcp.cli.setup_native import main as setup_native
 
         return setup_native.main(args)
+    from ignition_rest_mcp.cli.setup import runtime as setup_runtime
+
+    setup_runtime.register()
     return run(args)
 
 
