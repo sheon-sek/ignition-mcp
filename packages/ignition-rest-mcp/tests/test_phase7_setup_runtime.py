@@ -27,8 +27,8 @@ import pytest
 from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.report import JsonReporter
 from ignition_rest_mcp.cli.setup import runtime
-from ignition_rest_mcp.cli.setup_native import security
-from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpProbeError
+from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpProbeError
 
 ROOT = Path(__file__).resolve().parents[3]
 MODULES = ROOT / "tests/fixtures/modules"

@@ -36,8 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native.inputs import (
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops.inputs import (
     API_TOKEN_TYPE,
     CONFIG_COLLECTION,
     Inputs,

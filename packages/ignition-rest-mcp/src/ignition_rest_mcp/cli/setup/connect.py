@@ -5,8 +5,10 @@ tokens (D32 section 8):
 
 * ``ignition-runtime-<role>``, the Gateway endpoint ``<gateway-url>/data/mcp/<role>``,
   authenticated with the ``X-Ignition-API-Token`` header the Module reads;
-* ``ignition-rest-<role>``, the REST server's default address, authenticated with
-  ``Authorization: Bearer`` and the role's Named static token.
+* ``ignition-rest-<role>``, the address the deployment's ``start`` listens on, which
+  is ``--bind`` or the ``bind`` value saved in ``deployment.toml``, and otherwise
+  the default ``127.0.0.1:8000``. It is authenticated with ``Authorization: Bearer``
+  and the role's Named static token.
 
 Which client is decided by the ``client`` input, so one engine resolves it and the
 wizard's equivalent command carries the answer:
@@ -181,7 +183,7 @@ def registrations(ctx: engine.Context, role: str, deployment: Deployment) -> lis
         ),
         Registration(
             f"ignition-rest-{role}",
-            f"http://{start.DEFAULT_BIND}{start.MCP_PATH}",
+            start.mcp_url(start.saved_bind(deployment.values)),
             REST_HEADER,
             f"Bearer {static}",
         ),

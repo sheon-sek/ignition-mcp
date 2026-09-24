@@ -43,16 +43,16 @@ from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, Needed, Risk
 from ignition_rest_mcp.cli.setup import rest, runtime
 from ignition_rest_mcp.cli.setup.runtime import RemovalPlan, Role
-from ignition_rest_mcp.cli.setup_native import documents as docs
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import security
-from ignition_rest_mcp.cli.setup_native.inputs import (
+from ignition_rest_mcp.cli.gateway_ops import documents as docs
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops.inputs import (
     API_TOKEN_TYPE,
     CONFIG_COLLECTION,
     SECURITY_LEVEL_PARENT,
     SECURITY_LEVELS_TYPE,
 )
-from ignition_rest_mcp.cli.setup_native.writer import RESOURCE_COLLECTION_PATH, WriteError
+from ignition_rest_mcp.cli.gateway_ops.writer import RESOURCE_COLLECTION_PATH, WriteError
 
 STAGE_NAME = "reset"
 

@@ -1,38 +1,6 @@
-"""One planned intention, shared by ``plan`` and ``apply`` (D20).
-
-``plan`` derives a list of these from the read-only observations and prints them;
-``apply`` consumes the same list, refuses to write anything while a line is
-``BLOCKED``, and executes the remaining lines in the order they appear.
-"""
+"""The D21 change classes a bundle or Module build change is named by (D20, D21)."""
 
 from __future__ import annotations
-
-from dataclasses import dataclass
-
-CREATE = "CREATE"
-UPDATE = "UPDATE"
-NO_CHANGE = "NO CHANGE"
-BLOCKED = "BLOCKED"
-#: Detect-only lines carry no intention; ``SKIP`` marks them as out of scope here.
-SKIPPED = "SKIP"
-
-ACKNOWLEDGEMENT = "requires explicit acknowledgement in apply"
-
-
-@dataclass(frozen=True, slots=True)
-class Action:
-    """One planned intention."""
-
-    action: str
-    kind: str
-    name: str
-    reason: str
-
-    def as_dict(self) -> dict[str, str]:
-        return {"action": self.action, "kind": self.kind, "name": self.name, "reason": self.reason}
-
-    def as_line(self) -> str:
-        return f"{self.action} {self.kind} {self.name}: {self.reason}"
 
 
 def parse_semver(value: str | None) -> tuple[int, int, int] | None:

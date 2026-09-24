@@ -52,9 +52,9 @@ from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, read_secr
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, InputSpec, Kind, Needed, Risk, Source
-from ignition_rest_mcp.cli.setup_native import security
-from ignition_rest_mcp.cli.setup_native.inputs import API_TOKEN_TYPE, CONFIG_COLLECTION
-from ignition_rest_mcp.cli.setup_native.writer import RESOURCE_COLLECTION_PATH, GatewayWriter
+from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops.inputs import API_TOKEN_TYPE, CONFIG_COLLECTION
+from ignition_rest_mcp.cli.gateway_ops.writer import RESOURCE_COLLECTION_PATH, GatewayWriter
 from ignition_rest_mcp.config import CONFIG_SCOPE, CONTROL_SCOPE, READ_SCOPE
 
 STAGE_NAME = "rest"

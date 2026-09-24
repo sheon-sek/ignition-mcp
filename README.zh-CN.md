@@ -25,20 +25,19 @@ Ignition MCP 让 Claude 这类 AI 助手能够操作
 | --- | --- | --- |
 | 负责 | Gateway 信息、配置资源、项目、Perspective View、审计日志、报警通知管道 | Tag 值和 Tag 配置、UDT、Tag 历史、报警搁置、已批准的数据库查询 |
 | 运行位置 | 作为独立程序，运行在任何能连到 Gateway 的机器上 | 运行在 Gateway 内部，由官方 Ignition MCP Module 承载 |
-| 安装指南 | [安装 REST server](docs/guide/setup-rest.zh-CN.md) | [安装 Runtime server](docs/guide/setup-runtime.zh-CN.md) |
+| 安装指南 | [快速开始](docs/guide/quick-start.zh-CN.md) | [快速开始](docs/guide/quick-start.zh-CN.md) |
 
-拿不准的话，先装 Runtime server 并使用 `readonly` profile，因为读 Tag 和历史数据是最常见的需求。[运作原理](docs/guide/how-it-works.zh-CN.md#我需要哪个-server)里有更完整的对照表。
+一条 `ignition-mcp setup` 命令会同时装好两个 server 的两个助手角色。读 Tag 和历史数据是最常见的需求，先跑一次默认的 `dev` 部署就能用。[运作原理](docs/guide/how-it-works.zh-CN.md#我需要哪个-server)里有更完整的对照表。
 
 ## 文档
 
 | 我想…… | 看这里 |
 | --- | --- |
 | 了解两个 server 做什么、一次调用怎么进行 | [运作原理](docs/guide/how-it-works.zh-CN.md) |
-| 一步步安装 REST server | [安装 REST server](docs/guide/setup-rest.zh-CN.md) |
-| 一步步安装 Runtime server | [安装 Runtime server](docs/guide/setup-runtime.zh-CN.md) |
+| 一步步装好两个 server | [快速开始](docs/guide/quick-start.zh-CN.md) |
 | 查某个 Tool 为什么不见了，或者它需要什么设置 | [Tool 目录](docs/guide/tools.zh-CN.md) |
 | 查某个设置项 | [配置参考](docs/guide/configuration.zh-CN.md) |
-| 升级、修改 policy、看懂 `doctor` 的某一行或某个退出码 | [运维手册](docs/operations/runbook.zh-CN.md) |
+| 升级、修改 policy、看懂 `status` 的某一行或某个退出码 | [运维手册](docs/operations/runbook.zh-CN.md) |
 | 查错误码 | [运作原理：错误](docs/guide/how-it-works.zh-CN.md#错误) |
 
 ## 安全
@@ -68,7 +67,7 @@ Ignition MCP 让 Claude 这类 AI 助手能够操作
 
 | 路径 | 内容 |
 | --- | --- |
-| `packages/ignition-rest-mcp/` | REST server 和 `ignition-mcp setup-native` 命令。它的 [README](packages/ignition-rest-mcp/README.md) 详细说明各 Tool 的行为。 |
+| `packages/ignition-rest-mcp/` | REST server 和 `ignition-mcp` 命令。它的 [README](packages/ignition-rest-mcp/README.md) 详细说明各 Tool 的行为。 |
 | `packages/ignition-runtime-bundle/` | 作为 Ignition 项目的 Runtime Tool。见它的 [README](packages/ignition-runtime-bundle/README.md)。 |
 | `contracts/` | Tool 契约、输出 schema 和共享错误码，两个 server 都以它为准做检查。 |
 | `tooling/` | bundle 构建器、契约 linter 和 CI 辅助脚本。 |

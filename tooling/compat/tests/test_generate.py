@@ -88,6 +88,21 @@ class GenerateTest(unittest.TestCase):
         self.assertEqual([r.gate for r in rows], ["G3"])
         self.assertTrue(rows[0].is_d27_tuple)
 
+    def test_a_run_without_the_setup_section_still_composes_and_validates(self) -> None:
+        """P7-6 deleted the setup stage, so a new run observes no ``setupNative`` section."""
+
+        observations = _observations()
+        del observations["setupNative"]
+        row = build_row(observations, _identity())
+        self.assertIsNone(row["setupNative"])
+        with self.assertRaisesRegex(GenerateError, "authzDenials"):
+            build_row({key: value for key, value in observations.items() if key != "authzDenials"}, _identity())
+
+        temp = Path(tempfile.mkdtemp())
+        generate(_write(temp, "obs.json", observations), temp, _write(temp, "id.json", _identity()))
+        rows = load_evidence(temp)
+        self.assertEqual(rows[0].raw["setupNative"], None)
+
     def test_non_d27_tuple_never_inherits_the_exception(self) -> None:
         row = build_row(_observations(), _identity(gatewayVersion="8.3.9", gatewayBuild="2026082511"))
         self.assertEqual(row["nativeResponseBinding"], "UNVERIFIED_LIMITATION")

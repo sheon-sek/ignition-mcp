@@ -27,8 +27,8 @@ flowchart LR
 | 运行位置 | 作为独立程序，运行在任何能连到 Gateway 的机器上 | 运行在 Gateway 内部，由官方 Ignition MCP Module 承载 |
 | 和 Ignition 通信的方式 | 通过 Gateway 的 Web API，也就是 REST API | 通过 Ignition 的脚本函数 |
 | 负责的内容 | Gateway 信息、配置资源、项目、Perspective View、审计日志、报警通知管道、导出和导入 | Tag 值和 Tag 配置、UDT、报警搁置、Historian、已批准的数据库查询 |
-| 安装方式 | 运行 `ignition-rest-mcp` | 安装 MCP Module，再用 `ignition-mcp setup-native` 部署本仓库的 Tool |
-| 安装指南 | [安装 REST server](setup-rest.zh-CN.md) | [安装 Runtime server](setup-runtime.zh-CN.md) |
+| 安装方式 | 运行 `ignition-rest-mcp` | 运行 `ignition-mcp setup` 安装 MCP Module 并部署本仓库的 Tool |
+| 安装指南 | [快速开始](quick-start.zh-CN.md) | [快速开始](quick-start.zh-CN.md) |
 
 两个 server 从不提供同一个操作。只要 Gateway 的 Web API 能完整完成某件事，这件事就归 REST server；其余的都归 Runtime server。所以读 Tag 值要用 Runtime server，改数据库连接要用 REST server。
 
@@ -124,7 +124,7 @@ REST server 把自己的审计记录和调用记录保存在 `IGNITION_MCP_DATA_
 | 8.3.8，build `b2026071409` | `1.3.5.2026021307-SNAPSHOT` | `VERIFIED` | `VERIFIED_WITH_LIMITATION`：可用，但没有发布输出 schema |
 | 8.3.9，build `b2026082511` | 同上 | `VERIFIED` | `FAILED_NATIVE_BINDING`：在这个版本上未确认 |
 
-`VERIFIED` 表示自动化测试在对应版本的真实 Gateway 上完成了部署并调用了 Tool。本项目不把任何版本称为获得生产支持。其他版本也许能用，`setup-native doctor` 会把它们报告为 `UNKNOWN`。证据文件在 `tests/compatibility/evidence/`。
+`VERIFIED` 表示自动化测试在对应版本的真实 Gateway 上完成了部署并调用了 Tool。本项目不把任何版本称为获得生产支持。其他版本也许能用，`ignition-mcp status` 会报告 Gateway、Module build 和 bundle 的实际状态。证据文件在 `tests/compatibility/evidence/`。
 
 ## 本文用到的词
 

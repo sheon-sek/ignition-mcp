@@ -5,7 +5,7 @@
 本文按设置的位置分组，列出所有设置项。哪个 Tool 需要哪个设置，见 [Tool 目录](tools.zh-CN.md)。
 
 - [REST server 设置](#rest-server-设置)：`ignition-rest-mcp` 的环境变量。
-- [安装命令的设置](#安装命令的设置)：`ignition-mcp setup-native` 的参数和环境变量。
+- [setup 命令的设置](#setup-命令的设置)：`ignition-mcp setup` 的参数。
 - [Runtime Target Policy](#runtime-target-policy)：允许 Runtime 写入的 JSON 文件。
 - [Server Config 权限文件](#server-config-权限文件)：谁可以连接 Runtime server。
 - [Named Query 注册表](#named-query-注册表)：Runtime server 可以运行的数据库查询。
@@ -14,7 +14,7 @@
 
 REST server 启动时从环境变量读取设置。它会检查每个值，只要有一个不对就拒绝启动，报错信息会写出是哪个变量。改完设置后要重启 server。
 
-[安装指南](setup-rest.zh-CN.md#第-4-步写一个设置文件)把设置放在一个设置文件里，用 `uv run --no-sync --env-file ignition-rest.env ignition-rest-mcp` 启动 server。在这个文件里，JSON 值和 Windows 路径要加单引号。你也可以在 shell 里直接设置：Linux 和 macOS 用 `export NAME=value`，PowerShell 用 `$env:NAME = "value"`。
+正常用法是运行 [快速开始](quick-start.zh-CN.md)里的 `ignition-mcp start`，它从部署文件夹推导出下面这些值，你不用自己设置。你也可以直接运行 `ignition-rest-mcp` 并自己设置环境变量：Linux 和 macOS 用 `export NAME=value`，PowerShell 用 `$env:NAME = "value"`。自己设置时，JSON 值和 Windows 路径里的引号要按各 shell 的规则处理。
 
 ### 必填项
 
@@ -136,40 +136,33 @@ REST server 启动时从环境变量读取设置。它会检查每个值，只�
 | `IGNITION_MCP_LOG_FORMAT` | `auto` | `text`、`json`，或 `auto`：在 `development` 以外的 profile 中选 `json`。 |
 | `IGNITION_MCP_SERVICE_IDENTITY` | `ignition-rest` | 未开身份验证时，记录里用来称呼调用方的名字。 |
 
-## 安装命令的设置
+## setup 命令的设置
 
-`ignition-mcp setup-native` 负责部署 Runtime server。各子命令的说明见[运维手册](../operations/runbook.zh-CN.md)。下面是它的输入。
+`ignition-mcp setup` 负责部署两个 server。每个命令做什么，见[快速开始](quick-start.zh-CN.md)。下面是它接受的参数。
 
-| 参数 | 环境变量 | 含义 |
-| --- | --- | --- |
-| `--gateway-url URL` | `IGNITION_MCP_SETUP_GATEWAY_URL` | Gateway 的网址。 |
-| `--gateway-token-file PATH` | `IGNITION_MCP_SETUP_GATEWAY_TOKEN`，直接存放 token 本身 | 存有 Gateway API token 的单行文件。在 Linux 和 macOS 上权限必须是 `0600`。 |
-| `--mcp-url URL` | `IGNITION_MCP_SETUP_MCP_URL` | Runtime MCP 地址。不填时，`doctor` 和 `verify` 会根据 `--server-config-name` 拼出来。 |
-| `--mcp-token-file PATH` | `IGNITION_MCP_SETUP_MCP_TOKEN` | Runtime MCP 地址需要登录时使用的 token。 |
-| `--bundle-manifest PATH` | | release manifest。除 `install-module` 外的子命令都要。 |
-| `--bundle-zip PATH` | | release ZIP。`apply` 必填。 |
-| `--profile NAME` | | `readonly`（默认）、`operator`、`configurator` 或 `full`。 |
-| `--bundle-project NAME` | | 放置 Tool 的 Ignition 项目。默认 `ignition_runtime`。 |
-| `--server-config-name NAME` | | MCP endpoint 的名字。`apply` 必填。agent 连接 `<gateway-url>/data/mcp/<name>`。 |
-| `--policy-file PATH` | | Runtime Target Policy。`apply` 必填。 |
-| `--server-config-permissions-file PATH` | | 谁可以连接。`apply` 第一次创建 endpoint 时必填。 |
-| `--backup-dir PATH` | | `apply` 替换旧项目之前，把旧项目存一份到这个文件夹。 |
-| `--provision-security-levels` | | 为这个 profile 创建安全级别，名为 `IgnitionMcpRuntime<Profile>`。 |
-| `--security-level-name NAME` | | 使用另一个安全级别名称。 |
-| `--create-runtime-token` | | 为 agent 创建一个带该安全级别的 API token。 |
-| `--runtime-token-file PATH` | | 新 agent token 的保存位置。和 `--create-runtime-token` 一起时必填。 |
-| `--runtime-token-name NAME` | | 新 token 的名字。默认用 `--server-config-name`。 |
-| `--runtime-token-insecure-channel` | | 让新 token 可以通过普通 `http` 使用。只用于实验环境的 Gateway。 |
-| `--acknowledge-upgrade` | | 接受 bundle 的大版本升级、降级，或更新的 Module build。 |
-| `--allow-insecure-authorize` | | 允许通过普通 `http` 把 Gateway token 发给另一台机器。只用于实验网络。 |
-| `--timeout-seconds N` | | 每个请求的时限。默认 `10`。 |
-| `--json` | | 以 JSON 输出报告。 |
+| 参数 | 含义 |
+| --- | --- |
+| `--deployment NAME` | 部署名，对应 `~/.config/ignition-mcp/deployments/<name>/`。默认 `default`。 |
+| `--gateway-url URL` | Gateway 的网址。 |
+| `--environment dev\|prod` | 部署环境，默认 `dev`。 |
+| `--roles analysis,engineer` | 要部署的助手角色。`dev` 默认两个，`prod` 默认只有 `analysis`。 |
+| `--gateway-token-file PATH` | 存有 Gateway API key 的单行 `<name>:<key>` 文件。在 Linux 和 macOS 上权限必须是 `0600`。 |
+| `--module-file PATH` | MCP Module 的 `.modl` 文件。不填时在 `tests/fixtures/modules/` 和 `~/Downloads` 里找。 |
+| `--recreate-tokens` | 本地机密文件丢失但 Gateway 上的 token 还在时，删掉并重建它。 |
+| `--provision-security-levels` | 在 `prod` 里也创建角色缺少的安全级别。 |
+| `--dry-run` | 只显示计划，不写任何东西。 |
+| `--json` | 以 JSON 输出报告，带稳定的错误码。 |
+| `--yes` | 接受除证书和 EULA 之外的每个具名风险。 |
+| `--accept-certificate` | 信任 Module 的证书。 |
+| `--accept-eula` | 接受 Module 的 EULA。 |
 
-`install-module` 有自己的参数，见[运维手册](../operations/runbook.zh-CN.md#安装-mcp-module)。
+每个命令都接受 `--deployment`、`--json`、`--yes`、`--accept-certificate` 和 `--accept-eula`。`status` 另外读一个 `--gateway-token-file`。`start` 接受 `--bind HOST:PORT`，默认 `127.0.0.1:8000`。`connect` 接受 `--client claude|codex|none`。
+
+`setup` 不需要环境变量：每个值来自参数、上次保存的部署，或向导的问题。
 
 ## Runtime Target Policy
 
-policy 决定 Runtime 写入 Tool 可以修改哪些 Tag 和报警。你把它写成 JSON 文件，传给 `setup-native apply --policy-file`。命令把它存进 Gateway 上的 `IgnitionMCPPolicy` Tag provider，agent 改不了它。
+policy 决定 Runtime 写入 Tool 可以修改哪些 Tag 和报警。`setup` 根据部署环境和角色生成它，存进 Gateway 上的 `IgnitionMCPPolicy` Tag provider，agent 改不了它。operator 从不手写这个文件，`setup` 会让它和 Gateway 保持一致。下面是生成文档的字段，供你阅读 Gateway 上的副本。
 
 | 字段 | 必填 | 含义 |
 | --- | --- | --- |
@@ -185,11 +178,13 @@ policy 决定 Runtime 写入 Tool 可以修改哪些 Tag 和报警。你把它�
 
 文件最大 32 KiB。allowlist 条目如何匹配，见 [Tool 目录](tools.zh-CN.md#runtime-写入-tool-都需要什么)。
 
-`allowlists` 为空的 policy 是有效的。它让所有 Runtime 写入保持关闭，是一个安全的起点。
+`allowlists` 为空的 policy 是有效的。`prod` 默认就是这样，它让所有 Runtime 写入保持关闭，是一个安全的起点。
 
 ## Server Config 权限文件
 
-Server Config 是 MCP Module 对一个 MCP endpoint 的记录。它的权限树列出调用方使用这个 endpoint 必须具备的 Ignition 安全级别。`setup-native` 从不自己编造权限树，所以第一次要用 `--server-config-permissions-file` 提供。之后的运行会沿用 Gateway 上已有的那份。
+Server Config 是 MCP Module 对一个 MCP endpoint 的记录。它的权限树列出调用方使用这个 endpoint 必须具备的 Ignition 安全级别。`setup` 从角色生成这棵树，存进部署文件夹的 `permissions-<role>.json`，并保持它和 Gateway 一致。你不用手写这个文件。
+
+Analysis 角色生成的权限树是这样。Engineer 角色相同，只是级别名为 `IgnitionMcpEngineer`。
 
 ```json
 {
@@ -198,7 +193,7 @@ Server Config 是 MCP Module 对一个 MCP endpoint 的记录。它的权限树�
     {
       "name": "Authenticated",
       "children": [
-        {"name": "IgnitionMcpRuntimeReadonly", "children": []}
+        {"name": "IgnitionMcpAnalysis", "children": []}
       ]
     }
   ]
@@ -206,8 +201,8 @@ Server Config 是 MCP Module 对一个 MCP endpoint 的记录。它的权限树�
 ```
 
 - `type` 是 `AllOf` 或 `AnyOf`。
-- `securityLevels` 沿用 Ignition 的安全级别树。这个例子要求 `Authenticated/IgnitionMcpRuntimeReadonly` 级别，`--provision-security-levels` 会为 `readonly` profile 创建它。
-- agent 连接时使用的 token 必须带有这个级别。`--create-runtime-token` 会创建这样的 token。
+- `securityLevels` 沿用 Ignition 的安全级别树。这个例子要求 `Authenticated/IgnitionMcpAnalysis` 级别，`setup` 会在 `dev` 里创建它。
+- agent 连接时使用的 token 必须带有这个级别，`setup` 会创建带这个级别的 token。
 
 ## Named Query 注册表
 

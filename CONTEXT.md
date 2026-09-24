@@ -19,7 +19,7 @@ A non-binding checkpoint inside a phase that produces its own live evidence but 
 _Avoid_: sub-gate, G4a
 
 **Module install**:
-Putting a trusted local MCP Module file on a Gateway through `setup-native install-module`. The operator names the file's hash and accepts its certificate and EULA explicitly.
+Putting a trusted local MCP Module file on a Gateway through `ignition-mcp setup`. The CLI checks the file's SHA-256 against the build this repository pins, and the operator accepts its certificate and EULA explicitly.
 _Avoid_: module deploy, module upgrade (when a first install is meant)
 
 **Module upgrade**:
@@ -27,7 +27,7 @@ A Module install that replaces an installed MCP Module with a higher build. It n
 _Avoid_: update, reinstall
 
 **Bundle upgrade**:
-An `apply` that replaces a managed Runtime Bundle Project with a newer bundle version. It needs explicit acknowledgement. The v1 "upgrade path" means this, not a Module upgrade.
+A `setup` run that replaces a managed Runtime Bundle Project with a newer bundle version. It needs explicit acknowledgement. The v1 "upgrade path" means this, not a Module upgrade.
 _Avoid_: redeploy, bundle update
 
 ### Setup

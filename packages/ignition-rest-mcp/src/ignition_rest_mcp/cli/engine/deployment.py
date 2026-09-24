@@ -6,7 +6,7 @@ environment and the Assistant roles, and one file per secret. The generated poli
 and permissions documents also live here; the tickets that generate them choose
 their file names.
 
-Secret files go through ``cli/setup_native/security.py``, the handling Phase 4
+Secret files go through ``cli/gateway_ops/security.py``, the handling Phase 4
 verified: ``O_CREAT|O_EXCL``, mode ``0600``, no symlinks, one ``<name>:<key>`` line,
 and on Windows one warning in place of the mode check (D31 section 4.1).
 """
@@ -22,8 +22,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
-from ignition_rest_mcp.cli.setup_native import security
-from ignition_rest_mcp.cli.setup_native.inputs import warn_posix_modes_unavailable
+from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops.inputs import warn_posix_modes_unavailable
 
 DEPLOYMENT_FILE = "deployment.toml"
 SECRET_SUFFIX = ".secret"

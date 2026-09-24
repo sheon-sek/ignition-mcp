@@ -1,7 +1,7 @@
-"""The curated, guarded write path ``apply`` and ``install-module`` use (D20, D30).
+"""The curated, guarded write path the CLI changes a Gateway through (D20, D30).
 
-These two commands are the only parts of this repo that write a Gateway outside the
-D08 mutation chain, so this write path is deliberately small and named:
+The CLI is the only part of this repo that writes a Gateway outside the D08 mutation
+chain, so this write path is deliberately small and named:
 
 * **Only these routes.** Each operation has one method here, and every path is built
   from a module constant: import a Project archive, create or modify the MCP Server
@@ -20,7 +20,7 @@ D08 mutation chain, so this write path is deliberately small and named:
   starts, and because an accepted import is not proof that the provider serves the
   Tags. Every write's effect is confirmed by a read-back the caller performs.
 
-Reads go through :class:`~ignition_rest_mcp.cli.setup_native.gateway.GatewayRest`,
+Reads go through :class:`~ignition_rest_mcp.cli.gateway_ops.gateway.GatewayRest`,
 which stays GET-only; this module owns the POST/PUT half.
 """
 
@@ -34,15 +34,15 @@ from urllib.parse import quote
 
 import httpx
 
-from ignition_rest_mcp.cli.setup_native import documents
-from ignition_rest_mcp.cli.setup_native.gateway import (
+from ignition_rest_mcp.cli.gateway_ops import documents
+from ignition_rest_mcp.cli.gateway_ops.gateway import (
     GatewayProbeError,
     GatewayRest,
     _reason,
     _redact,
     _snippet,
 )
-from ignition_rest_mcp.cli.setup_native.inputs import (
+from ignition_rest_mcp.cli.gateway_ops.inputs import (
     API_TOKEN_TYPE,
     CONFIG_COLLECTION,
     MAX_MODULE_BYTES,
@@ -209,7 +209,7 @@ def guard_tool_list(tools: Any, what: str) -> list[str]:
 
 
 class GatewayWriter:
-    """The curated write half of ``setup-native``, guarded and bounded."""
+    """The curated write half, guarded and bounded."""
 
     def __init__(
         self,
@@ -228,7 +228,7 @@ class GatewayWriter:
                 "Accept": "application/json",
                 "Accept-Encoding": "identity",
                 "X-Ignition-API-Token": api_token,
-                "User-Agent": "ignition-mcp-setup-native",
+                "User-Agent": "ignition-mcp",
             },
             follow_redirects=False,
             timeout=httpx.Timeout(timeout_seconds),

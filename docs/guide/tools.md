@@ -19,7 +19,7 @@ The words "scope", "profile", "allowlist" and "Precondition token" are explained
 ## The REST server (`ignition-rest`)
 
 The REST server runs on your own machine and talks to the Gateway over its web API. Setup is in
-[Set up the REST server](setup-rest.md). Every setting named below is an environment variable, listed
+[Quick start](quick-start.md). Every setting named below is an environment variable, listed
 in full in [Configuration reference](configuration.md#rest-server-settings).
 
 ### What every REST Tool needs
@@ -146,20 +146,19 @@ turns nothing on.
 ## The Runtime server (`ignition-runtime`)
 
 The Runtime server runs inside the Gateway. The official Ignition MCP Module hosts it, and this
-repository supplies the Tools as an Ignition project. Setup is in
-[Set up the Runtime server](setup-runtime.md).
+repository supplies the Tools as an Ignition project. Setup is in [Quick start](quick-start.md).
 
 ### What every Runtime Tool needs
 
 - The MCP Module is installed and running on the Gateway.
-- The bundle project, the Server Config and the Runtime Target Policy are deployed with
-  `ignition-mcp setup-native apply`.
+- `ignition-mcp setup` deploys the bundle project, the Server Config and the Runtime Target Policy.
 - The agent connects to `<gateway-url>/data/mcp/<server-config-name>` with an Ignition API token whose
   security level the Server Config allows.
 
-### Profiles decide which Tools exist
+### Roles decide which Tools exist
 
-The `--profile` you pass to `setup-native apply` decides which Tools the endpoint offers.
+Each Assistant role carries a Runtime profile, and the profile decides which Tools the endpoint
+offers. The Analysis role uses `readonly`. The Engineer role uses `full`.
 
 | Profile | What it adds | Tool count |
 | --- | --- | --- |
@@ -168,8 +167,9 @@ The `--profile` you pass to `setup-native apply` decides which Tools the endpoin
 | `configurator` | `readonly` plus the 6 Tag configuration Tools | 19 |
 | `full` | all of the above | 22 |
 
-To change the profile, run `setup-native apply` again with the new `--profile`, then reconnect the
-agent.
+`ignition-mcp setup` deploys both roles by default in `dev` and the Analysis role alone in `prod`. To
+change which roles a deployment serves, run `setup` again with `--roles`, then run `ignition-mcp
+connect` for each role.
 
 ### Read Tools, in every profile
 
@@ -265,7 +265,7 @@ changes nothing.
 ### What every Runtime write Tool needs
 
 A profile only makes a write Tool visible. Before the Tool changes anything it also reads the
-**Runtime Target Policy**, a small JSON document that `setup-native apply` stores on the Gateway. The
+**Runtime Target Policy**, a small JSON document that `ignition-mcp setup` stores on the Gateway. The
 Tool refuses to run with `operation_disabled` if the policy is missing or broken, and with
 `permission_denied` if the target is not in the policy's allowlist for that Tool.
 

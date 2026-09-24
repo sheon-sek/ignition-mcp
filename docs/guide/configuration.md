@@ -6,7 +6,7 @@ This page lists every setting, grouped by where you set it. For which Tool needs
 the [Tool catalog](tools.md).
 
 - [REST server settings](#rest-server-settings): environment variables for `ignition-rest-mcp`.
-- [Setup command settings](#setup-command-settings): flags and variables for `ignition-mcp setup-native`.
+- [CLI settings](#cli-settings): the flags an `ignition-mcp` command takes.
 - [Runtime Target Policy](#runtime-target-policy): the JSON file that allows Runtime writes.
 - [Server Config permissions file](#server-config-permissions-file): who may connect to the Runtime server.
 - [Named Query registry](#named-query-registry): the database queries the Runtime server may run.
@@ -17,10 +17,11 @@ The REST server reads its settings from environment variables when it starts. It
 and refuses to start if one is wrong, and the error message names the variable. Change a value, then
 restart the server.
 
-The [setup guide](setup-rest.md#step-4-write-a-settings-file) keeps them in a settings file and
-starts the server with `uv run --no-sync --env-file ignition-rest.env ignition-rest-mcp`. In that file,
-put single quotes around JSON values and Windows paths. You can also set them in the shell: with
-`export NAME=value` on Linux and macOS, or `$env:NAME = "value"` in PowerShell.
+`ignition-mcp setup` writes these values into the deployment directory and `ignition-mcp start` runs
+the server with them. The [quick start](quick-start.md) covers both commands, and the
+[runbook](../operations/runbook.md#turn-on-writes) shows the switches for write Tools. You can also
+set the variables in a shell: with `export NAME=value` on Linux and macOS, or `$env:NAME = "value"`
+in PowerShell.
 
 ### Required
 
@@ -150,44 +151,36 @@ Stored files, called artifacts, have their own limits:
 | `IGNITION_MCP_LOG_FORMAT` | `auto` | `text`, `json`, or `auto`, which picks `json` outside the `development` profile. |
 | `IGNITION_MCP_SERVICE_IDENTITY` | `ignition-rest` | The name recorded for callers when authentication is off. |
 
-## Setup command settings
+## CLI settings
 
-`ignition-mcp setup-native` deploys the Runtime server. The [runbook](../operations/runbook.md)
-explains each subcommand. These are its inputs.
+The [quick start](quick-start.md) explains the wizard, the one-line form and the acceptances. The
+[runbook](../operations/runbook.md) covers operating a deployment after setup.
 
-| Flag | Environment variable | Meaning |
+| Flag | Commands | Meaning |
 | --- | --- | --- |
-| `--gateway-url URL` | `IGNITION_MCP_SETUP_GATEWAY_URL` | The Gateway's web address. |
-| `--gateway-token-file PATH` | `IGNITION_MCP_SETUP_GATEWAY_TOKEN` holds the token itself | A file holding the Gateway API token on one line. On Linux and macOS it must have mode `0600`. |
-| `--mcp-url URL` | `IGNITION_MCP_SETUP_MCP_URL` | The Runtime MCP address. `doctor` and `verify` build it from `--server-config-name` when you leave it out. |
-| `--mcp-token-file PATH` | `IGNITION_MCP_SETUP_MCP_TOKEN` | A token for the Runtime MCP address, if it needs one. |
-| `--bundle-manifest PATH` | | The release manifest. Required for every subcommand except `install-module`. |
-| `--bundle-zip PATH` | | The release ZIP. Required by `apply`. |
-| `--profile NAME` | | `readonly` (default), `operator`, `configurator` or `full`. |
-| `--bundle-project NAME` | | The Ignition project the Tools go into. Default `ignition_runtime`. |
-| `--server-config-name NAME` | | The name of the MCP endpoint. Required by `apply`. Agents connect to `<gateway-url>/data/mcp/<name>`. |
-| `--policy-file PATH` | | The Runtime Target Policy. Required by `apply`. |
-| `--server-config-permissions-file PATH` | | Who may connect. Required the first time `apply` creates the endpoint. |
-| `--backup-dir PATH` | | A folder for a copy of the old project before `apply` replaces it. |
-| `--provision-security-levels` | | Create a security level for this profile, named `IgnitionMcpRuntime<Profile>`. |
-| `--security-level-name NAME` | | Use a different security level name. |
-| `--create-runtime-token` | | Create an API token for agents, with that security level. |
-| `--runtime-token-file PATH` | | Where to save the new agent token. Required with `--create-runtime-token`. |
-| `--runtime-token-name NAME` | | The new token's name. Default: the `--server-config-name`. |
-| `--runtime-token-insecure-channel` | | Let the new token work over plain `http`. Lab Gateways only. |
-| `--acknowledge-upgrade` | | Accept a major bundle upgrade, a downgrade, or a newer Module build. |
-| `--allow-insecure-authorize` | | Send the Gateway token over plain `http` to another machine. Lab networks only. |
-| `--timeout-seconds N` | | Time limit per request. Default `10`. |
-| `--json` | | Print the report as JSON. |
-
-`install-module` has its own flags, listed in the
-[runbook](../operations/runbook.md#install-the-mcp-module).
+| `--deployment NAME` | all | The deployment directory under `~/.config/ignition-mcp/deployments/`. Default `default`. |
+| `--json` | all | Print the report as one JSON document. Never prompts. |
+| `--yes` | all | Accept every named risk except the certificate and the EULA. A one-line run confirms a plan with changes through this flag. |
+| `--accept-certificate` | all | Trust the Module certificate. |
+| `--accept-eula` | all | Accept the Module EULA. |
+| `--gateway-url URL` | `setup`, `status`, `reset` | The Gateway's web address. |
+| `--gateway-token-file PATH` | `setup`, `status`, `reset` | A file holding the Gateway API key on one line, mode `0600` on Linux and macOS. |
+| `--environment dev\|prod` | `setup` | The Deployment environment. Default `dev`. |
+| `--roles LIST` | `setup` | The Assistant roles to deploy. Default `analysis,engineer` in `dev` and `analysis` in `prod`. |
+| `--module-file PATH` | `setup` | The MCP Module `.modl` file. |
+| `--recreate-tokens` | `setup` | Delete and recreate every managed token whose local secret file is lost. |
+| `--provision-security-levels` | `setup` | In `prod`, create the roles' missing Security Levels. |
+| `--dry-run` | `setup` | Show the plan and stop before any write. |
+| `--bind HOST:PORT` | `start` | The address the REST server listens on. Default `127.0.0.1:8000`. |
+| `--client claude\|codex\|none` | `connect` | The client to register the role with. |
 
 ## Runtime Target Policy
 
-The policy decides which Tags and alarms the Runtime write Tools may change. You write it as a JSON
-file and pass it to `setup-native apply --policy-file`. The command stores it on the Gateway in the
-`IgnitionMCPPolicy` Tag provider. Agents cannot change it.
+The policy decides which Tags and alarms the Runtime write Tools may change. `ignition-mcp setup`
+generates it from the Deployment environment and the roles, stores it in the deployment directory as
+`runtime-policy.json`, and writes it to the Gateway's `IgnitionMCPPolicy` Tag provider. In `dev` every
+Runtime Mutation Tool gets `*`; in `prod` every allowlist is empty. Agents cannot change it. The table
+below describes the fields of the generated document.
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -210,9 +203,9 @@ start.
 ## Server Config permissions file
 
 The Server Config is the MCP Module's record of one MCP endpoint. Its permissions tree lists the
-Ignition security levels a caller must have to use the endpoint. `setup-native` never makes one up,
-so you supply it the first time with `--server-config-permissions-file`. Later runs keep the one on
-the Gateway.
+Ignition security levels a caller must have to use the endpoint. `ignition-mcp setup` generates the
+tree from the role and keeps it in step with the Gateway, so you never write one. This is what
+`setup` generates for the Analysis Assistant:
 
 ```json
 {
@@ -221,7 +214,7 @@ the Gateway.
     {
       "name": "Authenticated",
       "children": [
-        {"name": "IgnitionMcpRuntimeReadonly", "children": []}
+        {"name": "IgnitionMcpAnalysis", "children": []}
       ]
     }
   ]
@@ -230,10 +223,12 @@ the Gateway.
 
 - `type` is `AllOf` or `AnyOf`.
 - `securityLevels` follows Ignition's security level tree. The example requires the
-  `Authenticated/IgnitionMcpRuntimeReadonly` level, which `--provision-security-levels` creates for
-  the `readonly` profile.
-- The token the agent connects with must carry that level. `--create-runtime-token` makes such a
-  token.
+  `Authenticated/IgnitionMcpAnalysis` level, which `setup` creates for the Analysis role. The
+  Engineer role uses `Authenticated/IgnitionMcpEngineer`.
+- The token the agent connects with must carry that level. `setup` creates one Runtime token per
+  deployed role.
+- A tree someone changed by hand is reported as `CHANGED`, never `NO CHANGE`, and `setup` restores
+  the generated tree after confirmation.
 
 ## Named Query registry
 

@@ -101,6 +101,25 @@ def parse_bind(value: str) -> tuple[str, int]:
     return parts.hostname, port
 
 
+def saved_bind(values: Mapping[str, Any]) -> str:
+    """The bind the deployment saved, or the default when it saved none.
+
+    ``bind`` is not one of the resolved inputs, so only a hand edit of
+    ``deployment.toml`` puts it there. Both ``start`` and ``connect`` read it, so a
+    registered endpoint points at the address the server listens on.
+    """
+
+    value = values.get("bind")
+    return value.strip() if isinstance(value, str) and value.strip() else DEFAULT_BIND
+
+
+def mcp_url(bind: str) -> str:
+    """The MCP endpoint a client reaches when the REST server listens on ``bind``."""
+
+    host, port = parse_bind(bind)
+    return f"http://{_url_host(_connect_host(host))}:{port}{MCP_PATH}"
+
+
 def _url_host(host: str) -> str:
     return f"[{host}]" if ":" in host else host
 
@@ -253,7 +272,8 @@ SERVE: Serve = serve_foreground
 
 
 def start(ctx: engine.Context) -> None:
-    host, port = parse_bind(getattr(ctx.args, "bind", None) or DEFAULT_BIND)
+    bind = getattr(ctx.args, "bind", None) or saved_bind(ctx.deployment.values)
+    host, port = parse_bind(bind)
     if not _is_loopback(host):
         items = accept([Needed(Risk.NON_LOOPBACK_BIND, f"{_url_host(host)}:{port}")], ctx.accept_flags, ctx.prompter)
         ctx.accepted.extend(items)
@@ -281,7 +301,7 @@ def start(ctx: engine.Context) -> None:
         )
     _accept_risks(ctx)
 
-    rest_url = f"http://{_url_host(host)}:{port}{MCP_PATH}"
+    rest_url = mcp_url(bind)
     gateway_url = str(deployment.values["gateway_url"]).rstrip("/")
 
     def report(status: int, body: dict[str, Any]) -> None:

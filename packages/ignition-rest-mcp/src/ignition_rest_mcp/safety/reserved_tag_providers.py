@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from ignition_rest_mcp.safety.policy import PolicyDecision
 
-#: The provider `setup-native apply` creates to hold the Runtime Target Policy.
+#: The provider `ignition-mcp setup` creates to hold the Runtime Target Policy.
 #: Provider names are compared case-insensitively: a Tag path that differs from the
 #: reserved name only in case addresses the same provider.
 RESERVED_TAG_PROVIDERS = ("IgnitionMCPPolicy",)

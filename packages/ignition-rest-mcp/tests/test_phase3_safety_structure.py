@@ -28,11 +28,11 @@ WRITE_BOUNDARY_FILES = frozenset({"client/gateway.py", "safety/executor.py"})
 
 WRITE_METHOD_CALLS = frozenset({"post", "put", "patch", "delete", "request"})
 
-#: The setup-native CLI is code-separated from the server (D25): it never imports
-#: the Gateway transport and only probes documented read-only REST routes plus the
-#: Runtime MCP endpoint (whose JSON-RPC wire requires POST). The name-based write
-#: scan below would flag the CLI's own ``request`` RPC helper, so the subtree is
-#: excluded here and pinned GET-only by test_cli_gateway_probes_are_get_only.
+#: The CLI is code-separated from the server (D25): it never imports the Gateway
+#: transport and only probes documented read-only REST routes plus the Runtime MCP
+#: endpoint (whose JSON-RPC wire requires POST). The name-based write scan below
+#: would flag the CLI's own ``request`` RPC helper, so the subtree is excluded here
+#: and pinned GET-only by test_cli_gateway_probes_are_get_only.
 SCAN_EXCLUDED_PREFIXES = ("cli/",)
 
 READ_TOOLS = frozenset({
@@ -172,8 +172,8 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     in ``cli/`` is the MCP JSON-RPC POST, and it can target nothing but the
     operator-supplied Runtime MCP endpoint URL."""
 
-    cli_dir = SRC_ROOT / "cli" / "setup_native"
-    assert cli_dir.is_dir(), "the setup-native CLI package must exist"
+    cli_dir = SRC_ROOT / "cli" / "gateway_ops"
+    assert cli_dir.is_dir(), "the gateway_ops CLI package must exist"
     for path in sorted(cli_dir.glob("*.py")):
         for node in ast.walk(_parse(path)):
             if not (
@@ -209,6 +209,38 @@ def test_cli_gateway_probes_are_get_only_and_post_targets_the_mcp_endpoint() -> 
     assert offenders == [], f"gateway.py _request call sites with a non-GET method: {offenders}"
 
 
+#: The CLI package may import: the stdlib, httpx and its own package (D25).
+ALLOWED_CLI_IMPORT_ROOTS = frozenset(
+    {
+        "__future__", "argparse", "asyncio", "base64", "collections", "dataclasses", "hashlib", "httpx",
+        "io", "ipaddress", "json", "logging", "os", "pathlib", "re", "stat", "sys", "time", "typing", "urllib",
+        "xml", "zipfile",
+    }
+)
+
+
+@pytest.mark.parametrize("module", sorted((SRC_ROOT / "cli" / "gateway_ops").glob("*.py")))
+def test_the_cli_package_stays_code_separated(module: Path) -> None:
+    """D25 plus the no-repo-path rule: only the CLI package, httpx and the stdlib.
+
+    Kept from the retired command suite unchanged: the CLI never imports the
+    server's request-handling modules, the Gateway transport or the monorepo tooling.
+    """
+
+    tree = _parse(module)
+    imported: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported.update(str(alias.name) for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(str(node.module))
+    foreign = {name for name in imported if name.split(".")[0] not in ALLOWED_CLI_IMPORT_ROOTS}
+    own_package = {name for name in foreign if name.startswith("ignition_rest_mcp.cli")}
+    assert foreign == own_package, (module.name, sorted(foreign - own_package))
+    assert "subprocess" not in imported, module
+    assert not any(name.startswith(("tooling", "tests", "ignition_rest_mcp.server")) for name in imported)
+
+
 def test_cli_write_routes_are_the_curated_set_of_the_two_writing_commands() -> None:
     """Tickets #21 and #54: the CLI writes through one guarded module with named routes.
 
@@ -220,7 +252,7 @@ def test_cli_write_routes_are_the_curated_set_of_the_two_writing_commands() -> N
     ``writer.py`` is the bounded Project export.
     """
 
-    cli_dir = SRC_ROOT / "cli" / "setup_native"
+    cli_dir = SRC_ROOT / "cli" / "gateway_ops"
     writer = cli_dir / "writer.py"
     tree = _parse(writer)
 

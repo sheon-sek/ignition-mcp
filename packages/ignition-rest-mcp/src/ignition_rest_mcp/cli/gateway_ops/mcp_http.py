@@ -1,9 +1,9 @@
-"""Minimal bounded MCP Streamable HTTP JSON-RPC client for ``setup-native``.
+"""Minimal bounded MCP Streamable HTTP JSON-RPC client for the CLI's endpoint checks.
 
 Wire semantics mirror the Phase 2 probe (single POST per request, ``Accept:
 application/json, text/event-stream``, optional ``Mcp-Session-Id`` echo, SSE
 ``data:`` decoding, 1 MiB response ceiling, JSON-RPC error = failure) but use
-the package's ``httpx`` dependency.  ``doctor`` and ``verify`` are diagnostics,
+the package's ``httpx`` dependency.  The endpoint checks are diagnostics,
 not installers: ``initialize`` gets exactly one attempt under a bounded timeout
 and never a readiness wait loop. Waiting for a starting Gateway belongs to the
 live harness.
@@ -18,7 +18,7 @@ from typing import Any
 
 import httpx
 
-from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
+from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint
 
 PROTOCOL_VERSION = "2025-06-18"
 ACCEPT = "application/json, text/event-stream"
@@ -34,7 +34,7 @@ INVALID_REQUEST = -32600
 #: not found``.  For list methods both codes mean "this endpoint does not offer
 #: that capability"; anywhere else ``-32600`` stays a hard failure.
 LIST_METHODS = frozenset({"tools/list", "resources/list", "prompts/list"})
-USER_AGENT = "ignition-mcp-setup-native"
+USER_AGENT = "ignition-mcp"
 #: An Ignition API token (``name:key``, the key being unpadded Base64URL).  The
 #: Gateway module's MCP endpoint authenticates it through ``X-Ignition-API-Token``
 #: and does not accept the bearer scheme; a value shaped like an API token is
@@ -70,7 +70,7 @@ class McpHttpClient:
     token: str | None = None
     timeout_seconds: float = 10.0
     transport: httpx.AsyncBaseTransport | None = None
-    client_name: str = "ignition-mcp-setup-native"
+    client_name: str = "ignition-mcp"
     client_version: str = "0.1.0a0"
     session_id: str | None = None
     server_capabilities: dict[str, Any] = field(default_factory=dict, init=False)

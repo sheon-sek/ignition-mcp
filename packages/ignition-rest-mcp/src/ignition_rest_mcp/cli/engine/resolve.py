@@ -334,8 +334,8 @@ def probe_gateway_token(url: str, token: str, transport: httpx.AsyncBaseTranspor
     The reason never carries the token, and never a bare HTTP status (D32 section 4).
     """
 
-    from ignition_rest_mcp.cli.setup_native import gateway as gw
-    from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
+    from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+    from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint
 
     parts = urlsplit(url)
     endpoint = Endpoint(

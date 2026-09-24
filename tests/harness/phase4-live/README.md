@@ -7,7 +7,7 @@ Ephemeral CI-owned evidence for the facts Phase 4 milestone 4a depends on:
    Bundle, so that
    - a Runtime Tool handler (`onToolCalled.py`) reads it at bounded cost,
    - the Runtime MCP server cannot write it,
-   - `setup-native apply` can later write it through Native REST?
+   - `ignition-mcp setup` can later write it through Native REST?
 2. **Exact-path `system.alarm.queryStatus` bound** (D12 Phase 4 amendment,
    issue #6). Whether querying one exact Alarm path is bounded before or during
    execution, to the standard the Phase 2 amendment set.
@@ -94,29 +94,6 @@ fixture, exactly like `tests/harness/runtime-binding/project`.
   Drift is reported and recorded, never hidden.
 - `rehearse_local.py`: runs one milestone's driver stages against the recorded
   Gateway fake (`--stages 4a` by default, `--stages 4b` for ticket #10).
-- `apply_stage.py` (tickets #21 and #22, milestone 4d): drives the shipped
-  `ignition-mcp setup-native` CLI — `plan` -> `apply` -> `verify`, then a second
-  `plan`/`apply` that must be a `NO CHANGE` run that writes nothing — against the
-  Gateway row this workflow provisioned. It uses run-unique names for the Project
-  and the Server Config (so the first run really creates both), the deterministic
-  release the workflow built, the ticket #6 policy document and the harness's own
-  permissions tree. Ticket #22's opt-in flags are always passed, so the same run
-  also creates the dedicated Runtime Security Level for its profile and a Runtime
-  API token granted exactly that level; both are read back over Native REST with the
-  stage's own admin token, the token's stored hash must equal the secret the CLI
-  wrote, the credential file must be `0600`, and the secret is judged absent from
-  every command output and from the evidence (which is redacted rather than uploaded
-  if it ever appears). A verify that fails right after the write is re-run, bounded
-  and read-only; the CLI itself now makes the endpoint serve its Tools (it
-  re-announces a Server Config the Module built before the Project's provider
-  registered, which is why a live row's first apply can need a moment), and the
-  stage judges the *last* verify it ran, never only the report `apply` embedded.
-  `--compose-file` adds one last-resort Gateway reload if the CLI could not make the
-  endpoint serve; no *write* of the plan is ever re-run by the stage.
-  `--expected-origin` refuses any Gateway but the compose one.
-- `rehearse_apply.py`: builds the release into a temporary directory, starts the
-  recorded Gateway fake and runs `apply_stage.py` against it, so the stage is
-  rehearsed — writes, read-backs, idempotency — before a live Gateway is spent.
 - `../recorded_gateway.py`: replays the recorded Native REST and MCP bodies,
   including this ticket's `phase4/` fixtures.
 
@@ -165,7 +142,7 @@ characterized. The workflow fails on `3` now that the expectations are frozen.
 handler to refuse with `operation_disabled` on a Gateway whose policy provider
 does not exist yet.
 
-`policy-provision` writes the policy the way `setup-native apply` will: create
+`policy-provision` writes the policy the way `ignition-mcp setup` will: create
 the dedicated Tag provider through
 `POST /data/api/v1/resources/ignition/tag-provider`, import the Tag document
 through `POST /data/api/v1/tags/import`, prove the D30 `Abort` collision policy,
@@ -187,7 +164,7 @@ Tags the running provider never serves. Both are recorded under
 targets through `tag_fixture_probe`, creates the `MCP_CI_AUDIT` local audit
 profile through Native REST, and installs the `tag_write` policy
 (`MergeOverwrite`) whose `auditProfile` the D18 `best_effort` mode then names.
-Like `setup-native apply`, it treats an accepted import as unproven until a
+Like `ignition-mcp setup`, it treats an accepted import as unproven until a
 Tool handler reads the served document back, and it retries under a deadline.
 
 `tag-write` drives the shipped Tool: the 14-Tool operator inventory, an
@@ -214,25 +191,6 @@ through `GET /data/api/v1/tags/export`, the segment-boundary refusal, the D30 §
 `_types_` refusals and the explicit-entry pass-through, the reserved-provider
 refusal under an explicit `*`, a whole-batch Preflight refusal, and the Runtime
 audit rows for the call's correlation ID.
-
-## Apply stage (ticket #21)
-
-```bash
-uv run --no-sync python tests/harness/phase4-live/rehearse_apply.py
-uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
-  --base-url http://127.0.0.1:8093 --expected-origin 127.0.0.1:8093 \
-  --api-token "$CI_API_TOKEN" \
-  --bundle-manifest dist/release/ignition-runtime-bundle-<version>.manifest.json \
-  --bundle-zip dist/release/ignition-runtime-bundle-<version>.zip \
-  --evidence-dir artifacts/apply-<version> --source-revision "$(git rev-parse HEAD)" \
-  --project ignition_runtime_apply_<run> --server-config phase4-apply-runtime
-```
-
-The stage is the product under test, not a copy of it: the Workflow
-`.github/workflows/phase4-live-apply.yml` (milestone 4d, its own Gateway row and
-its own `phase4-live` environment reuse) runs it after the release build. It
-never shares a Gateway with the 4a/4b Mutation rows, because it writes deployment
-state — a Project, a Server Config and the reserved policy provider.
 
 ## Setup CLI stage (issue #78, G7)
 

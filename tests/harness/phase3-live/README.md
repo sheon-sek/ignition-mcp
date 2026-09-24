@@ -13,28 +13,26 @@ the evidence row), and a run-unique disposable Project
 1. L5 guards: explicit CI marker + Gateway identity match + run-unique
    disposable project + writer-scoped allowlists. The driver checks all of these before any import and fails
    closed when one is missing.
-2. `setup-native doctor / plan / verify` against the real Gateway and the
-   deployed bundle (`plan` reports only NO CHANGE for provisioned items).
-3. Sensitive exports ON: exact 16-Tool REST inventory (zero mutation Tools),
+2. Sensitive exports ON: exact 16-Tool REST inventory (zero mutation Tools),
    `project_export` → READY CONFIDENTIAL/EXPORT artifact, `GET` body
    SHA-256 == metadata == quoted `ETag`, `Repr-Digest`, HEAD/GET header
    parity, `artifact_list`/`artifact_info` visibility, `tag_config_export`
    JSON artifact, `operation_diagnose` same-principal record and unknown-ID
    `not_found`, D18 audit triple for the export.
-4. Fingerprint stability: two exports with no change ⇒ identical `pcf1`
+3. Fingerprint stability: two exports with no change ⇒ identical `pcf1`
    (instability is recorded honestly and marks Project mutation
    not-concurrency-safe on that row).
-5. Authn/authz layers live: invalid/expired JWT rejected; a read-only JWT
+4. Authn/authz layers live: invalid/expired JWT rejected; a read-only JWT
    and a config JWT against a non-allowlisted project are each denied at the
    executor with exactly one `decision` audit row, zero `attempt` rows and
    the Gateway Project fingerprint unchanged.
-6. D16 transactions through the internal service and the guarded executor:
+5. D16 transactions through the internal service and the guarded executor:
    `NO_CHANGE` (no backup, no dispatch), `COMMITTED` (verified by re-export,
    recovery artifact persisted with the lock released), `CONFLICTED` from a
    real injected external drift between A and A′ (transaction `attempt` row
    absent, `import_dispatched=false`, recovery lock released per the D16
    release set).
-7. Sensitive exports OFF: the two export Tools disappear from discovery and
+6. Sensitive exports OFF: the two export Tools disappear from discovery and
    an explicit call is refused at call time; inventory stays mutation-free.
 
 ## Layout
