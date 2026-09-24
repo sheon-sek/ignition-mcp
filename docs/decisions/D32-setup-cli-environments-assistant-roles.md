@@ -38,7 +38,7 @@ There is no separate `plan` command, because `setup` always shows its plan first
 
 One engine resolves every input. It has two front ends.
 
-1. When the flags supply every value, the command runs without asking anything. This is the path an AI agent uses.
+1. When the flags supply every value, the command runs without asking anything. This is the path an AI agent uses. A `setup` run whose plan changes anything also needs `--yes` in this mode, which stands in for the wizard's confirmation. Without it the run fails before any write and names the flag. The coordinator added this on 2026-09-25 to resolve the conflict with section 2, and the owner may overrule it.
 2. When a value is missing and stdin is a terminal, a wizard asks for the missing values only. Each question shows its default and its choices.
 3. When a value is missing and stdin is not a terminal, the command exits with an error that lists every missing flag. It never waits for input.
 4. When the wizard finishes, it prints the one-line command with the same values, so the run can be repeated or handed to an agent.
