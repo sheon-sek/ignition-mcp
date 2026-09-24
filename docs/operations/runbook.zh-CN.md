@@ -2,18 +2,18 @@
 
 > English: [`runbook.md`](runbook.md)。本文是英文版的译本，两者不一致时以英文版为准。命令、参数、环境变量、退出码、状态字符串和文件路径保留英文原文。
 
-本手册是你了解基本用法之后，运维 Runtime server 部署时查阅的参考。它详细说明 `ignition-mcp setup-native` 的每个子命令、升级、Runtime Target Policy、在两个 server 上打开写入，以及如何阅读 `operation_diagnose` 的输出。
+本手册是你了解基本用法之后，运维 `ignition-mcp` 部署时查阅的参考。它详细说明 `setup` 和 `status` 的行为、升级、Runtime Target Policy、在两个 server 上打开写入，以及如何阅读 `operation_diagnose` 的输出。
 
-第一次安装请按[安装 Runtime server](../guide/setup-runtime.zh-CN.md) 操作，那里按顺序讲解了同样的命令。
+第一次安装请按[快速开始](../guide/quick-start.zh-CN.md) 操作，那里按顺序讲解了每个命令。
 
 | 我想…… | 章节 |
 | --- | --- |
 | 知道开始前要准备什么 | [前置条件](#前置条件) |
-| 设置 token 文件和共用的值 | [环境变量与凭证文件](#环境变量与凭证文件) |
-| 安装或升级 MCP Module | [安装 MCP Module](#安装-mcp-module) |
-| 看懂 `doctor` 的某一行 | [用 `doctor` 诊断](#用-doctor-诊断) |
-| 看懂 `plan` 的某一行 | [阅读 plan](#阅读-plan) |
-| 确切了解 `apply` 做了什么 | [应用部署](#应用部署) |
+| 设置 token 文件和部署状态 | [部署状态与凭证文件](#部署状态与凭证文件) |
+| 安装或升级 MCP Module | [setup](#setup) |
+| 看懂 `status` 的某一行 | [用 `status` 诊断](#用-status-诊断) |
+| 看懂 setup 显示的计划 | [阅读 setup 的计划](#阅读-setup-的计划) |
+| 确切了解 `setup` 做了什么 | [setup 写入了什么](#setup-写入了什么) |
 | 检查一个部署 | [验证部署](#验证部署) |
 | 部署更新的 bundle | [升级 bundle](#升级-bundle) |
 | 修改 Runtime 写入 Tool 可以碰的范围 | [Runtime Target Policy](#runtime-target-policy) |
@@ -21,7 +21,7 @@
 | 查一次 REST 调用发生了什么 | [阅读 `operation_diagnose` 的输出](#阅读-operation_diagnose-的输出) |
 | 看懂退出码 | [退出码](#退出码) |
 
-示例中 bundle 版本为 `0.7.0`，Server Config 名为 `production`，命令在仓库文件夹里运行。`ignition-mcp` 是 `uv run --no-sync ignition-mcp` 的简写。
+示例中的命令在仓库文件夹里运行，因为 `setup` 从检出构建 Runtime bundle。`ignition-mcp` 是 `uv run --no-sync ignition-mcp` 的简写。
 
 ## 前置条件
 
@@ -30,9 +30,9 @@
 | Gateway 地址 | 你的 Gateway，例如 `http://127.0.0.1:8088` |
 | 有写入权限的 Gateway API token | Gateway 网页界面的 Security 部分。存进文件，见下一节 |
 | MCP Module 文件及其 SHA-256 | Inductive Automation。本仓库固定版本 `1.3.5.2026021307-SNAPSHOT`、build `2026021307`、SHA-256 `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`，记录在 `tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.provenance.json` |
-| bundle 发布产物：ZIP、manifest 和校验和 | 用 `tooling.native.cli release` 构建，见下文 |
-| Runtime Target Policy 文件 | 由你编写。见 [Runtime Target Policy](#runtime-target-policy) |
-| Server Config 权限文件 | 由你编写。`apply` 创建 Server Config，或现有 Server Config 没有权限树时需要。见[配置参考](../guide/configuration.zh-CN.md#server-config-权限文件) |
+| bundle 发布产物：ZIP、manifest 和校验和 | 只有做发布时才需要，用 `tooling.native.cli release` 构建，见下文。`setup` 直接从仓库检出构建 bundle，你不用自己构建 |
+
+`setup` 生成 Runtime Target Policy 和 Server Config 的权限树，你不用手写它们。它们的格式见[配置参考](../guide/configuration.zh-CN.md#runtime-target-policy)。
 
 你自己的电脑上需要这些工具：
 
@@ -40,7 +40,7 @@
 | --- | --- | --- |
 | Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器。`uv` 会替你安装 Python | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
 | Shell | 任意 POSIX shell | PowerShell 7。D31 第 6 节的检查清单用到 `-SkipHttpErrorCheck`，需要 7 版 |
-| Git Bash 或 WSL | 不需要 | 只在运行 `bash` 脚本时需要：部署向导和 `tooling.ci.check_workflows` |
+| Git Bash 或 WSL | 不需要 | 只在运行 `bash` 脚本时需要：`tooling.ci.check_workflows` |
 | Java 11 | 只有 Jython 测试需要（D29）。两个 server 都不需要 | 同左 |
 
 本手册里的 Windows 指令都标注为**尚未在 Windows 上运行**。见 [D31](../decisions/D31-windows-support-scope.md)。
@@ -77,248 +77,138 @@ $V = Get-Content packages/ignition-runtime-bundle/BUNDLE_VERSION
 Get-FileHash "dist/release/ignition-runtime-bundle-$V.zip" -Algorithm SHA256
 ```
 
-## 环境变量与凭证文件
+## 部署状态与凭证文件
 
-每个命令都从参数或环境变量获取 Gateway 地址和 token。参数优先于环境变量。
+每个命令都从一个部署文件夹读取状态。`--deployment NAME` 选一个部署，默认 `default`。每个部署的状态都在 `~/.config/ignition-mcp/deployments/<name>/`，里面有 `deployment.toml`（Gateway 地址、环境、角色）、生成的 policy 和 permissions 文档，以及每个机密一个文件。
+
+先在 Gateway 网页界面的 Security 里新建一个 API key，它的安全级别要在 Security > General Settings 的每一项权限下都打勾。把它按 `名称:密钥` 存进一个文件：
 
 ```bash
-export IGNITION_MCP_SETUP_GATEWAY_URL=http://127.0.0.1:8088
-export IGNITION_MCP_SETUP_MCP_URL=$IGNITION_MCP_SETUP_GATEWAY_URL/data/mcp/production
 mkdir -p ~/.config/ignition-mcp
 umask 077
-printf '%s\n' '<your-ignition-api-token>' > ~/.config/ignition-mcp/gateway.token
-chmod 0600 ~/.config/ignition-mcp/gateway.token
+printf '%s\n' '<name>:<your-ignition-api-key>' > ~/.config/ignition-mcp/gateway-token
+chmod 0600 ~/.config/ignition-mcp/gateway-token
 ```
 
 在 Windows 上，**尚未在 Windows 上运行**，见 [D31](../decisions/D31-windows-support-scope.md)：
 
 ```powershell
-$env:IGNITION_MCP_SETUP_GATEWAY_URL = "http://127.0.0.1:8088"
-$env:IGNITION_MCP_SETUP_MCP_URL = "$env:IGNITION_MCP_SETUP_GATEWAY_URL/data/mcp/production"
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\ignition-mcp"
-Set-Content "$env:USERPROFILE\.config\ignition-mcp\gateway.token" -Value "<your-ignition-api-token>"
+Set-Content "$env:USERPROFILE\.config\ignition-mcp\gateway-token" -Value "<name>:<your-ignition-api-key>"
 ```
 
 Windows 不强制 `0600` 规则，所以要给 token 文件设置文件系统 ACL，只让服务账号能读取。
 
 token 文件的规则：
 
-- 必须是普通文件，不能是符号链接，里面恰好有一行非空内容。
+- 必须是普通文件，不能是符号链接，里面恰好有一行非空内容，格式是 `名称:密钥`。
 - 在 Linux 和 macOS 上只有所有者能读取，也就是权限 `0600`。
 - 不符合以上规则是用法错误，退出码为 2。
-- 优先用 `--gateway-token-file`，少用 `IGNITION_MCP_SETUP_GATEWAY_TOKEN` 变量，这样 token 不会留在进程环境里。
 
 地址的规则：
 
 - 地址必须是带主机名的完整 `http` 或 `https` URL，不能包含用户名或密码。
-- 命令拒绝通过普通 `http` 把 token 发送给另一台机器，因为 token 会以明文传输。请使用 `https`，或在你信任的实验网络上加 `--allow-insecure-authorize`。
+- Gateway URL 是 `http` 时，Runtime token 需要一个具名确认。`prod` 环境要求安全通道，token 只能通过 `https` 使用。
 
-命令运行时不读取仓库。`--bundle-manifest` 是它们对“应该部署什么”的唯一描述，所以你可以把三个发布文件复制到另一台机器上，在那里运行命令。
+第一次运行时还没有部署文件夹，`setup` 会从参数或向导得到值，然后把它们保存下来。之后每次命令都读取这个文件夹，而不是再问一遍。
 
-## 安装 MCP Module
+## setup
 
-`setup-native install-module` 通过 Gateway 自己的模块路由，把你电脑上的一个 `.modl` 文件安装到 Gateway。它不下载任何东西，也不读取 manifest。Module id 和 build 取自文件里的 `module.xml`。
+`setup` 运行整个部署，可以重复运行。它先只读地算出要做什么，把每一处改动显示一行，取出确认，然后才写任何东西。`--dry-run` 只显示计划就停下。第一次运行时向导会问缺少的值，参数给全时它什么都不问。命令和参数见[快速开始](../guide/quick-start.zh-CN.md#setup)。
 
-```bash
-ignition-mcp setup-native install-module \
-  --file ~/Downloads/MCP-module-1.3.5.2026021307-SNAPSHOT.modl \
-  --sha256 b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365 \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token
-```
+Module 安装是 `setup` 的一步。它只安装本地那个 SHA-256 对得上的文件，从不下载，也拒绝更低的 build。证书、EULA 和需要时的重启各自需要一个具名确认。Module 文件默认从 `tests/fixtures/modules/` 或 `~/Downloads` 找，用 `--module-file` 可以指定。Module id 和 build 取自文件里的 `module.xml`。仓库里只有一个 Module build，所以升级路径由单元测试覆盖，没有做过真实的升级。
 
-| 参数 | 含义 |
-| --- | --- |
-| `--file PATH` | 必填。`.modl` 文件。哈希对上之前不会上传任何东西。 |
-| `--sha256 HEX` | 必填。文件应有的 64 位十六进制哈希，大小写都可以。 |
-| `--accept-certificate` | 接受 Module 的证书。不加时，命令只显示证书，不安装。 |
-| `--accept-eula` | 接受 Module 的许可协议。不加时，命令只说明在哪里阅读协议，不安装。 |
-| `--acknowledge-upgrade` | 允许安装比已安装版本更新的 build。 |
-| `--restart` | 安装后重启 Gateway，并等到 Module 运行起来。 |
+`setup` 从不期望任何一步失败。一步在该状态下无法成功时，它要么先把状态改对，要么跳过那一步并说明原因。
 
-它还接受 `--gateway-url`、`--gateway-token-file`、`--timeout-seconds`、`--allow-insecure-authorize` 和 `--json`。
+## 用 `status` 诊断
 
-命令按固定顺序执行。每项检查都发生在它所保护的步骤之前，所以被拒绝时不留下需要撤销的东西。
-
-1. **检查文件。** 计算文件哈希并打开 `module.xml`。以下任何情况都会在发出请求前以退出码 2 停止：哈希与 `--sha256` 不符、文件大于 64 MiB、不是 ZIP、没有 `module.xml`、没有 `<id>` 或 `<version>`、版本里没有 10 位 build 号、文件名不能用于上传，或者它不是 MCP Module `com.inductiveautomation.mcp`。
-2. **与 Gateway 比对。** 读取 Gateway 的模块列表，每页 500 条，最多四页。
-   - 已安装同一个 build：`NO CHANGE`，退出码 0，不上传。
-   - 已安装更新的 build：拒绝，退出码 1。
-   - 已安装的 build 无法比较：拒绝，退出码 1。
-   - 文件的 build 更新：需要 `--acknowledge-upgrade`，否则以退出码 3 停止。
-   - 模块列表无法读到结尾：拒绝，退出码 1，而不是当作 Module 不存在。
-3. **上传**文件。如果 Gateway 报告的 Module id 不同，以退出码 1 停止，不安装任何东西。
-4. **接受证书和许可协议。** 两个参数没有同时给出时，命令显示证书的主题、签发者和有效期，说明在哪里阅读协议，然后以退出码 3 停止。此时文件已经上传，但没有安装。给出参数时它会接受两者。Module 没有证书或许可协议时，对应步骤会被跳过。
-5. **安装** Module。
-6. **重启。** 不加 `--restart` 时，以退出码 0 结束，显示 `INSTALL` 或 `UPGRADE`，并提示你重启 Gateway、运行 `verify`。加了 `--restart` 时，它会重启 Gateway，每 5 秒检查一次，最多 10 分钟，直到 Module 以新 build 运行。做不到时以退出码 1 结束。
-
-文本输出每步一行，格式为 `<MARKER> <step>: <detail>`，标记有 `DONE`、`SKIPPED`、`NEEDS-ACK`、`REFUSED` 和 `FAILED`，最后是一行汇总：
-
-```console
-install-module: INSTALL com.inductiveautomation.mcp build=2026021307 => exit 0
-```
-
-加 `--json` 时，同样的结果输出为一个 JSON 对象，包含 `outcome`、`steps[]`、`moduleId`、`moduleVersion`、`moduleBuild`、`installedBefore`、`restart`，以及命令执行到的 `certificate` 和 `eula` 信息。任何输出都不包含 token。
-
-`install-module` 不检查兼容性列表，那是 `doctor` 的工作。仓库里只有一个 Module build，所以升级路径由单元测试覆盖，没有做过真实的升级。
-
-## 用 `doctor` 诊断
-
-`doctor` 不改任何东西。它运行一组固定的检查，每项输出一行。它不等待正在启动的 Gateway，所以重启后要再运行一次。
+`status` 只读，每个检查一行。它不修复、不写入、不删除，也不等待正在启动的 Gateway，所以重启后要再运行一次。
 
 ```bash
-ignition-mcp setup-native doctor \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --mcp-token-file ~/.config/ignition-mcp/runtime.token \
-  --server-config-name production \
-  --profile readonly
+ignition-mcp status \
+  --gateway-url http://127.0.0.1:8088 \
+  --gateway-token-file ~/.config/ignition-mcp/gateway-token
 ```
 
-`doctor` 和 `verify` 需要 MCP endpoint 地址。传入 `--mcp-url`，或传入 `--server-config-name`，命令会使用 `<gateway-url>/data/mcp/<name>`。endpoint 需要登录时，用 `--mcp-token-file` 传入 agent token。第一次 `apply` 之前 token 文件还不存在，此时不要加这个参数。
+检查按顺序进行：`deployment`、`gateway`、`module`、`bundle`，接着每个角色一行 `level <role>`、`token <role>`、`server config <role>` 和 `endpoint <role>`，然后是 `runtime policy`、`rest token`、`rest static tokens`、`rest settings`、`named-query registry`，最后是 `leftover files`。
 
-检查按以下顺序进行：`gateway-info`、`openapi-sha256`、`module-installed`、`bundle-project`、`server-config-presence`，然后 `server-config`、`project-import`、`security-levels`、`api-token` 和 `designers` 各一行 `capabilities.<name>`，接着 `mcp-initialize`、`inventory-tools`、`inventory-resources`、`inventory-prompts`、`bundle-info`，最后是 `compatibility`。
-
-每行有一个状态：`PASS`、`FAIL`、`SKIP`、`NOT_APPLICABLE` 或 `UNKNOWN`。token 被拒绝、也没有 Server Config 时，输出类似这样：
-
-```console
-FAIL           gateway-info: GET /data/api/v1/gateway-info returned HTTP 401: { "message":"Unauthorized", ... }
-SKIP           openapi-sha256: Gateway did not answer /data/api/v1/gateway-info
-...
-FAIL           mcp-initialize: initialize returned HTTP 404: { "message":"MCP server not found: production", ... }
-SKIP           inventory-tools: MCP session unavailable
-doctor: 16 check(s) {"FAIL": 2, "SKIP": 14} => exit 1
-```
+每行有一个状态：`OK`、`CHANGED`、`SKIPPED` 或 `FAILED`。读不到的状态记为 `SKIPPED`，第一个读失败的检查带出原因，依赖它的后续检查用同一个原因跳过，所以一个原因不会变成每个检查一行。`endpoint <role>` 行是带这个角色自己的 token 的收尾检查。
 
 | 输出行 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `gateway-info` FAIL，HTTP 401 | Gateway 拒绝了 token。 | 修正 token 文件，或给 token 读取权限。 |
-| `module-installed` FAIL | MCP Module 没装或没有运行。 | 安装它，重启，再运行 `doctor`。 |
-| `bundle-project` PASS `ABSENT` | 还没有部署任何东西。 | 第一次 `apply` 之前是正常的。 |
-| `bundle-project` FAIL `MARKER_INVALID` | 已有同名项目，其归属标记损坏或属于别人。 | `plan` 拒绝替换它。重命名或删除那个项目，或换一个 `--bundle-project`。 |
-| `bundle-project` FAIL `UNMANAGED_SAME_NAME` | 已有同名项目，但不是本工具创建的。 | 同上。命令从不接管不是它创建的项目。 |
-| `bundle-project` FAIL `NOT standalone` | bundle 项目被标记为可继承。 | 把它改为独立项目，或换一个新的 `--bundle-project` 名字。 |
-| `server-config-presence` FAIL | Server Config 还不存在。 | 第一次 `apply` 之前是正常的。`plan` 会建议 `CREATE`。 |
-| `capabilities.<name>` `NOT_APPLICABLE` 或 `SKIP` | Gateway 的 API 描述里没有这个路由，或描述读不到。 | 对应的 `plan` 行是 `BLOCKED`，这项写入在这台 Gateway 上无法进行。 |
-| `mcp-initialize` FAIL，HTTP 401 或 403 | endpoint 需要登录。 | 用 `--mcp-token-file` 传入 agent token。 |
-| `inventory-tools` FAIL，带有 `missing=[...]` 或 `extra=[...]` | endpoint 提供的 Tool 与你指定的 profile 不一致。多了少了都算失败。 | 传入部署时用的 profile，或用你想要的 profile 再运行 `apply`。 |
-| `bundle-info` FAIL | 已部署的 bundle 报告的版本或 Git 版本不同。 | 执行[升级 bundle](#升级-bundle)。 |
-| `compatibility` UNKNOWN | 这个 Gateway、Module 和 bundle 的组合没有测试过，或缺少某个版本字段。 | 在未测试的版本上是正常的，不会阻止任何操作。 |
+| `gateway` FAILED，HTTP 401 | Gateway 拒绝了 setup token。 | 修正 token 文件，或给 token 读取权限。 |
+| `module` FAILED | MCP Module 没装、没有运行，或 build 不对。 | 运行 `ignition-mcp setup` 安装它。 |
+| `bundle` FAILED | 受管 bundle 项目和仓库检出不一致。 | 运行 `ignition-mcp setup` 重新部署。 |
+| `level <role>`、`token <role>`、`server config <role>` FAILED | 有人手工改了 Gateway，或本地机密文件丢失。 | `setup` 会报告差异并在确认后恢复；机密丢失时加 `--recreate-tokens`。 |
+| `endpoint <role>` FAILED，HTTP 403 | 没有发送 token、token 的安全级别不满足 Server Config 的权限，或 token 要求安全通道而 Gateway URL 是 `http`。 | 按那一行写出的原因处理，必要时重新运行 `setup`。 |
+| `named-query registry` FAILED | Gateway 没有设置 `IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON`。 | 在 Gateway 上设置它，见 [Tool 目录](../guide/tools.zh-CN.md#named-query-注册表)。 |
+| `leftover files` | 部署不再服务的角色在部署文件夹里留下了文件。 | 用 `reset` 删掉这个部署，或手工清理。 |
 
-`compatibility` 把五个值与 manifest 里的测试列表比对：`gatewayVersion`、`gatewayBuild`、`mcpModuleVersion`、`mcpModuleBuild` 和 `bundleVersion`。这些 API 看不到 Module 的 SHA-256，所以不比较它。
+`status` 报告状态，不修复它。D32 第 10 节的机密丢失和手工改动两种情况，会连同修复它的命令一起报告出来。
 
-## 阅读 plan
+## 阅读 setup 的计划
 
-`plan` 根据和 `doctor` 相同的检查，算出 `apply` 会做什么，但不改任何东西。
+`setup` 先运行同样的只读检查，算出会发生什么，把计划显示出来，然后才写任何东西。
 
 ```bash
-ignition-mcp setup-native plan \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --bundle-zip dist/release/ignition-runtime-bundle-0.7.0.zip \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --server-config-name production \
-  --profile readonly \
-  --policy-file policy.json \
-  --json
+ignition-mcp setup \
+  --gateway-url http://127.0.0.1:8088 \
+  --environment dev \
+  --roles analysis,engineer \
+  --gateway-token-file ~/.config/ignition-mcp/gateway-token \
+  --dry-run
 ```
 
-每行格式为 `<ACTION> <kind> <name>: <reason>`。动作有 `CREATE`、`UPDATE`、`NO CHANGE`、`BLOCKED` 和 `SKIP`。最后一行总是 `No changes have been applied.`，加 `--json` 时也一样。
+计划里的每一行是一个阶段和它要做的改动。`runtime` 阶段负责 MCP Module、bundle 项目、安全级别、角色 token、Server Config 和 Runtime Target Policy；`rest` 阶段负责 `ignition-mcp-rest` token、角色的具名静态 token 和 `start` 会用到的设置。
 
-各行按 `apply` 执行的顺序排列：
+没有改动的阶段什么都不列。计划有改动时，一行模式需要 `--yes` 才能继续，没有它就以 `not_confirmed` 失败，退出码 2。证书和 EULA 永远需要 `--accept-certificate` 和 `--accept-eula`。
 
-1. `mcp-module`
-2. `security-level` 和 `runtime-token`，你要求创建时才有
-3. `bundle-project`
-4. `server-config`
-5. `runtime-policy`
-6. 你没有要求创建时，再列出 `security-level` 和 `runtime-token`，仅供参考
+bundle 项目的改动在计划里写明版本变化的类型：`patch`、`minor`、`major` 或 `downgrade`。`major` 和 `downgrade` 各自需要一个具名确认，`--yes` 可以代替它。有意回滚就是通过降级完成的。
 
-`mcp-module` 行从不是 `CREATE`，因为 `apply` 不安装 Module。Module 在运行时它是 `NO CHANGE`，缺失或状态读不到时是 `BLOCKED`。
+一步在该状态下无法成功时，`setup` 要么先把状态改对，要么跳过并说明原因。没有哪一步是注定失败的。
 
-`bundle-project` 的 `UPDATE` 会写明版本变化的类型：`patch`、`minor`、`major` 或 `downgrade`。`major` 和 `downgrade` 会写着 `requires explicit acknowledgement in apply`，没有 `--acknowledge-upgrade` 时 `apply` 会拒绝它们。
+## setup 写入了什么
 
-只要有一行 `BLOCKED`，`plan` 就以退出码 3 结束。修正原因后再运行，原因通常是 Module 或项目重名。
+`setup` 先显示计划，取出确认，然后按这个顺序写入：
 
-## 应用部署
-
-`apply` 先运行 `plan`，再做修改。它需要三个其他命令里可选的参数：`--server-config-name`、`--bundle-zip` 和 `--policy-file`。
-
-```bash
-ignition-mcp setup-native apply \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --bundle-zip dist/release/ignition-runtime-bundle-0.7.0.zip \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --profile configurator \
-  --bundle-project ignition_runtime \
-  --server-config-name production \
-  --policy-file policy.json \
-  --server-config-permissions-file permissions.json \
-  --backup-dir /var/backups/ignition-mcp \
-  --provision-security-levels \
-  --create-runtime-token \
-  --runtime-token-file ~/.config/ignition-mcp/runtime.token
-```
-
-写入任何东西之前：
-
-- 缺少必填参数是用法错误，退出码 2。
-- 它计算 `--bundle-zip` 的哈希并和 manifest 比对，不符时退出码 2。
-- 任何 `BLOCKED` 行，或未确认的 `major`、`downgrade` 变化，都会以退出码 3 停止。
-- 它检查 policy 文件，拒绝大于 32 KiB 的文件。
-- 它检查参数组合。`--create-runtime-token` 需要 `--runtime-token-file`，以及来自 `--runtime-token-name` 或 `--server-config-name` 的名字。其他 `--runtime-token-*` 参数需要 `--create-runtime-token`。`--security-level-name` 需要 `--provision-security-levels` 或 `--create-runtime-token`。
-
-它按以下顺序写入：
-
-1. 安全级别，加了 `--provision-security-levels` 时。它是 `Authenticated` 的子级别，名为 `IgnitionMcpRuntime<Profile>`，除非用 `--security-level-name` 另行指定。已有的级别从不修改，有子级别的级别会被拒绝。
-2. agent 的 API token，加了 `--create-runtime-token` 时。它只获得上面那个安全级别。密钥只写入 `--runtime-token-file`，文件以 `0600` 权限创建。Gateway 使用普通 `http` 时要加 `--runtime-token-insecure-channel`，否则 token 只能通过 `https` 使用。
-3. bundle 项目。替换已有项目之前，先把旧项目存进 `--backup-dir`。
-4. Server Config。新建时先以关闭状态创建，读回后再打开。已有的 Server Config 只更新 Tool 列表，其他一切保持不变，包括它是否处于打开状态。Tool 列表总是逐个列出，从不用 `*`。权限树取自 `--server-config-permissions-file`，没有时取自现有的 Server Config。
-5. Runtime Target Policy。写入后读回，读回内容不一致时再写一次。
+1. MCP Module。需要时安装并重启 Gateway，每 5 秒检查一次，最多 10 分钟，直到新 build 运行起来。
+2. 受管 bundle 项目 `ignition_runtime`。替换已有项目之前，先把旧项目备份进部署文件夹。
+3. 每个角色的安全级别，用一次最小的 singleton 修改完成，写完读回校验结构。
+4. 每个角色的 Gateway API token，只获得上面那个安全级别，密钥以 `0600` 权限写入部署文件夹。
+5. 每个角色的 Server Config。新建时先以关闭状态创建，读回后再打开；已有的 Server Config 只更新 Tool 列表和权限树。Tool 列表总是逐个列出，从不用 `*`。
+6. Runtime Target Policy。写入后读回，读回内容不一致时再写一次。
+7. `ignition-mcp-rest` Gateway API token，供 REST server 自己调用 Gateway。
+8. 每个角色的具名静态 token。
+9. `start` 会用到的设置，以及生成的 policy 和 permissions 文档。
 
 需要知道的几点：
 
-- 无法撤销。某项写入失败时命令停止，之前的写入保留。`--backup-dir` 是唯一的本地副本。没有它的话，只有 Gateway 自己的配置备份能恢复旧状态。
-- 命令从不显示 token。用同一个 token 文件再次运行时，它会用文件核对 Gateway 上的 token，报告 `NO CHANGE`，不会生成新 token。
-- Module 有时会短暂地让新 Server Config 不提供任何 Tool。这时 `apply` 会把同一份 Server Config 重新发送，最多三次，每次输出一行 `REFRESH server-config ...`。结果是同样的部署。
-
-`apply` 最后运行 `verify` 并输出它的报告，然后是一行汇总：
-
-```console
-apply: wrote=3 skipped=2 failed=0 => exit 0
-```
-
-退出码 1 表示某项写入或最后的检查失败。退出码 3 表示什么都没写。第一次运行时，最后的检查可能因为还没有 agent token 而报 HTTP 401 或 403。这时写入已经完成，带上 `--mcp-token-file` 运行 `verify` 即可。
+- 某一步失败时命令停止，之前的写入保留。`reset` 会删掉这次部署创建并被记录下来的东西，它不碰别人手工创建的同名项目。
+- 命令从不显示 token。再运行一次时，它会用部署文件夹里的机密核对 Gateway 上的 token，对得上就报告 `OK`，不会生成新 token。
+- 权限漂移算改动：Server Config 的 Tool 列表对得上但权限树不同时，报告为 `CHANGED`，从不报 `NO CHANGE`。
+- Module 有时会短暂地让新 Server Config 不提供任何 Tool。这时 `setup` 会把同一份 Server Config 重新发送，最多三次。结果是同样的部署。
 
 ## 验证部署
 
-```bash
-ignition-mcp setup-native verify \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --mcp-token-file ~/.config/ignition-mcp/runtime.token \
-  --server-config-name production \
-  --profile readonly
-```
+`status` 是检查部署的命令。每个角色的 `endpoint <role>` 行就是收尾检查，它带这个角色自己的 token 调用端点，确认它能初始化并列出应有的 Tool。
 
-检查项依次是 `endpoint-reachable`、`mcp-initialize`、`inventory-tools`、`inventory-resources`、`inventory-prompts`，profile 中每个资源一行 `resources-read <uri>`，每个 prompt 一行 `prompts-get <name>`，最后是 `bundle-info`。
+- 所有行都是 `OK` 或 `SKIPPED` 时，部署是好的。
+- 某个 `FAILED` 行给出原因和下一步可以运行的命令。
+- 每次 Gateway 重启后，以及 `setup` 装好或升级 Module 之后，都要运行一次。
 
-- `endpoint-reachable` PASS 只表示这个地址有回应。
-- 每一行都是 `PASS` 或 `NOT_APPLICABLE` 时，退出码才是 0。
-- 资源或 prompt 列表为空时是 `NOT_APPLICABLE`，不算失败。bundle 没有 prompt。
-
-每次 Gateway 重启后，以及 `install-module --restart` 之后，都要运行 `verify`。
+`status` 不等待正在启动的 Gateway，所以刚重启时可能读到旧状态，稍后再运行一次即可。
 
 ## 升级 bundle
 
 升级 bundle 就是用本仓库更新版本的 Tool 替换 bundle 项目。
 
 1. 获取更新版本的仓库。如果你在开发 bundle，就提高 `packages/ignition-runtime-bundle/BUNDLE_VERSION` 里的版本号。`bundle_info` 里的版本或归属标记与这个文件不一致时，构建会失败。
-2. 按[前置条件](#前置条件)构建并校验发布产物。
-3. 用新 manifest 运行 `doctor`。`bundle-info` FAIL 是正常的，因为 Gateway 上跑的还是旧版本。在某个测试过的组合匹配之前，`compatibility` 一直是 `UNKNOWN`。
-4. 用新 manifest 和 ZIP 运行 `plan`。应该看到类似 `UPDATE bundle-project ignition_runtime: redeploy managed bundle 0.7.0 -> 0.8.0 (minor)` 的一行。
-5. 带上 `--backup-dir` 运行 `apply`。只有 `major` 变化或降级时才加 `--acknowledge-upgrade`。有意回滚就是通过降级完成的。
-6. 运行 `verify`，然后重新连接 AI 应用，因为 Tool 列表可能变了。
+2. 运行 `status`，看 `bundle` 行。Gateway 上跑的还是旧版本时它报告不一致。
+3. 运行 `setup --dry-run`，看计划里 bundle 项目那一行。它写明变化类型是 `patch`、`minor`、`major` 还是 `downgrade`。
+4. 运行 `setup`。`major` 变化和降级各自需要一个具名确认，`--yes` 可以代替它。有意回滚就是通过降级完成的。
+5. 运行 `status`，然后重新连接 AI 应用，因为 Tool 列表可能变了。
 
-升级会替换整个 bundle 项目。你手动加进 `ignition_runtime` 的任何内容都会丢失，除非 `--backup-dir` 保存了它。
+升级会替换整个 bundle 项目。你手动加进 `ignition_runtime` 的任何内容都会丢失，`setup` 替换前会把它备份进部署文件夹的 `backups/`。
 
 ## Runtime Target Policy
 
@@ -327,7 +217,7 @@ Runtime 写入 Tool 的 allowlist 来自 Gateway 上的一份文档，而不是 
 - `[IgnitionMCPPolicy]RuntimeTargetPolicy` 存放 JSON 文本。
 - `[IgnitionMCPPolicy]RuntimeTargetPolicyLength` 存放它的字节数。Tool 会先读大小，所以过大的文档不会被加载就被拒绝。
 
-只有 `setup-native apply` 写入 policy。REST server 的 `config_resource_*` Tool 无论 allowlist 怎么写都拒绝 `IgnitionMCPPolicy` provider，所以 agent 改不了 policy。
+只有 `setup` 写入 policy。REST server 的 `config_resource_*` Tool 无论 allowlist 怎么写都拒绝 `IgnitionMCPPolicy` provider，所以 agent 改不了 policy。
 
 ```json
 {
@@ -357,9 +247,9 @@ Runtime 写入 Tool 的 allowlist 来自 Gateway 上的一份文档，而不是 
 - `alarmShelveMaxSeconds` 只能把搁置时长上限调低，不能超过 86400 秒。
 - 存储的文本最多 32768 字节。
 
-命令以固定格式存储 policy：键排序、没有空格。这样 `plan` 可以和已存储的副本逐字节比较。你的文件可以用任何格式书写。
+`setup` 以固定格式存储 policy：键排序、没有空格。这样它可以把生成的文档和已存储的副本逐字节比较。你不用写这个文件。
 
-要修改 policy，编辑文件，然后运行 `plan`，再运行 `apply`。`plan` 会显示 `UPDATE runtime-policy [IgnitionMCPPolicy]RuntimeTargetPolicy: replace the served policy (...)`，附带大小以及新旧 SHA-256 的开头部分。
+要修改 policy，就改部署环境或角色，再运行 `setup`。计划里那一行会说明这次写入多少字节，以及新旧 SHA-256 的开头部分。例如 `dev` 的 allowlist 是每个 Runtime 修改 Tool 的 `*`，`prod` 的是空。
 
 policy 缺失、无法读取、过大或无效时，所有 Runtime 写入 Tool 都返回 `operation_disabled`。删除 policy 会关闭 Runtime 写入，而不会放开它们。
 
@@ -369,9 +259,9 @@ policy 缺失、无法读取、过大或无效时，所有 Runtime 写入 Tool �
 
 在 Runtime server 上：
 
-1. `--profile` 决定 endpoint 提供哪些 Tool。`readonly` 没有写入 Tool。`operator` 增加 `tag_write`、`alarm_shelve` 和 `alarm_unshelve`。`configurator` 增加 `tag_update`、`tag_create`、`tag_copy`、`tag_delete`、`tag_move` 和 `tag_rename`。`full` 两组都有。没有管理类 profile。
-2. Server Config 的权限树决定谁可以连接。`--provision-security-levels` 和 `--create-runtime-token` 会创建相应的安全级别和 token。
-3. Runtime Target Policy 的 allowlist 决定每个 Tool 可以修改哪些目标。profile 提供了某个 Tool，但没有 allowlist 条目时，它仍然什么都改不了。
+1. 助手角色决定 endpoint 用哪个 profile，也决定它提供哪些 Tool。Analysis 用 `readonly`，没有写入 Tool。Engineer 用 `full`，两组写入 Tool 都有。要换 profile 就换角色，再运行一次 `setup`。
+2. Server Config 的权限树决定谁可以连接，`setup` 从角色生成它。
+3. Runtime Target Policy 的 allowlist 决定每个 Tool 可以修改哪些目标。`dev` 默认对每个 Runtime 修改 Tool 都是 `*`，`prod` 默认是空。角色提供了某个 Tool，但没有 allowlist 条目时，它仍然什么都改不了。
 
 在 REST server 上，写在它的环境设置里：
 
@@ -427,22 +317,23 @@ REST server 按以下顺序检查一次写入，第一个拒绝决定错误码�
 
 | 退出码 | 含义 |
 | --- | --- |
-| 0 | 成功。`doctor` 或 `verify` 没有 `FAIL`。`plan` 没有 `BLOCKED`。`apply` 全部写入并通过验证。`install-module` 安装或升级了 Module，发现已经装好（`NO CHANGE`），或已安装但在等待重启。 |
-| 1 | 检查失败、写入失败或网络失败。对 `install-module` 还包括：Gateway 上的 build 更新、模块列表读不到结尾、Gateway 拒绝了上传、接受或安装，或 `--restart` 后 Module 没有恢复。 |
-| 2 | 用法错误：参数错误、manifest 无法读取或无效、ZIP 与 manifest 不符，或 token 文件被拒绝。对 `install-module` 还包括发出请求前发现的文件问题：SHA-256 不符、超过 `.modl` 大小上限、没有可读的 `module.xml`、没有 10 位 build 号，或不是 MCP Module。 |
-| 3 | 命令需要你没有给出的决定，所以什么都没改。`plan` 有 `BLOCKED` 行，`apply` 什么都没写。`install-module` 没有安装任何东西；在证书或许可协议这一步停下时，文件已经上传。 |
+| 0 | 成功。命令完成，`status` 没有 `FAILED` 行。 |
+| 1 | 某一步失败，或网络失败。 |
+| 2 | 用法错误：参数错误、缺少接受、token 文件被拒绝，或回答有问题。 |
 
-按 Ctrl-C 以退出码 2 结束。意外崩溃以退出码 1 结束，只输出错误类型，所以 token 不会通过堆栈信息泄露。
+`--json` 带着稳定错误码，完整列表见[快速开始](../guide/quick-start.zh-CN.md#退出码和错误码)。
+
+按 Ctrl-C 以退出码 2 结束，错误码是 `interrupted`。意外崩溃以退出码 1 结束，只输出错误类型，所以 token 不会通过堆栈信息泄露。
 
 ## Windows
 
 Windows 不是受支持的平台，不过目前没有已知的问题。[D31](../decisions/D31-windows-support-scope.md) 记录了范围、已知限制，以及一份还没有人执行过的手动检查清单。
 
-[前置条件](#前置条件)里的工具表和[环境变量与凭证文件](#环境变量与凭证文件)里的 PowerShell 代码块是 Windows 的起点，两处都带有**尚未在 Windows 上运行**的标注。
+[前置条件](#前置条件)里的工具表和[部署状态与凭证文件](#部署状态与凭证文件)里的 PowerShell 代码块是 Windows 的起点，两处都带有**尚未在 Windows 上运行**的标注。
 
 - **换行符。** 在 `.gitattributes` 加入之前 clone 的仓库保留 Windows 换行符，`tooling.native.cli validate` 会以 `must use LF line endings` 拒绝它们。运行一次 `git rm --cached -rq . && git reset --hard`，或者重新 clone。两种做法都会丢掉未提交的修改。见 [D31 第 5 节](../decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones)。
 - **校验和。** Windows 没有 `sha256sum -c`。在 `dist/release` 里运行 `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` 或 `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`，把结果和 `ignition-runtime-bundle-<version>.sha256` 里的值比对。
-- **向导。** `scripts/deploy-runtime-bundle.sh` 是 bash 脚本，需要 Git Bash 或 WSL。`setup-native` 命令不需要它。
+- **向导。** 在 Git Bash 的 mintty 里没有伪控制台时，向导退回普通逐行提示，问题和校验不变。这样的提示关不掉终端回显，粘贴的机密会在输入时显示在屏幕上，问题里会说明这一点。
 - **token 文件和数据文件夹。** Windows 跳过 `0600` 的 token 文件检查和 `0700` 的数据文件夹检查，只记录一条 WARNING。请用文件系统 ACL，只让服务账号能读取 token 文件和 `IGNITION_MCP_DATA_DIR`。
 
 ## 第 1 版的已知限制
@@ -453,8 +344,8 @@ Windows 不是受支持的平台，不过目前没有已知的问题。[D31](../
 - 在 8.3.9 上，Module 回应格式记为 `FAILED_NATIVE_BINDING`；在 8.3.8 上记为 `VERIFIED_WITH_LIMITATION`。两者都没有记为获得生产支持，本手册里的任何命令也不会这样记录。
 - bundle 版本仍是 0.x。
 - 仓库里只有一个 Module build，所以 Module 升级只由单元测试覆盖，没有做过真实升级。
-- `doctor` 和 `verify` 不等待正在启动的 Gateway。只有 `tests/harness/` 下的实机测试环境会等待。
+- `status` 不等待正在启动的 Gateway。只有 `tests/harness/` 下的实机测试环境会等待。
 
 ## 来源
 
-本手册的规则来自这些决策：D20 规定安装命令及其安全规则，D26 Phase 6 修订规定第 1 版的范围，D27 和 D28 规定 Runtime 的回应行为，D30 规定写入规则。`CONTEXT.md` 定义了 Module install、Module upgrade 和 Bundle upgrade。每个参数都与 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup_native/` 和各子命令的 `--help` 核对过。`doctor`、`plan` 和 `verify` 的示例是真实输出。`install-module` 的示例展示的是源码输出的格式。
+本手册的规则来自这些决策：D20 规定安装命令及其安全规则，D26 Phase 6 修订规定第 1 版的范围，D27 和 D28 规定 Runtime 的回应行为，D30 规定写入规则。`CONTEXT.md` 定义了 Module install、Module upgrade 和 Bundle upgrade。每个参数都与 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`、`cli/engine/` 和 `cli/setup/` 以及各命令的 `--help` 核对过。`status` 的输出格式取自源码。

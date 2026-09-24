@@ -19,9 +19,6 @@ and the confirmation (``--yes`` in one-line mode), and only then each stage's
 through :meth:`ApplyContext.gateway_writer`, check the engine's gate themselves. A
 stage brings its own inputs, so the Runtime and REST tickets never edit the same
 lines here.
-
-``ignition-mcp setup-native ...`` still runs the old commands until ticket P7-6
-deletes them.
 """
 
 from __future__ import annotations
@@ -64,9 +61,9 @@ from ignition_rest_mcp.cli.engine.resolve import (
     gateway_token_check,
     resolve,
 )
-from ignition_rest_mcp.cli.setup_native.gateway import GatewayRest
-from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
-from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter
+from ignition_rest_mcp.cli.gateway_ops.gateway import GatewayRest
+from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint
+from ignition_rest_mcp.cli.gateway_ops.writer import GatewayWriter
 
 DEFAULT_DEPLOYMENT = "default"
 ENVIRONMENTS = ("dev", "prod")
@@ -246,7 +243,7 @@ class ApplyContext(Context):
 
 
 class _GatedGatewayWriter(GatewayWriter):
-    """``setup_native``'s writer, whose single write method checks the gate first."""
+    """The package writer, whose single write method checks the gate first."""
 
     def __init__(
         self,
@@ -586,10 +583,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Console-script entry point for ``ignition-mcp``."""
 
     args = list(sys.argv[1:] if argv is None else argv)
-    if args[:1] == ["setup-native"]:
-        from ignition_rest_mcp.cli.setup_native import main as setup_native
-
-        return setup_native.main(args)
     from ignition_rest_mcp.cli.setup import connect as connect_setup
     from ignition_rest_mcp.cli.setup import reset as reset_setup
     from ignition_rest_mcp.cli.setup import rest as rest_setup

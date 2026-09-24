@@ -20,13 +20,13 @@ sys.path.insert(0, str(ROOT / "tests/harness/phase3-live"))
 
 from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 
-from ignition_rest_mcp.cli.setup_native.inputs import Endpoint  # noqa: E402
-from ignition_rest_mcp.cli.setup_native.mcp_http import (  # noqa: E402
+from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint  # noqa: E402
+from ignition_rest_mcp.cli.gateway_ops.mcp_http import (  # noqa: E402
     McpHttpClient,
     McpMethodNotFound,
 )
 
-MCP_HTTP = ROOT / "packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup_native/mcp_http.py"
+MCP_HTTP = ROOT / "packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/mcp_http.py"
 PHASE3_DRIVER = ROOT / "tests/harness/phase3-live/driver.py"
 PHASE2_PROVISION = ROOT / "tests/harness/phase2-live/provision.py"
 

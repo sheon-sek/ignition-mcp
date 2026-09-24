@@ -15,7 +15,7 @@ writes nothing. Its apply runs these steps in order, each with a start and an en
    a permissions tree generated from the role's level;
 6. the Runtime Target Policy generated from the environment;
 7. the generated documents, stored in the deployment directory;
-8. per role, the closing check: ``setup_native``'s verify sequence at the role's
+8. per role, the closing check: the verify sequence at the role's
    endpoint with the role's own token, which checks the exact Tool, Resource and
    Prompt inventories, reads each Resource, gets each Prompt and calls
    ``bundle_info``. A 403 names its cause.
@@ -25,7 +25,7 @@ A role the saved deployment served and this run does not, as after a move from
 local files, and in step 3 its Security Level. A Module upgrade and a MAJOR or
 downgrade Bundle change each need their own Explicit acceptance.
 
-The Gateway writes go through ``setup_native``'s curated writer, so the guards, the
+The Gateway writes go through the curated writer in ``cli/gateway_ops``, so the guards, the
 optimistic preconditions and the read-backs Phases 4 to 6 verified still apply. The
 module also adds the D32 section 9 check that the pasted setup key's Security Level
 is ticked under every permission in Security > General Settings.
@@ -67,12 +67,12 @@ from ignition_rest_mcp.cli.engine.main import (
 )
 from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, TOKEN_CHECKS, InputSpec, Kind, Needed, Risk, Source
-from ignition_rest_mcp.cli.setup_native import documents as docs
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import install_module, security, verify
-from ignition_rest_mcp.cli.setup_native.action import needs_acknowledgement, upgrade_class
-from ignition_rest_mcp.cli.setup_native.apply import _confirm_policy
-from ignition_rest_mcp.cli.setup_native.inputs import (
+from ignition_rest_mcp.cli.gateway_ops import documents as docs
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops import install_module, security, verify
+from ignition_rest_mcp.cli.gateway_ops.action import needs_acknowledgement, upgrade_class
+from ignition_rest_mcp.cli.gateway_ops.policy import confirm_policy
+from ignition_rest_mcp.cli.gateway_ops.inputs import (
     API_TOKEN_TYPE,
     DEFAULT_BUNDLE_PROJECT,
     MAX_MODULE_BYTES,
@@ -84,8 +84,8 @@ from ignition_rest_mcp.cli.setup_native.inputs import (
     ModuleInputs,
     UsageError,
 )
-from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
-from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter, WriteError
+from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
+from ignition_rest_mcp.cli.gateway_ops.writer import GatewayWriter, WriteError
 
 STAGE_NAME = "runtime"
 
@@ -270,7 +270,7 @@ class Bundle:
 
     @property
     def manifest(self) -> dict[str, Any]:
-        """The manifest subset ``setup_native``'s document builders and ``verify`` read.
+        """The manifest subset the document builders and the verify sequence read.
 
         The build is stamped with the checkout's revision, but a deployed bundle of the
         same version may carry an older one, so ``bundle_info`` compares the version only.
@@ -610,7 +610,7 @@ class RuntimeTargets:
 
 
 def role_inputs(plan: RuntimePlan | RuntimeTargets, role: Role, mcp_token: str | None = None) -> Inputs:
-    """The ``setup_native`` inputs for one role. Only ``verify`` gets the role's token."""
+    """The ``Inputs`` for one role. Only the closing check gets the role's token."""
 
     return Inputs(
         command="apply",
@@ -1403,7 +1403,7 @@ async def _write_policy(ctx: ApplyContext, plan: RuntimePlan) -> str:
             if created:
                 await writer.await_policy_provider()
             outcome = await writer.import_policy(text, first_policy="Abort" if created else "MergeOverwrite")
-            await _confirm_policy(writer, docs.Documents(policy_text=text))
+            await confirm_policy(writer, docs.Documents(policy_text=text))
         except (WriteError, gw.GatewayProbeError) as error:
             raise _failed(f"the Runtime Target Policy was not written: {error}", ctx) from error
     return f"wrote {docs.byte_length(text)} bytes in {outcome.attempt_count} import(s); read back equal"

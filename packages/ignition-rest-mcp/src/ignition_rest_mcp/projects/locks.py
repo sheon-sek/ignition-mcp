@@ -31,7 +31,7 @@ LOCK_FILENAME = "project-writer.lock"
 # The flock is process-local. It prevents two ignition-rest processes sharing
 # one data directory; cross-host exclusivity remains an operator obligation
 # (D16: one active Project writer per Gateway) and is surfaced as a limitation
-# by gateway_diagnose / setup-native doctor.
+# by gateway_diagnose / ignition-mcp status.
 SINGLE_WRITER_LIMITATION = (
     "the single-writer guard is process-local; the operator must run at most one "
     "project-writer-enabled replica per Gateway"

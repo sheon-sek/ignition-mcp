@@ -33,8 +33,8 @@ flowchart LR
 | Where it runs | As its own program, on any machine that can reach the Gateway | Inside the Gateway, hosted by the official Ignition MCP Module |
 | How it talks to Ignition | Through the Gateway's web API, the "REST" API | Through Ignition's scripting functions |
 | What it covers | Gateway information, configuration resources, projects, Perspective Views, audit logs, alarm pipelines, exports and imports | Tag values and Tag configuration, UDTs, alarm shelving, Historian, approved database queries |
-| How you install it | Run `ignition-rest-mcp` | Install the MCP Module, then deploy this repository's Tools with `ignition-mcp setup-native` |
-| Setup guide | [Set up the REST server](setup-rest.md) | [Set up the Runtime server](setup-runtime.md) |
+| How you install it | Run `ignition-mcp setup`, then `ignition-mcp start` | Run `ignition-mcp setup`, which installs the MCP Module and deploys this repository's Tools |
+| Setup guide | [Quick start](quick-start.md) | [Quick start](quick-start.md) |
 
 The two servers never offer the same operation. If the Gateway's web API can do something fully,
 the REST server owns it. Everything else belongs to the Runtime server. So to read a Tag value you
@@ -54,8 +54,9 @@ need the Runtime server, and to change a database connection you need the REST s
 | read or edit Perspective Views | REST |
 | read the Gateway audit log or alarm notification pipelines | REST |
 
-You can install either one alone. Many people start with the Runtime server in `readonly` mode,
-because reading Tags and history is the most common request.
+`ignition-mcp setup` deploys both planes for the roles you choose. The Analysis role reads only; the
+Engineer role also writes, in a `dev` deployment. Most deployments start with the Analysis role
+alone, because reading Tags and history is the most common request.
 
 ## What happens when the agent calls a Tool
 
@@ -156,7 +157,8 @@ These only matter if you write code that reads the Runtime server's answers dire
 
 `VERIFIED` means the automated tests deployed everything and called the Tools on a real Gateway of
 that version. The project does not call any version production-supported. Other versions may work,
-and `setup-native doctor` reports them as `UNKNOWN`. The evidence files are in
+and `ignition-mcp status` reports the Gateway version and the Module build it reads without judging
+compatibility, so an untested tuple stays unjudged. The evidence files are in
 `tests/compatibility/evidence/`.
 
 ## Words used in these docs
@@ -177,8 +179,9 @@ Scope
 
 Profile
 : For the Runtime server, the named set of Tools an endpoint offers: `readonly`, `operator`,
-  `configurator` or `full`. For the REST server, `IGNITION_MCP_DEPLOYMENT_PROFILE` is a different
-  setting that controls how strict the server is.
+  `configurator` or `full`. `ignition-mcp setup` gives the Analysis role `readonly` and the Engineer
+  role `full`. For the REST server, `IGNITION_MCP_DEPLOYMENT_PROFILE` is a different setting that
+  controls how strict the server is.
 
 Server Config
 : The MCP Module's record of one Runtime endpoint: its name, its Tool list and who may connect.

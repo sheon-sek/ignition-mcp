@@ -1,4 +1,4 @@
-"""``setup-native verify``: the D20 post-provisioning acceptance sequence.
+"""The post-provisioning acceptance sequence a role's endpoint is checked with (D20).
 
 endpoint reachable → ``initialize`` → exact ``tools/list`` → exact
 ``resources/list`` → exact ``prompts/list`` → ``resources/read`` smoke for every
@@ -14,19 +14,18 @@ from typing import Any, Sequence
 
 import httpx
 
-from ignition_rest_mcp.cli.setup_native.doctor import (
+from ignition_rest_mcp.cli.gateway_ops.checks import (
     FAIL,
     NOT_APPLICABLE,
     PASS,
     SKIP,
     Check,
     bundle_info_check,
-    emit,
     inventory_check,
     make_mcp,
 )
-from ignition_rest_mcp.cli.setup_native.inputs import Endpoint, Inputs
-from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
+from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint, Inputs
+from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
 
 #: Statuses that still count as verified.
 _OK = frozenset({PASS, NOT_APPLICABLE})
@@ -185,15 +184,3 @@ def _finish(inputs: Inputs, checks: Sequence[Check]) -> tuple[dict[str, Any], li
     lines = [f"{check.status:<15}{check.name}: {check.detail}" for check in checks]
     lines.append(f"verify: verified={str(verified).lower()} => exit {exit_code}")
     return verify_report(inputs, checks, verified, exit_code, inputs.runtime_endpoint()), lines, exit_code
-
-
-async def run(
-    inputs: Inputs,
-    *,
-    mcp_transport: httpx.AsyncBaseTransport | None = None,
-) -> int:
-    """Execute the verify sequence; exit 0 only when every check passed or was not applicable."""
-
-    report, lines, exit_code = await collect(inputs, mcp_transport=mcp_transport)
-    emit(inputs, report, lines)
-    return exit_code

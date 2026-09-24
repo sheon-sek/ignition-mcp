@@ -1032,7 +1032,7 @@ tools/list works?
 所以新 FastMCP package 可以额外提供一个 CLI：
 
 ```bash
-ignition-mcp setup-native
+ignition-mcp setup
 ```
 
 它不调用 WebDev，只用 Native REST：
@@ -1052,7 +1052,7 @@ probe tools/list
 最终安装体验可以变成：
 
 ```bash
-uvx ignition-mcp setup-native \
+uvx ignition-mcp setup \
   --gateway https://ignition.example.com \
   --server-name ignition-runtime
 ```
@@ -1628,7 +1628,7 @@ ignition-unified
 
 5. **最后解决 Perspective。** 不使用不存在的 Project Resource REST，也不默认 filesystem write + scan；建立 project-export ZIP adapter、offline validation、concurrency guard、backup 和 post-import verification。
 
-6. **最后做 installer / unified UX。** `setup-native` 自动检查 MCP Module、导入 tool project、建立 MCP server config、security setup diagnostics；再考虑 optional unified facade。
+6. **最后做 installer / unified UX。** `ignition-mcp setup` 自动检查 MCP Module、导入 tool project、建立 MCP server config、security setup diagnostics；再考虑 optional unified facade。
 
 ---
 

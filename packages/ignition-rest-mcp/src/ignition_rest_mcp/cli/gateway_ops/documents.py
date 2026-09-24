@@ -1,4 +1,4 @@
-"""The two operator-supplied documents ``plan`` and ``apply`` reconcile (D20, D30 §1).
+"""The two documents a Runtime deployment reconciles (D20, D30 §1).
 
 * the **Runtime Target Policy**: a deployment-owned JSON document stored as a
   String Tag in the reserved Tag provider ``IgnitionMCPPolicy``, together with a
@@ -6,12 +6,11 @@
   read gate and the product-enforced 32 KiB cap come from the ticket #6 research
   note (``docs/research/runtime-target-policy-storage-and-alarm-query-bound.md``)
   and D30's owner ruling 1. A Runtime Mutation fails closed when the document is
-  missing, unreadable, over the cap or malformed, so ``apply`` refuses an over-cap
+  missing, unreadable, over the cap or malformed, so the CLI refuses an over-cap
   or malformed document before it writes anything.
-* the **Server Config permissions tree**. ``apply`` never invents one: D20 keeps
-  Security Level provisioning opt-in (ticket #22), so a Server Config that does
-  not exist yet is only created when the operator supplies the permissions it
-  should carry.
+* the **Server Config permissions tree**. The caller supplies it, because D20 keeps
+  Security Level provisioning opt-in (ticket #22): this module merges the tree the
+  caller generated for the role into the Server Config document and invents nothing.
 
 Nothing here dispatches a request: the document contracts are pure, and the one
 read (``observe_policy``) is an injected read-only Gateway client.
@@ -25,8 +24,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn
 
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native.inputs import Inputs, UsageError
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops.inputs import Inputs, UsageError
 
 # --------------------------------------------------------------------------- policy
 
@@ -350,8 +349,7 @@ def desired_server_config(
 class Documents:
     """The operator-supplied documents one run reasons over (both optional).
 
-    ``plan`` may run without either; ``apply`` requires the policy document and
-    needs the permissions tree only when it has to create a Server Config.
+    One run may hold only the policy text, only the permissions tree, or both.
     """
 
     policy_text: str | None = None

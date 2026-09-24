@@ -41,11 +41,11 @@ from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG
 from ignition_rest_mcp.cli.setup import rest, runtime, start
 from ignition_rest_mcp.cli.setup.runtime import Bundle, Role, RuntimeTargets
-from ignition_rest_mcp.cli.setup_native import documents as docs
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import security
-from ignition_rest_mcp.cli.setup_native.inputs import API_TOKEN_TYPE, SECURITY_LEVEL_PARENT
-from ignition_rest_mcp.cli.setup_native.mcp_http import McpHttpClient, McpProbeError
+from ignition_rest_mcp.cli.gateway_ops import documents as docs
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops.inputs import API_TOKEN_TYPE, SECURITY_LEVEL_PARENT
+from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpProbeError
 
 #: The Runtime Tool whose answer says whether the Gateway's Named Query registry
 #: variable is set (D32 section 12).

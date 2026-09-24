@@ -264,7 +264,7 @@ def test_policy_document_is_deterministic_and_provider_qualified() -> None:
 
 
 def test_harness_policy_documents_satisfy_the_shipped_schema() -> None:
-    """The harness writes the policy `setup-native apply` will write, so both
+    """The harness writes the policy `ignition-mcp setup` writes, so both
     documents must satisfy the contract schema the shipped reader implements."""
     contract = json.loads(
         (ROOT / "contracts/tools/runtime/tag_write.contract.json").read_text(encoding="utf-8")
@@ -2541,7 +2541,7 @@ def test_every_harness_script_ends_with_its_main_guard() -> None:
     """A script executes top to bottom, so a guard above the definitions its own call
     path needs is a run-time ``NameError``, not an import-time one.
 
-    `apply_stage.py` shipped that way: `_reverify` and `_reverify_after_reload` sat
+    One harness script shipped that way: `_reverify` and `_reverify_after_reload` sat
     below `if __name__ == "__main__": raise SystemExit(main())`, so the live apply
     row's retry branch raised `NameError: name '_reverify' is not defined` (run
     35713927140, head `0801e51`) while the rehearsal stayed green, because a

@@ -4,16 +4,16 @@ This package holds two programs:
 
 - `ignition-rest-mcp` is the `ignition-rest` MCP server. It wraps selected Ignition Gateway web API
   operations as MCP Tools, served over Streamable HTTP with FastMCP 4.
-- `ignition-mcp setup-native` installs the MCP Module and deploys the `ignition-runtime` bundle on a
-  Gateway.
+- `ignition-mcp` sets up, checks, runs and connects an Ignition MCP deployment. It installs the MCP
+  Module, deploys the `ignition-runtime` bundle, starts the REST server, and registers the endpoints
+  with an agent client.
 
 To install and use them, read the guides instead of this page:
 
-- [Set up the REST server](../../docs/guide/setup-rest.md)
-- [Set up the Runtime server](../../docs/guide/setup-runtime.md)
+- [Quick start](../../docs/guide/quick-start.md)
 - [Tool catalog](../../docs/guide/tools.md), for what each Tool needs
 - [Configuration reference](../../docs/guide/configuration.md), for every setting
-- [Operations runbook](../../docs/operations/runbook.md), for every `setup-native` flag and exit code
+- [Operations runbook](../../docs/operations/runbook.md), for upgrades, the policy and exit codes
 
 This page describes the server's behavior in detail: how it authenticates callers, stores data, and
 decides the result of each write Tool. The binding rules are in `docs/decisions/`, and each section
@@ -404,27 +404,35 @@ The Project writer runs the D16 project transaction for `project_import` and the
 
 While it is on, the process holds an exclusive lock on `<data>/project-writer.lock`. That stops two
 processes that share one data folder, but it cannot stop two machines. Running one Project writer per
-Gateway is the operator's job. `gateway_diagnose` and `setup-native doctor` report this as a
-limitation.
+Gateway is the operator's job. `gateway_diagnose` reports it as a limitation, and the `rest settings`
+line of `ignition-mcp status` names whether the writer is on.
 
-## The `setup-native` command
+## The `ignition-mcp` command
 
-`ignition-mcp setup-native` is separate from the server code (D25). It has five subcommands: `doctor`,
-`plan`, `apply`, `verify` and `install-module`. The [runbook](../../docs/operations/runbook.md)
-documents each one, and the
-[Configuration reference](../../docs/guide/configuration.md#setup-command-settings) lists its flags.
+`ignition-mcp` is separate from the server code (D25). It has five commands: `setup`, `status`,
+`start`, `connect` and `reset`. The [quick start](../../docs/guide/quick-start.md) walks through
+setup, and the [Configuration reference](../../docs/guide/configuration.md#cli-settings) lists the
+flags.
 
-Design points that the runbook does not repeat:
+Design points the other pages do not repeat:
 
-- Every input comes from the manifest file or the command line. The command never reads
-  repository paths such as `contracts/` or `packages/ignition-runtime-bundle/`.
+- One engine resolves every input from a flag, the saved deployment or the wizard, in that order. It
+  writes nothing until the plan is shown, every named risk is accepted and the plan is confirmed.
+- The engine generates the Runtime Target Policy and each Server Config's permissions tree from the
+  Deployment environment and the role, so the operator writes neither by hand.
+- A command is a list of stages. A stage plans with read-only Gateway requests, and only its apply
+  half may write. A write before the plan is accepted and confirmed is a bug, not an operator error.
+- Each secret lives in one `*.secret` file inside the deployment directory, written with mode `0600`.
+  Secrets never appear in output, logs or the one-line command the wizard prints.
+- `setup` builds the Runtime bundle from the repository checkout and finds the Module file in
+  `tests/fixtures/modules/` or `~/Downloads`, so the CLI does read those repository paths. It installs
+  only a local Module file whose SHA-256 matches the pinned build.
 - Gateway probes are bounded GET requests with redirects off: 1 MiB per JSON response, and 16 MiB for
   `/openapi.json`, which is hashed and scanned for path keys only. Capability presence comes from the
   OpenAPI path list, so write routes are never called to test them.
 - Every write goes through one writer with a documented route constant per operation, never through
   `config_resource_*`.
 - Gateway and MCP error bodies are shortened and scrubbed before they are shown.
-- Compatibility comes only from the manifest's `testedTuples`, and is never raised. An incomplete
-  identity or an unknown combination gives `UNKNOWN` or `UNTESTED`.
-- `initialize` gets exactly one attempt, bounded at 30 seconds. Waiting for a Gateway to start belongs
-  to the live test setups.
+- A 403 on the MCP endpoint is reported as its cause when the CLI can tell them apart: no token was
+  sent, the token's Security Level does not satisfy the Server Config's permissions, or the token
+  requires a secure channel and the Gateway URL is `http`.

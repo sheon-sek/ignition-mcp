@@ -4,7 +4,7 @@ This folder holds the Tools of the `ignition-runtime` MCP server, written as an 
 project. The official Ignition MCP Module runs them inside the Gateway. This repository ships only the
 project, called the bundle. It is not a separate server program.
 
-To install it, follow [Set up the Runtime server](../../docs/guide/setup-runtime.md). To see what each
+To install it, follow [Quick start](../../docs/guide/quick-start.md). To see what each
 Tool does and needs, read the [Tool catalog](../../docs/guide/tools.md#the-runtime-server-ignition-runtime).
 This page is for people who change the bundle.
 
@@ -79,7 +79,7 @@ Every write Tool reads the Runtime Target Policy before it acts, and refuses wit
 `operation_disabled` when the policy is missing, unreadable, invalid or larger than 32 KiB. The policy
 is the Tag `[IgnitionMCPPolicy]RuntimeTargetPolicy`, with a companion Int4 Tag
 `RuntimeTargetPolicyLength` that is read first so an oversized policy is never loaded. Only
-`ignition-mcp setup-native apply` writes it. The policy holds the per-Tool allowlists, the service
+`ignition-mcp setup` writes it. The policy holds the per-Tool allowlists, the service
 identity used as the audit actor, the audit mode, the per-call item limits and the `alarm_shelve`
 duration limit. Its fields are listed in the
 [Configuration reference](../../docs/guide/configuration.md#runtime-target-policy).
@@ -124,7 +124,7 @@ ownership mark is the last line of the `project.json` description:
 ignition-mcp-managed: product=ignition-runtime-bundle; bundle=<bundleVersion>
 ```
 
-`setup-native doctor` uses that mark to tell a project it deployed from a project someone else made.
+`ignition-mcp status` uses that mark to tell a project it deployed from a project someone else made.
 `RESOURCE_SCHEMA_VERSION` tracks changes to the resource file format.
 
 Build a release (D21):

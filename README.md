@@ -28,10 +28,10 @@ The project has two MCP servers. You can install one or both.
 | --- | --- | --- |
 | Covers | Gateway information, configuration resources, projects, Perspective Views, audit logs, alarm notification pipelines | Tag values and configuration, UDTs, Tag history, alarm shelving, approved database queries |
 | Runs | as its own program, on any machine that can reach the Gateway | inside the Gateway, through the official Ignition MCP Module |
-| Setup guide | [Set up the REST server](docs/guide/setup-rest.md) | [Set up the Runtime server](docs/guide/setup-runtime.md) |
+| Setup guide | [Quick start](docs/guide/quick-start.md) | [Quick start](docs/guide/quick-start.md) |
 
-If you are unsure, start with the Runtime server in its `readonly` profile, because reading Tags and
-history is the most common request. [How it works](docs/guide/how-it-works.md#which-server-do-i-need)
+If you are unsure, start with the Analysis Assistant role. It reads Tags and history, which is the
+most common request, and it changes nothing. [How it works](docs/guide/how-it-works.md#which-server-do-i-need)
 has a longer table.
 
 ## Documentation
@@ -39,19 +39,18 @@ has a longer table.
 | I want to... | Read |
 | --- | --- |
 | understand what the servers do and how a call works | [How it works](docs/guide/how-it-works.md) |
-| install the REST server, step by step | [Set up the REST server](docs/guide/setup-rest.md) |
-| install the Runtime server, step by step | [Set up the Runtime server](docs/guide/setup-runtime.md) |
+| install both servers, step by step | [Quick start](docs/guide/quick-start.md) |
 | find out why a Tool is missing, or what a Tool needs | [Tool catalog](docs/guide/tools.md) |
 | look up a setting | [Configuration reference](docs/guide/configuration.md) |
-| upgrade, change the policy, or understand a `doctor` line or an exit code | [Operations runbook](docs/operations/runbook.md) |
+| upgrade, change the policy, or understand a `status` line or an exit code | [Operations runbook](docs/operations/runbook.md) |
 | look up an error code | [How it works: Errors](docs/guide/how-it-works.md#errors) |
 
 ## Safety
 
 The assistant starts with read access only. Every kind of change stays off until you turn it on.
 
-- **Writes are off by default.** On the REST server you turn on each kind of change with a setting.
-  On the Runtime server you choose a profile that includes write Tools.
+- **Writes are off by default.** A `prod` deployment leaves every write off. A `dev` deployment turns
+  on the Mutations the Engineer role needs, and only for that role's token.
 - **You list what may change.** Each write Tool can only touch the targets you list, such as one
   Tag folder or one project. A Tool with an empty list can change nothing.
 - **Changes need a fresh read.** Most change Tools need a token from a recent read. If someone else
@@ -78,7 +77,7 @@ Known limitations in v1:
 - The alarm status, alarm journal and alarm acknowledge Tools are switched off. Ignition's alarm
   query functions cannot limit how many rows they return, so these Tools cannot promise a bounded
   answer.
-- Windows has not been tested. The guides include Windows steps marked as not run on Windows yet.
+- Windows has not been tested. The runbook includes Windows steps marked as not run on Windows yet.
   See [D31](docs/decisions/D31-windows-support-scope.md).
 - The MCP Module does not publish output schemas for Runtime Tools. This repository publishes them
   in `contracts/schemas/`.
@@ -87,7 +86,7 @@ Known limitations in v1:
 
 | Path | Contents |
 | --- | --- |
-| `packages/ignition-rest-mcp/` | The REST server and the `ignition-mcp setup-native` command. Its [README](packages/ignition-rest-mcp/README.md) describes the Tools' detailed behavior. |
+| `packages/ignition-rest-mcp/` | The REST server and the `ignition-mcp` command. Its [README](packages/ignition-rest-mcp/README.md) describes the Tools' detailed behavior. |
 | `packages/ignition-runtime-bundle/` | The Runtime Tools as an Ignition project. See its [README](packages/ignition-runtime-bundle/README.md). |
 | `contracts/` | The Tool contracts, output schemas and shared error codes that both servers are checked against. |
 | `tooling/` | The bundle builder, the contract linter and CI helpers. |

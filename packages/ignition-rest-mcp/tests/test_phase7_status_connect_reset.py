@@ -32,9 +32,9 @@ from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment,
 from ignition_rest_mcp.cli.engine.report import JsonReporter, RichReporter
 from ignition_rest_mcp.cli.engine.resolve import Secret as EngineSecret
 from ignition_rest_mcp.cli.setup import connect, reset, rest, runtime, status
-from ignition_rest_mcp.cli.setup_native import documents as docs
-from ignition_rest_mcp.cli.setup_native import gateway as gw
-from ignition_rest_mcp.cli.setup_native import security
+from ignition_rest_mcp.cli.gateway_ops import documents as docs
+from ignition_rest_mcp.cli.gateway_ops import gateway as gw
+from ignition_rest_mcp.cli.gateway_ops import security
 from test_phase7_setup_runtime import (
     ACCEPT,
     MODULES,

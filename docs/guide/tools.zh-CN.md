@@ -14,7 +14,7 @@ scope、profile、allowlist 和 Precondition token 这几个词的解释见[运�
 
 ## REST server（`ignition-rest`）
 
-REST server 运行在你自己的机器上，通过 Gateway 的 Web API 和它通信。安装见[安装 REST server](setup-rest.zh-CN.md)。下文提到的每个设置都是环境变量，完整列表见[配置参考](configuration.zh-CN.md#rest-server-设置)。
+REST server 运行在你自己的机器上，通过 Gateway 的 Web API 和它通信。安装见[快速开始](quick-start.zh-CN.md)。下文提到的每个设置都是环境变量，完整列表见[配置参考](configuration.zh-CN.md#rest-server-设置)。
 
 ### 每个 REST Tool 都需要的
 
@@ -118,17 +118,17 @@ IGNITION_MCP_MUTATION_TARGETS='{"config_resource_update":["ignition/database-con
 
 ## Runtime server（`ignition-runtime`）
 
-Runtime server 运行在 Gateway 内部。官方 Ignition MCP Module 承载它，本仓库以 Ignition 项目的形式提供 Tool。安装见[安装 Runtime server](setup-runtime.zh-CN.md)。
+Runtime server 运行在 Gateway 内部。官方 Ignition MCP Module 承载它，本仓库以 Ignition 项目的形式提供 Tool。安装见[快速开始](quick-start.zh-CN.md)。
 
 ### 每个 Runtime Tool 都需要的
 
 - Gateway 上已安装并运行 MCP Module。
-- 已用 `ignition-mcp setup-native apply` 部署了 bundle 项目、Server Config 和 Runtime Target Policy。
-- agent 连接 `<gateway-url>/data/mcp/<server-config-name>`，使用的 Ignition API token 的安全级别被 Server Config 允许。
+- 已用 `ignition-mcp setup` 部署了 bundle 项目、Server Config 和 Runtime Target Policy。
+- agent 连接 `<gateway-url>/data/mcp/<role>`，使用的 Ignition API token 的安全级别被 Server Config 允许。`<role>` 是 `analysis` 或 `engineer`。
 
-### profile 决定有哪些 Tool
+### 角色决定有哪些 Tool
 
-你传给 `setup-native apply` 的 `--profile` 决定 endpoint 提供哪些 Tool。
+`setup` 部署的助手角色决定 endpoint 用哪个 profile，也决定它提供哪些 Tool。Analysis 角色用 `readonly`，Engineer 角色用 `full`。
 
 | Profile | 包含 | Tool 数 |
 | --- | --- | --- |
@@ -137,7 +137,7 @@ Runtime server 运行在 Gateway 内部。官方 Ignition MCP Module 承载它�
 | `configurator` | `readonly` 加 6 个 Tag 配置 Tool | 19 |
 | `full` | 以上全部 | 22 |
 
-要换 profile，就用新的 `--profile` 再运行一次 `setup-native apply`，然后重新连接 agent。
+要把某个角色换成另一个 profile，就用不同的 `--roles` 再运行一次 `ignition-mcp setup`，然后重新连接 agent。`operator` 和 `configurator` 这两个 profile 由 Runtime bundle 提供，但 `setup` 只部署上面这两个角色。
 
 ### 读取 Tool，所有 profile 都有
 
@@ -223,7 +223,7 @@ IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON
 
 ### Runtime 写入 Tool 都需要什么
 
-profile 只让写入 Tool 变得可见。Tool 在改动任何东西之前，还会读取 **Runtime Target Policy**，这是 `setup-native apply` 存在 Gateway 上的一份小 JSON 文档。policy 缺失或损坏时，Tool 返回 `operation_disabled` 拒绝执行；目标不在该 Tool 的 allowlist 里时，返回 `permission_denied`。
+profile 只让写入 Tool 变得可见。Tool 在改动任何东西之前，还会读取 **Runtime Target Policy**，这是 `ignition-mcp setup` 存在 Gateway 上的一份小 JSON 文档。policy 缺失或损坏时，Tool 返回 `operation_disabled` 拒绝执行；目标不在该 Tool 的 allowlist 里时，返回 `permission_denied`。
 
 ```json
 {

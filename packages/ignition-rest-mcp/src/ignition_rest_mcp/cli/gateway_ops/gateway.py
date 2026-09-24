@@ -1,4 +1,4 @@
-"""Bounded, read-only Gateway REST probes for ``setup-native`` (D04, D20).
+"""Bounded, read-only Gateway REST probes (D04, D20).
 
 Only GETs against documented read-only routes.  Write routes are never called:
 capability presence is decided from the ``/openapi.json`` path inventory alone.
@@ -17,7 +17,7 @@ from urllib.parse import quote
 
 import httpx
 
-from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
+from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint
 
 JSON_LIMIT_BYTES = 1_048_576
 #: The EULA route answers HTML; only its size is ever read, never its text.
@@ -193,7 +193,7 @@ class GatewayRest:
                 "Accept": "application/json",
                 "Accept-Encoding": "identity",
                 "X-Ignition-API-Token": api_token,
-                "User-Agent": "ignition-mcp-setup-native",
+                "User-Agent": "ignition-mcp",
             },
             follow_redirects=False,
             timeout=httpx.Timeout(timeout_seconds),

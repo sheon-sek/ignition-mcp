@@ -1,26 +1,21 @@
 name: Phase 4 Live Gateway apply
 
-# Milestone 4d (ticket #21): `ignition-mcp setup-native apply` against a disposable
-# Gateway — the bundle Project, the MCP Server Config for the selected profile and the
-# Runtime Target Policy in the reserved provider, then the D20 verify sequence.
+# Ticket #56 (Phase 6, G6): this workflow starts its Gateway with NO MCP Module (the
+# docker-compose-install.yml override drops the .modl mount the shared base file
+# carries for the G4a/G4b workflows), installs the pinned Module, provisions the CI
+# security level and API token, and builds the exact release the run ships. The composed evidence rows are g6-*.
 #
-# Ticket #56 (Phase 6, G6): this workflow now starts its Gateway with NO MCP Module
-# (the docker-compose-install.yml override drops the .modl mount the shared base file
-# carries for the G4a/G4b workflows) and installs the pinned Module through
-# `setup-native install-module` first, then runs the same apply/verify sequence, then
-# proves the Bundle upgrade: a lowered real release first, then the exact release the
-# run built with --acknowledge-upgrade. The composed evidence rows are g6-*.
+# P7-6 replaced the old deployment command with `ignition-mcp setup`, whose live stage
+# is the G7 stage (#78). The stage that wrote the bundle Project, the MCP Server Config
+# and the Runtime Target Policy, and the lowered-bundle preparation that fed its upgrade
+# case, are gone from here.
 #
-# A dedicated row, because the stage writes deployment state: it must not share a
-# Gateway with the milestone 4a/4b Mutation evidence. The stage uses run-unique names,
-# so the first `apply` is a CREATE of the Project and of the Server Config (the paths
-# this ticket adds) and the second `plan`/`apply` pair must be a NO CHANGE run that
-# writes nothing. The `phase4-live` environment is the same one G4a/G4b use and exists
-# WITHOUT protection rules, reusing the owner-accepted deviation recorded for
-# `phase3-live`; the compensating controls are the trusted-repo guard, no repository or
-# environment secrets in the job, localhost/compose-only Gateway endpoints, run-unique
-# Project and Server Config names, and the stage's exact-origin check, which refuses
-# any Gateway but the compose one before it sends a request.
+# A dedicated row, because a deployment stage writes Gateway state: it must not share
+# a Gateway with the milestone 4a/4b Mutation evidence. The `phase4-live` environment
+# is the same one G4a/G4b use and exists WITHOUT protection rules, reusing the
+# owner-accepted deviation recorded for `phase3-live`; the compensating controls are
+# the trusted-repo guard, no repository or environment secrets in the job, and
+# localhost/compose-only Gateway endpoints.
 on:
   pull_request:
     paths:
@@ -69,18 +64,12 @@ jobs:
       GATEWAY_VERSION: ${{ matrix.gateway_version }}
       EXPECTED_GATEWAY_BUILD: ${{ matrix.expected_build }}
       P4_BASE_URL: http://127.0.0.1:8093
-      P4_ORIGIN: 127.0.0.1:8093
       MODULE_FILE: tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.modl
       MCP_MODULE_SHA256: b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365
       MCP_MODULE_VERSION: "1.3.5-SNAPSHOT"
       MCP_MODULE_ARTIFACT_VERSION: "1.3.5.2026021307-SNAPSHOT"
       MCP_MODULE_BUILD: "2026021307"
       RELEASE_DIR: dist/release
-      # Ticket #56: this workflow runs the module-install stage; G4a/G4b, which share
-      # the compose file, keep the mount and never set this.
-      MODULE_INSTALL: "1"
-      APPLY_PROJECT: ignition_runtime_apply_${{ github.run_id }}
-      APPLY_SERVER_CONFIG: phase4-apply-runtime
       EVIDENCE_DIR: artifacts/apply-${{ matrix.gateway_version }}
     steps:
       - name: Checkout
@@ -110,16 +99,6 @@ jobs:
           (cd "$RELEASE_DIR" && sha256sum ignition-runtime-bundle-*.zip > "$OLDPWD/$EVIDENCE_DIR/deployed.sha256")
           cat "$EVIDENCE_DIR/deployed.sha256"
           echo "SOURCE_REVISION=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
-
-      - name: Rehearse the apply stage against the recorded Gateway
-        shell: bash
-        run: |
-          # The stage drives the shipped CLI, so it is rehearsed against the recorded
-          # Gateway (which models the Project import, the Server Config routes and the
-          # reserved policy provider) before a live Gateway is spent on it.
-          set -euo pipefail
-          uv run --no-sync python tests/harness/phase4-live/rehearse_apply.py \
-            | tee "$EVIDENCE_DIR/apply-rehearsal.log"
 
       - name: Pull the exact Gateway image
         shell: bash
@@ -219,65 +198,6 @@ jobs:
           echo "the authenticated Native REST plane never became ready" >&2
           docker compose logs --no-color gateway | tail -n 200 >&2
           exit 1
-
-      - name: Install the MCP Module with setup-native (ticket #56)
-        if: env.MODULE_INSTALL == '1'
-        shell: bash
-        run: |
-          # The Gateway this workflow started carries no Module (the compose override
-          # dropped the mount). The stage installs the pinned .modl through the shipped
-          # CLI: hash check, certificate and EULA acceptance under their own flags,
-          # install, restart, and a read-back that proves the served build.
-          set -euo pipefail
-          uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
-            --base-url "$P4_BASE_URL" \
-            --expected-origin "$P4_ORIGIN" \
-            --api-token "$CI_API_TOKEN" \
-            --module-file "$MODULE_FILE" \
-            --module-sha256 "$MCP_MODULE_SHA256" \
-            --install-only \
-            --evidence-dir "$EVIDENCE_DIR" \
-            2>&1 | tee "$EVIDENCE_DIR/install-module.log"
-
-      - name: Prepare the lowered bundle source (ticket #56)
-        if: env.MODULE_INSTALL == '1'
-        shell: bash
-        run: |
-          # The Bundle upgrade case needs a validated copy of the release project the
-          # stage can re-version: one BUNDLE_VERSION + project/ pair outside the
-          # checked-out tree, which apply_stage lowers and rebuilds.
-          set -euo pipefail
-          rm -rf artifacts/bundle-source
-          mkdir -p artifacts/bundle-source
-          cp packages/ignition-runtime-bundle/BUNDLE_VERSION artifacts/bundle-source/BUNDLE_VERSION
-          cp packages/ignition-runtime-bundle/RESOURCE_SCHEMA_VERSION artifacts/bundle-source/RESOURCE_SCHEMA_VERSION
-          cp -r packages/ignition-runtime-bundle/project artifacts/bundle-source/project
-
-      - name: Plan, apply and verify with setup-native (ticket #21)
-        shell: bash
-        run: |
-          set -euo pipefail
-          release_manifest="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.manifest.json' -print -quit)"
-          release_zip="$(find "$RELEASE_DIR" -maxdepth 1 -name 'ignition-runtime-bundle-*.zip' -print -quit)"
-          test -n "$release_manifest" && test -n "$release_zip"
-          install_flags=()
-          if [[ "$MODULE_INSTALL" == "1" ]]; then
-            install_flags=(--module-file "$MODULE_FILE" --module-sha256 "$MCP_MODULE_SHA256" --bundle-source artifacts/bundle-source)
-          fi
-          uv run --no-sync python tests/harness/phase4-live/apply_stage.py \
-            --base-url "$P4_BASE_URL" \
-            --expected-origin "$P4_ORIGIN" \
-            --compose-file "$COMPOSE_FILE" \
-            --api-token "$CI_API_TOKEN" \
-            --bundle-manifest "$release_manifest" \
-            --bundle-zip "$release_zip" \
-            --evidence-dir "$EVIDENCE_DIR" \
-            --source-revision "$SOURCE_REVISION" \
-            --project "$APPLY_PROJECT" \
-            --server-config "$APPLY_SERVER_CONFIG" \
-            --profile readonly \
-            "${install_flags[@]}" \
-            2>&1 | tee "$EVIDENCE_DIR/setup-native-apply.log"
 
       - name: Record the run identity for the G6 row (ticket #56)
         shell: bash

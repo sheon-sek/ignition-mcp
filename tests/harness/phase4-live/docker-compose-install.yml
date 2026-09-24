@@ -3,7 +3,7 @@
 # The docker-compose.yml of this harness mounts the pinned .modl into the
 # Gateway's user-lib, which is how the G4a/G4b workflows deploy it. This stage
 # must instead start a Gateway with NO MCP Module and put it there through
-# `setup-native install-module`, so this override replaces the volume list with
+# `ignition-mcp setup`, so this override replaces the volume list with
 # the data volume alone (compose `!override` tag, docker compose v2.24+):
 # the .modl mount of the shared base file is gone and nothing else changes.
 #
