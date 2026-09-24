@@ -3,15 +3,16 @@
 Two MCP servers that let AI agents read and, under layered safety rules, change an
 [Inductive Automation Ignition](https://inductiveautomation.com/) Gateway.
 
-| Server | Plane | What it is |
-| --- | --- | --- |
-| `ignition-rest` | REST | External FastMCP 4 server (Python 3.11+, Streamable HTTP) wrapping curated Ignition Native REST operations. |
-| `ignition-runtime` | Runtime | A bundle of Jython Tools, Text Resources and Prompts, hosted on the Gateway by the Ignition Official MCP Module. This repo ships the bundle, not the Module. |
+| Server | Plane | What it is | Where it runs | Start it with |
+| --- | --- | --- | --- | --- |
+| `ignition-rest` | REST | FastMCP 4 server (Python 3.11+, Streamable HTTP) wrapping curated Ignition Native REST operations. | As a standalone process. | `ignition-rest-mcp` |
+| `ignition-runtime` | Runtime | A bundle of Jython Tools, Text Resources and Prompts that call `system.*`. | On the Gateway, hosted by the Ignition Official MCP Module. | `ignition-mcp setup-native apply` (or `./scripts/deploy-runtime-bundle.sh`) |
 
-Capability ownership is exclusive: an operation belongs to exactly one plane. Native REST owns
-everything a semantically complete official endpoint covers; the Runtime plane owns the rest. There
-is no arbitrary REST-request Tool, no arbitrary SQL (approved Named Queries only), and no WebDev
-bridge. The rules are binding in [`docs/decisions/`](docs/decisions/INDEX.md).
+Both planes are first-class and independent: you can deploy either alone. Capability ownership is
+**exclusive** — an operation belongs to exactly one plane. Native REST owns everything a
+semantically complete official endpoint covers; the Runtime plane owns the rest. There is no
+arbitrary REST-request Tool, no arbitrary SQL (approved Named Queries only), and no WebDev bridge.
+The rules are binding in [`docs/decisions/`](docs/decisions/INDEX.md).
 
 ## Status
 
@@ -28,11 +29,42 @@ repo-owned JSON Schemas in `contracts/schemas/` are the mandatory output contrac
 `VERIFIED` / `VERIFIED_WITH_LIMITATION` / `UNVERIFIED_LIMITATION` / `UNTESTED` only — **never**
 production `SUPPORTED`.
 
-Shipped inventory:
+### REST surface (33 Tools, 2 Text Resources)
 
-- **REST** — 33 Tools (21 read + 12 mutation), 2 Text Resources (`ignition://gateway/capabilities`,
-  `ignition://gateway/openapi-info`).
-- **Runtime** — 22 Tools (13 read + 9 mutation), 3 Text Resources, no Prompts.
+Exposure is decided by three independent switches: the scope on the caller's credential, whether the
+Gateway documents the Tool's capability, and whether the Tool's Mutation class is enabled.
+
+| Class | Scope | Enablement | Tools |
+| --- | --- | --- | --- |
+| read | `ignition.read` | always on | 21 |
+| config mutation | `ignition.config` | `IGNITION_MCP_CONFIG_MUTATION_ENABLED` | 11 |
+| control mutation | `ignition.control` | `IGNITION_MCP_CONTROL_MUTATION_ENABLED` | 1 |
+| admin mutation | `ignition.admin` | `IGNITION_MCP_ADMIN_MUTATION_ENABLED` | 0 today |
+
+Reads cover Gateway identity and diagnosis, projects, config resources, audit, alarm pipelines,
+artifacts and exports, Perspective and operation diagnosis. The config Mutations are the four
+`config_resource_*`, `project_import`, `tag_config_import`, `artifact_delete` and the four Perspective
+writes; the control Mutation is `alarm_pipeline_cancel`. Text Resources:
+`ignition://gateway/capabilities` and `ignition://gateway/openapi-info`. Every enabled Mutation also
+needs its id in `IGNITION_MCP_MUTATION_OPERATIONS` and its targets in
+`IGNITION_MCP_MUTATION_TARGETS`; none of this is wildcard-by-default.
+
+### Runtime surface (22 Tools, 3 Text Resources, no Prompts)
+
+The Server Config's **profile** decides the Tools the endpoint serves. Inventories are always
+explicit, never `*`.
+
+| Profile | Scopes | Tools |
+| --- | --- | --- |
+| `readonly` | READ | 13 |
+| `operator` | READ + CONTROL | 16 |
+| `configurator` | READ + CONFIG | 19 |
+| `full` | READ + CONFIG + CONTROL | 22 |
+
+Reads cover tags, alarms, historians, UDTs and Named Query execution. The Mutations are the CONTROL
+Tools (`tag_write`, `alarm_shelve`, `alarm_unshelve`) and the CONFIG Tools (`tag_update`, `tag_create`,
+`tag_copy`, `tag_delete`, `tag_move`, `tag_rename`). Every Mutation additionally requires the Runtime
+Target Policy in the reserved `[IgnitionMCPPolicy]` Tag provider and fails closed without it.
 
 Known v1 limitation: `alarm_status`, `alarm_journal` (D12 Phase 2 amendment) and `alarm_acknowledge`
 (D12 Phase 4 amendment) stay parked until a native pre-execution bound exists; their handlers live in
@@ -55,15 +87,18 @@ Known v1 limitation: `alarm_status`, `alarm_journal` (D12 Phase 2 amendment) and
 
 - Python 3.11+ and [`uv`](https://docs.astral.sh/uv/).
 - An Ignition 8.3.8/8.3.9 Gateway reachable over HTTP(S), with an `ignition/api-token` resource.
+  The REST server connects to it outbound; the Runtime bundle is installed on it.
 - For the Runtime plane only: the official MCP Module `.modl` file and its SHA-256, from the
   Inductive Automation download channel. The repo pins version `1.3.5.2026021307-SNAPSHOT`, build
   `2026021307`, SHA-256 `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`.
 
-### 1. Run the REST server
+```bash
+uv sync --all-packages   # installs the workspace package and its console scripts
+```
+
+### Plane 1 — launch the REST server
 
 ```bash
-uv sync --all-packages          # installs the workspace package and its console scripts
-
 export IGNITION_MCP_GATEWAY_URL=http://127.0.0.1:8088
 export IGNITION_MCP_GATEWAY_API_TOKEN=<your-ignition-api-token>
 export IGNITION_MCP_DATA_DIR=$HOME/.local/state/ignition-mcp   # durable SQLite + artifact store
@@ -71,8 +106,9 @@ export IGNITION_MCP_DATA_DIR=$HOME/.local/state/ignition-mcp   # durable SQLite 
 uv run --no-sync ignition-rest-mcp
 ```
 
-The development profile binds `127.0.0.1:8000/mcp` and serves `/health/live`, `/health/ready` and
-`/metrics`. Point any Streamable HTTP MCP client at that URL:
+The development profile binds `127.0.0.1:8000/mcp` (`IGNITION_MCP_HOST` / `_PORT` / `_PATH` override
+it) and serves `/health/live`, `/health/ready` and `/metrics`. Point a Streamable HTTP MCP client at
+the URL:
 
 ```json
 {
@@ -82,17 +118,28 @@ The development profile binds `127.0.0.1:8000/mcp` and serves `/health/live`, `/
 }
 ```
 
-Reads work as soon as the capability registry reports `READY` (it follows the Gateway's OpenAPI).
-Mutation Tools stay hidden from `tools/list` and refused at call time until the deployment enables
-their class and allowlists them. Full configuration — deployment profiles, auth modes, budgets,
-artifact limits — is in [`packages/ignition-rest-mcp/README.md`](packages/ignition-rest-mcp/README.md).
+Reads work as soon as the capability registry reports `READY` (it follows the Gateway's OpenAPI); a
+Tool whose route the Gateway does not document stays hidden. Mutation Tools are hidden from
+`tools/list` until their class is enabled *and* the Gateway documents their capability, and the
+operation and target allowlists are then enforced at call time as well. To turn on the first config
+Mutation on a trusted deployment:
 
-### 2. Deploy the Runtime server
+```bash
+export IGNITION_MCP_AUTH_MODE=static-token
+export IGNITION_MCP_STATIC_TOKENS='{"agent":{"token":"<secret>","scopes":["ignition.read","ignition.config"]}}'
+export IGNITION_MCP_CONFIG_MUTATION_ENABLED=true
+export IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update
+export IGNITION_MCP_MUTATION_TARGETS='{"config_resource_update":["ignition/tag-provider/MyProvider"]}'
+```
 
-The bundle is deployed onto the Gateway, not run as a local process.
+Full configuration — deployment profiles, auth modes, budgets, artifact limits, sensitive exports —
+is in [`packages/ignition-rest-mcp/README.md`](packages/ignition-rest-mcp/README.md).
 
-**Option A — interactive wizard** (walks the manual procedure stage by stage, persists answers to
-`.env`):
+### Plane 2 — deploy the Runtime bundle
+
+The bundle runs on the Gateway, not as a local process.
+
+**Option A — interactive wizard** (walks the procedure stage by stage, persists answers to `.env`):
 
 ```bash
 ./scripts/deploy-runtime-bundle.sh
@@ -137,13 +184,9 @@ ignition-mcp setup-native verify --bundle-manifest dist/release/ignition-runtime
 ```
 
 `apply` writes the Runtime Target Policy, the bundle Project and the MCP Server Config; `doctor`,
-`plan` and `verify` write nothing. The MCP endpoint the agent then connects to is
-`<gateway-url>/data/mcp/<server-config-name>`.
-
-The Runtime **profile** decides the Tool inventory: `readonly` (13 read), `operator` (+3 CONTROL),
-`configurator` (+6 CONFIG), `full` (all 22). Inventories are always explicit, never `*`. Every
-Bundle Mutation additionally requires the Runtime Target Policy in the reserved
-`[IgnitionMCPPolicy]` Tag provider and fails closed without it.
+`plan` and `verify` write nothing. The agent then connects to
+`<gateway-url>/data/mcp/<server-config-name>`. Raise the profile to `operator`, `configurator` or
+`full` to serve more Tools, then re-run `apply`.
 
 The complete operator procedure — every flag, exit code, certificate/EULA rule and failure
 diagnosis — is in [`docs/operations/runbook.md`](docs/operations/runbook.md).
