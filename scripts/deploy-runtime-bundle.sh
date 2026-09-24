@@ -125,6 +125,31 @@ ask_secret() {
   printf -v "$key" '%s' "$input"
 }
 
+# normalize_path VALUE prints VALUE cleaned for use as a filesystem path:
+# surrounding whitespace and one pair of surrounding quotes stripped, a leading
+# ~ expanded, and under Git Bash/Cygwin a Windows form (D:\... or D:/...)
+# converted to POSIX form so [[ -f ]] works. POSIX paths pass through as-is.
+normalize_path() {
+  local p="$1"
+  p="${p#"${p%%[![:space:]]*}"}"
+  p="${p%"${p##*[![:space:]]}"}"
+  if [[ ${#p} -ge 2 ]]; then
+    local first="${p:0:1}" last="${p: -1}"
+    if { [[ "$first" == '"' && "$last" == '"' ]] || [[ "$first" == "'" && "$last" == "'" ]]; }; then
+      p="${p:1:${#p}-2}"
+    fi
+  fi
+  if [[ "$p" == "~" ]]; then
+    p="$HOME"
+  elif [[ "$p" == "~/"* ]]; then
+    p="$HOME/${p#\~/}"
+  fi
+  if command -v cygpath >/dev/null 2>&1 && [[ "$p" =~ ^[A-Za-z]:[\\/] ]]; then
+    p=$(cygpath -m "$p")
+  fi
+  printf '%s' "$p"
+}
+
 # write_env KEY VALUE upserts KEY=VALUE into ENV_FILE (creates it; replaces
 # any existing line). Idempotent.
 write_env() {
@@ -290,8 +315,12 @@ say "The repository pins MCP Module build $MODULE_BUILD (com.inductiveautomation
 note "SHA-256: $MODULE_SHA256"
 note "Download the .modl from the official Inductive Automation channel if you do not have it."
 ask MODL_PATH "Path to the MCP Module .modl file:"
+MODL_PATH=$(normalize_path "$MODL_PATH")
 if [[ -z "$MODL_PATH" || ! -f "$MODL_PATH" ]]; then
   warn "no such file: ${MODL_PATH:-<empty>}"
+  case "$OSTYPE" in
+    msys*|cygwin*) note "under Git Bash type the path as Windows shows it (D:\\...) or in POSIX form (/d/...); quotes are stripped" ;;
+  esac
   exit 1
 fi
 actual=$(sha256sum "$MODL_PATH" | awk '{print $1}')
@@ -326,9 +355,11 @@ ask BUNDLE_PROJECT "Bundle project name:"
 ask SERVER_CONFIG_NAME "MCP server config name:"
 [[ -n "$SERVER_CONFIG_NAME" ]] || SERVER_CONFIG_NAME="production"
 ask BACKUP_DIR "Backup directory (the only local copy before overwrites):"
+BACKUP_DIR=$(normalize_path "$BACKUP_DIR")
 [[ -n "$BACKUP_DIR" ]] || BACKUP_DIR="backups/ignition-mcp"
 mkdir -p "$BACKUP_DIR"
 ask PERMISSIONS_FILE "Server Config permissions tree file (Enter to skip, '-' clears a saved value):"
+PERMISSIONS_FILE=$(normalize_path "$PERMISSIONS_FILE")
 if [[ "$PERMISSIONS_FILE" == "-" ]]; then PERMISSIONS_FILE=""; fi
 PROVISION_SECURITY_LEVELS=no
 if confirm "Provision the dedicated Runtime Security Level (--provision-security-levels)?"; then
@@ -339,6 +370,7 @@ RUNTIME_TOKEN_FILE=""
 if confirm "Create the Runtime API token (--create-runtime-token)?"; then
   CREATE_RUNTIME_TOKEN=yes
   ask RUNTIME_TOKEN_FILE "Where to write the created token (mode 0600):"
+  RUNTIME_TOKEN_FILE=$(normalize_path "$RUNTIME_TOKEN_FILE")
   [[ -n "$RUNTIME_TOKEN_FILE" ]] || RUNTIME_TOKEN_FILE="$HOME/.config/ignition-mcp/runtime.token"
 fi
 write_env PROFILE "$PROFILE"
@@ -358,6 +390,7 @@ fi
 stage "Runtime Target Policy"
 say "The policy document controls which Runtime Mutations are allowed."
 ask POLICY_FILE "Runtime Target Policy file:"
+POLICY_FILE=$(normalize_path "$POLICY_FILE")
 [[ -n "$POLICY_FILE" ]] || POLICY_FILE="policy.json"
 if [[ ! -f "$POLICY_FILE" ]]; then
   cat > "$POLICY_FILE" <<'POLICY'
