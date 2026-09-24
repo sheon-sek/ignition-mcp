@@ -30,6 +30,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -227,11 +228,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     try:
+        bash = shutil.which("bash")
+        if bash is None:
+            raise WorkflowCheckError(
+                "bash is not on PATH; this check runs `bash -n` over every run: block. "
+                "On Windows run it under WSL or Git Bash, or leave it to CI"
+            )
         files = workflow_files(args.workflow_dir)
         binary = actionlint.resolve_binary(args.actionlint)
         findings = actionlint_findings(files, binary=binary)
         blocks = [block for path in files for block in extract_run_blocks(path)]
-        findings.extend(finding for path in files for finding in shell_syntax_findings(path))
+        findings.extend(finding for path in files for finding in shell_syntax_findings(path, bash=bash))
     except (WorkflowCheckError, actionlint.ActionlintError, OSError) as error:
         print(f"workflow check failed: {error}", file=sys.stderr)
         return 2
