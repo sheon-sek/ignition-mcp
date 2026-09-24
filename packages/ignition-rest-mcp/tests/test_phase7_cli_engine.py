@@ -6,6 +6,7 @@ no test needs either.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import json
 import shlex
@@ -82,7 +83,7 @@ def seen() -> Iterator[Seen]:
         contexts.append(ctx)
         return engine.Plan(changes=["save deployment.toml"], needed=list(contexts.needed))
 
-    def apply(ctx: engine.Context, plan: engine.Plan) -> None:
+    def apply(ctx: engine.ApplyContext, plan: engine.Plan) -> None:
         with ctx.reporter.step("deployment", "saving deployment.toml") as end:
             ctx.save()
             end.set(Status.CHANGED, "saved deployment.toml")
@@ -124,6 +125,7 @@ def test_one_line_and_wizard_resolve_the_same_inputs(tmp_path: Path, seen: Seen)
             "--environment", "dev",
             "--roles", "analysis,engineer",
             "--gateway-token-file", str(token_file(tmp_path)),
+            "--yes",
         ],
         one_line_root,
         interactive=False,
@@ -189,7 +191,7 @@ def test_a_saved_deployment_answers_instead_of_asking(tmp_path: Path, seen: Seen
         {"gateway_url": "http://lab:8088", "environment": "prod", "roles": ["analysis"]},
     )
     write_secret(deployment, "gateway-token", GOOD_TOKEN)
-    code, document, raw = run_json(["setup", "--deployment", "lab"], tmp_path, interactive=False, token_probe=probe)
+    code, document, raw = run_json(["setup", "--deployment", "lab", "--yes"], tmp_path, interactive=False, token_probe=probe)
     assert code == 0, document
     assert seen[0].resolved.values["roles"] == "analysis"
     assert GOOD_TOKEN not in raw
@@ -379,7 +381,7 @@ def test_a_later_stage_acceptance_stops_the_run_before_an_earlier_stage_writes(
 ) -> None:
     applied: list[str] = []
 
-    def first_apply(ctx: engine.Context, plan: engine.Plan) -> None:
+    def first_apply(ctx: engine.ApplyContext, plan: engine.Plan) -> None:
         applied.append("first")
         ctx.save()
 
@@ -423,17 +425,77 @@ def test_a_later_stage_acceptance_stops_the_run_before_an_earlier_stage_writes(
     assert code == 2 and "not_confirmed" in buffer.getvalue() and applied == []
 
 
-def test_the_engine_refuses_a_write_during_the_plan(tmp_path: Path, stages: list[engine.Stage]) -> None:
+def test_a_plan_step_has_no_write_capability(tmp_path: Path, stages: list[engine.Stage]) -> None:
+    received: list[engine.Context] = []
+
     def plan(ctx: engine.Context) -> engine.Plan:
-        ctx.save()
+        received.append(ctx)
+        ctx.save()  # type: ignore[attr-defined]
         return engine.Plan()
 
     stages.append(engine.register_stage(engine.Stage("eager", plan, lambda ctx, plan: None)))
     root = tmp_path / "root"
-    code, document, _ = run_json(one_line(tmp_path), root, interactive=False, token_probe=probe)
+    code, document, _ = run_json(one_line(tmp_path, "--yes"), root, interactive=False, token_probe=probe)
     assert code == 1
     assert document["error"]["code"] == "unexpected_error"
     assert document["steps"][0]["status"] == "FAILED"
+    assert not (root / "default" / "deployment.toml").exists()
+    ctx = received[0]
+    assert not isinstance(ctx, engine.ApplyContext)
+    for name in ("save", "write_secret", "gateway_writer", "allow_writes", "_gate"):
+        assert not hasattr(ctx, name), name
+
+
+def test_a_gateway_write_before_the_gate_opens_is_refused(tmp_path: Path, stages: list[engine.Stage]) -> None:
+    captured: list[engine.ApplyContext] = []
+    stages.append(
+        engine.register_stage(
+            engine.Stage("capture", lambda ctx: engine.Plan(), lambda ctx, plan: captured.append(ctx))
+        )
+    )
+    code, document, _ = run_json(one_line(tmp_path), tmp_path / "root", interactive=False, token_probe=probe)
+    assert code == 0, document
+    ctx = captured[0]
+    sent: list[httpx.Request] = []
+
+    def gateway(request: httpx.Request) -> httpx.Response:
+        sent.append(request)
+        return httpx.Response(200, json={})
+
+    closed = engine.ApplyContext(
+        command=ctx.command,
+        args=ctx.args,
+        specs=ctx.specs,
+        resolved=ctx.resolved,
+        prompter=None,
+        reporter=ctx.reporter,
+        accept_flags=ctx.accept_flags,
+    )
+
+    async def restart(apply_ctx: engine.ApplyContext) -> None:
+        async with apply_ctx.gateway_writer(transport=httpx.MockTransport(gateway)) as writer:
+            await writer.restart_gateway()
+
+    with pytest.raises(engine.WriteBeforeAcceptance):
+        asyncio.run(restart(closed))
+    with pytest.raises(engine.WriteBeforeAcceptance):
+        closed.save()
+    assert sent == []
+    assert not (tmp_path / "root" / "default" / "deployment.toml").exists()
+
+    # The context the engine handed to apply has its gate open.
+    asyncio.run(restart(ctx))
+    assert [request.method for request in sent] == ["POST"]
+
+
+def test_one_line_changes_need_yes(tmp_path: Path, seen: Seen) -> None:
+    root = tmp_path / "root"
+    code, document, raw = run_json(one_line(tmp_path), root, interactive=False, token_probe=probe)
+    assert code == 2
+    assert document["error"]["code"] == "not_confirmed"
+    assert "--yes" in document["error"]["message"]
+    assert shlex.split(document["error"]["next_action"])[-1] == "--yes"
+    assert GOOD_TOKEN not in raw
     assert not (root / "default" / "deployment.toml").exists()
 
 

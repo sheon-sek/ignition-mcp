@@ -3,7 +3,9 @@
 Modules, and what a command ticket uses from each:
 
 * :mod:`.main`: :func:`~.main.register_stage` with a :class:`~.main.Stage` (a
-  read-only ``plan``, the ``apply`` that writes, and the stage's own inputs),
+  ``plan`` that gets a :class:`~.main.Context` with no write method, an ``apply``
+  that gets an :class:`~.main.ApplyContext` whose ``save``, ``write_secret`` and
+  ``gateway_writer`` check the engine's gate, and the stage's own inputs),
   ``COMMANDS`` (set a command's ``handler``, add to its ``extra_inputs``) and
   :class:`~.main.Context`, the one object a handler or stage gets.
 * :mod:`.resolve`: :class:`~.resolve.InputSpec`, :class:`~.resolve.Needed` and

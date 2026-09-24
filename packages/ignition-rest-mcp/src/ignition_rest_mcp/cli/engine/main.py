@@ -11,9 +11,12 @@ Every command runs the same way:
 
 A handler reports each step through ``ctx.reporter.step``, and raises
 :class:`~ignition_rest_mcp.cli.engine.errors.CliError` to stop. The handlers of
-this ticket are placeholders. ``setup`` runs the stages added with
-:func:`register_stage`: every stage's read-only plan first, then the plan display,
-every acceptance and the confirmation, and only then each stage's ``apply``. A
+this ticket are placeholders. ``setup``, and any command a stage is registered
+on, runs the stages added with :func:`register_stage`: every stage's plan first
+with a :class:`Context` that cannot write, then the plan display, every acceptance
+and the confirmation (``--yes`` in one-line mode), and only then each stage's
+``apply`` with an :class:`ApplyContext`. Its writes, including Gateway writes
+through :meth:`ApplyContext.gateway_writer`, check the engine's gate themselves. A
 stage brings its own inputs, so the Runtime and REST tickets never edit the same
 lines here.
 
@@ -29,6 +32,9 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
+
+import httpx
 
 from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment, save_deployment, write_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
@@ -50,6 +56,9 @@ from ignition_rest_mcp.cli.engine.resolve import (
     gateway_token_check,
     resolve,
 )
+from ignition_rest_mcp.cli.setup_native.gateway import GatewayRest
+from ignition_rest_mcp.cli.setup_native.inputs import Endpoint
+from ignition_rest_mcp.cli.setup_native.writer import GatewayWriter
 
 DEFAULT_DEPLOYMENT = "default"
 ENVIRONMENTS = ("dev", "prod")
@@ -110,15 +119,29 @@ class WriteBeforeAcceptance(RuntimeError):
     """
 
 
+class _WriteGate:
+    """The engine's switch for writes. Only :func:`_run_stages` opens it."""
+
+    __slots__ = ("_open",)
+
+    def __init__(self) -> None:
+        self._open = False
+
+    def check(self, what: str) -> None:
+        if not self._open:
+            raise WriteBeforeAcceptance(f"{what} was attempted before the plan was shown, accepted and confirmed")
+
+
+def _open_gate(gate: _WriteGate) -> None:
+    gate._open = True
+
+
 @dataclass(slots=True)
 class Context:
-    """What a handler or stage gets. Everything it prints goes through ``reporter``.
+    """What a handler or a stage's ``plan`` gets. It has no way to write.
 
-    Writes are refused until the engine calls :meth:`allow_writes`. For ``setup``
-    that happens only after every stage's plan was shown, every Explicit acceptance
-    item was accepted and the plan was confirmed. A stage that writes anything the
-    engine does not write for it, such as a Gateway resource, calls
-    :meth:`require_writes` first.
+    Everything it prints goes through ``reporter``. It can read the Gateway through
+    :meth:`gateway_reader`, which only sends GET requests.
     """
 
     command: str
@@ -129,7 +152,8 @@ class Context:
     reporter: Reporter
     accept_flags: AcceptFlags
     accepted: list[Accepted] = field(default_factory=list)
-    _writes_allowed: bool = False
+    #: Whether the plan was confirmed, so the equivalent command carries ``--yes``.
+    confirmed: bool = False
 
     @property
     def deployment(self) -> Deployment:
@@ -139,29 +163,32 @@ class Context:
     def dry_run(self) -> bool:
         return bool(getattr(self.args, "dry_run", False))
 
-    @property
-    def writes_allowed(self) -> bool:
-        return self._writes_allowed
+    def gateway_reader(self, transport: httpx.AsyncBaseTransport | None = None) -> GatewayRest:
+        """A GET-only Gateway client that authenticates with the setup token."""
 
-    def accept(self, needed: Sequence[Needed]) -> list[Accepted]:
-        """Accept every item or raise ``acceptance_required``. Only the engine calls it for setup."""
+        return GatewayRest(_endpoint(self), self._setup_token(), transport=transport)
 
-        items = accept(needed, self.accept_flags, self.prompter)
-        self.accepted.extend(items)
-        self.reporter.accepted(items)
-        return items
+    def _setup_token(self) -> str:
+        secret = self.resolved.secrets.get("gateway_token")
+        if secret is None:
+            raise CliError(ErrorCode.MISSING_INPUT, f"{self.command} has no Gateway token")
+        return secret.reveal()
 
-    def allow_writes(self) -> None:
-        self._writes_allowed = True
 
-    def require_writes(self) -> None:
-        if not self._writes_allowed:
-            raise WriteBeforeAcceptance(f"{self.command} tried to write before its plan was accepted")
+@dataclass(slots=True)
+class ApplyContext(Context):
+    """What a stage's ``apply`` gets: a :class:`Context` that can also write.
+
+    Every write checks the engine's gate itself, so a write made before the plan was
+    shown, accepted and confirmed raises :class:`WriteBeforeAcceptance`.
+    """
+
+    _gate: _WriteGate = field(default_factory=_WriteGate)
 
     def save(self) -> Deployment:
         """Write the resolved non-secret values into ``deployment.toml``."""
 
-        self.require_writes()
+        self._gate.check("saving deployment.toml")
         deployment = save_deployment(self.deployment, self.resolved.saveable(self.specs))
         self.resolved.deployment = deployment
         return deployment
@@ -169,8 +196,56 @@ class Context:
     def write_secret(self, secret: str, value: str) -> Path:
         """Create one ``0600`` secret file in the deployment directory."""
 
-        self.require_writes()
+        self._gate.check(f"writing the {secret} secret file")
         return write_secret(self.deployment, secret, value)
+
+    def gateway_writer(self, transport: httpx.AsyncBaseTransport | None = None) -> GatewayWriter:
+        """The curated Gateway write path, with every write checked against the gate."""
+
+        return _GatedGatewayWriter(self._gate, _endpoint(self), self._setup_token(), transport=transport)
+
+
+class _GatedGatewayWriter(GatewayWriter):
+    """``setup_native``'s writer, whose single write method checks the gate first."""
+
+    def __init__(
+        self,
+        gate: _WriteGate,
+        endpoint: Endpoint,
+        api_token: str,
+        *,
+        transport: httpx.AsyncBaseTransport | None = None,
+    ) -> None:
+        super().__init__(endpoint, api_token, transport=transport)
+        self._gate = gate
+
+    async def _write(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: bytes,
+        content_type: str,
+        action: str,
+        params: dict[str, str] | None = None,
+    ) -> Any:
+        self._gate.check(action)
+        return await super()._write(
+            method, path, body=body, content_type=content_type, action=action, params=params
+        )
+
+
+def _endpoint(ctx: Context) -> Endpoint:
+    url = ctx.resolved.values.get("gateway_url")
+    if not url:
+        raise CliError(ErrorCode.MISSING_INPUT, f"{ctx.command} has no Gateway URL")
+    parts = urlsplit(url)
+    return Endpoint(
+        url=url.rstrip("/"),
+        scheme=parts.scheme,
+        host=str(parts.hostname),
+        port=parts.port or (443 if parts.scheme == "https" else 80),
+    )
 
 
 Handler = Callable[[Context], None]
@@ -182,7 +257,7 @@ def _not_implemented(ctx: Context) -> None:
 
 @dataclass(slots=True)
 class Plan:
-    """What one ``setup`` stage will do, found without writing anything.
+    """What one stage will do, found without writing anything.
 
     ``changes`` are the lines the operator sees before confirming. ``needed`` are
     the Explicit acceptance items the stage's writes depend on. ``data`` is the
@@ -196,57 +271,71 @@ class Plan:
 
 @dataclass(frozen=True, slots=True)
 class Stage:
-    """One part of ``setup``: a read-only ``plan`` and the ``apply`` that writes it.
+    """One part of a command: a read-only ``plan`` and the ``apply`` that writes it.
 
-    ``inputs`` are the stage's own inputs. They are asked after the shared ones, in
-    the order the stages were registered, and get their flags on ``setup``.
+    ``plan`` gets a :class:`Context`, which cannot write. ``apply`` gets an
+    :class:`ApplyContext`. ``inputs`` are the stage's own inputs. They are asked
+    after the command's shared inputs, in the order the stages were registered.
     """
 
     name: str
     plan: Callable[[Context], Plan]
-    apply: Callable[[Context, Plan], None]
+    apply: Callable[[ApplyContext, Plan], None]
     inputs: tuple[InputSpec, ...] = ()
 
 
-#: The stages ``setup`` runs, in order. Add one with :func:`register_stage`.
-SETUP_STAGES: list[Stage] = []
-
-
-def register_stage(stage: Stage) -> Stage:
-    """Add a ``setup`` stage and its inputs. Each Phase 7 ticket calls this once."""
-
-    if any(existing.name == stage.name for existing in SETUP_STAGES):
-        raise ValueError(f"setup stage {stage.name!r} is already registered")
-    SETUP_STAGES.append(stage)
-    return stage
-
-
-def _setup(ctx: Context) -> None:
+def _run_stages(ctx: Context) -> None:
     """Plan every stage, show the plan, accept and confirm, and only then apply.
 
-    Nothing may be written before the last acceptance and the confirmation, so a
-    missing or declined item fails the run with the Gateway and the deployment
-    directory untouched.
+    One-line mode confirms a plan with changes through ``--yes``; the wizard asks.
+    A missing or declined acceptance or confirmation fails the run before the gate
+    opens, so the Gateway and the deployment directory stay untouched.
     """
 
-    if not SETUP_STAGES:
+    stages = COMMANDS[ctx.command].stages
+    if not stages:
         _not_implemented(ctx)
     plans: list[tuple[Stage, Plan]] = []
-    for stage in SETUP_STAGES:
+    for stage in stages:
         with ctx.reporter.step(f"plan {stage.name}", "reading the current state") as end:
             plan = stage.plan(ctx)
             end.set(Status.OK, f"{len(plan.changes)} change(s) planned")
         plans.append((stage, plan))
     ctx.reporter.plan([PlannedChange(stage.name, change) for stage, plan in plans for change in plan.changes])
-    ctx.accept([item for _, plan in plans for item in plan.needed])
+    items = accept([item for _, plan in plans for item in plan.needed], ctx.accept_flags, ctx.prompter)
+    ctx.accepted.extend(items)
+    ctx.reporter.accepted(items)
     if ctx.dry_run:
         return
-    if any(plan.changes for _, plan in plans) and ctx.prompter is not None and not ctx.accept_flags.yes:
+    if any(plan.changes for _, plan in plans) and not ctx.accept_flags.yes:
+        if ctx.prompter is None:
+            positional, extra = _command_words(ctx)
+            raise CliError(
+                ErrorCode.NOT_CONFIRMED,
+                "the plan above has changes and one-line mode confirms them with --yes. Nothing was written",
+                next_action=equivalent_command(
+                    [ctx.command, *positional], ctx.specs, ctx.resolved, ctx.accepted, extra, yes=True
+                ),
+            )
         if not ctx.prompter.confirm("Apply the changes listed above?"):
             raise CliError(ErrorCode.NOT_CONFIRMED, "the plan was not confirmed. Nothing was written")
-    ctx.allow_writes()
+    ctx.confirmed = True
+    gate = _WriteGate()
+    apply_ctx = ApplyContext(
+        command=ctx.command,
+        args=ctx.args,
+        specs=ctx.specs,
+        resolved=ctx.resolved,
+        prompter=ctx.prompter,
+        reporter=ctx.reporter,
+        accept_flags=ctx.accept_flags,
+        accepted=ctx.accepted,
+        confirmed=ctx.confirmed,
+        _gate=gate,
+    )
+    _open_gate(gate)
     for stage, plan in plans:
-        stage.apply(ctx, plan)
+        stage.apply(apply_ctx, plan)
 
 
 @dataclass(slots=True)
@@ -260,11 +349,12 @@ class Command:
     configure: Callable[[argparse.ArgumentParser], None] | None = None
     #: Inputs the command's own ticket adds, asked after ``inputs``.
     extra_inputs: list[InputSpec] = field(default_factory=list)
+    #: The stages :func:`_run_stages` runs when ``handler`` is ``_run_stages``.
+    stages: list[Stage] = field(default_factory=list)
 
     def specs(self, standard: Mapping[str, InputSpec]) -> list[InputSpec]:
         specs = [standard[name] for name in self.inputs] + list(self.extra_inputs)
-        if self.name == "setup":
-            specs += [spec for stage in SETUP_STAGES for spec in stage.inputs]
+        specs += [spec for stage in self.stages for spec in stage.inputs]
         seen: set[str] = set()
         unique: list[InputSpec] = []
         for spec in specs:
@@ -272,6 +362,21 @@ class Command:
                 seen.add(spec.name)
                 unique.append(spec)
         return unique
+
+
+def register_stage(stage: Stage, command: str = "setup") -> Stage:
+    """Add a stage and its inputs to a command. Each Phase 7 ticket calls this.
+
+    The command runs its stages through :func:`_run_stages`, so a command that had a
+    placeholder body gets the plan, acceptance and confirmation sequence.
+    """
+
+    target = COMMANDS[command]
+    if any(existing.name == stage.name for existing in target.stages):
+        raise ValueError(f"{command} stage {stage.name!r} is already registered")
+    target.stages.append(stage)
+    target.handler = _run_stages
+    return stage
 
 
 def _setup_flags(parser: argparse.ArgumentParser) -> None:
@@ -289,7 +394,7 @@ COMMANDS: dict[str, Command] = {
             "setup",
             "deploy both planes for the chosen Assistant roles; shows the plan and asks before writing",
             ("gateway_url", "environment", "roles", "gateway_token"),
-            handler=_setup,
+            handler=_run_stages,
             configure=_setup_flags,
         ),
         Command("status", "read-only: report every check one line at a time", ("gateway_url",)),
@@ -303,6 +408,10 @@ COMMANDS: dict[str, Command] = {
         Command("reset", "remove what setup created; refused outside dev", ("gateway_url", "gateway_token")),
     )
 }
+
+
+#: The stages ``setup`` runs, in order. Add one with :func:`register_stage`.
+SETUP_STAGES: list[Stage] = COMMANDS["setup"].stages
 
 
 def build_parser(specs: Mapping[str, InputSpec] | None = None) -> argparse.ArgumentParser:
@@ -399,7 +508,9 @@ def run(
     if ctx is not None and not stopped and _wizard_asked(ctx):
         extra = _command_words(ctx)
         reporter.equivalent_command(
-            equivalent_command([command.name, *extra[0]], ctx.specs, ctx.resolved, ctx.accepted, extra[1])
+            equivalent_command(
+                [command.name, *extra[0]], ctx.specs, ctx.resolved, ctx.accepted, extra[1], yes=ctx.confirmed
+            )
         )
     return reporter.finish()
 

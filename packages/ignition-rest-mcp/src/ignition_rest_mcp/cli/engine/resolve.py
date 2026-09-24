@@ -472,12 +472,15 @@ def equivalent_command(
     resolved: Resolved,
     accepted: Sequence[Accepted] = (),
     extra: Sequence[str] = (),
+    *,
+    yes: bool = False,
 ) -> str:
     """The one-line command with the same values as a wizard run, and no secret.
 
     A secret appears as the path of the file it came from. A pasted secret that no
     command saved appears as ``FILE``, for the operator to replace with a file that
     holds it. ``command`` is the words after ``ignition-mcp``, such as ``["setup"]``.
+    ``yes`` adds ``--yes``, the one-line form of confirming a plan.
     """
 
     words = [PROG, *command, "--deployment", resolved.deployment.name]
@@ -491,6 +494,6 @@ def equivalent_command(
     words += extra
     risks = {item.risk for item in accepted}
     words += [flag for risk, flag in NAMED_FLAGS.items() if risk in risks]
-    if risks - set(NAMED_FLAGS):
+    if yes or risks - set(NAMED_FLAGS):
         words.append("--yes")
     return shlex.join(words)
