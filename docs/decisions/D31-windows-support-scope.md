@@ -35,7 +35,7 @@ Each item below is a known and accepted limit of `NOT_BROKEN`. None of them is a
 4. **POSIX-only tests stay as they are.** Tests that assert modes, call `os.umask`, depend on `bash`, or use POSIX paths are neither changed nor skipped. They wait until a `windows-latest` ticket exists.
 5. **Lock release timing after a crash.** `msvcrt` locks are released when the process exits. Win32 documents that the timing depends on available system resources. After a crash, a fast restart can therefore report a spurious single-writer `conflict`. Wait and retry.
 6. **Artifact deletion can leave an object behind.** Artifact deletion relies on the POSIX behaviour that an open fd keeps streaming after `unlink`. Windows refuses to unlink an open file, and the store swallows that `OSError`. Deleting an artifact while it is being downloaded can therefore leave its object file on disk.
-7. **The recorded Jython runner on Windows.** Finding `java.exe` and making the launcher output ASCII-safe are tracked in #64. That work is not part of the fixes this decision records.
+7. **The recorded Jython runner is unverified on Windows.** `runner.py` now probes both `bin/java` and `bin/java.exe`, and `jython_launcher.py` emits ASCII-safe JSON, so a non-ASCII handler result cannot be mangled by the Windows ANSI code page. Neither change has been exercised on Windows, because Java 11 (D29) is not installed on the machine that made the patch.
 
 ## 5. Migration for existing Windows clones
 
@@ -73,7 +73,7 @@ Invoke-WebRequest http://127.0.0.1:8000/health/ready -SkipHttpErrorCheck | Selec
 # expect: "storageReady": true. A 200 with "ready": true also needs a reachable Gateway.
 # expect: exactly one WARNING that POSIX modes are unavailable.
 
-# 4. One recorded Jython handler run (needs Java 11, D29; see #64).
+# 4. One recorded Jython handler run (needs Java 11, D29).
 uv run --locked --package ignition-rest-mcp --with pytest==9.1.1 pytest -q tooling/native/jython_runner/tests/test_tag_query.py
 ```
 
