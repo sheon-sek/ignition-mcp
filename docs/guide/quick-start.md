@@ -15,6 +15,21 @@ per Gateway. Every command takes `--deployment NAME` to pick one; the default is
 
 The commands are `setup`, `status`, `start`, `connect <role>` and `reset`.
 
+## Install
+
+`ignition-mcp` ships in this repository, so you run it from a checkout:
+
+```bash
+git clone https://github.com/sheon-sek/ignition-mcp.git
+cd ignition-mcp
+uv sync --locked --package ignition-rest-mcp
+source .venv/bin/activate
+```
+
+`uv` installs Python 3.11 or newer for you if the machine has none. On Windows, activate with
+`.venv\Scripts\activate`. Every command below runs from the checkout with that environment active;
+`uv run --no-sync ignition-mcp` does the same without activating.
+
 ## The wizard
 
 Run a command with no flags and stdin attached to a terminal. The wizard asks for the values that are
@@ -40,13 +55,15 @@ ignition-mcp setup \
   --environment dev \
   --roles analysis,engineer \
   --gateway-token-file ~/.config/ignition-mcp/gateway-token \
+  --accept-certificate --accept-eula \
   --yes
 ```
 
 Two acceptances are never covered by `--yes`. The Module certificate needs `--accept-certificate` and
-the Module license needs `--accept-eula`. A missing acceptance stops the run before any write. The
-`--json` output never prompts, even on a terminal, because a program reads it. Every value a run
-accepts, and every risky value it turns on, appears in the report.
+the Module license needs `--accept-eula`, so a first run against an empty Gateway passes both. A
+missing acceptance stops the run before any write. The `--json` output never prompts, even on a
+terminal, because a program reads it. Every value a run accepts, and every risky value it turns on,
+appears in the report.
 
 Create the Gateway key by hand first. Ignition 8.3 offers no way to exchange a name and password for
 a key, so make a new API key in the Gateway web interface whose Security Level is ticked under every
@@ -101,14 +118,17 @@ is stored with the deployment. It chooses defaults only.
 | REST bind address | `127.0.0.1:8000` | `127.0.0.1:8000` |
 | Runtime token secure channel | not required when the Gateway URL is `http` | required |
 
-Turning on `ADMIN` in `dev` needs its own acceptance, because it changes the Gateway's own
-configuration and the Engineer Assistant does not need it to develop projects.
+Turning on `ADMIN` in `dev` means adding `admin` to `--rest-mutation-classes`; the run then needs the
+ADMIN Mutation class acceptance, because it changes the Gateway's own configuration, and `--yes`
+covers that acceptance in one-line mode. The Engineer Assistant does not need `ADMIN` to develop
+projects.
 
 The operator never writes a policy file or a permissions file. The CLI generates both from the
 environment and the role, stores them with the deployment, and keeps them in step with the Gateway.
-`prod` exists for a deployment that must not allow writes. Switching a deployment from `dev` to
-`prod` lists everything that narrows, such as allowlists emptied or a role removed, and writes only
-after confirmation.
+`prod` defaults every write off, through the three REST flags in the table below and an empty Runtime
+Target Policy; each of those defaults can still be turned on deliberately. Switching a deployment
+from `dev` to `prod` lists everything that narrows, such as allowlists emptied or a role removed, and
+writes only after confirmation.
 
 ## `setup`
 
@@ -125,6 +145,9 @@ shows the plan and stops. It is safe to re-run.
 | `--module-file PATH` | The MCP Module `.modl` file. `setup` looks in `tests/fixtures/modules/` and `~/Downloads` first and uses a file whose SHA-256 matches the pinned build. |
 | `--recreate-tokens` | Delete and recreate every managed token whose local secret file is lost. Use this after a lost secret file. |
 | `--provision-security-levels` | In `prod`, create the roles' missing Security Levels. `dev` does this already. |
+| `--rest-mutation-classes LIST` | Which REST Mutation classes the server may offer: `none`, or a comma-separated list of `config`, `control` and `admin`. Default `config,control` in `dev` and `none` in `prod`. Adding `admin` needs the ADMIN acceptance, which `--yes` covers. |
+| `--rest-target-allowlist *\|none` | Whether the enabled REST Mutation classes may target anything (`*`) or nothing (`none`). Default `*` in `dev` and `none` in `prod`. `*` with a class enabled needs the wildcard acceptance, which `--yes` covers. |
+| `--rest-project-writer on\|off` | Whether the REST server may import a Project. Default `on` in `dev` and `off` in `prod`. |
 | `--dry-run` | Show the plan and stop before any write. |
 
 The steps run in a fixed order, and each step reports `OK`, `CHANGED`, `SKIPPED` or `FAILED` with its
@@ -170,8 +193,8 @@ ignition-mcp status \
 ## `start`
 
 `start` runs the REST server in the foreground until you press Ctrl+C. It prints the health result and
-both roles' endpoints before it serves, so you can see that it is ready. Agents connect to
-`http://<bind>/mcp`.
+one endpoint line per deployed role before it serves, so you can see that it is ready. Agents connect
+to `http://<bind>/mcp`.
 
 | Flag | Meaning |
 | --- | --- |

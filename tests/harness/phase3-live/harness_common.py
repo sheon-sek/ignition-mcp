@@ -31,13 +31,19 @@ EXPECTED_GATE_ON_TOOLS = frozenset({
     "artifact_list",
     "artifact_info",
     "operation_diagnose",
+    "perspective_view_list",
+    "perspective_view_get",
+    "perspective_view_validate",
+    "perspective_page_config_get",
+    "perspective_session_props_get",
 })
 
 #: The same inventory with the sensitive-export gate off (exports hidden from
 #: discovery; they must also fail at call time).
 EXPECTED_GATE_OFF_TOOLS = EXPECTED_GATE_ON_TOOLS - {"project_export", "tag_config_export"}
 
-#: Phase 4 candidates that must never appear in any effective inventory.
+#: Every mutation Tool the server registers: none of them may ever appear in an
+#: effective inventory (frozen in tests/test_phase3_safety_structure.py MUTATION_TOOLS).
 MUTATION_TOOL_NAMES = frozenset({
     "project_import",
     "tag_config_import",
@@ -47,6 +53,10 @@ MUTATION_TOOL_NAMES = frozenset({
     "config_resource_delete",
     "config_resource_rename",
     "alarm_pipeline_cancel",
+    "perspective_view_upsert",
+    "perspective_view_delete",
+    "perspective_page_config_update",
+    "perspective_session_props_update",
 })
 
 PROTOCOL_VERSION = "2025-06-18"

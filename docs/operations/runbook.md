@@ -150,6 +150,9 @@ ignition-mcp setup \
 | `--module-file PATH` | The MCP Module `.modl` file. Without it, `setup` looks in `tests/fixtures/modules/` and `~/Downloads` for a file whose SHA-256 matches the pinned build. |
 | `--recreate-tokens` | Delete and recreate every managed token whose local secret file is lost. |
 | `--provision-security-levels` | In `prod`, create the roles' missing Security Levels. |
+| `--rest-mutation-classes LIST` | Which REST Mutation classes the server may offer: `none`, or a comma-separated list of `config`, `control` and `admin`. Default `config,control` in `dev` and `none` in `prod`. Adding `admin` needs the ADMIN acceptance, which `--yes` covers. |
+| `--rest-target-allowlist *\|none` | Whether the enabled REST Mutation classes may target anything (`*`) or nothing (`none`). Default `*` in `dev` and `none` in `prod`. |
+| `--rest-project-writer on\|off` | Whether the REST server may import a Project. Default `on` in `dev` and `off` in `prod`. |
 | `--dry-run` | Show the plan and stop before any write. |
 
 Every command also takes `--deployment`, `--json`, `--yes`, `--accept-certificate` and
@@ -220,9 +223,9 @@ The lines are `deployment`, `gateway`, `module`, `bundle`, then four lines per d
 
 ## Start the REST server
 
-`start` runs the REST server in the foreground until Ctrl+C. It prints the health result and both
-roles' endpoints before it serves. It derives every server setting from the deployment, so you do not
-set any environment variable by hand.
+`start` runs the REST server in the foreground until Ctrl+C. It prints the health result and one
+endpoint line per deployed role before it serves. It derives every server setting from the
+deployment, so you do not set any environment variable by hand.
 
 ```bash
 ignition-mcp start

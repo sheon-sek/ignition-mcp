@@ -8,6 +8,19 @@
 
 命令有 `setup`、`status`、`start`、`connect <role>` 和 `reset`。
 
+## 安装
+
+`ignition-mcp` 就在本仓库里，所以要在一个 checkout 里运行它：
+
+```bash
+git clone https://github.com/sheon-sek/ignition-mcp.git
+cd ignition-mcp
+uv sync --locked --package ignition-rest-mcp
+source .venv/bin/activate
+```
+
+机器上没有 Python 3.11 或更新版本时，`uv` 会自己装一个。Windows 上用 `.venv\Scripts\activate` 激活。下文每条命令都在这个 checkout 里、在这个环境激活的状态下运行；`uv run --no-sync ignition-mcp` 是不激活时等价的写法。
+
 ## 向导
 
 不带参数运行一个命令，并把 stdin 接在终端上。向导只问还缺的值，其他值不动。每个问题都写出默认值和可选项。
@@ -26,10 +39,11 @@ ignition-mcp setup \
   --environment dev \
   --roles analysis,engineer \
   --gateway-token-file ~/.config/ignition-mcp/gateway-token \
+  --accept-certificate --accept-eula \
   --yes
 ```
 
-有两个确认永远不被 `--yes` 覆盖。Module 证书需要 `--accept-certificate`，Module 许可协议需要 `--accept-eula`。缺任何一个确认都会在写任何东西之前停下。`--json` 的输出从不提问，哪怕在终端上，因为读它的是程序。这次运行接受的每一项，以及它打开的每一个有风险的值，都出现在报告里。
+有两个确认永远不被 `--yes` 覆盖。Module 证书需要 `--accept-certificate`，Module 许可协议需要 `--accept-eula`，所以对着一台空白 Gateway 的第一次运行要把两个都写上。缺任何一个确认都会在写任何东西之前停下。`--json` 的输出从不提问，哪怕在终端上，因为读它的是程序。这次运行接受的每一项，以及它打开的每一个有风险的值，都出现在报告里。
 
 先手工创建 Gateway key。Ignition 8.3 没有用用户名和密码换 key 的办法，所以在 Gateway 网页界面新建一个 API key，它的安全级别要在 Security > General Settings 的每一项权限下都打勾。把 key 按 `名称:密钥` 的格式单独写成一行放进文件：
 
@@ -76,9 +90,9 @@ CLI 立刻拿这个 key 去问 Gateway，被拒绝或缺少某项权限时会再
 | REST 监听地址 | `127.0.0.1:8000` | `127.0.0.1:8000` |
 | Runtime token 的安全通道 | Gateway URL 是 `http` 时不要求 | 要求 |
 
-在 `dev` 里打开 `ADMIN` 需要单独确认，因为它会改动 Gateway 自己的配置，而 Engineer 助手开发项目并不需要它。
+在 `dev` 里打开 `ADMIN` 就是在 `--rest-mutation-classes` 里加上 `admin`；这样运行还需要 ADMIN 修改类别的确认，因为它会改动 Gateway 自己的配置，而一行命令模式下的 `--yes` 覆盖这个确认。Engineer 助手开发项目并不需要 `ADMIN`。
 
-operator 从不手写 policy 文件或 permissions 文件。CLI 从环境和角色生成两者，和部署一起保存，并让它们和 Gateway 保持一致。`prod` 用于一个不能允许写入的部署。把部署从 `dev` 改到 `prod` 会列出收紧的每一项，例如被清空的 allowlist 或被移除的角色，确认之后才写入。
+operator 从不手写 policy 文件或 permissions 文件。CLI 从环境和角色生成两者，和部署一起保存，并让它们和 Gateway 保持一致。`prod` 把写入都默认关掉，靠下面表里的三个 REST 参数和一个空的 Runtime Target Policy 实现；这些默认值仍然可以被有意打开。把部署从 `dev` 改到 `prod` 会列出收紧的每一项，例如被清空的 allowlist 或被移除的角色，确认之后才写入。
 
 ## `setup`
 
@@ -93,6 +107,9 @@ operator 从不手写 policy 文件或 permissions 文件。CLI 从环境和角�
 | `--module-file PATH` | MCP Module 的 `.modl` 文件。`setup` 先在 `tests/fixtures/modules/` 和 `~/Downloads` 里找，并用 SHA-256 对得上固定 build 的文件。 |
 | `--recreate-tokens` | 本地机密文件丢失时，删除并重建每个受管 token。机密文件丢失后用这个。 |
 | `--provision-security-levels` | 在 `prod` 里创建角色缺少的安全级别。`dev` 已经会创建。 |
+| `--rest-mutation-classes LIST` | REST server 可以提供的修改类别：`none`，或 `config`、`control`、`admin` 的逗号分隔列表。`dev` 默认 `config,control`，`prod` 默认 `none`。加上 `admin` 需要 ADMIN 确认，`--yes` 覆盖它。 |
+| `--rest-target-allowlist *\|none` | 已打开的 REST 修改类别是否可以针对任何目标（`*`）或什么都不针对（`none`）。`dev` 默认 `*`，`prod` 默认 `none`。有类别打开时的 `*` 需要通配确认，`--yes` 覆盖它。 |
+| `--rest-project-writer on\|off` | REST server 是否可以导入 Project。`dev` 默认 `on`，`prod` 默认 `off`。 |
 | `--dry-run` | 只显示计划，不写任何东西。 |
 
 各步骤按固定顺序运行，每一步报告 `OK`、`CHANGED`、`SKIPPED` 或 `FAILED` 以及原因：
@@ -127,11 +144,11 @@ ignition-mcp status \
 
 ## `start`
 
-`start` 在前台运行 REST server，直到你按 Ctrl+C。它在开始服务之前打印健康结果和两个角色的端点，让你看到它已经就绪。agent 连接 `http://<bind>/mcp`。
+`start` 在前台运行 REST server，直到你按 Ctrl+C。它在开始服务之前打印健康结果，以及每个已部署角色各一行端点，让你看到它已经就绪。agent 连接 `http://<bind>/mcp`。
 
 | 参数 | 含义 |
 | --- | --- |
-| `--bind HOST:PORT` | REST server 监听的地址。默认 `127.0.0.1:8000`。其他主机需要 `--yes`。 |
+| `--bind HOST:PORT` | REST server 监听的地址。默认 `127.0.0.1:8000`。没有 `--bind` 时，用 `deployment.toml` 里保存的 `bind`。其他主机需要 `--yes`。 |
 
 ```bash
 ignition-mcp start
