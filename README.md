@@ -92,7 +92,7 @@ The toolchain differs by platform; the Gateway and Module inputs below are share
 | Toolchain item | Linux/macOS | Windows |
 | --- | --- | --- |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | the [official installer](https://docs.astral.sh/uv/) or a package manager | `winget install --id=astral-sh.uv -e`, or the same official installer |
-| Shell | a POSIX shell | PowerShell 7 — the D31 checklist step 6 uses `-SkipHttpErrorCheck`, which needs 7 |
+| Shell | a POSIX shell | PowerShell 7 — the D31 §6 checklist uses `-SkipHttpErrorCheck`, which needs 7 |
 | Git for Windows | not needed | only for the `bash`-based checks: `tooling.ci.check_workflows` and the bundled bash wizard |
 | Java 11 | only for the recorded-Jython tests (D29); neither server needs it | same |
 

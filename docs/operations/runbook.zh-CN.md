@@ -33,7 +33,7 @@ D28 为准，Mutation 契约以 D30 为准。Module 安装（Module install）�
 | 工具链项目 | Linux/macOS | Windows |
 | --- | --- | --- |
 | Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器 | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
-| Shell | 一个 POSIX shell | PowerShell 7 —— D31 清单第 6 步使用 `-SkipHttpErrorCheck`，需要 7 |
+| Shell | 一个 POSIX shell | PowerShell 7 —— D31 §6 的清单使用 `-SkipHttpErrorCheck`，需要 7 |
 | Git for Windows | 不需要 | 仅用于基于 `bash` 的检查：`tooling.ci.check_workflows` 与内置的 bash 向导 |
 | Java 11 | 仅用于录制式 Jython 测试（D29）；两个 server 都不需要 | 同上 |
 
@@ -61,7 +61,7 @@ V=$(cat packages/ignition-runtime-bundle/BUNDLE_VERSION)
 ### 在 Windows 上构建发布产物
 
 **尚未在 Windows 上运行**；见 [D31](../decisions/D31-windows-support-scope.md)。先把 revision 存入变量，
-再以 `--source-revision $rev` 传入；并用 `Get-FileHash` 或 `certutil` 校验和，而不是 `sha256sum -c`：
+再以 `--source-revision $rev` 传入；并用 `Get-FileHash` 或 `certutil` 校验和（把结果与 `.sha256` 文件里的哈希比对），而不是 `sha256sum -c`：
 
 ```powershell
 $rev = git rev-parse HEAD

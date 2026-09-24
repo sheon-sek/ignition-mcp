@@ -90,7 +90,7 @@ Runtime Target Policy，缺失时一律 fail closed。
 | 工具链项目 | Linux/macOS | Windows |
 | --- | --- | --- |
 | Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器 | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
-| Shell | 一个 POSIX shell | PowerShell 7 —— D31 清单第 6 步使用 `-SkipHttpErrorCheck`，需要 7 |
+| Shell | 一个 POSIX shell | PowerShell 7 —— D31 §6 的清单使用 `-SkipHttpErrorCheck`，需要 7 |
 | Git for Windows | 不需要 | 仅用于基于 `bash` 的检查：`tooling.ci.check_workflows` 与内置的 bash 向导 |
 | Java 11 | 仅用于录制式 Jython 测试（D29）；两个 server 都不需要 | 同上 |
 
