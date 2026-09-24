@@ -1,6 +1,6 @@
 # Phase 7: setup CLI and G7
 
-Status: IN PROGRESS. D32 approved on 2026-09-25.
+Status: G7 RECORDED on both tuples (run 36056634095), waiting for the owner's Windows run (item 9) and merge decision. D32 approved on 2026-09-25.
 
 Branch: `phase-7/setup-ux`, created from `fix/windows-portability` at `98d9456` on the owner's instruction, because that branch is about to merge into `main`. Rebase onto `main` after it merges. Each ticket runs on its own branch and worktree and merges into `phase-7/setup-ux`.
 
@@ -31,13 +31,13 @@ P7-3 and P7-4 can run in parallel once P7-2 merges. Both edit the `setup` comman
 ## G7 checklist
 
 - [x] 1. `setup` takes an empty Gateway to both Assistant roles in one command, in `dev`, with no file written by hand. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `setup` step of `setup-g7.json`. The only manual action is the operator's setup key, as D32 section 9 decides.
-- [ ] 2. The wizard asks only for missing values, asks again after invalid input, and prints the equivalent one-line command.
-- [ ] 3. In a non-TTY run with a missing value, the command exits before any write and lists the missing flags.
-- [ ] 4. Every step reports its status and reason, and every failure names a next action. `--json` carries the same steps with stable error codes.
+- [x] 2. The wizard asks only for missing values, asks again after invalid input, and prints the equivalent one-line command. Evidence: the P7-2 unit tests `test_one_line_and_wizard_resolve_the_same_inputs`, `test_a_saved_deployment_answers_instead_of_asking`, `test_rejected_token_is_asked_again_and_the_run_continues`, `test_wrong_path_is_asked_again` and `test_equivalent_command_reruns_to_the_same_result`. The owner's Windows run in item 9 exercises the wizard by hand.
+- [x] 3. In a non-TTY run with a missing value, the command exits before any write and lists the missing flags. Evidence: the P7-2 unit tests `test_non_tty_missing_values_fail_before_any_write` and `test_one_line_changes_need_yes`, and the P7-6 CLI smoke run of `ignition-mcp setup` with no flags and no terminal.
+- [x] 4. Every step reports its status and reason, and every failure names a next action. `--json` carries the same steps with stable error codes. Evidence: the P7-2 unit tests `test_json_steps_carry_codes_and_never_a_secret`, `test_an_error_inside_a_step_ends_that_step_as_failed` and `test_an_unreachable_gateway_has_its_own_code`, and the live `setup-g7.json` documents of run 36056634095, which are the CLI's own `--json` output.
 - [x] 5. Each role's token initializes only its own endpoint, and `tools/list` returns that role's exact Tool inventory. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `roles` step (and the `rest` step for the Named static tokens).
 - [x] 6. A second `setup` run reports no change. The three re-run rules in D32 section 10 behave as decided. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `setupAgain` step. The three re-run rules are covered by the unit tests of P7-3 to P7-5, not by the live run.
 - [x] 7. `reset` removes everything `setup` created and is refused in `prod`. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `reset` step, including the Module uninstall. The `prod` refusal is covered by the P7-5 tests, not by the live run.
-- [ ] 8. The old entry points are deleted and the guides describe only the new commands.
+- [x] 8. The old entry points are deleted and the guides describe only the new commands. Evidence: P7-6 (#77, merge 24f3839). A repository grep finds `setup-native` only in decision records, phase records, compatibility evidence and the `tooling/compat` code that reads the frozen G4 and G6 artifacts.
 - [ ] 9. The owner runs the wizard once on a Windows Gateway and records the result.
 
 ## Owner rulings
