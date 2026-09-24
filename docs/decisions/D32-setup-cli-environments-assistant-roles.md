@@ -89,6 +89,8 @@ The named items are the Module certificate, the Module EULA, a Gateway restart, 
 
 In the wizard, each item is a yes or no question that states what it allows. In one-line mode, `--yes` accepts every item except the certificate and the EULA, which need `--accept-certificate` and `--accept-eula`. A missing acceptance in one-line mode fails the run before any write, and the error names the flag. Every accepted item appears in the run's report and in its `--json` output.
 
+`setup` records in the deployment directory which risky values were accepted. `start` activates a risky value without asking when that record matches it, and lists it in its report as active together with the acceptance it rests on. A risky value without a matching record, for example after a hand edit of `deployment.toml`, needs Explicit acceptance in that `start` run. The coordinator added this on 2026-09-25 after the P7-4 review, and the owner may overrule it.
+
 ## 7. Rules no environment relaxes
 
 - The reserved policy provider, `_types_`, Precondition tokens and Refused resource types behave as D30 decides.
