@@ -218,6 +218,10 @@ Windows 不会出错，但不是受支持的平台。范围与已声明的限制
 [前置条件](#前置条件) 表格与 [平面 1 — 启动 REST server](#平面-1--启动-rest-server) 中的 PowerShell
 区块就是 Windows 的前置条件与启动路径，其中的每条指令都带有同样的**尚未在 Windows 上运行**标记。
 
+- **换行符。** 在 `.gitattributes` 落地之前克隆的仓库会保留 CRLF 文件，
+  `tooling.native.cli validate` 会以 `size must match data.bin UTF-8 byte count` 拒绝它们。执行一次
+  `git rm --cached -rq . && git reset --hard`，或者重新克隆。两种做法都会丢弃未提交的改动。详见
+  [D31 第 5 节](docs/decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones)。
 - **校验和。** Windows 没有内置的 `sha256sum -c`。请使用 `certutil -hashfile <file> SHA256` 或
   `Get-FileHash <file> -Algorithm SHA256`，并把结果与 `.sha256` 文件中的哈希比对。
 - **向导。** `scripts/deploy-runtime-bundle.sh` 是 bash 向导，需要 Git Bash 或 WSL。

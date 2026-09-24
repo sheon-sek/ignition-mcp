@@ -222,6 +222,10 @@ The [Prerequisites](#prerequisites) table and the PowerShell block in
 [Plane 1 — launch the REST server](#plane-1--launch-the-rest-server) are the Windows prerequisites and
 start path, and every instruction there carries the same **not run on Windows yet** marker.
 
+- **Line endings.** A clone made before `.gitattributes` landed keeps CRLF files, and
+  `tooling.native.cli validate` rejects them with `size must match data.bin UTF-8 byte count`. Run
+  `git rm --cached -rq . && git reset --hard` once, or clone again. Both discard uncommitted work. See
+  [D31 section 5](docs/decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones).
 - **Checksums.** Windows has no built-in `sha256sum -c`. Use `certutil -hashfile <file> SHA256` or
   `Get-FileHash <file> -Algorithm SHA256`, and compare the result with the hash in the `.sha256` file.
 - **Wizard.** `scripts/deploy-runtime-bundle.sh` is a bash wizard, so it needs Git Bash or WSL. The

@@ -547,6 +547,10 @@ The toolchain table in [Prerequisites](#prerequisites) and the PowerShell block 
 [Environment and credential files](#environment-and-credential-files) are the Windows prerequisites and
 start path, and both carry the same **not run on Windows yet** marker.
 
+- **Line endings.** A clone made before `.gitattributes` landed keeps CRLF files, and
+  `tooling.native.cli validate` rejects them with `size must match data.bin UTF-8 byte count`. Run
+  `git rm --cached -rq . && git reset --hard` once, or clone again. Both discard uncommitted work. See
+  [D31 section 5](../decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones).
 - **Checksums.** Windows has no built-in `sha256sum -c`. In `dist/release`, run
   `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
   `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`, and compare the result with the
