@@ -1,9 +1,10 @@
 """The step reporter (D32 section 4).
 
-A command calls :meth:`Reporter.start` and :meth:`Reporter.end` once per step,
-:meth:`Reporter.accepted` with what the operator accepted, and :meth:`Reporter.fail`
-with a :class:`CliError` that ends the run. :meth:`Reporter.finish` returns the exit
-code.
+A command wraps each step in :meth:`Reporter.step`, which prints the start line and
+always records an end: the status the body set, ``OK`` when it set none, or
+``FAILED`` with the reason and a next action when an exception escapes.
+:meth:`Reporter.fail` records the error that ends the run and closes a step that
+:meth:`Reporter.start` left open. :meth:`Reporter.finish` returns the exit code.
 
 :class:`RichReporter` prints one line when a step starts and one when it ends.
 :class:`JsonReporter` prints nothing until :meth:`finish`, then one JSON document
@@ -17,6 +18,8 @@ from __future__ import annotations
 
 import json
 import sys
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any, TextIO
@@ -24,7 +27,7 @@ from typing import Any, TextIO
 from rich.console import Console
 from rich.markup import escape
 
-from ignition_rest_mcp.cli.engine.errors import CliError
+from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.resolve import Accepted
 
 #: Version of the ``--json`` document. Bump it when a field changes meaning.
@@ -49,12 +52,39 @@ class Step:
     code: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class PlannedChange:
+    """One change ``setup`` will make, shown before anything is written."""
+
+    stage: str
+    change: str
+
+
+class StepEnd:
+    """What the body of :meth:`Reporter.step` sets as the step's end."""
+
+    def __init__(self, next_action: str) -> None:
+        self.status = Status.OK
+        self.reason = "done"
+        self.next_action = next_action
+        self.code = ""
+
+    def set(self, status: Status, reason: str, *, next_action: str = "", code: str = "") -> None:
+        self.status = status
+        self.reason = reason
+        self.next_action = next_action or self.next_action
+        self.code = code
+
+
 class Reporter:
     """The shared bookkeeping. Subclasses decide how lines look."""
 
     def __init__(self, command: str) -> None:
         self.command = command
+        #: The next action for a failure that names none. ``run`` sets it.
+        self.default_next_action = f"ignition-mcp {command} --help"
         self.steps: list[Step] = []
+        self.plan_entries: list[PlannedChange] = []
         self.accepted_items: list[Accepted] = []
         self.error: CliError | None = None
         self.equivalent: str = ""
@@ -86,6 +116,36 @@ class Reporter:
         self._ended(step)
         return step
 
+    @contextmanager
+    def step(self, name: str, what: str = "", *, next_action: str = "") -> Iterator[StepEnd]:
+        """One step with a guaranteed end line. ``next_action`` is used if it fails."""
+
+        end = StepEnd(next_action)
+        self.start(name, what)
+        try:
+            yield end
+        except CliError as error:
+            self._close_failed(error.message, error.next_action or end.next_action, error.code.value)
+            raise
+        except KeyboardInterrupt:
+            self._close_failed("interrupted", end.next_action, ErrorCode.INTERRUPTED.value)
+            raise
+        except Exception as error:
+            reason = f"unexpected {type(error).__name__}"
+            self._close_failed(reason, end.next_action, ErrorCode.UNEXPECTED_ERROR.value)
+            raise
+        if end.status is Status.FAILED and not end.next_action:
+            end.next_action = self.default_next_action
+        self.end(name, end.status, end.reason, next_action=end.next_action, code=end.code)
+
+    def _close_failed(self, reason: str, next_action: str, code: str) -> None:
+        if self._open is not None:
+            self.end(self._open, Status.FAILED, reason, next_action=next_action or self.default_next_action, code=code)
+
+    def plan(self, entries: list[PlannedChange]) -> None:
+        self.plan_entries.extend(entries)
+        self._planned([PlannedChange(entry.stage, self.redact(entry.change)) for entry in entries])
+
     def accepted(self, items: list[Accepted]) -> None:
         self.accepted_items.extend(items)
         for item in items:
@@ -96,6 +156,7 @@ class Reporter:
         self._equivalent(self.equivalent)
 
     def fail(self, error: CliError) -> None:
+        self._close_failed(error.message, error.next_action, error.code.value)
         self.error = error
         self._failed(error)
 
@@ -110,6 +171,7 @@ class Reporter:
     def _started(self, name: str, what: str) -> None: ...
     def _ended(self, step: Step) -> None: ...
     def _accepted(self, item: Accepted) -> None: ...
+    def _planned(self, entries: list[PlannedChange]) -> None: ...
     def _equivalent(self, command: str) -> None: ...
     def _failed(self, error: CliError) -> None: ...
     def _finished(self, code: int) -> None: ...
@@ -140,6 +202,12 @@ class RichReporter(Reporter):
         self._line(f"{label} {escape(step.name)}  {escape(step.reason)}")
         if step.next_action:
             self._line(f"        next: {escape(step.next_action)}")
+
+    def _planned(self, entries: list[PlannedChange]) -> None:
+        if not entries:
+            self._line("PLAN    no changes")
+        for entry in entries:
+            self._line(f"PLAN    {escape(entry.stage)}  {escape(entry.change)}")
 
     def _accepted(self, item: Accepted) -> None:
         detail = f" ({item.detail})" if item.detail else ""
@@ -181,6 +249,9 @@ class JsonReporter(Reporter):
                     "code": step.code,
                 }
                 for step in self.steps
+            ],
+            "plan": [
+                {"stage": entry.stage, "change": self.redact(entry.change)} for entry in self.plan_entries
             ],
             "accepted": [
                 {"item": item.risk.value, "detail": self.redact(item.detail), "how": item.how}

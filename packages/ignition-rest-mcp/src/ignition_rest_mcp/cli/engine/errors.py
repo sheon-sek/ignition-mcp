@@ -17,7 +17,7 @@ class ErrorCode(StrEnum):
     INVALID_INPUT = "invalid_input"
     #: A named risk or legal term was not accepted (D32 section 6).
     ACCEPTANCE_REQUIRED = "acceptance_required"
-    #: The Gateway rejected the setup token, or could not be reached to check it.
+    #: The Gateway answered and refused the setup token.
     GATEWAY_TOKEN_REJECTED = "gateway_token_rejected"
     #: ``deployment.toml`` exists but cannot be read or parsed.
     DEPLOYMENT_UNREADABLE = "deployment_unreadable"
@@ -31,6 +31,10 @@ class ErrorCode(StrEnum):
     INTERRUPTED = "interrupted"
     #: A bug. Only the exception type is reported, so no secret can leak.
     UNEXPECTED_ERROR = "unexpected_error"
+    #: DNS, TCP, TLS or a timeout: the Gateway never answered, so nothing was judged.
+    GATEWAY_UNREACHABLE = "gateway_unreachable"
+    #: The operator saw the plan and did not confirm it. Nothing was written.
+    NOT_CONFIRMED = "not_confirmed"
 
 
 #: Exit code for each error code. ``0`` is success, ``1`` a failed step, ``2`` a
@@ -46,6 +50,8 @@ EXIT_CODES: dict[ErrorCode, int] = {
     ErrorCode.NOT_IMPLEMENTED: 1,
     ErrorCode.INTERRUPTED: 2,
     ErrorCode.UNEXPECTED_ERROR: 1,
+    ErrorCode.GATEWAY_UNREACHABLE: 1,
+    ErrorCode.NOT_CONFIRMED: 2,
 }
 
 

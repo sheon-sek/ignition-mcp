@@ -23,6 +23,8 @@ from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
+import httpx
+
 from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, read_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.prompter import Prompter
@@ -299,7 +301,8 @@ def gateway_token_check(probe: TokenProbe | None = None) -> Check:
     """A check that asks the Gateway at ``gateway_url`` whether it accepts the key.
 
     The resolver asks again when the check fails, so a rejected key never ends the
-    run while someone can answer. Tests pass a fake ``probe``.
+    run while someone can answer. A check that raises ``CliError`` ends the run at
+    once, as an unreachable Gateway does. Tests pass a fake ``probe``.
     """
 
     use = probe or probe_gateway_token
@@ -313,9 +316,11 @@ def gateway_token_check(probe: TokenProbe | None = None) -> Check:
     return check
 
 
-def probe_gateway_token(url: str, token: str) -> str:
+def probe_gateway_token(url: str, token: str, transport: httpx.AsyncBaseTransport | None = None) -> str:
     """Read gateway-info with ``token``; ``""`` on success, else a reason in words.
 
+    A Gateway that never answers (DNS, TCP, TLS or a timeout) raises
+    ``gateway_unreachable`` at once, because asking for another key cannot fix it.
     The reason never carries the token, and never a bare HTTP status (D32 section 4).
     """
 
@@ -331,15 +336,21 @@ def probe_gateway_token(url: str, token: str) -> str:
     )
 
     async def read() -> None:
-        async with gw.GatewayRest(endpoint, token) as client:
+        async with gw.GatewayRest(endpoint, token, transport=transport) as client:
             await client.gateway_info()
 
     try:
         asyncio.run(read())
     except gw.GatewayProbeError as error:
+        if isinstance(error.__cause__, httpx.TransportError):
+            raise CliError(
+                ErrorCode.GATEWAY_UNREACHABLE,
+                f"cannot reach the Gateway at {url} ({type(error.__cause__).__name__})",
+                next_action=f"curl -sSI {url}{gw.GATEWAY_INFO_PATH}",
+            ) from None
         status = re.search(r"returned HTTP (\d{3})", str(error))
         if status is None:
-            return f"cannot reach the Gateway at {url}"
+            return f"the Gateway's answer to the key check could not be read ({error})"
         code = int(status.group(1))
         if code == 401:
             return "the Gateway does not know this key; copy the whole <name>:<key> line of a new API key"

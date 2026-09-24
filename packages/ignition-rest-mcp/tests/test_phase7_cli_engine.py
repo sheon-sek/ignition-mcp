@@ -15,6 +15,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 from rich.console import Console
 
@@ -23,7 +24,7 @@ from ignition_rest_mcp.cli.engine.deployment import open_deployment, save_deploy
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.prompter import PlainPrompter
 from ignition_rest_mcp.cli.engine.report import JsonReporter, RichReporter, Status
-from ignition_rest_mcp.cli.engine.resolve import InputSpec, Kind, Needed, Risk, resolve
+from ignition_rest_mcp.cli.engine.resolve import InputSpec, Kind, Needed, Risk, probe_gateway_token, resolve
 
 GOOD_TOKEN = "setup:R29vZEtleUdvb2RLZXk"
 BAD_TOKEN = "setup:QmFkS2V5QmFkS2V5"
@@ -77,14 +78,16 @@ def seen() -> Iterator[Seen]:
     contexts = Seen()
     contexts.needed = []
 
-    def stage(ctx: engine.Context) -> None:
+    def plan(ctx: engine.Context) -> engine.Plan:
         contexts.append(ctx)
-        ctx.accept(contexts.needed)
-        ctx.reporter.start("deployment", "saving deployment.toml")
-        ctx.save()
-        ctx.reporter.end("deployment", Status.CHANGED, "saved deployment.toml")
+        return engine.Plan(changes=["save deployment.toml"], needed=list(contexts.needed))
 
-    engine.SETUP_STAGES.append(stage)
+    def apply(ctx: engine.Context, plan: engine.Plan) -> None:
+        with ctx.reporter.step("deployment", "saving deployment.toml") as end:
+            ctx.save()
+            end.set(Status.CHANGED, "saved deployment.toml")
+
+    stage = engine.register_stage(engine.Stage("deployment", plan, apply))
     try:
         yield contexts
     finally:
@@ -127,12 +130,13 @@ def test_one_line_and_wizard_resolve_the_same_inputs(tmp_path: Path, seen: Seen)
         token_probe=probe,
     )
     assert code == 0, document
-    assert document["steps"][0]["status"] == "CHANGED"
+    assert [step["status"] for step in document["steps"]] == ["OK", "CHANGED"]
+    assert document["plan"] == [{"stage": "deployment", "change": "save deployment.toml"}]
     assert GOOD_TOKEN not in raw
 
     wizard_root = tmp_path / "wizard"
     reporter, buffer = rich_reporter("setup")
-    prompter = ScriptedPrompter("http://gw:8088", "dev", "analysis,engineer", GOOD_TOKEN)
+    prompter = ScriptedPrompter("http://gw:8088", "dev", "analysis,engineer", GOOD_TOKEN, True)
     code = engine.run(
         ["setup"], root=wizard_root, prompter=prompter, interactive=True, token_probe=probe, reporter=reporter
     )
@@ -161,7 +165,7 @@ def test_one_line_and_wizard_resolve_the_same_inputs(tmp_path: Path, seen: Seen)
 
 def test_equivalent_command_reruns_to_the_same_result(tmp_path: Path, seen: Seen) -> None:
     reporter, _ = rich_reporter("setup")
-    prompter = ScriptedPrompter("prod", "analysis", GOOD_TOKEN)
+    prompter = ScriptedPrompter("prod", "analysis", GOOD_TOKEN, True)
     code = engine.run(
         ["setup", "--gateway-url", "https://gw:8043"],
         root=tmp_path / "a",
@@ -285,7 +289,7 @@ def test_rejected_token_is_asked_again_and_the_run_continues(
     tmp_path: Path, seen: Seen
 ) -> None:
     reporter, _ = rich_reporter("setup")
-    prompter = ScriptedPrompter("not a url", "http://gw:8088", "dev", "analysis", "no-colon", BAD_TOKEN, GOOD_TOKEN)
+    prompter = ScriptedPrompter("not a url", "http://gw:8088", "dev", "analysis", "no-colon", BAD_TOKEN, GOOD_TOKEN, True)
     code = engine.run(
         ["setup"], root=tmp_path, prompter=prompter, interactive=True, token_probe=probe, reporter=reporter
     )
@@ -351,3 +355,153 @@ def test_plain_prompter_asks_again_on_bad_answers() -> None:
     assert prompter.confirm("Allow it?") is True
     assert "Enter a number from 1 to 2." in output.getvalue()
     assert "Answer y or n." in output.getvalue()
+
+
+# ------------------------------------------------- review round 1 fixes
+
+
+@pytest.fixture
+def stages() -> Iterator[list[engine.Stage]]:
+    """Stages a test registers; removed again afterwards."""
+
+    added: list[engine.Stage] = []
+    yield added
+    for stage in added:
+        engine.SETUP_STAGES.remove(stage)
+
+
+def one_line(tmp_path: Path, *extra: str) -> list[str]:
+    return ["setup", "--gateway-url", "http://gw:8088", "--gateway-token-file", str(token_file(tmp_path)), *extra]
+
+
+def test_a_later_stage_acceptance_stops_the_run_before_an_earlier_stage_writes(
+    tmp_path: Path, stages: list[engine.Stage]
+) -> None:
+    applied: list[str] = []
+
+    def first_apply(ctx: engine.Context, plan: engine.Plan) -> None:
+        applied.append("first")
+        ctx.save()
+
+    stages.append(engine.register_stage(engine.Stage("first", lambda ctx: engine.Plan(["write"]), first_apply)))
+    stages.append(
+        engine.register_stage(
+            engine.Stage(
+                "second",
+                lambda ctx: engine.Plan(["install module"], [Needed(Risk.CERTIFICATE)]),
+                lambda ctx, plan: applied.append("second"),
+            )
+        )
+    )
+    root = tmp_path / "root"
+    code, document, _ = run_json(one_line(tmp_path, "--yes"), root, interactive=False, token_probe=probe)
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert "--accept-certificate" in document["error"]["message"]
+    assert [entry["stage"] for entry in document["plan"]] == ["first", "second"]
+    assert applied == []
+    assert not (root / "default" / "deployment.toml").exists()
+
+    # --dry-run shows the plan and stops, even when everything is accepted.
+    code, document, _ = run_json(
+        one_line(tmp_path, "--yes", "--accept-certificate", "--dry-run"), root, interactive=False, token_probe=probe
+    )
+    assert code == 0 and applied == [] and len(document["plan"]) == 2
+
+    # A wizard that does not confirm the plan writes nothing either.
+    reporter, buffer = rich_reporter("setup")
+    prompter = ScriptedPrompter(True, False)
+    code = engine.run(
+        one_line(tmp_path, "--environment", "dev", "--roles", "analysis"),
+        root=root,
+        prompter=prompter,
+        interactive=True,
+        token_probe=probe,
+        reporter=reporter,
+    )
+    assert prompter.answers == []
+    assert code == 2 and "not_confirmed" in buffer.getvalue() and applied == []
+
+
+def test_the_engine_refuses_a_write_during_the_plan(tmp_path: Path, stages: list[engine.Stage]) -> None:
+    def plan(ctx: engine.Context) -> engine.Plan:
+        ctx.save()
+        return engine.Plan()
+
+    stages.append(engine.register_stage(engine.Stage("eager", plan, lambda ctx, plan: None)))
+    root = tmp_path / "root"
+    code, document, _ = run_json(one_line(tmp_path), root, interactive=False, token_probe=probe)
+    assert code == 1
+    assert document["error"]["code"] == "unexpected_error"
+    assert document["steps"][0]["status"] == "FAILED"
+    assert not (root / "default" / "deployment.toml").exists()
+
+
+def test_an_error_inside_a_step_ends_that_step_as_failed(tmp_path: Path, stages: list[engine.Stage]) -> None:
+    def apply(ctx: engine.Context, plan: engine.Plan) -> None:
+        with ctx.reporter.step("gateway", "probing"):
+            raise CliError(ErrorCode.STEP_FAILED, "connection refused")
+
+    stages.append(engine.register_stage(engine.Stage("probe", lambda ctx: engine.Plan(), apply)))
+    code, document, _ = run_json(one_line(tmp_path), tmp_path / "root", interactive=False, token_probe=probe)
+    assert code == 1
+    failed = document["steps"][-1]
+    assert failed["step"] == "gateway" and failed["status"] == "FAILED"
+    assert failed["reason"] == "connection refused" and failed["code"] == "step_failed"
+    assert failed["next_action"] == "ignition-mcp status --deployment default"
+
+    # A step left open by start() is closed by fail() in the rich report too.
+    reporter, buffer = rich_reporter("status")
+    reporter.start("gateway", "probing")
+    reporter.fail(CliError(ErrorCode.STEP_FAILED, "connection refused", "ignition-mcp status"))
+    assert reporter.finish() == 1
+    lines = buffer.getvalue().splitlines()
+    assert lines[1].startswith("FAILED  gateway  connection refused")
+    assert lines[2].strip() == "next: ignition-mcp status"
+
+
+def test_an_unreachable_gateway_has_its_own_code(tmp_path: Path) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    transport = httpx.MockTransport(refuse)
+    with pytest.raises(CliError) as caught:
+        probe_gateway_token("http://gw:8088", GOOD_TOKEN, transport=transport)
+    assert caught.value.code is ErrorCode.GATEWAY_UNREACHABLE
+    assert caught.value.next_action == "curl -sSI http://gw:8088/data/api/v1/gateway-info"
+    assert probe_gateway_token(
+        "http://gw:8088", BAD_TOKEN, transport=httpx.MockTransport(lambda request: httpx.Response(401))
+    ).startswith("the Gateway does not know this key")
+
+    # In the wizard an unreachable Gateway ends the run instead of asking for another key.
+    reporter, buffer = rich_reporter("setup")
+    code = engine.run(
+        ["setup", "--gateway-url", "http://gw:8088", "--environment", "dev", "--roles", "analysis"],
+        root=tmp_path,
+        prompter=ScriptedPrompter(GOOD_TOKEN),
+        interactive=True,
+        token_probe=lambda url, token: probe_gateway_token(url, token, transport=transport),
+        reporter=reporter,
+    )
+    assert code == 1 and "gateway_unreachable" in buffer.getvalue()
+    assert GOOD_TOKEN not in buffer.getvalue()
+
+
+def test_a_stage_brings_its_own_inputs(tmp_path: Path, stages: list[engine.Stage]) -> None:
+    module = tmp_path / "module.modl"
+    module.write_bytes(b"PK")
+    found: list[str] = []
+
+    def plan(ctx: engine.Context) -> engine.Plan:
+        found.append(ctx.resolved.values["module_file"])
+        return engine.Plan()
+
+    spec = InputSpec("module_file", "--module-file", "Module file", kind=Kind.PATH)
+    stages.append(engine.register_stage(engine.Stage("module", plan, lambda ctx, plan: None, (spec,))))
+    code, document, _ = run_json(one_line(tmp_path), tmp_path / "root", interactive=False, token_probe=probe)
+    assert code == 2 and "--module-file" in document["error"]["message"]
+    code, document, _ = run_json(
+        one_line(tmp_path, "--module-file", str(module)), tmp_path / "root", interactive=False, token_probe=probe
+    )
+    assert code == 0, document
+    assert found == [str(module)]
