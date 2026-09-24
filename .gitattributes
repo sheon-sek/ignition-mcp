@@ -1,0 +1,4 @@
+* text=auto eol=lf
+*.modl binary
+*.sh text eol=lf
+data.bin text eol=lf
