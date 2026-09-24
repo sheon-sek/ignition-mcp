@@ -31,6 +31,7 @@ import base64
 import hashlib
 import os
 import stat
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -42,6 +43,7 @@ from ignition_rest_mcp.cli.setup_native.inputs import (
     Inputs,
     SECURITY_LEVEL_PARENT,
     SECURITY_LEVELS_TYPE,
+    warn_posix_modes_unavailable,
 )
 
 #: The documented API-token extension point (``config.profile.type``).
@@ -381,7 +383,9 @@ def observe_secret_file(path: Path) -> SecretFile:
     if not stat.S_ISREG(info.st_mode):
         return SecretFile(exists=False, error="it is not a regular file")
     mode = stat.S_IMODE(info.st_mode)
-    if mode & 0o077:
+    if sys.platform == "win32":
+        warn_posix_modes_unavailable()
+    elif mode & 0o077:
         return SecretFile(
             exists=False,
             error=f"it is accessible to group or others (mode {mode:04o}); require 0600 and chmod it first",
@@ -418,7 +422,8 @@ def write_secret_file(path: Path, secret: str) -> None:
     ``O_CREAT|O_EXCL`` means the file cannot already exist (so no credential is ever
     overwritten) and cannot be a symlink; ``fchmod`` pins the mode whatever the
     process umask is. A file this function has to abort on is removed again rather
-    than left behind half-written.
+    than left behind half-written. Windows has no POSIX modes, so there the mode is
+    neither set nor checked and the operator protects the file with ACLs.
     """
 
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
@@ -430,7 +435,8 @@ def write_secret_file(path: Path, secret: str) -> None:
         raise FileError(f"cannot create {path}: {type(error).__name__}") from error
     try:
         try:
-            os.fchmod(descriptor, SECRET_FILE_MODE)
+            if sys.platform != "win32":
+                os.fchmod(descriptor, SECRET_FILE_MODE)
             payload = (secret + "\n").encode("utf-8")
             written = os.write(descriptor, payload)
             if written != len(payload):
@@ -438,10 +444,15 @@ def write_secret_file(path: Path, secret: str) -> None:
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        mode = stat.S_IMODE(path.stat().st_mode)
-        if mode != SECRET_FILE_MODE:
-            raise OSError(f"the file was created with mode {mode:04o}, not {SECRET_FILE_MODE:04o}")
-    except OSError as error:
+        if sys.platform == "win32":
+            warn_posix_modes_unavailable()
+        else:
+            mode = stat.S_IMODE(path.stat().st_mode)
+            if mode != SECRET_FILE_MODE:
+                raise OSError(f"the file was created with mode {mode:04o}, not {SECRET_FILE_MODE:04o}")
+    except Exception as error:
+        # Any failure after creation (including an AttributeError from a missing
+        # platform API) removes the file so no 0-byte credential is left behind.
         try:
             os.unlink(path)
         except OSError:
