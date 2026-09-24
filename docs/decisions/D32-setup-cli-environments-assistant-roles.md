@@ -121,7 +121,7 @@ One REST server process serves both roles. It runs with `static-token` authentic
 
 The operator creates the first Gateway API token by hand. Ignition 8.3's OpenAPI documents no login endpoint and no way to exchange a username and password for a token. The CLI tells the operator to create a new API key on the Gateway whose Security Level is ticked under every permission in Security > General Settings. It validates the pasted key against the Gateway at once and asks again when the key is rejected or lacks a permission.
 
-`setup` then creates one more Gateway API token, `ignition-mcp-rest`, for the REST server's own calls to the Gateway. The operator's setup token is used during setup only and is never given to the REST server.
+`setup` then creates one more Gateway API token, `ignition-mcp-rest`, for the REST server's own calls to the Gateway. The operator's setup token is used during setup only and is never given to the REST server. In Phase 7 the `ignition-mcp-rest` token copies the Security Level of the setup key, and `setup` names that level in its plan. A dedicated level with only the permissions the REST server needs requires an edit of the Gateway's General Settings permissions, which is deferred to issue #79.
 
 Each deployment is a named directory, `~/.config/ignition-mcp/deployments/<name>/`. It holds `deployment.toml` with the Gateway URL, the environment and the roles, the generated policy and permissions documents, and one file per secret. A re-run reads the directory instead of asking again. Several deployments can exist side by side, one per Gateway.
 
