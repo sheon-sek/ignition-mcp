@@ -70,6 +70,8 @@ class FakeGateway:
         #: What ``bundle_info`` reports, when it should differ from the deployed marker.
         self.bundle_info_version = ""
         self.bundle_resources = runtime.read_bundle(ROOT).inventories["readonly"]["resources"]
+        #: Levels someone adds while the Gateway restarts after the Module install.
+        self.levels_added_on_restart: list[dict[str, Any]] = []
 
     # ---------------------------------------------------------------- helpers
 
@@ -193,6 +195,10 @@ class FakeGateway:
             self.module_build = runtime.PINNED_MODULE_BUILD
             return ok
         if path == "/data/api/v1/restart-tasks/restart":
+            # A live Gateway serves the Security Level singleton with a new signature
+            # after a restart (issue #78), and a hand edit may land in the same window.
+            self.levels_signature = self._sign()
+            self.levels += self.levels_added_on_restart
             return ok
         if path.startswith("/data/api/v1/projects/import/"):
             name = path.rsplit("/", 1)[-1]
@@ -375,6 +381,28 @@ def test_dev_setup_takes_an_empty_gateway_to_both_roles_and_a_rerun_changes_noth
     assert document["plan"] == []
     assert set(steps(document).values()) == {"OK"}, document
     assert gateway.writes == []
+
+
+def test_the_level_edit_after_the_module_restart_uses_the_signature_read_then(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 0, document
+    assert steps(document)["runtime security levels"] == "CHANGED"
+
+
+def test_a_level_tree_changed_during_the_module_restart_is_not_overwritten(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    gateway.levels_added_on_restart = [{"name": "HandMade", "children": []}]
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 1
+    assert steps(document)["runtime security levels"] == "FAILED"
+    assert "changed on the Gateway after the plan read it" in document["error"]["message"]
+    assert not any(level["name"] == "IgnitionMcpAnalysis" for level in gateway.levels[0]["children"])
 
 
 def test_dry_run_shows_the_plan_and_writes_nothing(tmp_path: Path, gateway: FakeGateway) -> None:
