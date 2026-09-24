@@ -6,11 +6,20 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import errno
-import fcntl
 import logging
 import os
 from pathlib import Path
+import sys
 from typing import AsyncIterator
+
+# D16's guarantee is one active project writer per data directory. The OS-level
+# primitive differs: flock(2) on POSIX, msvcrt.locking (a mandatory region lock)
+# on Windows. Guarded on sys.platform, not os.name, because only sys.platform
+# lets strict mypy narrow the platform-specific members.
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.storage.paths import ensure_private_dir
@@ -30,7 +39,8 @@ SINGLE_WRITER_LIMITATION = (
 
 
 class ProcessWriterGuard:
-    """Exclusive non-blocking flock held while the writer is enabled."""
+    """Exclusive non-blocking OS lock (flock on POSIX, msvcrt region lock on
+    Windows) held while the writer is enabled."""
 
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir / LOCK_FILENAME
@@ -46,7 +56,13 @@ class ProcessWriterGuard:
         ensure_private_dir(self._path.parent)
         fd = os.open(self._path, os.O_RDWR | os.O_CREAT, 0o600)
         try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if sys.platform == "win32":
+                # Lock 1 byte at offset 0; the position stays 0 because nothing
+                # reads or writes on this fd. LK_NBLCK fails with EACCES when the
+                # region is already locked (EDEADLOCK comes only from LK_LOCK).
+                msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+            else:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as error:
             os.close(fd)
             if error.errno in {errno.EACCES, errno.EAGAIN}:
@@ -66,7 +82,10 @@ class ProcessWriterGuard:
         fd, self._fd = self._fd, None
         if fd is not None:
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                if sys.platform == "win32":
+                    msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                else:
+                    fcntl.flock(fd, fcntl.LOCK_UN)
             finally:
                 os.close(fd)
 
