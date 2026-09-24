@@ -1324,8 +1324,15 @@ async def _write_levels(ctx: ApplyContext, plan: RuntimePlan, removed: list[Role
         tree = _without_level(tree, role.level)
     async with ctx.gateway_writer(SETTINGS.transport) as writer:
         try:
+            # The Module install restarts the Gateway after the plan read the tree, and a
+            # restart gives the singleton a new signature. The precondition is the
+            # signature read now, and only while the tree is still the one the plan showed.
+            current = await writer.reads.singleton_document(SECURITY_LEVELS_TYPE)
+            if security.level_tree(current) != plan.levels:
+                raise _failed("the Security Level tree changed on the Gateway after the plan read it", ctx)
+            signature = str((current or {}).get("signature") or "")
             await writer.update_security_levels(
-                tree, signature=plan.levels_signature, collection=plan.levels_collection
+                tree, signature=signature, collection=security.singleton_collection(current)
             )
             served = await writer.reads.singleton_document(SECURITY_LEVELS_TYPE)
         except (WriteError, gw.GatewayProbeError) as error:

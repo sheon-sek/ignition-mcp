@@ -104,6 +104,21 @@ G6_LIVE_CASES: dict[str, str] = {
     "apply idempotency (second plan and apply write nothing)": "secondApply",
     "bundle upgrade with acknowledgement": "upgradeApply",
 }
+#: The cases the G7 stage proves live (issue #78, D32): the ``ignition-mcp`` CLI on a
+#: Gateway that started without the Module. Each case names the step of
+#: ``setup-g7.json`` that is its evidence, and the G7 checklist item it serves.
+G7_LIVE_CASES: dict[str, str] = {
+    # G7 item 1
+    "one-line setup from an empty Gateway": "setup",
+    # G7 item 5
+    "each role's token initializes only its own endpoint with the role's exact inventory": "roles",
+    # D32 section 8, the REST plane of the same roles
+    "each role's Named static token has the role's REST scopes": "rest",
+    # G7 item 6
+    "a second setup reports no change": "setupAgain",
+    # G7 item 7
+    "reset removes everything setup recorded as created": "reset",
+}
 G4_GATE_RESULTS = ("VERIFIED", "VERIFIED_WITH_LIMITATION", "UNVERIFIED_LIMITATION", "UNTESTED")
 G4_PLANES = ("rest", "runtime")
 G4_PROFILES = ("readonly", "operator", "configurator", "full")
@@ -111,7 +126,7 @@ BINDING_STATUSES = (
     "NATIVE_BINDING_PENDING", "VERIFIED", "VERIFIED_WITH_LIMITATION", "FAILED",
     "FAILED_NATIVE_BINDING", "UNVERIFIED_LIMITATION", "UNVERIFIED",
 )
-GATES = ("G0", "G1", "G2", "G3", "G4", "G5", "G6")
+GATES = ("G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7")
 
 _SHA = re.compile(r"^[0-9a-f]{64}$")
 _BUILD = re.compile(r"^[0-9]{10}$")
@@ -249,6 +264,8 @@ def parse_row(directory: Path, doc: dict[str, Any]) -> EvidenceRow:
         _apply_g5_rules(row, doc, where, directory.parent)
     if gate == "G6":
         _apply_g6_rules(row, doc, where)
+    if gate == "G7":
+        _apply_g7_rules(row, doc, where)
     return row
 
 
@@ -586,6 +603,42 @@ def _apply_g6_rules(row: EvidenceRow, doc: dict[str, Any], where: str) -> None:
     unsatisfied = doc.get("unsatisfiedAcceptance")
     if not isinstance(unsatisfied, list) or not all(isinstance(item, str) for item in unsatisfied):
         raise EvidenceError(f"{where}: unsatisfiedAcceptance must be a list of strings")
+
+
+def _apply_g7_rules(row: EvidenceRow, doc: dict[str, Any], where: str) -> None:
+    """G7 rules (issue #78): the ``ignition-mcp`` CLI stage of the phase4-live-apply workflow.
+
+    The same shape as G6: every case in :data:`G7_LIVE_CASES` is ``LIVE`` and cites a
+    run that ``runs[]`` holds, the phase4-live deviation is recorded, and a row that
+    is not fully verified names its limitations. ``parse_row`` already refuses
+    ``SUPPORTED``.
+    """
+
+    deviations = doc.get("ownerAcceptedDeviations")
+    if not isinstance(deviations, list) or "phase4-live-environment-protection" not in deviations:
+        raise EvidenceError(
+            f"{where}: G7 evidence must record the owner-accepted phase4-live environment "
+            "deviation (phase4-live-environment-protection)"
+        )
+    g7 = doc.get("g7")
+    cases = g7.get("cases") if isinstance(g7, dict) else None
+    if not isinstance(cases, dict) or set(cases) != set(G7_LIVE_CASES):
+        raise EvidenceError(f"{where}: g7.cases must account for exactly {sorted(G7_LIVE_CASES)}")
+    run_ids = {entry.get("runId") for entry in doc.get("runs", []) if isinstance(entry, dict)}
+    for case in G7_LIVE_CASES:
+        entry = _g5_entry(cases[case], case, where, verdicts=("LIVE",))
+        for run_id in entry["runIds"]:
+            if run_id not in run_ids:
+                raise EvidenceError(
+                    f"{where}: G7 case {case!r} cites run {run_id!r}, which runs[] does not hold"
+                )
+    gate_result = doc.get("gateResult")
+    if gate_result not in G4_GATE_RESULTS:
+        raise EvidenceError(f"{where}: gateResult must be one of {G4_GATE_RESULTS}")
+    if gate_result != "VERIFIED":
+        limitations = doc.get("limitations")
+        if not isinstance(limitations, list) or not limitations:
+            raise EvidenceError(f"{where}: a G7 row that is not fully verified must record its limitations")
 
 
 def load_evidence(evidence_dir: str | Path, *, reject_supported: bool = True) -> list[EvidenceRow]:

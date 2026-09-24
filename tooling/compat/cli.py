@@ -10,6 +10,7 @@ from tooling.compat.evidence import EvidenceError, load_evidence
 from tooling.compat.g4 import G4Error, generate_g4
 from tooling.compat.g5 import G5Error, generate_g5
 from tooling.compat.g6 import G6Error, generate_g6
+from tooling.compat.g7 import G7Error, generate_g7
 from tooling.compat.generate import GenerateError, generate
 
 
@@ -53,6 +54,16 @@ def main(argv: list[str] | None = None) -> int:
     g6.add_argument("--head", required=True, help="the commit the run checked out")
     g6.add_argument("--conclusion", default="success", help="the run's conclusion (a green run only)")
     g6.add_argument("--out-dir", required=True, type=Path, help="fresh directory to write g6-<...>/ into")
+    g7 = subparsers.add_parser("g7")
+    g7.add_argument("--stage", required=True, type=Path, help="the G7 stage's setup-g7.json, downloaded from the run")
+    g7.add_argument("--identity", required=True, type=Path, help="the run's identity.json")
+    g7.add_argument("--evidence-dir", required=True, type=Path, help="the evidence tree the row is validated in")
+    g7.add_argument("--run-id", required=True, help="the workflow run id that produced the stage")
+    g7.add_argument("--workflow", default="Phase 4 Live Gateway apply",
+                    help="the workflow name that produced the stage")
+    g7.add_argument("--head", required=True, help="the commit the run checked out")
+    g7.add_argument("--conclusion", default="success", help="the run's conclusion (a green run only)")
+    g7.add_argument("--out-dir", required=True, type=Path, help="fresh directory to write g7-<...>/ into")
     args = parser.parse_args()
 
     if args.command == "g5":
@@ -85,6 +96,22 @@ def main(argv: list[str] | None = None) -> int:
             print(f"g6: REJECTED: {error}", file=sys.stderr)
             return 1
         print(f"g6: OK ({directory})")
+        return 0
+
+    if args.command == "g7":
+        try:
+            directory = generate_g7(
+                args.stage, args.identity, args.out_dir,
+                evidence_root=args.evidence_dir,
+                run={
+                    "runId": args.run_id, "workflow": args.workflow,
+                    "head": args.head, "conclusion": args.conclusion,
+                },
+            )
+        except (G7Error, EvidenceError) as error:
+            print(f"g7: REJECTED: {error}", file=sys.stderr)
+            return 1
+        print(f"g7: OK ({directory})")
         return 0
 
     if args.command == "g4":

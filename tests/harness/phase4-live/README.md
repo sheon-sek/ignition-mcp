@@ -234,6 +234,40 @@ its own `phase4-live` environment reuse) runs it after the release build. It
 never shares a Gateway with the 4a/4b Mutation rows, because it writes deployment
 state — a Project, a Server Config and the reserved policy provider.
 
+## Setup CLI stage (issue #78, G7)
+
+`setup_stage.py` runs the shipped `ignition-mcp` CLI on the Module-less Gateway
+of `docker-compose-install.yml`, as a step of `phase4-live-apply`:
+
+1. It ticks the CI key's Security Level under every permission in Security >
+   General Settings. That is the operator's one manual step in D32 section 9.
+2. It runs one one-line `ignition-mcp setup` in `dev` with `--yes`,
+   `--accept-certificate` and `--accept-eula`.
+3. For each role, it sends `initialize` and `tools/list` with the role's Runtime
+   token and compares the result with `contracts/profiles/<profile>.yaml`. Each
+   token must be refused at the other role's endpoint.
+4. It runs `ignition-mcp start`. The Analysis Named static token calls
+   `gateway_info` and is refused `config_resource_update`. The Engineer token
+   lists that Tool and is not refused it; the call has empty arguments, so it
+   writes nothing.
+5. It runs the same `setup` again, which must plan and change nothing.
+6. It runs `ignition-mcp reset --yes` and checks that every resource the
+   deployment recorded as created is gone.
+
+The deployment directory and its secret files live in a temporary HOME that the
+stage deletes. The stage writes `setup-g7.json`, and
+`python -m tooling.compat g7` composes the G7 row from it after a green run.
+
+`docker-compose-install.yml` drops `GATEWAY_MODULES_ENABLED` for this stage.
+While that variable holds a list, the Gateway refuses to uninstall any Module,
+so `reset` could not finish.
+
+Rehearse it on a local docker Gateway before a live run. The script repeats the
+workflow's steps and removes its compose project at the end (`--keep` leaves
+the Gateway running):
+
+    uv run --no-sync python tests/harness/phase4-live/rehearse_setup.py
+
 ## Rehearsal
 
 Run this before spending a live run:
