@@ -509,7 +509,7 @@ Windows 不会出错，但不是受支持的平台。[D31](../decisions/D31-wind
 就是 Windows 的前置条件与启动路径，两者都带有同样的**尚未在 Windows 上运行**标记。
 
 - **换行符。** 在 `.gitattributes` 落地之前克隆的仓库会保留 CRLF 文件，
-  `tooling.native.cli validate` 会以 `size must match data.bin UTF-8 byte count` 拒绝它们。执行一次
+  `tooling.native.cli validate` 会以 `must use LF line endings` 拒绝它们。执行一次
   `git rm --cached -rq . && git reset --hard`，或者重新克隆。两种做法都会丢弃未提交的改动。详见
   [D31 第 5 节](../decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones)。
 - **校验和。** Windows 没有内置的 `sha256sum -c`。在 `dist/release` 中运行

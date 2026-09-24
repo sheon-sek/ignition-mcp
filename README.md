@@ -223,7 +223,7 @@ The [Prerequisites](#prerequisites) table and the PowerShell block in
 start path, and every instruction there carries the same **not run on Windows yet** marker.
 
 - **Line endings.** A clone made before `.gitattributes` landed keeps CRLF files, and
-  `tooling.native.cli validate` rejects them with `size must match data.bin UTF-8 byte count`. Run
+  `tooling.native.cli validate` rejects them with `must use LF line endings`. Run
   `git rm --cached -rq . && git reset --hard` once, or clone again. Both discard uncommitted work. See
   [D31 section 5](docs/decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones).
 - **Checksums.** Windows has no built-in `sha256sum -c`. Use `certutil -hashfile <file> SHA256` or
