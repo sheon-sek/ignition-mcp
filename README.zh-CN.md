@@ -189,6 +189,18 @@ ignition-mcp setup-native verify --bundle-manifest dist/release/ignition-runtime
 [`docs/operations/runbook.zh-CN.md`](docs/operations/runbook.zh-CN.md)（英文版：
 [`runbook.md`](docs/operations/runbook.md)）。
 
+## Windows
+
+Windows 不会出错，但不是受支持的平台。范围与已声明的限制见
+[D31](docs/decisions/D31-windows-support-scope.md)。本仓库的内容尚未在 Windows 上运行过。
+
+- **校验和。** Windows 没有内置的 `sha256sum -c`。请使用 `certutil -hashfile <file> SHA256` 或
+  `Get-FileHash <file> -Algorithm SHA256`，并把结果与 `.sha256` 文件中的哈希比对。
+- **向导。** `scripts/deploy-runtime-bundle.sh` 是 bash 向导，需要 Git Bash 或 WSL。
+  `ignition-mcp setup-native doctor|plan|apply` 命令是原生命令，不需要它。
+- **机密与数据目录。** 在 Windows 上会跳过 POSIX 权限模式检查，改为记录一条 WARNING。请用文件系统 ACL
+  保护 `IGNITION_MCP_DATA_DIR` 和每个凭证文件。
+
 ## 安全模型
 
 - **一切有界。** 每个输入、执行与输出都有上界；超限会显式失败，绝不静默截断（D10）。
@@ -221,7 +233,7 @@ Runtime 的 `onToolCalled.py` / `onPrompt.py` 是 Jython 2.7、用 Tab 缩进且
 
 ## 文档
 
-- [`docs/decisions/INDEX.md`](docs/decisions/INDEX.md) —— 具备约束力的架构决策 D01–D30。
+- [`docs/decisions/INDEX.md`](docs/decisions/INDEX.md) —— 具备约束力的架构决策 D01–D31。
 - [`docs/operations/runbook.zh-CN.md`](docs/operations/runbook.zh-CN.md) —— v1 运维 runbook（中文）。
 - [`docs/development/`](docs/development/) —— 各 phase 的交付记录与关卡证据。
 - [`contracts/README.md`](contracts/README.md) —— 契约事实来源。

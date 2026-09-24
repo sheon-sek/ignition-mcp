@@ -496,6 +496,21 @@ decide. D06 forbids automatic replay of an ambiguous Mutation.
 An interrupted run exits 2. An unexpected crash exits 1 and prints only the exception type, so a
 credential cannot leak through a traceback.
 
+## Windows
+
+Windows is not broken, but it is not a supported platform. [D31](../decisions/D31-windows-support-scope.md)
+records the scope, the declared limitations and a manual verification checklist that nobody has run yet.
+
+- **Checksums.** Windows has no built-in `sha256sum -c`. In `dist/release`, run
+  `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
+  `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`, and compare the result with the
+  hash in `ignition-runtime-bundle-<version>.sha256`.
+- **Wizard.** `scripts/deploy-runtime-bundle.sh` is a bash wizard, so it needs Git Bash or WSL. The
+  `ignition-mcp setup-native doctor|plan|apply` commands are native and do not need it.
+- **Credential files and the data directory.** On Windows, the `0600` token-file rule and the `0700`
+  data-directory rule are not checked, and one WARNING is logged instead. Protect every token file and
+  `IGNITION_MCP_DATA_DIR` with filesystem ACLs so that only the service account can read them.
+
 ## Known v1 limitations
 
 - Three Alarm Tools are parked, and that is the known v1 gap on the Runtime plane. `alarm_status` and
