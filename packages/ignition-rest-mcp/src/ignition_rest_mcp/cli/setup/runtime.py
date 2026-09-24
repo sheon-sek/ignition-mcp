@@ -1231,7 +1231,7 @@ def _flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--recreate-tokens",
         action="store_true",
-        help="delete and recreate a role's Gateway token whose secret file is lost",
+        help="delete and recreate every managed token whose secret file is lost, on either plane",
     )
     parser.add_argument(
         "--provision-security-levels",
