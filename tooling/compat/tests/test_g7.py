@@ -103,6 +103,9 @@ def test_generate_g7_writes_a_row_the_committed_tree_accepts(tmp_path: Path) -> 
     stage_path.write_text(json.dumps(_stage()), encoding="utf-8")
     identity_path = tmp_path / "identity.json"
     identity_path.write_text(json.dumps(_identity()), encoding="utf-8")
+    # The committed tree already holds the live G7 rows, so the generated row goes in
+    # place of its own copy there.
+    shutil.rmtree(tree / "g7-8.3.8-mcp-2026021307")
     directory = generate_g7(stage_path, identity_path, tree, evidence_root=tree, run=RUN)
     assert directory.name == "g7-8.3.8-mcp-2026021307"
     assert "G7" in {row.gate for row in load_evidence(tree)}

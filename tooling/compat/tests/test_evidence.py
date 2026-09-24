@@ -24,6 +24,7 @@ G3_D27_DIR = "g3-8.3.8-mcp-2026021307"
 G3_NON_D27_DIR = "g3-8.3.9-mcp-2026021307"
 G4_DIRS = ("g4-8.3.8-mcp-2026021307", "g4-8.3.9-mcp-2026021307")
 G6_DIRS = ("g6-8.3.8-mcp-2026021307", "g6-8.3.9-mcp-2026021307")
+G7_DIRS = ("g7-8.3.8-mcp-2026021307", "g7-8.3.9-mcp-2026021307")
 
 
 def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
@@ -39,15 +40,16 @@ def _rows_with(gate_dir: str, mutate) -> list:  # type: ignore[no-untyped-def]
 class EvidenceTest(unittest.TestCase):
     def test_repository_evidence_passes_readonly(self) -> None:
         rows = load_evidence(REPO_EVIDENCE)
-        # G0 (1 row), G1 (1), and two Gateway tuples per gate from G2 on: 12 rows now
-        # that the G6 rows (ticket #56) are committed.
-        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4", "G5", "G6"})
-        self.assertEqual(len(rows), 12)
-        for directory in G6_DIRS:
-            g6 = next(row for row in rows if row.directory == directory)
-            self.assertEqual(g6.gate, "G6")
-            self.assertEqual(g6.compatibility_status, "UNTESTED")
-            self.assertEqual(g6.d27_exception_applied, g6.is_d27_tuple)
+        # G0 (1 row), G1 (1), and two Gateway tuples per gate from G2 on: 14 rows now
+        # that the G7 rows (issue #78) are committed.
+        self.assertEqual({row.gate for row in rows}, {"G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7"})
+        self.assertEqual(len(rows), 14)
+        for gate, directories in (("G6", G6_DIRS), ("G7", G7_DIRS)):
+            for directory in directories:
+                row = next(row for row in rows if row.directory == directory)
+                self.assertEqual(row.gate, gate)
+                self.assertEqual(row.compatibility_status, "UNTESTED")
+                self.assertEqual(row.d27_exception_applied, row.is_d27_tuple)
         d27 = next(row for row in rows if row.directory == D27_DIR)
         self.assertTrue(d27.is_d27_tuple and d27.d27_exception_applied)
         g3_d27 = next(row for row in rows if row.directory == G3_D27_DIR)

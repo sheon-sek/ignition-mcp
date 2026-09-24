@@ -186,7 +186,7 @@ def test_generate_g6_writes_a_row_the_evidence_tree_accepts(tmp_path: Path) -> N
     shutil.copytree(ROOT / "tests/compatibility/evidence", with_committed / "evidence")
     shutil.copytree(directory, with_committed / "evidence" / directory.name, dirs_exist_ok=True)
     assert {row.gate for row in load_evidence(with_committed / "evidence")} == {
-        "G0", "G1", "G2", "G3", "G4", "G5", "G6",
+        "G0", "G1", "G2", "G3", "G4", "G5", "G6", "G7",
     }
 
 

@@ -1,0 +1,80 @@
+{
+  "bundleSha256": "ffa4b866b4d957fd566ac1a4928424dbeaed2f35ba4da38b4d4c88c87272dcca",
+  "bundleVersion": "0.7.0",
+  "compatibilityStatus": "UNTESTED",
+  "d27ExceptionApplied": true,
+  "g7": {
+    "cases": {
+      "a second setup reports no change": {
+        "runIds": [
+          "36056634095"
+        ],
+        "source": "Phase 4 Live Gateway apply run 36056634095: the setupAgain step of setup-g7.json",
+        "verdict": "LIVE"
+      },
+      "each role's Named static token has the role's REST scopes": {
+        "runIds": [
+          "36056634095"
+        ],
+        "source": "Phase 4 Live Gateway apply run 36056634095: the rest step of setup-g7.json",
+        "verdict": "LIVE"
+      },
+      "each role's token initializes only its own endpoint with the role's exact inventory": {
+        "runIds": [
+          "36056634095"
+        ],
+        "source": "Phase 4 Live Gateway apply run 36056634095: the roles step of setup-g7.json",
+        "verdict": "LIVE"
+      },
+      "one-line setup from an empty Gateway": {
+        "runIds": [
+          "36056634095"
+        ],
+        "source": "Phase 4 Live Gateway apply run 36056634095: the setup step of setup-g7.json",
+        "verdict": "LIVE"
+      },
+      "reset removes everything setup recorded as created": {
+        "runIds": [
+          "36056634095"
+        ],
+        "source": "Phase 4 Live Gateway apply run 36056634095: the reset step of setup-g7.json",
+        "verdict": "LIVE"
+      }
+    }
+  },
+  "gate": "G7",
+  "gateResult": "VERIFIED",
+  "gatewayBuild": "2026071409",
+  "gatewayImage": "inductiveautomation/ignition:8.3.8",
+  "gatewayImageDigest": "sha256:560d0c069911476ff65aa7fd0fefab0530897e81c2a6cc5ea1410026126ed8ce",
+  "gatewayVersion": "8.3.8",
+  "limitations": [],
+  "mcpModuleArtifactVersion": "1.3.5.2026021307-SNAPSHOT",
+  "mcpModuleBuild": "2026021307",
+  "mcpModuleSha256": "b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365",
+  "mcpModuleVersion": "1.3.5-SNAPSHOT",
+  "nativeResponseBinding": "VERIFIED_WITH_LIMITATION",
+  "outputSchemaPublished": false,
+  "ownerAcceptedDeviations": [
+    "phase4-live-environment-protection"
+  ],
+  "runs": [
+    {
+      "citation": "the G7 stage: ignition-mcp setup, the role checks, start, setup again and reset. setup built the bundle from the same checkout the release was built from",
+      "conclusion": "success",
+      "gatewayBuild": "2026071409",
+      "gatewayImage": "inductiveautomation/ignition:8.3.8",
+      "gatewayImageDigest": "sha256:560d0c069911476ff65aa7fd0fefab0530897e81c2a6cc5ea1410026126ed8ce",
+      "gatewayVersion": "8.3.8",
+      "harnessDocument": "setup-g7.json",
+      "head": "247f92fd38c6a09fb245761ac9ee65b107b0efee",
+      "runId": "36056634095",
+      "workflow": "Phase 4 Live Gateway apply"
+    }
+  ],
+  "schemaVersion": 7,
+  "sourceRevision": "247f92fd38c6a09fb245761ac9ee65b107b0efee",
+  "stageCorroboration": "5 cases corroborated from setup-g7.json",
+  "status": "VERIFIED",
+  "unsatisfiedAcceptance": []
+}

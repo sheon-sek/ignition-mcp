@@ -30,13 +30,13 @@ P7-3 and P7-4 can run in parallel once P7-2 merges. Both edit the `setup` comman
 
 ## G7 checklist
 
-- [ ] 1. `setup` takes an empty Gateway to both Assistant roles in one command, in `dev`, with no file written by hand.
+- [x] 1. `setup` takes an empty Gateway to both Assistant roles in one command, in `dev`, with no file written by hand. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `setup` step of `setup-g7.json`. The only manual action is the operator's setup key, as D32 section 9 decides.
 - [ ] 2. The wizard asks only for missing values, asks again after invalid input, and prints the equivalent one-line command.
 - [ ] 3. In a non-TTY run with a missing value, the command exits before any write and lists the missing flags.
 - [ ] 4. Every step reports its status and reason, and every failure names a next action. `--json` carries the same steps with stable error codes.
-- [ ] 5. Each role's token initializes only its own endpoint, and `tools/list` returns that role's exact Tool inventory.
-- [ ] 6. A second `setup` run reports no change. The three re-run rules in D32 section 10 behave as decided.
-- [ ] 7. `reset` removes everything `setup` created and is refused in `prod`.
+- [x] 5. Each role's token initializes only its own endpoint, and `tools/list` returns that role's exact Tool inventory. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `roles` step (and the `rest` step for the Named static tokens).
+- [x] 6. A second `setup` run reports no change. The three re-run rules in D32 section 10 behave as decided. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `setupAgain` step. The three re-run rules are covered by the unit tests of P7-3 to P7-5, not by the live run.
+- [x] 7. `reset` removes everything `setup` created and is refused in `prod`. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `reset` step, including the Module uninstall. The `prod` refusal is covered by the P7-5 tests, not by the live run.
 - [ ] 8. The old entry points are deleted and the guides describe only the new commands.
 - [ ] 9. The owner runs the wizard once on a Windows Gateway and records the result.
 

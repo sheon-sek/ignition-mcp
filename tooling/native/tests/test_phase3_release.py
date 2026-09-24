@@ -37,6 +37,8 @@ def _expected_tuples() -> list[tuple[str, str, str, str]]:
         ("G5", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
         ("G6", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
         ("G6", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
+        ("G7", "8.3.8", "UNTESTED", "VERIFIED_WITH_LIMITATION"),
+        ("G7", "8.3.9", "UNTESTED", "UNVERIFIED_LIMITATION"),
     ], key=lambda item: (item[0], item[1]))
 
 
@@ -76,8 +78,8 @@ class ReleaseTest(unittest.TestCase):
         self.assertEqual(manifest["bundleVersion"], BUNDLE_VERSION)
         self.assertEqual(manifest["resourceSchemaVersion"], 1)
         self.assertEqual(manifest["nativeResponseBindingStatus"], "VERIFIED_WITH_LIMITATION")
-        # The G4 and G5 close-out rows certify this bundle, and the G6 rows join them
-        # the moment their evidence directories land (ticket #56). One exact tuple per
+        # The G4 and G5 close-out rows certify this bundle, and the G6 and G7 rows join them
+        # the moment their evidence directories land (ticket #56, issue #78). One exact tuple per
         # Gateway row per gate, per D21. The status stays UNTESTED because an evidence
         # row never promotes a deployment.
         self.assertEqual(
