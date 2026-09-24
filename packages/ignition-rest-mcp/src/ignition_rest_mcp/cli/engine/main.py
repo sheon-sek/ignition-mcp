@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment, save_deployment, write_secret
+from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, open_deployment, save_deployment, write_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.prompter import Prompter, default_prompter, is_terminal
 from ignition_rest_mcp.cli.engine.report import JsonReporter, PlannedChange, Reporter, RichReporter, Status
@@ -185,11 +185,11 @@ class ApplyContext(Context):
 
     _gate: _WriteGate = field(default_factory=_WriteGate)
 
-    def save(self) -> Deployment:
-        """Write the resolved non-secret values into ``deployment.toml``."""
+    def save(self, extra: Mapping[str, Value] | None = None) -> Deployment:
+        """Write the resolved non-secret values, and a stage's ``extra`` values, into ``deployment.toml``."""
 
         self._gate.check("saving deployment.toml")
-        deployment = save_deployment(self.deployment, self.resolved.saveable(self.specs))
+        deployment = save_deployment(self.deployment, {**self.resolved.saveable(self.specs), **(extra or {})})
         self.resolved.deployment = deployment
         return deployment
 
@@ -351,6 +351,8 @@ class Command:
     extra_inputs: list[InputSpec] = field(default_factory=list)
     #: The stages :func:`_run_stages` runs when ``handler`` is ``_run_stages``.
     stages: list[Stage] = field(default_factory=list)
+    #: Extra words the command adds to its equivalent command, such as ``--bind``.
+    words: Callable[[Context], list[str]] | None = None
 
     def specs(self, standard: Mapping[str, InputSpec]) -> list[InputSpec]:
         specs = [standard[name] for name in self.inputs] + list(self.extra_inputs)
@@ -524,6 +526,9 @@ def _command_words(ctx: Context) -> tuple[list[str], list[str]]:
 
     positional = [ctx.args.role] if ctx.command == "connect" else []
     extra = ["--dry-run"] if ctx.dry_run else []
+    words = COMMANDS[ctx.command].words
+    if words is not None:
+        extra += words(ctx)
     return positional, extra
 
 
@@ -535,6 +540,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ignition_rest_mcp.cli.setup_native import main as setup_native
 
         return setup_native.main(args)
+    from ignition_rest_mcp.cli.setup import rest as rest_setup
+    from ignition_rest_mcp.cli.setup import start as rest_start
+
+    rest_setup.register()
+    rest_start.register()
     return run(args)
 
 
