@@ -550,14 +550,20 @@ def main(argv: Sequence[str] | None = None) -> int:
         from ignition_rest_mcp.cli.setup_native import main as setup_native
 
         return setup_native.main(args)
+    from ignition_rest_mcp.cli.setup import connect as connect_setup
+    from ignition_rest_mcp.cli.setup import reset as reset_setup
     from ignition_rest_mcp.cli.setup import rest as rest_setup
     from ignition_rest_mcp.cli.setup import runtime as setup_runtime
     from ignition_rest_mcp.cli.setup import start as rest_start
+    from ignition_rest_mcp.cli.setup import status as status_setup
 
     # The Runtime stage plans first: it owns the role reset on an environment change.
     setup_runtime.register()
     rest_setup.register()
     rest_start.register()
+    status_setup.register()
+    reset_setup.register()
+    connect_setup.register()
     return run(args)
 
 

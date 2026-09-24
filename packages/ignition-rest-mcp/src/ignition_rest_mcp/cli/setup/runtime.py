@@ -164,6 +164,34 @@ ROLES = {
 }
 
 
+def saved_roles(ctx: Context) -> list[Role]:
+    """The Assistant roles the saved deployment serves, in this module's order.
+
+    ``status`` and ``reset`` read the roles from ``deployment.toml`` rather than from
+    this run's flags: both report or remove what a previous ``setup`` created.
+    """
+
+    names = ctx.deployment.values.get("roles")
+    saved = [str(name) for name in names] if isinstance(names, list) else []
+    return [role for name, role in ROLES.items() if name in saved]
+
+
+#: The setup key as ``status`` and ``reset`` take it: a file, with no Gateway check.
+#: Both must report or refuse before they contact the Gateway, so a probe and the D32
+#: section 9 permission check would come too early: an unreachable Gateway would mask
+#: ``reset``'s prod refusal and ``status``'s own lines.
+OBSERVED_TOKEN_INPUT = InputSpec(
+    name="gateway_token",
+    flag="--gateway-token-file",
+    question=(
+        "file that holds the Gateway API key whose Security Level is ticked under every "
+        "permission in Security > General Settings"
+    ),
+    kind=Kind.SECRET,
+    secret_name="gateway-token",
+)
+
+
 @dataclass(slots=True)
 class Settings:
     """What tests replace. ``None`` means the real thing."""
@@ -543,7 +571,20 @@ class RuntimePlan:
         return "none" if self.project.bundle_version == self.bundle.version else "update"
 
 
-def role_inputs(plan: RuntimePlan, role: Role, mcp_token: str | None = None) -> Inputs:
+@dataclass(frozen=True, slots=True)
+class RuntimeTargets:
+    """What a read-only role check needs from a Runtime plan.
+
+    :func:`role_inputs` and :func:`closing_check` take this or a whole
+    :class:`RuntimePlan`, so ``status`` checks a deployment without building a plan.
+    """
+
+    bundle: Bundle
+    endpoint: Endpoint
+    insecure_channel: bool
+
+
+def role_inputs(plan: RuntimePlan | RuntimeTargets, role: Role, mcp_token: str | None = None) -> Inputs:
     """The ``setup_native`` inputs for one role. Only ``verify`` gets the role's token."""
 
     return Inputs(
@@ -884,7 +925,7 @@ def _plan_token(
         return TokenPlan("create", create + ("; the stale file there is replaced" if stale else ""), None, stale)
     stored = security.stored_token_hash(document)
     if secret.exists and secret.name == role.token and secret.hashes_to(stored):
-        drift = _token_drift(plan, role, document)
+        drift = _token_drift(role, document, insecure_channel=plan.insecure_channel)
         if not drift:
             return TokenPlan("none", "", document)
         if not (plan.previous_environment and drift.startswith("it has secureChannelRequired")):
@@ -913,14 +954,14 @@ def _plan_token(
     return TokenPlan("recreate", reason, document, secret.exists or bool(secret.error))
 
 
-def _token_drift(plan: RuntimePlan, role: Role, document: dict[str, Any]) -> str:
+def _token_drift(role: Role, document: dict[str, Any], *, insecure_channel: bool) -> str:
     config = document.get("config")
     profile = config.get("profile") if isinstance(config, dict) else None
     secure = profile.get("secureChannelRequired") if isinstance(profile, dict) else None
     held = token_levels(document)
     if held != [(SECURITY_LEVEL_PARENT, role.level)]:
         return f"it grants {_dotted(held)}, not {role.level_path}"
-    if secure is not (not plan.insecure_channel):
+    if secure is not (not insecure_channel):
         return f"it has secureChannelRequired={str(secure).lower()}"
     return ""
 
@@ -1344,6 +1385,19 @@ async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
     refreshes = 0
     if plan.configs[role.name].action != "none" and token:
         refreshes = await _await_tools(ctx, plan, role, token)
+    summary = await closing_check(ctx, plan, role, token)
+    note = f", after {refreshes} re-announcement(s) of the Server Config this run wrote" if refreshes else ""
+    return summary + note
+
+
+async def closing_check(ctx: Context, plan: RuntimePlan | RuntimeTargets, role: Role, token: str) -> str:
+    """The verify sequence at the role's endpoint with the role's token. Reads only.
+
+    ``status`` reports this as a check of its own, so it must not write: the
+    re-announcement :func:`_check_role` may make stays there.
+    """
+
+    ctx.reporter.hide(token)
     report, _, code = await verify.collect(
         role_inputs(plan, role, mcp_token=token or None), mcp_transport=SETTINGS.transport
     )
@@ -1351,13 +1405,12 @@ async def _check_role(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> str:
     if code != 0:
         failed = [check for check in checks if check.get("status") not in ("PASS", "NOT_APPLICABLE")]
         if any("HTTP 403" in str(check.get("detail")) for check in failed):
-            raise _failed(await _explain_403(ctx, plan, role, bool(token)), ctx)
+            raise _failed(await _explain_403(ctx, plan.endpoint, role, bool(token)), ctx)
         detail = "; ".join(f"{check.get('name')}: {check.get('detail')}" for check in failed[:3])
         raise _failed(f"the {role.name} endpoint failed {len(failed)} check(s): {detail}", ctx)
-    note = f", after {refreshes} re-announcement(s) of the Server Config this run wrote" if refreshes else ""
     return (
         f"{len(checks)} checks passed with the role's token: initialize, the exact Tool, Resource and "
-        f"Prompt inventories of {role.profile}, resources/read, prompts/get and bundle_info{note}"
+        f"Prompt inventories of {role.profile}, resources/read, prompts/get and bundle_info"
     )
 
 
@@ -1395,7 +1448,7 @@ async def _reannounce(ctx: ApplyContext, plan: RuntimePlan, role: Role) -> None:
             raise _failed(f"the Server Config {role.server_config} could not be announced again: {error}", ctx) from error
 
 
-async def _explain_403(ctx: Context, plan: RuntimePlan, role: Role, token_sent: bool) -> str:
+async def _explain_403(ctx: Context, endpoint: Endpoint, role: Role, token_sent: bool) -> str:
     """D32 section 4: a 403 is reported as its cause, never as the status alone."""
 
     prefix = f"the {role.name} endpoint refused initialize because "
@@ -1408,7 +1461,7 @@ async def _explain_403(ctx: Context, plan: RuntimePlan, role: Role, token_sent: 
     except gw.GatewayProbeError as error:
         return prefix + f"of a cause the CLI could not read ({error})"
     profile = ((token or {}).get("config") or {}).get("profile") or {}
-    if plan.endpoint.scheme == "http" and profile.get("secureChannelRequired") is True:
+    if endpoint.scheme == "http" and profile.get("secureChannelRequired") is True:
         return prefix + "the token requires a secure channel and the Gateway URL is http"
     held = token_levels(token)
     permissions = ((config or {}).get("config") or {}).get("permissions")
