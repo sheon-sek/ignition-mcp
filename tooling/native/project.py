@@ -13,7 +13,7 @@ from .constants import (
 )
 from .jsonio import load_json_object
 from .jython import validate_handler, validate_prompt_handler
-from .validation import ValidationError, require
+from .validation import CRLF_LINE_ENDING_HINT, ValidationError, require
 
 
 def _nonempty_string(value: Any) -> bool:
@@ -37,7 +37,11 @@ def _snapshot(project_dir: Path) -> tuple[dict[str, bytes], set[str]]:
             directories.add(relative)
         else:
             require(path.is_file(), relative, "must be a regular file")
-            files[relative] = path.read_bytes()
+            data = path.read_bytes()
+            # Every file in a Designer project is text. Check line endings here so a CRLF
+            # checkout reports the cause instead of a derived size or handler mismatch.
+            require(b"\r" not in data, relative, CRLF_LINE_ENDING_HINT)
+            files[relative] = data
     return files, directories
 
 
