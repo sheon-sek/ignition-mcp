@@ -296,6 +296,11 @@ def check_gateway_url(value: str, _values: Mapping[str, str]) -> str:
 #: Checks a Gateway API key against a Gateway URL; ``""`` when the Gateway accepts it.
 TokenProbe = Callable[[str, str], str]
 
+#: Further checks of a key the probe accepted, such as the D32 section 9 check that
+#: its Security Level is ticked under every Gateway permission. A stage ticket adds
+#: its check here, and the resolver asks again when one returns a reason.
+TOKEN_CHECKS: list[TokenProbe] = []
+
 
 def gateway_token_check(probe: TokenProbe | None = None) -> Check:
     """A check that asks the Gateway at ``gateway_url`` whether it accepts the key.
@@ -311,7 +316,12 @@ def gateway_token_check(probe: TokenProbe | None = None) -> Check:
         url = values.get("gateway_url")
         if not url:
             return ""
-        return use(url.rstrip("/"), value)
+        reason = use(url.rstrip("/"), value)
+        for extra in TOKEN_CHECKS if not reason else ():
+            reason = extra(url.rstrip("/"), value)
+            if reason:
+                break
+        return reason
 
     return check
 
@@ -377,6 +387,10 @@ class Risk(StrEnum):
     ADMIN_CLASS = "admin_mutation_class"
     NON_LOOPBACK_BIND = "non_loopback_bind"
     OVERWRITE_HAND_EDIT = "overwrite_hand_edit"
+    #: An older installed MCP Module build replaced by the pinned one.
+    MODULE_UPGRADE = "module_upgrade"
+    #: A MAJOR Runtime bundle upgrade or any downgrade (D20's acknowledgement rule).
+    BUNDLE_UPGRADE = "bundle_upgrade"
 
 
 #: What accepting each item allows, as the wizard's yes or no question states it.
@@ -389,6 +403,8 @@ RISK_QUESTIONS: dict[Risk, str] = {
     Risk.ADMIN_CLASS: "Turn on ADMIN Mutations, which change the Gateway's own configuration?",
     Risk.NON_LOOPBACK_BIND: "Bind the REST server to an address other hosts can reach?",
     Risk.OVERWRITE_HAND_EDIT: "Overwrite a change someone made on the Gateway by hand?",
+    Risk.MODULE_UPGRADE: "Replace the installed MCP Module with the pinned newer build?",
+    Risk.BUNDLE_UPGRADE: "Replace the deployed Runtime bundle across a MAJOR version or with an older one?",
 }
 
 #: The items ``--yes`` never covers.

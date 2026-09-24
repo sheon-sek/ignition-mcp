@@ -282,6 +282,10 @@ class Stage:
     plan: Callable[[Context], Plan]
     apply: Callable[[ApplyContext, Plan], None]
     inputs: tuple[InputSpec, ...] = ()
+    #: Adds the stage's own switches, such as ``--recreate-tokens``, to its command.
+    flags: Callable[[argparse.ArgumentParser], None] | None = None
+    #: The stage's switches as words for the equivalent one-line command.
+    words: Callable[[argparse.Namespace], list[str]] | None = None
 
 
 def _run_stages(ctx: Context) -> None:
@@ -446,6 +450,9 @@ def build_parser(specs: Mapping[str, InputSpec] | None = None) -> argparse.Argum
         parser.add_argument("--accept-eula", action="store_true", help="accept the Module EULA")
         if command.configure is not None:
             command.configure(parser)
+        for stage in command.stages:
+            if stage.flags is not None:
+                stage.flags(parser)
     return root
 
 
@@ -529,6 +536,9 @@ def _command_words(ctx: Context) -> tuple[list[str], list[str]]:
     words = COMMANDS[ctx.command].words
     if words is not None:
         extra += words(ctx)
+    for stage in COMMANDS[ctx.command].stages:
+        if stage.words is not None:
+            extra += stage.words(ctx.args)
     return positional, extra
 
 
@@ -541,8 +551,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return setup_native.main(args)
     from ignition_rest_mcp.cli.setup import rest as rest_setup
+    from ignition_rest_mcp.cli.setup import runtime as setup_runtime
     from ignition_rest_mcp.cli.setup import start as rest_start
 
+    # The Runtime stage plans first: it owns the role reset on an environment change.
+    setup_runtime.register()
     rest_setup.register()
     rest_start.register()
     return run(args)
