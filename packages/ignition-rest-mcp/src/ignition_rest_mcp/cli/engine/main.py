@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 import httpx
 
-from ignition_rest_mcp.cli.engine.deployment import Deployment, open_deployment, save_deployment, write_secret
+from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, open_deployment, save_deployment, write_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.prompter import Prompter, default_prompter, is_terminal
 from ignition_rest_mcp.cli.engine.report import JsonReporter, PlannedChange, Reporter, RichReporter, Status
@@ -185,11 +185,11 @@ class ApplyContext(Context):
 
     _gate: _WriteGate = field(default_factory=_WriteGate)
 
-    def save(self) -> Deployment:
-        """Write the resolved non-secret values into ``deployment.toml``."""
+    def save(self, extra: Mapping[str, Value] | None = None) -> Deployment:
+        """Write the resolved non-secret values, and a stage's ``extra`` values, into ``deployment.toml``."""
 
         self._gate.check("saving deployment.toml")
-        deployment = save_deployment(self.deployment, self.resolved.saveable(self.specs))
+        deployment = save_deployment(self.deployment, {**self.resolved.saveable(self.specs), **(extra or {})})
         self.resolved.deployment = deployment
         return deployment
 

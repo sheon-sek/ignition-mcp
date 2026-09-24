@@ -22,7 +22,7 @@ import pytest
 from starlette.testclient import TestClient
 
 from ignition_rest_mcp.cli.engine import main as engine
-from ignition_rest_mcp.cli.engine.deployment import open_deployment
+from ignition_rest_mcp.cli.engine.deployment import open_deployment, save_deployment
 from ignition_rest_mcp.cli.engine.report import JsonReporter
 from ignition_rest_mcp.cli.setup import rest, start
 from ignition_rest_mcp.config import Settings
@@ -160,10 +160,14 @@ def test_setup_then_start_gives_each_role_its_own_scopes(
 
     assert code == 0, started
     assert statuses(started) == {
-        "deployment": "OK", "health": "OK", "endpoint analysis": "OK", "endpoint engineer": "OK",
-        "serve": "OK", "stop": "OK",
+        "deployment": "OK", "risks": "OK", "health": "OK", "endpoint analysis": "OK",
+        "endpoint engineer": "OK", "serve": "OK", "stop": "OK",
     }
     endpoints = {step["step"]: step["reason"] for step in started["steps"]}
+    assert endpoints["risks"] == (
+        "active: wildcard_target_allowlist:config,control (accepted by setup, recorded as rest_accepted)"
+    )
+    assert started["accepted"] == []
     assert "http://127.0.0.1:8000/mcp" in endpoints["endpoint analysis"]
     assert f"{gateway.base_url}/data/mcp/engineer" in endpoints["endpoint engineer"]
     settings = served[0]
@@ -265,3 +269,87 @@ def test_a_lost_rest_key_is_recreated_only_with_recreate_tokens(
     deletes = write_requests(gateway, "DELETE")
     assert len(deletes) == 1 and "/api-token/ignition-mcp-rest/" in deletes[0]["path"]
     assert lost.exists()
+
+
+def test_the_default_wildcard_allowlist_needs_acceptance(tmp_path: Path, gateway: RecordedGateway, cli: None) -> None:
+    root = tmp_path / "deployments"
+    code, document, _ = run_json(setup_argv(tmp_path, gateway), root)
+
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert "wildcard_target_allowlist" in document["error"]["message"]
+    assert not (root / "default").exists()
+    assert write_requests(gateway, "POST") == []
+
+
+def test_an_environment_change_resets_the_saved_rest_settings(
+    tmp_path: Path, gateway: RecordedGateway, cli: None,
+) -> None:
+    root = tmp_path / "deployments"
+    assert run_json(setup_argv(tmp_path, gateway, "--yes"), root)[0] == 0
+
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--environment", "prod", "--yes"), root)
+
+    assert code == 0, document
+    assert [entry["change"] for entry in document["plan"]] == [
+        "narrow rest-mutation-classes from config,control to none (environment dev to prod)",
+        "narrow rest-target-allowlist from * to none (environment dev to prod)",
+        "narrow rest-project-writer from on to off (environment dev to prod)",
+        "record the accepted REST risks: none",
+    ]
+    deployment = open_deployment("default", root)
+    assert (deployment.values["rest_mutation_classes"], deployment.values["rest_target_allowlist"]) == ("none", "none")
+    assert (deployment.values["rest_project_writer"], deployment.values["rest_accepted"]) == ("off", [])
+
+    # Widening back into dev asks for the '*' allowlist again.
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--environment", "dev"), root)
+    assert code == 2
+    assert "wildcard_target_allowlist" in document["error"]["message"]
+
+
+def test_a_hand_edited_rest_token_is_restored_after_acceptance(
+    tmp_path: Path, gateway: RecordedGateway, cli: None,
+) -> None:
+    root = tmp_path / "deployments"
+    assert run_json(setup_argv(tmp_path, gateway, "--yes"), root)[0] == 0
+    served = gateway.resource("ignition/api-token", "ignition-mcp-rest")
+    widened = [{"name": "Authenticated", "children": [{"name": "Everything", "children": []}]}]
+    config = {**served["config"], "profile": {**served["config"]["profile"], "securityLevels": widened}}
+    gateway.change_resource_out_of_band("ignition/api-token", "ignition-mcp-rest", config=config)
+
+    code, document, _ = run_json(setup_argv(tmp_path, gateway), root)
+    assert code == 2
+    assert "overwrite_hand_edit" in document["error"]["message"]
+    assert write_requests(gateway, "PUT") == []
+
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--yes"), root)
+    assert code == 0, document
+    assert statuses(document)["rest token ignition-mcp-rest"] == "CHANGED"
+    assert [item["item"] for item in document["accepted"]] == ["overwrite_hand_edit"]
+    restored = gateway.resource("ignition/api-token", "ignition-mcp-rest")["config"]
+    assert restored["profile"]["securityLevels"] == SETUP_GRANT
+    assert restored["settings"] == served["config"]["settings"], "the key must not change"
+
+
+def test_start_asks_for_a_risk_that_setup_never_recorded(
+    tmp_path: Path, gateway: RecordedGateway, cli: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "deployments"
+    assert run_json(setup_argv(tmp_path, gateway, "--yes"), root)[0] == 0
+    save_deployment(open_deployment("default", root), {"rest_mutation_classes": "config,control,admin"})
+    calls: list[Settings] = []
+    monkeypatch.setattr(start, "SERVE", lambda settings, report: calls.append(settings))
+
+    code, document, _ = run_json(["start"], root)
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert "admin_mutation_class" in document["error"]["message"]
+    assert "wildcard_target_allowlist" in document["error"]["message"]
+    assert calls == []
+
+    code, document, _ = run_json(["start", "--yes"], root)
+    assert code == 0, document
+    assert [item["item"] for item in document["accepted"]] == ["wildcard_target_allowlist", "admin_mutation_class"]
+    assert calls[0].admin_mutation_enabled is True
+    risks = {step["step"]: step["reason"] for step in document["steps"]}["risks"]
+    assert "admin_mutation_class (accepted in this run)" in risks

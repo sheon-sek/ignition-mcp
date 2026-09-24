@@ -19,14 +19,27 @@ A secret file holds one ``<name>:<key>`` line. For a Named static token the whol
 line is the bearer value a client sends, so :func:`static_token_value` is all
 ``connect`` needs.
 
+The named risks the saved settings carry, each ``*`` allowlist and the ADMIN class,
+are recorded in ``deployment.toml`` under ``rest_accepted`` once a run accepts them.
+A risky value without a matching record needs Explicit acceptance again, in
+``setup`` and in ``start``, so a hand edit of ``deployment.toml`` cannot skip it.
+
+When the Deployment environment changes, a REST setting that no flag of this run
+sets takes the new environment's default, and the plan lists each narrowing or
+widening (D32 section 5).
+
 When ``ignition-mcp-rest`` exists on the Gateway and its secret file is lost, D32
 section 10 applies: the token is deleted and created again with ``--recreate-tokens``
-or after the wizard's confirmation. The Runtime stage registers that flag.
+or after the wizard's confirmation. The Runtime stage registers that flag. When
+the token's served profile, Security Levels or secure-channel setting differ from the
+desired ones, the plan restores them, which needs the Explicit acceptance for
+overwriting a hand edit.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import secrets
 import time
 from collections.abc import Mapping
@@ -38,7 +51,7 @@ from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.deployment import Deployment, Value, read_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.report import Status
-from ignition_rest_mcp.cli.engine.resolve import PROG, InputSpec, Kind, Needed, Risk
+from ignition_rest_mcp.cli.engine.resolve import PROG, InputSpec, Kind, Needed, Risk, Source
 from ignition_rest_mcp.cli.setup_native import security
 from ignition_rest_mcp.cli.setup_native.inputs import API_TOKEN_TYPE, CONFIG_COLLECTION
 from ignition_rest_mcp.cli.setup_native.writer import RESOURCE_COLLECTION_PATH, GatewayWriter
@@ -166,6 +179,70 @@ class RestSettings:
         writer = "on" if self.project_writer else "off"
         return f"{classes} Mutation classes on, Target allowlists {targets}, project writer {writer}"
 
+    def risks(self) -> list[str]:
+        """The named risks these settings carry, as ``rest_accepted`` records them."""
+
+        entries: list[str] = []
+        if self.wildcard_targets and self.classes:
+            enabled = ",".join(name for name in MUTATION_CLASSES if name in self.classes)
+            entries.append(f"{Risk.WILDCARD_ALLOWLIST.value}:{enabled}")
+        if "admin" in self.classes:
+            entries.append(Risk.ADMIN_CLASS.value)
+        return entries
+
+
+#: The key in ``deployment.toml`` that records the accepted REST risks.
+RECORD_KEY = "rest_accepted"
+
+
+def recorded_risks(values: Mapping[str, Value]) -> list[str]:
+    record = values.get(RECORD_KEY)
+    return list(record) if isinstance(record, list) else []
+
+
+def needed_for(entry: str) -> Needed:
+    """The acceptance item behind one ``rest_accepted`` entry."""
+
+    risk, _, classes = entry.partition(":")
+    if risk == Risk.ADMIN_CLASS.value:
+        return Needed(Risk.ADMIN_CLASS, "REST server")
+    return Needed(Risk.WILDCARD_ALLOWLIST, f"REST {classes.upper().replace(',', ', ')} Mutations")
+
+
+def _width(name: str, value: str) -> int:
+    """How much a REST setting allows, to tell a narrowing from a widening."""
+
+    if name == "rest_mutation_classes":
+        return 0 if value == NONE else len(value.split(","))
+    return int(value in (WILDCARD, "on"))
+
+
+def _change_environment(ctx: engine.Context) -> list[str]:
+    """Give each saved REST setting the new environment's default; return the plan lines.
+
+    Only a value that came from the saved deployment changes. A flag or an answer of
+    this run keeps its value. This changes the resolved values in memory only, so the
+    stage's ``save`` writes them after the plan is confirmed.
+    """
+
+    before = ctx.deployment.values.get("environment")
+    after = ctx.resolved.values.get("environment")
+    if not isinstance(before, str) or before == after:
+        return []
+    lines: list[str] = []
+    for spec in INPUTS:
+        if ctx.resolved.sources.get(spec.name) is not Source.SAVED:
+            continue
+        old = ctx.resolved.values[spec.name]
+        new = spec.default_for(ctx.resolved.values)
+        if new is None or new == old:
+            continue
+        ctx.resolved.values[spec.name] = new
+        ctx.resolved.sources[spec.name] = Source.DEFAULT
+        verb = "narrow" if _width(spec.name, new) < _width(spec.name, old) else "widen"
+        lines.append(f"{verb} {spec.flag.removeprefix('--')} from {old} to {new} (environment {before} to {after})")
+    return lines
+
 
 # ------------------------------------------------------------------------ plan
 
@@ -174,9 +251,10 @@ class RestSettings:
 class RestPlan:
     """What :func:`plan` found, handed to :func:`apply`."""
 
-    #: ``""`` when the Gateway token and its file agree, ``create`` or ``recreate``.
+    #: ``""`` when the Gateway token and its file agree, else ``create``, ``recreate``
+    #: or ``restore`` (the token was changed by hand).
     token_action: str = ""
-    #: The served ``ignition-mcp-rest`` document for ``recreate``.
+    #: The served ``ignition-mcp-rest`` document for ``recreate`` and ``restore``.
     served: dict[str, Any] | None = None
     #: The setup key's name and the grant copied from it for ``create``/``recreate``.
     setup_key: str = ""
@@ -185,6 +263,8 @@ class RestPlan:
     #: Roles whose Named static token file must be created.
     new_static_tokens: list[str] = field(default_factory=list)
     save: bool = False
+    #: The ``rest_accepted`` record to save, ``None`` when it is already right.
+    record: list[str] | None = None
 
 
 def _grant(document: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -216,6 +296,28 @@ def _level_names(grant: list[dict[str, Any]]) -> str:
     return ", ".join(paths)
 
 
+def _level_paths(grant: list[dict[str, Any]]) -> set[str]:
+    return {path for path in _level_names(grant).split(", ") if path}
+
+
+def token_drift(served: dict[str, Any] | None, grant: list[dict[str, Any]], secure_channel: bool) -> list[str]:
+    """What differs between the served token's profile and the desired one."""
+
+    config = served.get("config") if isinstance(served, dict) else None
+    profile = config.get("profile") if isinstance(config, dict) else None
+    if not isinstance(profile, dict):
+        return ["profile"]
+    drift: list[str] = []
+    if profile.get("type") != security.BASIC_TOKEN_PROFILE:
+        drift.append("profile type")
+    served_grant = profile.get("securityLevels")
+    if not isinstance(served_grant, list) or _level_paths(served_grant) != _level_paths(grant):
+        drift.append("Security Levels")
+    if profile.get("secureChannelRequired") is not secure_channel:
+        drift.append("secureChannelRequired")
+    return drift
+
+
 def _recreate_flag(ctx: engine.Context) -> bool:
     return bool(getattr(ctx.args, "recreate_tokens", False))
 
@@ -223,11 +325,13 @@ def _recreate_flag(ctx: engine.Context) -> bool:
 def plan(ctx: engine.Context) -> engine.Plan:
     """Read the Gateway token, the secret files and the saved settings. Writes nothing."""
 
+    environment_changes = _change_environment(ctx)
     settings = RestSettings.from_values(ctx.resolved.values)
     roles = ctx.resolved.list("roles")
     rest_plan = RestPlan()
     changes: list[str] = []
     needed: list[Needed] = []
+    secure_channel = ctx.resolved.values["gateway_url"].startswith("https:")
 
     token_file = ctx.deployment.secret_path(REST_TOKEN_SECRET)
     observed = security.observe_secret_file(token_file)
@@ -249,6 +353,20 @@ def plan(ctx: engine.Context) -> engine.Plan:
                 f"{token_file} holds a key that does not match the Gateway token {REST_TOKEN_NAME}",
                 next_action=f"rm {token_file} && {PROG} setup --deployment {ctx.deployment.name} --recreate-tokens",
             )
+        grant = _setup_grant(ctx, setup_key, setup_document)
+        drift = token_drift(served, grant, secure_channel)
+        if drift:
+            rest_plan.token_action = "restore"
+            rest_plan.served = served
+            rest_plan.setup_key = setup_key
+            rest_plan.grant = grant
+            rest_plan.secure_channel = secure_channel
+            changes.append(
+                f"restore the Gateway token {REST_TOKEN_NAME}, whose {', '.join(drift)} changed on the Gateway, "
+                f"to the Security Levels of the setup key {setup_key} ({_level_names(grant)}) and "
+                f"secureChannelRequired {str(secure_channel).lower()}"
+            )
+            needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"Gateway token {REST_TOKEN_NAME}: {', '.join(drift)}"))
     elif served is None and observed.exists:
         raise CliError(
             ErrorCode.SECRET_FILE_INVALID,
@@ -268,17 +386,10 @@ def plan(ctx: engine.Context) -> engine.Plan:
             rest_plan.served = served
         else:
             rest_plan.token_action = "create"
-        grant = _grant(setup_document)
-        if not grant:
-            raise CliError(
-                ErrorCode.STEP_FAILED,
-                f"the setup key {setup_key} reads back no Security Level grant, so {REST_TOKEN_NAME} "
-                "cannot be given the same one",
-                next_action=f"{PROG} setup --deployment {ctx.deployment.name} --gateway-token-file FILE",
-            )
+        grant = _setup_grant(ctx, setup_key, setup_document)
         rest_plan.setup_key = setup_key
         rest_plan.grant = grant
-        rest_plan.secure_channel = ctx.resolved.values["gateway_url"].startswith("https:")
+        rest_plan.secure_channel = secure_channel
         verb = "delete the Gateway token whose secret file is lost, then create" if served else "create"
         changes.append(
             f"{verb} the Gateway API token {REST_TOKEN_NAME} with the Security Levels of the setup key "
@@ -300,15 +411,29 @@ def plan(ctx: engine.Context) -> engine.Plan:
     saved = {spec.name: ctx.deployment.values.get(spec.name) for spec in INPUTS}
     if saved != {spec.name: ctx.resolved.values.get(spec.name) for spec in INPUTS}:
         rest_plan.save = True
-        changes.append(f"save the REST settings: {settings.describe()}")
+        changes.extend(environment_changes or [f"save the REST settings: {settings.describe()}"])
 
-    # A run takes these risks only when it writes the settings that carry them.
-    if rest_plan.save and "admin" in settings.classes:
-        needed.append(Needed(Risk.ADMIN_CLASS, "REST server"))
-    if rest_plan.save and settings.wildcard_targets and settings.classes:
-        enabled = ", ".join(name.upper() for name in MUTATION_CLASSES if name in settings.classes)
-        needed.append(Needed(Risk.WILDCARD_ALLOWLIST, f"REST {enabled} Mutations"))
+    # A risky value needs acceptance until a run that accepted it recorded it, so a
+    # hand edit of deployment.toml cannot skip the question.
+    risks = settings.risks()
+    record = recorded_risks(ctx.deployment.values)
+    needed.extend(needed_for(entry) for entry in risks if entry not in record)
+    if risks != record:
+        rest_plan.record = risks
+        changes.append("record the accepted REST risks: " + (", ".join(risks) or "none"))
     return engine.Plan(changes=changes, needed=needed, data=rest_plan)
+
+
+def _setup_grant(ctx: engine.Context, setup_key: str, document: dict[str, Any] | None) -> list[dict[str, Any]]:
+    grant = _grant(document)
+    if not grant:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"the setup key {setup_key} reads back no Security Level grant, so {REST_TOKEN_NAME} "
+            "cannot be given the same one",
+            next_action=f"{PROG} setup --deployment {ctx.deployment.name} --gateway-token-file FILE",
+        )
+    return grant
 
 
 # ----------------------------------------------------------------------- apply
@@ -320,6 +445,13 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
     with ctx.reporter.step(f"rest token {REST_TOKEN_NAME}", "the REST server's own Gateway API token") as end:
         if not rest_plan.token_action:
             end.set(Status.OK, f"exists and matches {token_file}")
+        elif rest_plan.token_action == "restore":
+            asyncio.run(_restore_rest_token(rest_plan, ctx.gateway_writer()))
+            end.set(
+                Status.CHANGED,
+                f"restored the Security Levels of {rest_plan.setup_key} ({_level_names(rest_plan.grant)}) and "
+                f"secureChannelRequired {str(rest_plan.secure_channel).lower()}; the key is unchanged",
+            )
         else:
             asyncio.run(_create_rest_token(ctx, rest_plan, ctx.gateway_writer()))
             end.set(
@@ -341,11 +473,47 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
 
     with ctx.reporter.step("rest settings", "REST Mutation classes, Target allowlists, project writer") as end:
         settings = RestSettings.from_values(ctx.resolved.values)
-        if rest_plan.save:
-            ctx.save()
-            end.set(Status.CHANGED, settings.describe())
+        if rest_plan.save or rest_plan.record is not None:
+            ctx.save({RECORD_KEY: settings.risks()})
+            end.set(Status.CHANGED, f"{settings.describe()}; accepted risks recorded")
         else:
             end.set(Status.OK, settings.describe())
+
+
+async def _restore_rest_token(rest_plan: RestPlan, writer: GatewayWriter) -> None:
+    """Write the desired profile over a hand-edited ``ignition-mcp-rest``; the key stays."""
+
+    served = rest_plan.served or {}
+    signature = served.get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise CliError(ErrorCode.STEP_FAILED, f"{REST_TOKEN_NAME} reads back no signature; not restored")
+    stored_hash = security.stored_token_hash(served)
+    config = {
+        "profile": {
+            "type": security.BASIC_TOKEN_PROFILE,
+            "secureChannelRequired": rest_plan.secure_channel,
+            "securityLevels": rest_plan.grant,
+            "timestamp": int(time.time() * 1000),
+        },
+        "settings": {"tokenHash": stored_hash},
+    }
+    async with writer:
+        item = writer._api_token_change(REST_TOKEN_NAME, config, REST_TOKEN_DESCRIPTION)
+        item["collection"] = str(served.get("collection") or CONFIG_COLLECTION)
+        item["signature"] = signature
+        await writer._write(
+            "PUT",
+            RESOURCE_COLLECTION_PATH.format(resource_type=API_TOKEN_TYPE),
+            body=json.dumps([item], separators=(",", ":")).encode("utf-8"),
+            content_type="application/json",
+            action=f"restore API token {REST_TOKEN_NAME}",
+        )
+        after = await writer.reads.resource_document(API_TOKEN_TYPE, REST_TOKEN_NAME)
+    if security.stored_token_hash(after) != stored_hash or token_drift(after, rest_plan.grant, rest_plan.secure_channel):
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"{REST_TOKEN_NAME} was written but does not read back as restored",
+        )
 
 
 async def _create_rest_token(ctx: engine.ApplyContext, rest_plan: RestPlan, writer: GatewayWriter) -> None:

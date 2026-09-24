@@ -13,6 +13,12 @@ An ``IGNITION_MCP_*`` variable already in the environment is ignored. The server
 then runs in the foreground. Once it answers ``/health/ready``, ``start`` reports
 the result and each role's endpoints, and it keeps serving until Ctrl+C.
 
+Each ``*`` allowlist and the ADMIN class that the saved settings activate must match
+the ``rest_accepted`` record a setup run wrote when it accepted them. A value with no
+matching record, such as one edited into ``deployment.toml`` by hand, needs Explicit
+acceptance in this run, and the server does not start without it. The report lists
+each active risk and the acceptance it rests on.
+
 A bind address other hosts can reach needs Explicit acceptance (D32 section 6).
 The server then runs with the ``trusted-internal`` profile, because the
 ``development`` profile refuses such an address.
@@ -39,32 +45,18 @@ from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, Needed, Risk, accept
 from ignition_rest_mcp.cli.setup.rest import (
+    RECORD_KEY,
     REST_TOKEN_SECRET,
     ROLE_SCOPES,
     ROLE_TOKEN_NAMES,
     RestSettings,
+    needed_for,
+    recorded_risks,
     static_token_secret,
     static_token_value,
 )
 from ignition_rest_mcp.cli.engine.deployment import read_secret
 from ignition_rest_mcp.config import ConfigurationError, Settings, _is_loopback
-from ignition_rest_mcp.projects.transactions import PROJECT_IMPORT_OPERATION
-from ignition_rest_mcp.safety.policy import ADMIN_MUTATION, CONFIG_MUTATION, CONTROL_MUTATION, MutationOperation
-from ignition_rest_mcp.services.alarm_pipeline_cancel import ALARM_PIPELINE_CANCEL
-from ignition_rest_mcp.services.artifact_delete import ARTIFACT_DELETE
-from ignition_rest_mcp.services.config_mutation import (
-    CONFIG_RESOURCE_CREATE,
-    CONFIG_RESOURCE_DELETE,
-    CONFIG_RESOURCE_RENAME,
-    CONFIG_RESOURCE_UPDATE,
-)
-from ignition_rest_mcp.services.perspective_write import (
-    PAGE_CONFIG_UPDATE,
-    SESSION_PROPS_UPDATE,
-    VIEW_DELETE,
-    VIEW_UPSERT,
-)
-from ignition_rest_mcp.services.tag_config_import import TAG_CONFIG_IMPORT
 
 DEFAULT_BIND = "127.0.0.1:8000"
 MCP_PATH = "/mcp"
@@ -73,22 +65,13 @@ ENV_PREFIX = "IGNITION_MCP_"
 HEALTH_DEADLINE_SECONDS = 30.0
 HEALTH_POLL_SECONDS = 0.25
 
-#: Every REST Mutation operation, so an enabled class can allowlist its operations.
-OPERATIONS: tuple[MutationOperation, ...] = (
-    PROJECT_IMPORT_OPERATION,
-    VIEW_UPSERT,
-    VIEW_DELETE,
-    PAGE_CONFIG_UPDATE,
-    SESSION_PROPS_UPDATE,
-    TAG_CONFIG_IMPORT,
-    CONFIG_RESOURCE_UPDATE,
-    CONFIG_RESOURCE_CREATE,
-    CONFIG_RESOURCE_DELETE,
-    CONFIG_RESOURCE_RENAME,
-    ARTIFACT_DELETE,
-    ALARM_PIPELINE_CANCEL,
-)
-CLASS_NAMES = {"config": CONFIG_MUTATION, "control": CONTROL_MUTATION, "admin": ADMIN_MUTATION}
+#: The server's deployment gate for each Mutation class. A Mutation Tool's name is its
+#: operation ID, so ``DEPLOYMENT_GATED_TOOLS`` is the one inventory of operations.
+CLASS_GATES = {
+    "config": "config_mutation_enabled",
+    "control": "control_mutation_enabled",
+    "admin": "admin_mutation_enabled",
+}
 
 #: Called once the server answers ``/health/ready``: the HTTP status (``0`` when it
 #: never answered) and the decoded body.
@@ -148,8 +131,10 @@ def server_environment(deployment: Deployment, host: str, port: int) -> dict[str
         ROLE_TOKEN_NAMES[role]: {"token": static_token_value(deployment, role), "scopes": list(ROLE_SCOPES[role])}
         for role in roles
     }
-    enabled = {CLASS_NAMES[name] for name in settings.classes}
-    operations = [operation.op_id for operation in OPERATIONS if operation.mutation_class in enabled]
+    from ignition_rest_mcp.server import DEPLOYMENT_GATED_TOOLS
+
+    gates = {CLASS_GATES[name] for name in settings.classes}
+    operations = [tool for tool, gate in DEPLOYMENT_GATED_TOOLS.items() if gate in gates]
     environment = {
         "IGNITION_MCP_GATEWAY_URL": url,
         "IGNITION_MCP_GATEWAY_API_TOKEN": read_secret(deployment.secret_path(REST_TOKEN_SECRET)),
@@ -160,9 +145,9 @@ def server_environment(deployment: Deployment, host: str, port: int) -> dict[str
         "IGNITION_MCP_AUTH_MODE": "static-token",
         "IGNITION_MCP_STATIC_TOKENS": json.dumps(tokens),
         "IGNITION_MCP_DATA_DIR": str(deployment.directory / DATA_DIRECTORY),
-        "IGNITION_MCP_CONFIG_MUTATION_ENABLED": _bool(CONFIG_MUTATION in enabled),
-        "IGNITION_MCP_CONTROL_MUTATION_ENABLED": _bool(CONTROL_MUTATION in enabled),
-        "IGNITION_MCP_ADMIN_MUTATION_ENABLED": _bool(ADMIN_MUTATION in enabled),
+        "IGNITION_MCP_CONFIG_MUTATION_ENABLED": _bool("config" in settings.classes),
+        "IGNITION_MCP_CONTROL_MUTATION_ENABLED": _bool("control" in settings.classes),
+        "IGNITION_MCP_ADMIN_MUTATION_ENABLED": _bool("admin" in settings.classes),
         "IGNITION_MCP_MUTATION_OPERATIONS": ",".join(operations),
         "IGNITION_MCP_PROJECT_WRITER_ENABLED": _bool(settings.project_writer),
     }
@@ -294,6 +279,7 @@ def start(ctx: engine.Context) -> None:
             f"{settings.deployment_profile} profile, static-token auth for {', '.join(roles)}, "
             f"{RestSettings.from_values(deployment.values).describe()}",
         )
+    _accept_risks(ctx)
 
     rest_url = f"http://{_url_host(host)}:{port}{MCP_PATH}"
     gateway_url = str(deployment.values["gateway_url"]).rstrip("/")
@@ -332,6 +318,27 @@ def start(ctx: engine.Context) -> None:
         pass
     with ctx.reporter.step("stop", "the REST server") as end:
         end.set(Status.OK, "stopped")
+
+
+def _accept_risks(ctx: engine.Context) -> None:
+    """Check each risky value against setup's record before the server starts.
+
+    A value that a setup run accepted and recorded starts without asking. Any other,
+    such as one written into ``deployment.toml`` by hand, needs acceptance in this run.
+    """
+
+    risks = RestSettings.from_values(ctx.deployment.values).risks()
+    record = recorded_risks(ctx.deployment.values)
+    unrecorded = [entry for entry in risks if entry not in record]
+    items = accept([needed_for(entry) for entry in unrecorded], ctx.accept_flags, ctx.prompter)
+    ctx.accepted.extend(items)
+    ctx.reporter.accepted(items)
+    with ctx.reporter.step("risks", "the named risks the REST settings activate") as end:
+        lines = [
+            f"{entry} (accepted {'in this run' if entry in unrecorded else f'by setup, recorded as {RECORD_KEY}'})"
+            for entry in risks
+        ]
+        end.set(Status.OK, "active: " + "; ".join(lines) if lines else "none active")
 
 
 def _make_data_directory(path: Path) -> None:
