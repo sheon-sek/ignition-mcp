@@ -1,17 +1,39 @@
 # Contracts
 
-`contracts/` is the repository-level semantic source of truth. It is not a runtime package or code generator.
+`contracts/` describes what every Tool accepts and returns, in a form that does not depend on either
+server's language. Both servers are written by hand and checked against these files. Nothing here is
+generated into code, and nothing here runs.
 
-Phase 0 establishes shared error, permission, mutation, budget, pagination, batch, artifact, profile and compatibility-evidence semantics. Product implementations remain explicit and are checked against these contracts.
+| Path | Contents |
+| --- | --- |
+| `tools/rest/<tool>.contract.json` | One contract per REST Tool: its scope, write class, budget class, parameters, Target rules and output schema path. |
+| `tools/runtime/<tool>.contract.json` | The same for each Runtime Tool. |
+| `schemas/<tool>.output.schema.json` | The JSON Schema of each Tool's output. For Runtime Tools these are the only output contract, because the MCP Module does not publish one (D27). |
+| `profiles/*.yaml` | The Tools, resources and prompts of each Runtime profile: `readonly`, `operator`, `configurator` and `full`. |
+| `shared/` | Definitions both servers share: error codes, permission, write and budget classes, pagination, batch results, artifacts, the Runtime Target Policy schema, the bundle manifest schema and compatibility statuses. |
+| `resources/` | Contracts for the Text Resources. |
 
-Profile files use a JSON-compatible YAML 1.2 subset so the Phase 0 linter remains standard-library-only; consumers must treat them as YAML documents, not as a runtime contract interpreter.
+The profile files use a subset of YAML that is also valid JSON, so the linter needs only the Python
+standard library. Read them as YAML documents.
 
-`shared/refused-resource-types.json` (D30 §5) classifies every configuration resource type in a
-supported OpenAPI document as **allowed** or **refused** for generic config Mutations; a type in
-neither list is refused, and refused types answer `permission_denied` whatever the Target allowlist
-says. Two documents anchor the classification: the full 8.3.8 export under
-`docs/ignition-8.3.8-openapi/` (57 resource types) and the 8.3.9 candidate's derived resource-type
-inventory under `docs/ignition-8.3.9-openapi/` (56 types, a strict subset; the candidate's 12.7 MB
-document is not committed, and the inventory records its SHA-256 and the live run that captured it).
-A test classifies both, and rediscovering either by path means a new version fails the test until its
-types are classified.
+`tooling/contracts/lint.py` checks these files against each other and against the Tool lists. To add,
+remove or rename a Tool, change its implementation, its contract, its schema and the lists in
+`lint.py` together, then run:
+
+```bash
+uv run --no-sync python -m tooling.contracts.lint
+```
+
+## Refused resource types
+
+`shared/refused-resource-types.json` (D30 §5) sorts every configuration resource type in a supported
+Gateway API description into **allowed** or **refused** for the REST server's generic configuration
+writes. A type in neither list is refused. A refused type answers `permission_denied` whatever the
+Target allowlist says.
+
+Two documents anchor the list. One is the full 8.3.8 API description in
+`docs/ignition-8.3.8-openapi/`, with 57 resource types. The other is the resource type list derived
+from the 8.3.9 description in `docs/ignition-8.3.9-openapi/`, with 56 types, all of them also in the
+8.3.8 list. The 8.3.9 description itself is 12.7 MB and is not committed. The derived list records its
+SHA-256 and the live run that captured it. A test classifies both, so a new Gateway version fails the
+test until its types are sorted.
