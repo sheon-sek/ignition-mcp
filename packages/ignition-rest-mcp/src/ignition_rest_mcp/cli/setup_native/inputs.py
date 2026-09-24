@@ -13,9 +13,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import logging
 import os
 import re
 import stat
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NoReturn, Sequence
@@ -788,6 +790,23 @@ def _resolve_token(file_value: str | None, env_value: str | None, flag: str, env
 
 
 
+LOGGER = logging.getLogger("ignition_rest_mcp.setup_native")
+_posix_mode_warning_logged = False
+
+
+def warn_posix_modes_unavailable() -> None:
+    """Log, once per process, that credential-file modes cannot be enforced here."""
+
+    global _posix_mode_warning_logged
+    if _posix_mode_warning_logged:
+        return
+    _posix_mode_warning_logged = True
+    LOGGER.warning(
+        "POSIX file modes are unavailable on this platform; the operator must protect "
+        "credential and token files with filesystem ACLs"
+    )
+
+
 def _read_token_file(source: str, flag: str) -> str:
     path = Path(source).expanduser()
     if not path.is_absolute():
@@ -800,7 +819,9 @@ def _read_token_file(source: str, flag: str) -> str:
         mode = stat.S_IMODE(path.stat().st_mode)
     except OSError as error:  # pragma: no cover - racing removal
         raise UsageError(f"{flag}: cannot stat {path}: {type(error).__name__}") from error
-    if mode & 0o077:
+    if sys.platform == "win32":
+        warn_posix_modes_unavailable()
+    elif mode & 0o077:
         raise UsageError(
             f"{flag}: {path} is accessible to group or others (mode {mode:04o}); require 0600 and chmod the file first"
         )
