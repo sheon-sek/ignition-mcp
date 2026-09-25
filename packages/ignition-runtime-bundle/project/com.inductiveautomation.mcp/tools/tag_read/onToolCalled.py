@@ -123,7 +123,7 @@ def onToolCalled(builder, tagPaths, timeout, timestampFormat):
 		domain = encodeNulls(domain)
 		encoded = system.util.jsonEncode(domain)
 		if len(encoded.encode("utf-8")) > 262144:
-			return toolError("limit_exceeded", "Structured output exceeds the Phase 1 default limit of 256 KiB.")
+			return toolError("limit_exceeded", "Structured output exceeds the default limit of 256 KiB.")
 		return {"structuredContent": domain}
 	except (Exception, JavaException) as exc:
 		logger.error("correlationId=" + correlationId + " tag_read failed: " + unicode(exc))

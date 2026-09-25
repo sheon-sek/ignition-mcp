@@ -4,14 +4,21 @@ filtered to the target project. Policy comes only from deployment config
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.operation import OperationContext
 
+DESIGNERS_PATH = "/data/api/v1/designers"
 PAGE_SIZE = 100
 MAX_PAGES = 20  # bounded: at most 2000 session records inspected per check
+
+
+#: One page request: ``(limit, offset)`` to the parsed ``GET /data/api/v1/designers`` body.
+FetchPage = Callable[[int, int], Awaitable[Any]]
 
 
 async def active_sessions_for_project(
@@ -23,13 +30,25 @@ async def active_sessions_for_project(
             "the Gateway does not expose /data/api/v1/designers; the Designer-session "
             "policy cannot be evaluated and mutation fails closed",
         )
+
+    async def fetch(limit: int, offset: int) -> Any:
+        return await client.get_json(DESIGNERS_PATH, params={"limit": limit, "offset": offset}, context=context)
+
+    return await list_project_sessions(fetch, project_name)
+
+
+async def list_project_sessions(fetch: FetchPage, project_name: str) -> list[dict[str, str]]:
+    """The active Designer sessions on ``project_name``, read page by page through ``fetch``.
+
+    ``ignition-mcp setup`` passes its own Gateway client here (issue #80), so both
+    writers read the listing with one set of bounds and one fail-closed shape check.
+    """
+
     sessions: list[dict[str, str]] = []
     for page in range(MAX_PAGES):
-        payload = await client.get_json(
-            "/data/api/v1/designers",
-            params={"limit": PAGE_SIZE, "offset": page * PAGE_SIZE},
-            context=context,
-        )
+        payload = await fetch(PAGE_SIZE, page * PAGE_SIZE)
+        if not isinstance(payload, dict):
+            raise GatewayError("schema_mismatch", "Designer session listing has an unknown shape")
         items = payload.get("items")
         metadata = payload.get("metadata")
         if not isinstance(items, list) or any(not isinstance(item, dict) for item in items):

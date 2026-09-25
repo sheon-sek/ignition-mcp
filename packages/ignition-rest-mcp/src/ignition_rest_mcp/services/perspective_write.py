@@ -374,7 +374,7 @@ async def _defines_locally(
                 f"{_target_label(patch)} is an Inherited resource of Project {project_name!r}: the "
                 f"Project does not define it locally and ancestor Project {ancestor!r} does, so this "
                 "write would create a local override (reason: inherited_resource). A future explicit "
-                "override needs its own deliberate API (D15).",
+                "override needs its own deliberate API.",
             )
     return False
 

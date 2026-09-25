@@ -3,13 +3,26 @@
 # The docker-compose.yml of this harness mounts the pinned .modl into the
 # Gateway's user-lib, which is how the G4a/G4b workflows deploy it. This stage
 # must instead start a Gateway with NO MCP Module and put it there through
-# `setup-native install-module`, so this override replaces the volume list with
+# `ignition-mcp setup`, so this override replaces the volume list with
 # the data volume alone (compose `!override` tag, docker compose v2.24+):
-# the .modl mount of the shared base file is gone and nothing else changes.
+# the .modl mount of the shared base file is gone.
+#
+# Issue #78 (G7): the environment is the base file's without GATEWAY_MODULES_ENABLED.
+# The Gateway reads that variable itself. While it holds a list, the Gateway refuses
+# to enable, disable or uninstall any Module ("Module ... cannot be uninstalled"),
+# and `ignition-mcp reset` must uninstall the Module setup installed. A blank value
+# did not work in the local rehearsal: the Module setup installed came up disabled.
 #
 # Only the phase4-live-apply workflow lists this file on COMPOSE_FILE; G4a/G4b
 # keep the base file alone.
 services:
   gateway:
+    environment: !override
+      ACCEPT_IGNITION_EULA: "Y"
+      GATEWAY_ADMIN_USERNAME: "admin"
+      GATEWAY_ADMIN_PASSWORD: "phase4-ci-only-not-a-production-secret"
+      IGNITION_EDITION: "standard"
+      DISABLE_QUICKSTART: "true"
+      ACCEPT_MODULE_CERTS: "com.inductiveautomation.mcp"
     volumes: !override
       - phase4-gateway-data:/usr/local/bin/ignition/data

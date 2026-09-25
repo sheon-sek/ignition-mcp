@@ -80,7 +80,7 @@ class Artifact:
 
 
 class ArtifactValidator(Protocol):
-    """Offline validation of a fully staged file before publication (D15/D17)."""
+    """Offline validation of a fully staged file before publication."""
 
     name: str
 

@@ -1,36 +1,56 @@
-# v1 operations runbook
+# Operations runbook
 
 > Chinese translation: [`runbook.zh-CN.md`](runbook.zh-CN.md)
 
-This runbook covers the operator path for one `ignition-runtime-bundle` deployment: installing the MCP
-Module, then diagnosing, planning, applying and verifying the deployment, upgrading the Bundle,
-maintaining the Runtime Target Policy, enabling Mutation classes, and reading
-`operation_diagnose` output when a call goes wrong.
+This runbook is the reference for running a deployment after you understand the basics. It covers
+each `ignition-mcp` command, the MCP Module, upgrades, the Runtime Target Policy, turning on writes,
+and reading `operation_diagnose` output.
 
-Authority: D20 for the command set and its safety rules, the D26 Phase 6 amendment for what v1
-covers, D27 and D28 for Runtime wire behavior, and D30 for the Mutation contract. Terms such as
-Module install, Module upgrade and Bundle upgrade are defined in `CONTEXT.md`; this file uses them
-with those meanings.
+For a first installation, follow [Quick start](../guide/quick-start.md) instead. It walks through the
+same commands in order.
 
-Every flag was checked against the shipped source in
-`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup_native/` and confirmed against each
-subcommand's `--help` output. The `doctor`, `plan` and `verify` samples below are real run output. The
-`install-module` examples show the format the command prints, read off its source.
+| I want to... | Section |
+| --- | --- |
+| know what I need before I start | [Prerequisites](#prerequisites) |
+| know what a deployment directory holds | [Deployment state](#deployment-state) |
+| set up a Gateway | [Set up a deployment](#set-up-a-deployment) |
+| check a deployment | [Check a deployment](#check-a-deployment) |
+| run the REST server | [Start the REST server](#start-the-rest-server) |
+| register an agent | [Connect an agent](#connect-an-agent) |
+| remove a deployment | [Reset a deployment](#reset-a-deployment) |
+| install or upgrade the MCP Module | [The MCP Module](#the-mcp-module) |
+| deploy a newer bundle | [Upgrade the bundle](#upgrade-the-bundle) |
+| change what the Runtime write Tools may touch | [The Runtime Target Policy](#the-runtime-target-policy) |
+| turn on writes | [Turn on writes](#turn-on-writes) |
+| find out what happened to a REST call | [Reading `operation_diagnose` output](#reading-operation_diagnose-output) |
+| understand an exit code | [Exit codes](#exit-codes) |
+
+In the examples the deployment is `default`, the Gateway is `http://127.0.0.1:8088`, and the commands
+run from the repository folder.
 
 ## Prerequisites
 
-You need these before any command runs.
-
 | Item | Where it comes from |
 | --- | --- |
-| Gateway base URL | your deployment, for example `http://127.0.0.1:8088` |
-| Ignition API token | an `ignition/api-token` resource on the Gateway, held by the operator in a `0600` file as one line |
-| MCP Module file and its SHA-256 | the official Inductive Automation download channel. The repository pins `com.inductiveautomation.mcp` version `1.3.5.2026021307-SNAPSHOT`, build `2026021307`, SHA-256 `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`, recorded in `tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.provenance.json` |
-| Bundle release: ZIP, manifest, checksum | `tooling.native.cli release`, described below |
-| Runtime Target Policy document | written by the deployment owner, schema `contracts/shared/runtime-target-policy.schema.json` |
-| Server Config permissions tree | written by the deployment owner, required when `apply` creates a Server Config or when the deployed one carries no tree to preserve |
+| The Gateway's address | your Gateway, for example `http://127.0.0.1:8088` |
+| A Gateway API key with write access | the Gateway web interface, Security section. Create a new API key whose Security Level is ticked under every permission in Security > General Settings, and save it in a file |
+| The MCP Module `.modl` file | Inductive Automation. The repository pins version `1.3.5.2026021307-SNAPSHOT`, build `2026021307`, SHA-256 `b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365`. The record is `tests/fixtures/modules/MCP-module-1.3.5.2026021307-SNAPSHOT.provenance.json` |
+| A repository checkout | `ignition-mcp setup` builds the Runtime bundle from the checkout, so it needs `packages/ignition-runtime-bundle/project` and `tooling/native` |
 
-Build the release artifacts from a checkout:
+The operator writes no policy file and no permissions file. `setup` generates both from the
+Deployment environment and the roles.
+
+The tools you need on your own computer:
+
+| Tool | Linux or macOS | Windows |
+| --- | --- | --- |
+| Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | the [official installer](https://docs.astral.sh/uv/) or a package manager. `uv` installs Python for you | `winget install --id=astral-sh.uv -e`, or the same official installer |
+| A shell | any POSIX shell | PowerShell 7. The Windows checklist uses `-SkipHttpErrorCheck`, which needs version 7 |
+| Java 11 | only for the Jython tests. Neither server needs it | same |
+
+The Windows instructions in this runbook are marked **not run on Windows yet**.
+
+Repository maintainers build a release from the checkout, for the compatibility evidence:
 
 ```bash
 uv run --no-sync python -m tooling.native.cli validate \
@@ -44,316 +64,278 @@ V=$(cat packages/ignition-runtime-bundle/BUNDLE_VERSION)
 (cd dist/release && sha256sum -c "ignition-runtime-bundle-$V.sha256")
 ```
 
-`release` writes three files named after `packages/ignition-runtime-bundle/BUNDLE_VERSION`:
-`ignition-runtime-bundle-<version>.zip`, `.manifest.json` and `.sha256`. The checksum file is
-`sha256sum -c` compatible. The builder is deterministic, so two runs on one revision produce
-byte-identical archives, and `release` reads `tests/compatibility/evidence/` without rewriting it.
+`release` writes three files named after the version in
+`packages/ignition-runtime-bundle/BUNDLE_VERSION`: `ignition-runtime-bundle-<version>.zip`,
+`.manifest.json` and `.sha256`. Two builds of the same Git revision produce identical files.
+`release` reads `tests/compatibility/evidence/` and does not change it. `setup` builds the bundle
+itself, so an operator never handles these files.
 
-## Environment and credential files
+### Building on Windows
 
-The `IGNITION_MCP_SETUP_*` variables are fallbacks, and a flag always wins over its variable.
+**Not run on Windows yet.** Store the Git revision in a variable and pass it as
+`--source-revision $rev`. Check the checksum with `Get-FileHash`
+or `certutil` instead of `sha256sum -c`, and compare the result with the hash in the `.sha256` file:
 
-```bash
-export IGNITION_MCP_SETUP_GATEWAY_URL=http://127.0.0.1:8088
-export IGNITION_MCP_SETUP_MCP_URL=$IGNITION_MCP_SETUP_GATEWAY_URL/data/mcp/production
-mkdir -p ~/.config/ignition-mcp
-umask 077
-printf '%s\n' '<your-ignition-api-token>' > ~/.config/ignition-mcp/gateway.token
-chmod 0600 ~/.config/ignition-mcp/gateway.token
+```powershell
+$rev = git rev-parse HEAD
+uv run --no-sync python -m tooling.native.cli release `
+  --project-dir packages/ignition-runtime-bundle/project `
+  --out-dir dist/release `
+  --source-revision $rev `
+  --evidence-dir tests/compatibility/evidence
+$V = Get-Content packages/ignition-runtime-bundle/BUNDLE_VERSION
+Get-FileHash "dist/release/ignition-runtime-bundle-$V.zip" -Algorithm SHA256
 ```
 
-A token file must be a regular non-symlink file with no group or other bits (mode `0600`) holding
-exactly one non-empty line. A symlink, a loose mode, or zero or two token lines is a usage error and
-exits 2. Prefer `--gateway-token-file` over `IGNITION_MCP_SETUP_GATEWAY_TOKEN`, so the credential
-never sits in a process environment.
+## Deployment state
 
-URLs must be absolute `http` or `https` with a host, and must not embed credentials. Plain HTTP to a
-host that is not loopback is refused before any request, because the run would carry the API token
-unencrypted. Use `https`, or pass `--allow-insecure-authorize` on a trusted lab network.
+A deployment is a named directory, `~/.config/ignition-mcp/deployments/<name>/`. Several deployments
+can sit side by side, one per Gateway. Every command takes `--deployment NAME`, and the default is
+`default`.
 
-The commands take no repository path. `--bundle-manifest` is the only source of desired state, so
-`contracts/` and `packages/ignition-runtime-bundle/` are never read at operation time.
+| Path | Contents |
+| --- | --- |
+| `deployment.toml` | The Gateway URL, the environment, the roles, the generated REST settings, the record of what `setup` created and which risks were accepted, and a `bind` entry when someone saved one by hand |
+| `runtime-policy.json` | The generated Runtime Target Policy |
+| `gateway-token.secret` | The setup key you supplied, kept for re-runs |
+| `runtime-<role>.secret` | Each role's Runtime token |
+| `rest-gateway-token.secret` | The `ignition-mcp-rest` Gateway API token the REST server uses |
+| `rest-data/` | The REST server's own directory: its SQLite databases, the artifact store and the project-writer lock file |
+| `backups/` | The copy of a managed bundle project that `setup` replaces |
 
-## Install the MCP Module
+The directory is created with mode `0700` and each secret file with mode `0600`, where the platform
+has POSIX modes. Windows skips both checks and logs one warning instead, so give the files a
+filesystem ACL that lets only the service account read them.
 
-`setup-native install-module` puts one trusted local `.modl` on a Gateway through the Gateway's own
-module routes. It takes no bundle manifest: the Module id and build it reasons about come from the
-archive's own `module.xml`. It downloads nothing.
+The commands do not read the deployment directory from anywhere else, and secrets never appear in
+output, logs or the one-line command the wizard prints.
+
+Rules for token files:
+
+- A token file must be a regular file, not a symbolic link, with exactly one non-empty line holding
+  `<name>:<key>`, where the name is the API key's name on the Gateway.
+- On Linux and macOS only the owner may read it, that is mode `0600`. Anything else is refusal with
+  exit code 2.
+- Prefer a file over typing the key, so the key does not sit in the shell history.
+
+Rules for addresses:
+
+- An address must be an absolute `http` or `https` URL with a host, and must not contain a user name
+  or password.
+
+## Set up a deployment
+
+`setup` deploys both planes for the chosen roles. It plans first, shows the changes it will make,
+accepts each named risk, and asks for confirmation before writing anything. `--dry-run` shows the
+plan and stops. Running it again is the normal way to reconcile a deployment, so it is safe to
+repeat.
 
 ```bash
-ignition-mcp setup-native install-module \
-  --file ~/downloads/MCP-module-1.3.5.2026021307-SNAPSHOT.modl \
-  --sha256 b1142a5796f2fd834555f13f03de706599d745f7172a68e54f2f7908b67fe365 \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token
+ignition-mcp setup \
+  --deployment default \
+  --gateway-url http://127.0.0.1:8088 \
+  --environment dev \
+  --roles analysis,engineer \
+  --gateway-token-file ~/.config/ignition-mcp/gateway-token \
+  --yes
 ```
-
-Add `--accept-certificate` and `--accept-eula` to accept what the Module carries, `--restart` to
-restart the Gateway and wait for the Module to come back, and `--acknowledge-upgrade` to install a
-build higher than the installed one.
 
 | Flag | Meaning |
 | --- | --- |
-| `--file PATH` | required. The local `.modl`. Nothing is uploaded until its hash matches |
-| `--sha256 HEX` | required. The 64 hex digits this file must hash to. Case is folded to lowercase |
-| `--accept-certificate` | accept the Module certificate. Without it the run prints the certificate and installs nothing |
-| `--accept-eula` | accept the Module EULA. Without it the run says where to read the EULA and installs nothing |
-| `--acknowledge-upgrade` | allow a Module build higher than the installed one |
-| `--restart` | restart the Gateway after the install and wait for the Module to come back |
+| `--gateway-url URL` | The Gateway's web address. |
+| `--environment dev\|prod` | The Deployment environment. Default `dev`. |
+| `--roles LIST` | The roles to deploy, a comma-separated subset of `analysis` and `engineer`. Default `analysis,engineer` in `dev` and `analysis` in `prod`. |
+| `--gateway-token-file PATH` | A file holding the Gateway API key on one line. |
+| `--module-file PATH` | The MCP Module `.modl` file. Without it, `setup` looks in `tests/fixtures/modules/` and `~/Downloads` for a file whose SHA-256 matches the pinned build. |
+| `--recreate-tokens` | Delete and recreate every managed token whose local secret file is lost. |
+| `--provision-security-levels` | In `prod`, create the roles' missing Security Levels. |
+| `--rest-mutation-classes LIST` | Which REST Mutation classes the server may offer: `none`, or a comma-separated list of `config`, `control` and `admin`. Default `config,control` in `dev` and `none` in `prod`. Adding `admin` needs the ADMIN acceptance, which `--yes` covers. |
+| `--rest-target-allowlist *\|none` | Whether the enabled REST Mutation classes may target anything (`*`) or nothing (`none`). Default `*` in `dev` and `none` in `prod`. |
+| `--rest-project-writer on\|off` | Whether the REST server may import a Project. Default `on` in `dev` and `off` in `prod`. |
+| `--dry-run` | Show the plan and stop before any write. |
 
-The command also shares `--gateway-url`, `--gateway-token-file`, `--timeout-seconds`,
-`--allow-insecure-authorize` and `--json`.
+Every command also takes `--deployment`, `--json`, `--yes`, `--accept-certificate` and
+`--accept-eula`. In one-line mode a plan with changes needs `--yes`, and the certificate and the EULA
+always need their own flags. [Quick start](../guide/quick-start.md) explains the wizard, the
+acceptances and the exit codes.
 
-The sequence is fixed, and every step is refused before it happens rather than undone afterwards:
+`setup` runs its stages in a fixed order. Each stage plans with read-only requests and reports
+`OK`, `CHANGED`, `SKIPPED` or `FAILED` with the reason:
 
-1. Read the file, hash it, and open its `module.xml`. Every failure here exits 2 with no request sent:
-   the hash does not match `--sha256`; the file passes the 67108864 byte bound for a `.modl`, or is
-   not a ZIP, or holds no `module.xml`, or declares no `<id>` or `<version>`, or spells a version with
-   no 10-digit build to compare; the basename is not a name this CLI will upload as `fileName`; or the
-   archive's `<id>` is not `com.inductiveautomation.mcp`. This command installs the MCP Module and
-   nothing else, so a foreign Module artifact is refused before any Gateway call.
-2. Read `GET /data/api/v1/modules/healthy` in pages of 500, at most four pages, and find the identity
-   the Gateway reports for that Module id. The same build installed is `NO CHANGE` with exit 0 and no
-   upload. A newer build on the Gateway is refused with exit 1, and an installed build that cannot be
-   compared is refused too rather than replaced blind. A higher build in the file needs
-   `--acknowledge-upgrade`, or the run stops with exit 3. When the inventory cannot be read to its
-   end, because the Gateway does not page through its reported total or answers with no item list, the
-   run refuses with exit 1 before uploading instead of treating the Module as absent.
-3. `POST /data/api/v1/modules/upload?fileName=...` with the raw bytes, where `fileName` is the file's
-   basename. A Gateway that answers with a different `moduleId` is a refusal with exit 1, and nothing
-   is installed.
-4. Read `GET /data/api/v1/modules/certificate` and `GET /data/api/v1/modules/eula`. With either
-   acceptance flag missing, the run prints the certificate subject, issuer and validity dates, says
-   where the EULA can be read, and stops with exit 3. The archive is uploaded at that point, so that
-   run leaves an upload with nothing installed. With the flags it posts each acceptance, and a `409`
-   means the Gateway already holds one. A Module that carries no certificate or no EULA reports that
-   step as skipped rather than asking for an acceptance.
-5. `POST /data/api/v1/modules/install?moduleId=...`.
-6. Without `--restart`, exit 0 with outcome `INSTALL` or `UPGRADE`, a pending-restart line, and the
-   instruction to restart the Gateway and run `verify`. With `--restart`, confirm the restart with
-   `confirm=true`, then poll `modules/healthy` every 5 seconds for up to 600 seconds until the Module
-   is served with the installed build. A Gateway that never comes back with that build exits 1 and
-   says the install is still waiting on a restart.
+1. Install the MCP Module from the local file. See [The MCP Module](#the-mcp-module).
+2. Create the roles' Security Levels. `dev` creates them; `prod` needs
+   `--provision-security-levels`.
+3. Create the roles' Runtime tokens and the `ignition-mcp-rest` token, and save each secret to its
+   own `*.secret` file.
+4. Deploy the Runtime bundle project. A managed project is backed up before it is replaced, under the
+   Project writer lock, and its `pcf1` fingerprint is compared before the import. A project with the
+   bundle's name that `setup` did not create is never taken over. When the deployed bundle version
+   equals the checkout's version, a managed project whose Tools, Text Resources or Prompts differ from
+   the bundle is reported as a hand edit, and the restore needs the `overwrite_hand_edit` acceptance.
+   A version difference is an update, not a hand-edit restore.
+5. Create or update one Server Config per role with an explicit Tool list and the generated
+   permissions tree.
+6. Write the Runtime Target Policy.
+7. Write the REST settings.
 
-Text output is one line per step, `<MARKER> <step>: <detail>`, with the markers `DONE`, `SKIPPED`,
-`NEEDS-ACK`, `REFUSED` and `FAILED`, then a summary line:
+Things to know:
 
-```console
-install-module: INSTALL com.inductiveautomation.mcp build=2026021307 => exit 0
-```
+- A Server Config whose Tool list matches but whose permissions tree differs is reported as
+  `CHANGED`, never `NO CHANGE`.
+- Nothing is retried blindly. A stage that cannot finish says why and gives a next command.
+- A change someone made on the Gateway by hand is reported as a difference, and the desired state is
+  restored after confirmation, because that overwrites the other person's change.
+- When a local secret file is missing but its Gateway token still exists, `setup` reports the
+  mismatch. It deletes the Gateway token and creates a new one after confirmation, or with
+  `--recreate-tokens` in one-line mode.
+- Changing the environment from `dev` to `prod` lists everything that narrows, such as allowlists
+  emptied or a role removed, and writes only after confirmation.
 
-`--json` reports the same run as one object with `outcome`, `steps[]`, `moduleId`, `moduleVersion`,
-`moduleBuild`, `installedBefore`, `restart`, and the `certificate` and `eula` views when the step
-reached them. The certificate view carries only the subject, issuer, validity window and self-signed
-flag, and no output carries a credential.
+## Check a deployment
 
-Two operator facts: `install-module` does not consult the compatibility matrix, because `doctor`
-reports that, and it never accepts a certificate or an EULA without its own flag. A Module upgrade,
-meaning a higher build, is the acknowledged path in step 2. The repository holds one Module build, so
-v1 proves that logic with refusals and unit tests rather than with a live second build.
-
-## Diagnose a deployment with `doctor`
-
-`doctor` is read-only and ordered. It never waits for a starting Gateway: `initialize` gets exactly
-one attempt, so run it again after a restart rather than making it a readiness probe.
-
-The commands below assume the two exported variables and the token file from the previous section.
-They pass no URL or credential on the command line, which keeps a secret out of the process list.
+`status` changes nothing. It reads the Gateway and the deployment directory and prints one line per
+check, each with `OK`, `SKIPPED` or `FAILED` and a reason.
 
 ```bash
-ignition-mcp setup-native doctor \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --server-config-name production \
-  --profile readonly
+ignition-mcp status \
+  --deployment default \
+  --gateway-url http://127.0.0.1:8088 \
+  --gateway-token-file ~/.config/ignition-mcp/gateway-token
 ```
 
-`doctor` and `verify` need an MCP endpoint. Pass `--mcp-url`, or pass `--server-config-name` and let
-the command derive `<gateway-url>/data/mcp/<name>`.
+The lines are `deployment`, `gateway`, `module`, `bundle`, then four lines per deployed role (`level
+<role>`, `token <role>`, `server config <role>`, `endpoint <role>`), then `runtime policy`,
+`rest token`, `rest static tokens`, `rest settings`, `named-query registry` and `leftover files`.
 
-Checks run in this order: `gateway-info`, `openapi-sha256`, `module-installed`, `bundle-project`,
-`server-config-presence`, then one `capabilities.<name>` line for `server-config`, `project-import`,
-`security-levels`, `api-token` and `designers`, then `mcp-initialize`, `inventory-tools`,
-`inventory-resources`, `inventory-prompts`, `bundle-info`, and finally `compatibility`.
-
-Statuses are `PASS`, `FAIL`, `SKIP`, `NOT_APPLICABLE` and `UNKNOWN`. A real run against a Gateway with
-no such Server Config looks like this:
-
-```console
-FAIL           gateway-info: GET /data/api/v1/gateway-info returned HTTP 401: { "message":"Unauthorized", ... }
-SKIP           openapi-sha256: Gateway did not answer /data/api/v1/gateway-info
-...
-FAIL           mcp-initialize: initialize returned HTTP 404: { "message":"MCP server not found: production", ... }
-SKIP           inventory-tools: MCP session unavailable
-doctor: 16 check(s) {"FAIL": 2, "SKIP": 14} => exit 1
-```
-
-Read the failures in this way:
-
-| Report line | What it means | What to do |
+| Line | What it means | What to do |
 | --- | --- | --- |
-| `gateway-info` FAIL with HTTP 401 | the token was rejected | issue a token with read access, or fix the token file |
-| `module-installed` FAIL | the MCP Module is absent or unhealthy | install it, restart, run `doctor` again |
-| `capabilities.<name>` `NOT_APPLICABLE` or `SKIP` | the Gateway does not document that route, or the OpenAPI inventory was unavailable | the matching plan line is `BLOCKED`; do not expect that write |
-| `bundle-project` FAIL `MARKER_INVALID` | a project of that name exists with a foreign or malformed ownership marker | `plan` refuses the takeover; rename or remove the foreign project |
-| `bundle-project` FAIL `UNMANAGED_SAME_NAME` | a project of that name exists with no ownership marker | same refusal. The command never adopts someone else's project |
-| `bundle-project` FAIL `NOT standalone` | the managed project is inheritable | make it standalone, or point `--bundle-project` at a new name |
-| `inventory-tools` FAIL with `missing=[...]` or `extra=[...]` | the endpoint does not serve the manifest's profile inventory | inventories are exact. A superset and a subset both fail. Re-apply with the right `--profile` |
-| `bundle-info` FAIL | the deployed bundle reports a different `bundleVersion`, or a different `bundleSourceRevision` when the manifest is stamped | run the Bundle upgrade below |
-| `compatibility` UNKNOWN | the observed tuple has no matching `testedTuples` row, or an identity field is incomplete | expected on an untested Gateway. The command never upgrades a compatibility verdict |
+| `gateway` FAILED | The Gateway did not answer. | Check the address and that the Gateway is running, then run `status` again. |
+| `module` FAILED | The MCP Module is missing, not running, or another build. | Run `setup`, which installs the pinned build. |
+| `bundle` `ABSENT` | Nothing is deployed yet. | Run `setup`. |
+| `bundle` a name clash or a bad marker | A project with that name exists that this tool did not create, or its ownership mark is damaged. | Rename or remove that project, or choose another deployment on a Gateway without it. `setup` never takes over a project it did not create. |
+| `bundle` `NOT standalone` | The bundle project is marked inheritable. | Make it standalone in the Designer. |
+| `level <role>` FAILED | A role's Security Level is missing or changed. | Run `setup`. |
+| `token <role>` FAILED | The role's token is missing on the Gateway, or its secret file is lost locally. | Run `setup`, or `setup --recreate-tokens` when the local file is lost. |
+| `server config <role>` FAILED | The Server Config is missing or its permissions tree differs. | Run `setup`. |
+| `endpoint <role>` FAILED | The MCP endpoint did not answer as expected. | Check the Module, then run `setup` and `status` again. |
+| `runtime policy` FAILED | The served policy is missing or is not the generated one. | Run `setup`. |
+| `rest settings` FAILED | A risky setting is active with no record that it was accepted. | Run `start --yes`, or run `setup` again. |
+| `named-query registry` | Whether `IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON` is set on the Gateway. | Set it on the Gateway machine if you want the database Tools. |
 
-`compatibility` matches on five fields: `gatewayVersion`, `gatewayBuild`, `mcpModuleVersion`,
-`mcpModuleBuild` and `bundleVersion`. `gate` and `mcpModuleSha256` are not observable over these APIs,
-so they never appear in the comparison.
+`status` does not wait for a Gateway that is starting, so run it again after a restart.
 
-## Read the plan
+## Start the REST server
 
-`plan` derives the intentions from the same observations and writes nothing.
-
-```bash
-ignition-mcp setup-native plan \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --bundle-zip dist/release/ignition-runtime-bundle-0.7.0.zip \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --server-config-name production \
-  --profile readonly \
-  --policy-file policy.json \
-  --json
-```
-
-Each line reads `<ACTION> <kind> <name>: <reason>`, and the last line is always
-`No changes have been applied.`, including with `--json`. Actions are `CREATE`, `UPDATE`,
-`NO CHANGE`, `BLOCKED` and `SKIP`. Lines come in the order `apply` executes them: `mcp-module`, then
-the opt-in `security-level` and `runtime-token`, then `bundle-project`, `server-config`,
-`runtime-policy`, then the detect-only `security-level` and `runtime-token` lines for planes this run
-does not write.
-
-The `mcp-module` line is never `CREATE`. The Module is a precondition, so the line is `NO CHANGE` when
-a healthy Module is detected and `BLOCKED` when it is missing or its state cannot be read.
-
-A `bundle-project` `UPDATE` names the D21 change class: `patch`, `minor`, `major` or `downgrade`.
-`major` and `downgrade` carry the phrase `requires explicit acknowledgement in apply`, and `apply`
-refuses them without `--acknowledge-upgrade`.
-
-Any `BLOCKED` line makes `plan` exit 3. Fix the cause, usually the Module install or a foreign
-project, and run it again.
-
-## Apply the deployment
-
-`apply` plans first, then writes. It requires three flags that every other command treats as optional.
+`start` runs the REST server in the foreground until Ctrl+C. It prints the health result and one
+endpoint line per deployed role before it serves. It derives every server setting from the
+deployment, so you do not set any environment variable by hand.
 
 ```bash
-ignition-mcp setup-native apply \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --bundle-zip dist/release/ignition-runtime-bundle-0.7.0.zip \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --profile configurator \
-  --bundle-project ignition_runtime \
-  --server-config-name production \
-  --policy-file policy.json \
-  --server-config-permissions-file permissions.json \
-  --backup-dir /var/backups/ignition-mcp \
-  --provision-security-levels \
-  --create-runtime-token \
-  --runtime-token-file ~/.config/ignition-mcp/runtime.token
+ignition-mcp start
 ```
-
-The rules that decide what happens:
-
-- `apply` needs `--server-config-name`, `--bundle-zip` and `--policy-file`. A missing one is a usage
-  error, exit 2.
-- `--bundle-zip` is hashed against `artifact.sha256` in the manifest before anything else. A mismatch
-  exits 2 rather than planning against a different artifact.
-- Any `BLOCKED` plan line stops the run before a single write, exit 3. An unacknowledged `major` or
-  `downgrade` bundle change stops it the same way.
-- Writes run in plan order: Security Level, Runtime API token, bundle Project, Server Config, Runtime
-  Target Policy. A failed write stops the sequence, and nothing rolls back.
-- There is no undo. `--backup-dir` is the only local copy: before `apply` overwrites a managed
-  project it exports the deployed archive into that directory. Without it, the Gateway's own
-  configuration backup is your only recovery path.
-- A Server Config is created disabled, read back, then enabled with the signature that read returned.
-  An update reconciles the Tool list in one write and preserves `enabled` and every other
-  operator-held field. A Tool list is always explicit, never `*`. The permissions tree comes from
-  `--server-config-permissions-file` when that file is supplied, otherwise from the deployed
-  resource, and a Server Config with no tree available either way is a `BLOCKED` plan line.
-- The policy document is validated and canonicalized before anything is written, and refused above
-  32768 bytes. After the write, `apply` reads the served Tags back through the documented export
-  route and repairs once with an idempotent re-import if the read-back disagrees.
-- The CLI never echoes a credential. The created Runtime token goes only to the file you named,
-  created with mode `0600`. A second run proves you still own that token by hashing the file's secret
-  against the token hash the Gateway serves, so re-running is `NO CHANGE`, not a rotation.
-- The opt-in flags refuse bad input at parse time: `--create-runtime-token` needs
-  `--runtime-token-file`, and needs `--runtime-token-name` or `--server-config-name`; the three
-  `--runtime-token-*` flags are refused without `--create-runtime-token`; `--security-level-name` is
-  refused unless `--provision-security-levels` or `--create-runtime-token` is present.
-
-Because the Module registers a Project's provider on the Project's own thread, an endpoint built from
-a just-written Server Config can answer `initialize` with no capability. `apply` re-announces the same
-approved document up to three times, reports each one as a `REFRESH server-config ...` line and in
-`refreshes[]`, and only then judges the result. That leaves a `NO CHANGE` deployment afterwards.
-
-`apply` ends by running the `verify` sequence and embedding its report, so a normal run prints the plan
-lines, the write lines, a blank line, the verify lines, and a summary:
-
-```console
-apply: wrote=3 skipped=2 failed=0 => exit 0
-```
-
-Exit 1 means a write failed or verification failed. Exit 3 means the run wrote nothing.
-
-## Verify a deployment
 
 ```bash
-ignition-mcp setup-native verify \
-  --bundle-manifest dist/release/ignition-runtime-bundle-0.7.0.manifest.json \
-  --gateway-token-file ~/.config/ignition-mcp/gateway.token \
-  --server-config-name production \
-  --profile readonly
+ignition-mcp start --bind 127.0.0.1:8000 --yes
 ```
 
-The sequence is `endpoint-reachable`, `mcp-initialize`, `inventory-tools`, `inventory-resources`,
-`inventory-prompts`, then one `resources-read <uri>` line per Text Resource in the profile inventory,
-one `prompts-get <name>` line per Prompt, and `bundle-info`. A `PASS` on `endpoint-reachable` only
-means the URL answered. Exit 0 requires every check to be `PASS` or `NOT_APPLICABLE`; an empty
-Resource or Prompt inventory is `NOT_APPLICABLE`, not a failure.
+| Flag | Meaning |
+| --- | --- |
+| `--bind HOST:PORT` | The address the REST server listens on. Default `127.0.0.1:8000`. A `bind` entry saved in `deployment.toml` is used when `--bind` is absent. Another host needs `--yes`, because it exposes the server beyond this computer. |
 
-Run `verify` after every Gateway restart, and after a Module install with `--restart`.
+Agents reach the endpoint at `http://<bind>/mcp`. The server also answers `/health/live`,
+`/health/ready` and `/metrics` on the same port. If the port is taken, `start` names the conflict and
+suggests another port. Leave `start` running in its own terminal while the agents work; it is not
+started as a background service.
 
-## Bundle upgrade
+When a risky value was accepted in an earlier `setup` run, `start` activates it without asking and
+lists it with the acceptance it rests on. A risky value with no matching record, for example after a
+hand edit of `deployment.toml`, needs `--yes` in that `start` run.
 
-A Bundle upgrade replaces the managed Runtime Bundle Project with a newer bundle version. It is the
-v1 upgrade path, per the D26 Phase 6 amendment.
+## Connect an agent
 
-1. Bump `packages/ignition-runtime-bundle/BUNDLE_VERSION`. `tooling.native` refuses a build whose
-   `bundle_info` literal or project ownership marker disagrees with that file, so the version has one
-   source.
-2. Build and check the release, as shown under Prerequisites.
-3. `doctor` with the new manifest. Expect `bundle-info` FAIL, because the deployed bundle still
-   reports the old version, and expect `compatibility` to stay `UNKNOWN` until the new bundle is
-   deployed and a `testedTuples` row matches its tuple.
-4. `plan` with the new manifest and ZIP. Expect `UPDATE bundle-project ignition_runtime: redeploy
-   managed bundle 0.7.0 -> 0.8.0 (minor)`.
-5. `apply` with `--backup-dir` set. Add `--acknowledge-upgrade` only for a `major` change or a
-   downgrade, which is how you deliberately roll a bundle back.
-6. `verify`, then have the MCP client reconnect, because the Tool inventory may have changed.
+`connect <role>` registers one role's endpoints with an agent client. It registers two MCP servers:
+`ignition-runtime-<role>` at `<gateway-url>/data/mcp/<role>`, and `ignition-rest-<role>` at the REST
+server's `/mcp` address. It needs the deployment to be set up already, and the REST endpoint needs
+`start` to be running.
 
-The `UPDATE` replaces the whole managed Project. Anything you authored inside `ignition_runtime` by
-hand is lost unless you exported it first, which is what `--backup-dir` is for.
+```bash
+ignition-mcp connect analysis --client claude
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--client claude\|codex\|none` | The client to register with. `claude` is Claude Code, `codex` is Codex, `none` registers nothing. A client that is not installed is offered as an option you cannot choose, and the reason names the missing binary. |
+
+## Reset a deployment
+
+`reset` removes what `setup` created, on the Gateway and locally. It deletes only a resource the
+deployment's own record says `setup` created, and it lists anything else it finds as left in place.
+It is refused outside `dev`.
+
+```bash
+ignition-mcp reset \
+  --deployment default \
+  --gateway-url http://127.0.0.1:8088 \
+  --gateway-token-file ~/.config/ignition-mcp/gateway-token
+```
+
+## The MCP Module
+
+`setup` installs one `.modl` file from your computer on the Gateway, through the Gateway's own module
+routes. It downloads nothing. It learns the Module id and build from the file's own `module.xml`.
+
+The Module step runs in a fixed order, and each check happens before the step it protects:
+
+1. Check the file. `setup` refuses a file whose SHA-256 does not match the pinned build, that is
+   larger than 64 MiB, is not a ZIP, has no `module.xml`, has no `<id>` or `<version>`, has a version
+   without a 10-digit build, or is not the MCP Module, `com.inductiveautomation.mcp`.
+2. Compare with the Gateway. The same build already installed is `OK` and uploads nothing. A Module
+   the listing does not report as `ACTIVE`, or does not report a state for at all, is refused before
+   any write, because a Module the Gateway does not run hosts no route. A lower build is always
+   refused. A newer build needs the upgrade acceptance, which `--yes` covers.
+3. Upload the file. If the Gateway reports a different Module id, the step stops and installs nothing.
+4. Install the Module. This needs `--accept-certificate` and `--accept-eula`; a missing acceptance
+   stops the run before any write. If the Module has no certificate or no license, the step is
+   skipped.
+5. Restart the Gateway and wait until the listing reports the Module `ACTIVE` on the new build. A
+   Module that comes back otherwise fails the step, which names the state, what the listing reports
+   beside it such as `onStartup disabled`, or that it reported no state at all.
+
+The acceptance for the restart is one of the named items too. Grant it with `--yes` in one-line mode.
+
+## Upgrade the bundle
+
+A bundle upgrade replaces the bundle project with a newer version of this repository's Tools. It is
+the normal `setup` path, not a separate command.
+
+1. Get the newer repository version, or, if you develop the bundle, raise the number in
+   `packages/ignition-runtime-bundle/BUNDLE_VERSION`. The build refuses a bundle whose `bundle_info`
+   version or ownership mark disagrees with that file.
+2. Validate the project, as in [Prerequisites](#prerequisites).
+3. Run `setup` again. It names the kind of version change, `patch`, `minor`, `major` or `downgrade`. A
+   `major` change and a downgrade need explicit acknowledgement, which `--yes` covers. A downgrade is
+   how you roll back on purpose.
+4. Run `status` to check the deployment, then reconnect the AI application with `connect`, because
+   the Tool list may have changed.
+
+Before `setup` replaces a managed project, it backs that project up. The upgrade replaces the whole
+bundle project, so anything you added to it by hand is lost.
 
 ## The Runtime Target Policy
 
-The Runtime plane reads its Target allowlists from a deployment-owned document, not from the bundle.
-It lives in the reserved Tag provider `IgnitionMCPPolicy` as two Tags:
+The Runtime write Tools read their allowlists from a document on the Gateway. It is stored as two
+Tags in the reserved Tag provider `IgnitionMCPPolicy`:
 
-- `[IgnitionMCPPolicy]RuntimeTargetPolicy` holds the canonical JSON text;
-- `[IgnitionMCPPolicy]RuntimeTargetPolicyLength` holds its byte length, which the handler reads first
-  so an over-cap document is refused without being materialized.
+- `[IgnitionMCPPolicy]RuntimeTargetPolicy` holds the JSON text.
+- `[IgnitionMCPPolicy]RuntimeTargetPolicyLength` holds its size in bytes. The Tools read the size
+  first, so they refuse an oversized document without loading it.
 
-`setup-native apply` is the only supported writer, and the generic `config_resource_*` Tools refuse
-the reserved provider whatever the Target allowlist says, so an MCP caller cannot move the policy.
+Only `ignition-mcp setup` writes the policy. The REST server's `config_resource_*` Tools refuse the
+`IgnitionMCPPolicy` provider whatever their allowlist says, so an agent cannot change the policy.
 
-A document is stored in canonical form: keys sorted, no whitespace. Byte-for-byte stability is what
-lets `plan` compare its own SHA-256 with the served value and report `NO CHANGE`. Formatting the file
-by hand is harmless, because the CLI re-canonicalizes it.
+`setup` generates the document from the Deployment environment and the roles and stores it in the
+deployment directory as `runtime-policy.json`. In `dev` every Runtime Mutation Tool gets `*`; in
+`prod` every allowlist is empty. You do not write or edit it.
 
 ```json
 {
@@ -363,158 +345,178 @@ by hand is harmless, because the CLI re-canonicalizes it.
   "auditProfile": "MCP_AUDIT",
   "allowlists": {
     "tag_write": ["[default]Plant/AHU"],
-    "alarm_shelve": ["prov:default:/tag:Plant/AHU/*"],
-    "alarm_unshelve": ["prov:default:/tag:Plant/AHU/*"]
+    "alarm_shelve": ["prov:default:/tag:Plant/AHU"],
+    "alarm_unshelve": ["prov:default:/tag:Plant/AHU"]
   },
   "alarmShelveMaxSeconds": 3600,
   "tagUpdateMaxItems": 20
 }
 ```
 
-Rules, from `contracts/shared/runtime-target-policy.schema.json` and the CLI's shape check:
+Rules, from `contracts/shared/runtime-target-policy.schema.json` and the command's own checks:
 
-- `schemaVersion`, `allowlists`, `serviceIdentity` and `auditMode` are required.
-- `schemaVersion` must be `1`.
-- `allowlists` is keyed by Tool name, so a Tag allowlist cannot stand in for an Alarm allowlist. An
-  absent key means no target for that Tool. Allowing everything needs an explicit `"*"`.
-- `serviceIdentity` is a non-empty string, and it is the audit actor for Runtime Mutations. The caller
-  cannot supply it.
-- `auditMode` is `best_effort`, `required` or `off`. `auditProfile` is optional and non-empty.
-- Item ceilings are bounded 1 to 100. `tagUpdateMaxItems`, `tagCreateMaxItems` and `tagCopyMaxItems`
-  are checked by the CLI; the schema bounds `tagDeleteMaxItems`, `tagMoveMaxItems`,
-  `tagRenameMaxItems`, `tagWriteMaxWrites` and `alarmMaxPaths` the same way. An absent ceiling means
-  the 20-target project default.
-- `alarmShelveMaxSeconds` is a positive integer, and the product hard maximum is 86400 seconds
-  (D12). A deployment may lower it, never raise it.
-- The canonical text must be at most 32768 bytes.
+- `schemaVersion`, `allowlists`, `serviceIdentity` and `auditMode` are required. `schemaVersion` is
+  `1`.
+- `allowlists` has one key per Tool name, so a Tag entry can never allow an alarm Tool. A Tool with
+  no key can change nothing. `"*"` allows everything.
+- A Tag entry covers that path and the paths below it, at `/` boundaries: `[default]AHU` covers
+  `[default]AHU/Temp` but not `[default]AHU2`. UDT definitions under `_types_` need an explicit
+  `_types_` entry, which `*` does not cover.
+- An alarm entry is a provider-qualified alarm path starting with `prov:` and containing no `*`. It
+  covers that path and the paths below it, at `/` or `:` boundaries.
+- `serviceIdentity` is the actor name in Ignition's audit log for every Runtime write. The agent
+  cannot set it.
+- `auditMode` is `best_effort`, `required` or `off`. With `required`, a write is refused when the
+  audit profile named in `auditProfile` is unavailable.
+- The per-call item limits are between 1 and 100, 20 when absent. The schema limits
+  `tagUpdateMaxItems`, `tagCreateMaxItems`, `tagCopyMaxItems`, `tagDeleteMaxItems`, `tagMoveMaxItems`,
+  `tagRenameMaxItems`, `tagWriteMaxWrites` and `alarmMaxPaths` the same way.
+- `alarmShelveMaxSeconds` can lower the shelve limit, never raise it past 86400 seconds.
+- The stored text is at most 32768 bytes.
 
-To change the policy, edit the file and run `plan` then `apply`. `plan` reports
-`UPDATE runtime-policy [IgnitionMCPPolicy]RuntimeTargetPolicy: replace the served policy (...)` with
-the byte count and the old and new SHA-256 prefixes, and `apply` confirms the change with a read-back.
+`setup` stores the policy in a fixed form, with sorted keys and no spaces, so `status` can compare it
+byte for byte with the served copy. A served document that differs is reported as a hand edit, and
+`setup` restores the generated one.
 
-A Runtime Mutation fails closed with `operation_disabled` when the document is missing, unreadable,
-over the cap, or invalid, so an operator who removes the policy has disabled every Runtime Mutation
-rather than opened them. Tag entries match at segment boundaries: `[default]AHU` authorizes
-`[default]AHU/Temp` and never `[default]AHU2`.
+If the policy is missing, unreadable, too large or invalid, every Runtime write Tool refuses with
+`operation_disabled`. Removing the policy switches Runtime writes off. It never opens them up.
 
-## Enabling Mutation classes
+## Turn on writes
 
-Every Mutation class is disabled by default on both planes. The classes are `NONE` for reads, and
-`CONFIG_MUTATION`, `CONTROL_MUTATION` and `ADMIN_MUTATION` for writes (D08,
-`contracts/shared/mutation-classes.json`). No class is enabled by a hierarchy or a scope alone; you
-turn on each layer.
+Every kind of write starts switched off. There are three kinds: `CONFIG_MUTATION` for configuration
+changes, `CONTROL_MUTATION` for control actions and `ADMIN_MUTATION` for administration. No scope or
+role includes another. A `prod` deployment leaves all of them off. A `dev` deployment turns on what
+the Engineer role needs.
 
-Runtime plane, from `setup-native` and the Gateway:
+On the Runtime server, the role decides:
 
-1. `--profile` chooses the Tool list the Server Config advertises. `readonly` carries no Mutation.
-   `operator` adds the `CONTROL` Tools `tag_write`, `alarm_shelve` and `alarm_unshelve`.
-   `configurator` adds the `CONFIG` Tools `tag_update`, `tag_create`, `tag_copy`, `tag_delete`,
-   `tag_move` and `tag_rename`. `full` adds both groups. There is no ADMIN Runtime profile (D26).
-2. `--provision-security-levels` creates the dedicated Security Level for that profile, a leaf child
-   of `Authenticated`, named `IgnitionMcpRuntime<Profile>` unless `--security-level-name` says
-   otherwise. An existing level is never modified, and one with child levels is refused.
-3. `--create-runtime-token` creates the Runtime API token granted exactly that level, and writes its
-   secret once to your `--runtime-token-file`. On a plain-HTTP lab Gateway only, add
-   `--runtime-token-insecure-channel`.
-4. The Runtime Target Policy allowlists decide which targets those Tools may touch. An enabled Tool
-   with no allowlist entry still fails.
+1. The role's profile decides which Tools the endpoint offers. Analysis uses `readonly`, which has no
+   write Tools. Engineer uses `full`, which has all of them.
+2. The Server Config's permissions tree decides who may connect. `setup` generates the tree and each
+   role's Runtime token together, so they match.
+3. The Runtime Target Policy allowlists decide which targets each Tool may change. In `dev` a Tool can
+   change anything; in `prod` it can change nothing until you switch the deployment to `dev`.
 
-REST plane, in `ignition-rest-mcp` environment configuration:
+On the REST server, `setup` derives the settings from the environment and the role, and `start`
+passes them:
 
 ```bash
-export IGNITION_MCP_CONFIG_MUTATION_ENABLED=true
-export IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,project_import
-export IGNITION_MCP_MUTATION_TARGETS='{"config_resource_update":["com.inductiveautomation.historian/historian-provider"]}'
-export IGNITION_MCP_CONTROL_MUTATION_ENABLED=true    # alarm_pipeline_cancel
-export IGNITION_MCP_ADMIN_MUTATION_ENABLED=true      # no v1 Tool is ADMIN
-export IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true   # project_export, tag_config_export
+IGNITION_MCP_CONFIG_MUTATION_ENABLED=true
+IGNITION_MCP_MUTATION_OPERATIONS=config_resource_update,project_import
+IGNITION_MCP_MUTATION_TARGETS='{"config_resource_update":["com.inductiveautomation.historian/historian-provider/Core"],"project_import":["MES"]}'
+IGNITION_MCP_CONTROL_MUTATION_ENABLED=true    # for alarm_pipeline_cancel
+IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true   # for project_export and tag_config_export
+IGNITION_MCP_PROJECT_WRITER_ENABLED=true      # for project_import and the Perspective writes
+IGNITION_MCP_GATEWAY_ID=plant-gateway-1
 ```
 
-The caller's credential also needs the matching scope (`ignition.config`, `ignition.control`,
-`ignition.admin`) under D07, and only a verified principal may mutate: an `auth=none` deployment is
-read-only. Sensitive exports are a separate switch from the class gates.
+The caller's token also needs the matching scope, `ignition.config` or `ignition.control`. In `dev`
+the Engineer role's Named static token carries both; the Analysis role's token carries
+`ignition.read` only. The exports switch is separate from the write switches.
 
-The deployment checks run in this order, and the first refusal decides the error code: class enabled,
-operation allowlist, the operation's own Target-class rule (Refused resource types are denied even
-under `*`), Target allowlist, capability. A Tool whose class is disabled is hidden from `tools/list` as
-well as refused at call time with `operation_disabled`.
+The REST server checks a write in this order, and the first refusal decides the error: the kind is
+switched on, the Tool is in `IGNITION_MCP_MUTATION_OPERATIONS`, the target is not a refused resource
+type, the target is in `IGNITION_MCP_MUTATION_TARGETS`, and the Gateway offers the route. A Tool whose
+kind is switched off is also missing from the Tool list.
 
-To turn one write on safely, allow one operation id and one Target, call it, read the state back, and
-only then widen. D08 never auto-retries a write.
+Turn on one Tool and one target, try it, check the result, and only then allow more. Neither server
+retries a write on its own. The [Tool catalog](../guide/tools.md) lists what every Tool needs.
 
 ## Reading `operation_diagnose` output
 
-`operation_diagnose` is a REST-plane read Tool. It takes one parameter, `correlationId`, which must be
-an exact UUIDv7 string of 36 characters. A malformed identifier is `invalid_argument`, and a lookup is
-never fuzzy or partial.
+`operation_diagnose` is a read Tool on the REST server. It takes one value, `correlationId`, which
+must be the exact 36-character id. A malformed id is `invalid_argument`. The lookup is exact, never
+partial.
 
-Where to find the identifier:
+Where to find the id:
 
-- every Tool error from `ignition-rest` carries a JSON body with `code`, `message` and
-  `correlationId`;
-- a structured log line for the call carries the same `correlationId` field
-  (`IGNITION_MCP_LOG_FORMAT=json`);
-- a Mutation's success payload carries it, for example `project_import` returns `correlationId` and
+- Every REST Tool error carries `code`, `message` and `correlationId`.
+- The server's log line for the call carries the same `correlationId`. Set
+  `IGNITION_MCP_LOG_FORMAT=json` for structured logs.
+- A successful write returns it too. For example, `project_import` returns `correlationId` and
   `transactionId`.
-
-The output fields and how to read them:
 
 | Field | Meaning |
 | --- | --- |
-| `tool` | the Tool the record belongs to |
-| `outcome` | `in_progress`, `succeeded`, `failed`, `outcome_unknown`, `cancelled`, `interrupted`. A record that is still `in_progress` has no `finishedAt`: the call is running, or the process died before it wrote a result |
-| `errorCode` | the D06 taxonomy code, or `null` on a success |
-| `startedAt`, `finishedAt` | the call window |
-| `phases` | ordered `name` and `at` pairs, so you can see how far the operation got |
-| `phasesTruncated` | `true` means the record hit the 32-entry ceiling, dropped its oldest phase and kept the newest. The drop is reported, never silent |
-| `transactionId` | the D16 Project transaction, when the operation had one |
-| `downstreamCorrelationId` | the identifier the server correlated on the Gateway side, when present |
-| `auditResultMissing` | `true` means the audited operation has no result audit row, so the audit trail is incomplete for that call |
+| `tool` | The Tool that made the call. |
+| `outcome` | `in_progress`, `succeeded`, `failed`, `outcome_unknown`, `cancelled` or `interrupted`. `in_progress` without `finishedAt` means the call is still running, or the server stopped before it recorded the result. |
+| `errorCode` | The error code, or `null` for a success. |
+| `startedAt`, `finishedAt` | When the call started and ended. |
+| `phases` | The steps the call reached, in order, each with a time. |
+| `phasesTruncated` | `true` means the call had more than 32 steps. The oldest were dropped and the newest kept. |
+| `transactionId` | The project transaction, for project writes. |
+| `downstreamCorrelationId` | The id the Gateway used for the same request, when there is one. |
+| `auditResultMissing` | `true` means the audit log has no result entry for this call. |
 
-Three limits matter when you chase an old call:
+Why a lookup can return `not_found`:
 
-- records are pruned on a budget, defaults `IGNITION_MCP_OPERATION_RECORD_MAX_AGE_HOURS=72` and
-  `IGNITION_MCP_OPERATION_RECORD_MAX_ROWS=10000`. A `not_found` on a call from last week is expected;
-- records are principal-scoped. Another principal's identifier answers `not_found`, which is
-  deliberate, so the Tool is not an existence oracle. Only an `ignition.admin` caller sees across
-  principals;
-- if the record store was unavailable at call time, the call still ran and no record exists. The
-  server logs an `operation_record_failure` line for it.
+- Records are removed after 72 hours or beyond 10,000 records, by default. See
+  `IGNITION_MCP_OPERATION_RECORD_MAX_AGE_HOURS` and `IGNITION_MCP_OPERATION_RECORD_MAX_ROWS`.
+- Each caller only sees their own records. Another caller's id answers `not_found`, so the Tool
+  cannot reveal whether a call exists. Only a caller with `ignition.admin` sees all records.
+- If the record store was down during the call, the call still ran but has no record. The server
+  logged an `operation_record_failure` line instead.
 
-An `outcome_unknown` is a stop, not a retry signal. Verify the target's state with a read first, then
-decide. D06 forbids automatic replay of an ambiguous Mutation.
+`outcome_unknown` means stop and look. Read the target to see its real state before you decide what to
+do next. The server never repeats an uncertain write on its own.
 
 ## Exit codes
 
 | Code | Meaning |
 | --- | --- |
-| 0 | `doctor` or `verify` finished with no `FAIL`; `plan` finished with no `BLOCKED`; `apply` wrote everything and verified; `install-module` installed or upgraded the Module, reported `NO CHANGE`, or completed an install whose restart is still pending |
-| 1 | a check failed, a write failed, or a transport error occurred. `install-module` also answers 1 when the Gateway runs a newer build than the file, when the healthy-module inventory cannot be read to its end, when the Gateway refuses the upload, an acceptance or the install, or when the Gateway never came back with the installed build after `--restart` |
-| 2 | usage error: bad flag, unreadable or invalid manifest, artifact hash mismatch, rejected credential file. `install-module` also answers 2 for an artifact problem that stops the run before any request: a SHA-256 mismatch, a file over the `.modl` bound, an archive with no readable `module.xml`, a version with no 10-digit build, and a Module id that is not `com.inductiveautomation.mcp` |
-| 3 | the run needs a decision it was not given. `plan` reports a `BLOCKED` line and `apply` writes nothing. `install-module` installs nothing, and in the certificate or EULA case it has already uploaded the archive |
+| 0 | Success. |
+| 1 | A step failed, or the Gateway could not be reached. |
+| 2 | A problem with the flags or the answers. Nothing was written. |
 
-An interrupted run exits 2. An unexpected crash exits 1 and prints only the exception type, so a
-credential cannot leak through a traceback.
+With `--json` the report is one document with stable error codes, listed in
+[Quick start](../guide/quick-start.md#exit-codes-and-error-codes). Pressing Ctrl+C exits with 2 and
+keeps the steps that already ended. An unexpected crash exits with 1 and prints only the error type,
+so a secret cannot leak through a stack trace.
+
+## Windows
+
+Windows is not a supported platform, although nothing is known to be broken. The scope, the known
+limitations and a manual checklist that nobody has run yet are recorded in this runbook.
+
+The tool table in [Prerequisites](#prerequisites) is the Windows starting point. It carries the
+**not run on Windows yet** marker.
+
+- **Line endings.** A checkout with Windows (CRLF) line endings works: the bundle tooling reads
+  those files as LF and builds the same ZIP as a Linux checkout.
+- **Checksums.** Windows has no `sha256sum -c`. In `dist/release`, run
+  `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
+  `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`, and compare the result with the
+  hash in `ignition-runtime-bundle-<version>.sha256`.
+- **Prompts.** Under mintty without a pseudo console, the wizard falls back to plain line prompts with
+  the same questions and checks. They cannot switch terminal echo off, so a pasted secret shows on
+  screen while you type it. The secret still never reaches the CLI's output.
+- **Token files and directories.** Windows skips the `0600` secret-file check and the `0700`
+  deployment-directory check, and logs one WARNING instead. Use filesystem ACLs so only the service
+  account can read the files under `~/.config/ignition-mcp/`.
 
 ## Known v1 limitations
 
-- Three Alarm Tools are parked, and that is the known v1 gap on the Runtime plane. `alarm_status` and
-  `alarm_journal` are held in `packages/ignition-runtime-bundle/deferred/` under the D12 Phase 2
-  bounded-execution amendment. `alarm_acknowledge` is parked under the D12 Phase 4 amendment by the
-  ticket #9 outcome, for the same reason: an exact-path `queryStatus` has no native limit or
-  continuation, so it cannot bound the acknowledge pre-check or the Observed state. None of the three
-  is discoverable or callable, the profiles do not list them, and re-enabling one needs a native
-  pre-execution bound plus fresh live evidence.
-- The pinned official MCP Module publishes `structuredContent` and `isError` but no Tool
-  `outputSchema` (D27). Repo-owned schemas in `contracts/schemas/` remain the binding output contract.
-- The Module drops object-valued JSON nulls, so Runtime output uses the `ignition-null-v1` encoding
-  (D28): null becomes `{"$ignition":"null"}`, and an object carrying `$ignition` is escaped as
-  `{"$ignition":"object","entries":[...]}`. This applies to the Runtime plane only.
-- The 8.3.9 tuple carries `FAILED_NATIVE_BINDING` from G3, G4 and G5. The 8.3.8 tuple closes as
-  `VERIFIED_WITH_LIMITATION` under D27. Neither is `SUPPORTED`, and no command in this runbook records
-  one.
-- The Runtime Bundle is 0.x.
-- The repository pins one MCP Module build, so Module upgrade is covered by `install-module` refusal
-  logic and unit tests, not by a live build-to-build upgrade.
-- `doctor` and `verify` do not wait for a starting Gateway. Readiness waiting belongs to the live
-  harness (`tests/harness/`).
+- `alarm_status`, `alarm_journal` and `alarm_acknowledge` are switched off. Ignition's alarm query
+  functions have no row limit or continuation, so these Tools cannot bound their answer or their
+  pre-checks. Their code is in `packages/ignition-runtime-bundle/deferred/`, no profile lists them,
+  and turning one on needs a bounded mechanism plus new live test evidence.
+- The MCP Module returns structured results but publishes no Tool output schemas. The schemas in
+  `contracts/schemas/` are the reference.
+- The MCP Module drops `null` values inside objects, so Runtime answers encode them. See
+  [How it works](../guide/how-it-works.md#two-details-for-client-developers).
+- On 8.3.9 the Module's response format is recorded as `FAILED_NATIVE_BINDING`. On 8.3.8 it is
+  `VERIFIED_WITH_LIMITATION`. Neither is recorded as production-supported, and no command in this
+  runbook records that.
+- The bundle version is still 0.x.
+- The repository has one Module build, so a Module upgrade to a newer build is tested with unit tests,
+  not with a real upgrade.
+- `status` does not wait for a Gateway that is starting. Only the live test setups under
+  `tests/harness/` wait.
+
+## Sources
+
+`CONTEXT.md` defines Module install, Module upgrade and Bundle upgrade. Every flag was checked
+against `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`,
+`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/engine/` and
+`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup/`, and each command's `--help`. The
+console samples in this runbook show the shape of the output; they are not recorded runs.

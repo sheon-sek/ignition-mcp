@@ -38,7 +38,7 @@ _OPENAPI_OPERATIONS = (
     # read its verification uses.
     ("delete", "/data/alarm-notification/api/v1/pipeline"),
     ("get", "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"),
-    # Ticket #21: the Server Config create and modify routes `setup-native apply`
+    # Ticket #21: the Server Config create and modify routes `ignition-mcp setup`
     # writes through (never `config_resource_*`, which refuses the type by design).
     ("post", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
     ("put", "/data/api/v1/resources/com.inductiveautomation.mcp/server-config"),
@@ -124,14 +124,14 @@ DEFAULT_COLLECTION = "core"
 _MANAGED_MARKER_RE = re.compile(r"^ignition-mcp-managed:\s*product=(\S+)\s*;\s*bundle=(\S+)\s*$")
 MANAGED_PRODUCT = "ignition-runtime-bundle"
 
-#: The MCP Module's own Server Config resource type. ``setup-native apply`` writes it
+#: The MCP Module's own Server Config resource type. ``ignition-mcp setup`` writes it
 #: through the type's collection routes; D30 §5 refuses it to the generic config
 #: Mutations, which is exactly why apply has its own curated path.
 SERVER_CONFIG_TYPE = "com.inductiveautomation.mcp/server-config"
 
 #: Ticket #22: the resource types D20's opt-in provisioning writes — the Gateway's
 #: Security Levels singleton and an API token. D30 §5 refuses both to the generic
-#: config Mutations, so ``setup-native apply`` owns them through its curated path.
+#: config Mutations, so ``ignition-mcp setup`` owns them through its curated path.
 SECURITY_LEVELS_TYPE = "ignition/security-levels"
 API_TOKEN_TYPE = "ignition/api-token"
 
@@ -650,7 +650,7 @@ def _policy_probe_report(server: Any, report: dict[str, Any]) -> dict[str, Any]:
 def _record_tag_import(server: Any, body: bytes) -> None:
     """Track the policy document an accepted import leaves in the provider.
 
-    `setup-native apply` (and the ticket #7 harness) verifies the *served*
+    `ignition-mcp setup` (and the ticket #7 harness) verifies the *served*
     document through a handler-scope read, so the fake has to remember what it
     was asked to write instead of only replaying the response body.
     """
@@ -669,7 +669,7 @@ def _record_tag_import(server: Any, body: bytes) -> None:
             server.write_probe_value = value
     if entries:
         # Ticket #21: what the provider *serves* is what was imported, so
-        # `setup-native apply`'s read-back (and its declared-length companion) can be
+        # `ignition-mcp setup`'s read-back (and its declared-length companion) can be
         # compared with the document it wrote. Before the first import the recorded
         # provider export fixture answers instead.
         server.served_policy_tags = entries
@@ -2536,7 +2536,7 @@ class _Server(http.server.ThreadingHTTPServer):
         # ``module_install_flow`` has NO MCP Module: ``modules/healthy`` serves an
         # empty list until the operator uploads, accepts and installs one through the
         # documented module routes and restarts the Gateway, exactly the state
-        # ``setup-native install-module`` drives. The build the module comes back
+        # ``ignition-mcp setup`` drives. The build the module comes back
         # with is parsed from the uploaded archive's own module.xml.
         self.module_install_flow = module_install_flow
         self.uploaded_module: dict[str, Any] | None = None
@@ -2603,7 +2603,7 @@ class _Server(http.server.ThreadingHTTPServer):
         self._seed_security_levels()
 
     def _seed_security_levels(self) -> None:
-        """Publish the Security Levels singleton ``setup-native apply`` reconciles.
+        """Publish the Security Levels singleton ``ignition-mcp setup`` reconciles.
 
         Ticket #22: the stock tree (modelled from the live G0 evidence) with the
         ``Authenticated`` level a dedicated Runtime level hangs under, so a plan has a
@@ -2626,7 +2626,7 @@ class _Server(http.server.ThreadingHTTPServer):
     def deployed_bundle_version(self) -> str:
         """The bundle version the served Project reports, as the Module's handler reads it.
 
-        Ticket #21: ``setup-native apply`` imports the Project, so the bundle a
+        Ticket #21: ``ignition-mcp setup`` imports the Project, so the bundle a
         deployment now serves is the imported one. A Project that was seeded without
         an import (the harness deploys by copying) keeps the configured version.
         """
@@ -2650,10 +2650,10 @@ class _Server(http.server.ThreadingHTTPServer):
     def _seed_server_config(self, runtime_tools: tuple[str, ...], bundle_version: str) -> None:
         """Publish the deployed MCP Server Config the harness workflows deploy by hand.
 
-        Ticket #21: an explicit Tool list and a permissions tree, so ``setup-native
-        plan``/``apply`` read and reconcile the same document shape the live harness
-        copies onto the Gateway. A config apply creates lands in the same state
-        through the modelled collection routes.
+        Ticket #21: an explicit Tool list and a permissions tree, so a deployment reads
+        and reconciles the same document shape the live harness deploys onto the
+        Gateway. A config apply creates lands in the same state through the modelled
+        collection routes.
         """
 
         self.resources[SERVER_CONFIG_TYPE] = {
@@ -3589,7 +3589,7 @@ class RecordedGateway:
         """The Tags the reserved policy provider currently serves.
 
         Ticket #21: the provider's own state after the last import, so a case can
-        assert what ``setup-native apply`` left in it without a second HTTP read.
+        assert what ``ignition-mcp setup`` left in it without a second HTTP read.
         """
 
         return list(self._server.served_policy_tags)

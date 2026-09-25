@@ -5,7 +5,7 @@ Two questions, both answered with live evidence from a disposable Gateway:
 
 1. Where can the deployment-owned Runtime Target Policy live so that a Runtime
    Tool handler reads it at bounded cost, the Runtime plane cannot write it, and
-   `setup-native apply` can write it through Native REST?
+   `ignition-mcp setup` can write it through Native REST?
 2. Is `system.alarm.queryStatus` on one exact Alarm path bounded before or during
    execution, to the D12 Phase 2 amendment standard?
 
@@ -485,7 +485,7 @@ def import_policy(
 
     The recorded 8.3.8 run showed a freshly created Tag provider answering
     `/tags/import` with `Bad 776 TagPath.getPathLength() ... cleanPath is null`
-    while the provider was still starting, so `setup-native apply` cannot treat a
+    while the provider was still starting, so `ignition-mcp setup` cannot treat a
     single import as reliable. The first attempt keeps D30's `Abort` policy; the
     retries are idempotent so a partially applied import cannot wedge the write.
     """
@@ -815,7 +815,7 @@ def stage_policy_read(config: Config) -> dict[str, Any]:
         # first /tags/import can be rejected while the provider is starting, and
         # an accepted import can be written to config while the running provider
         # serves no Tags at all. Re-import idempotently and probe again; a
-        # config-only write is not enough for `setup-native apply` either.
+        # config-only write is not enough for `ignition-mcp setup` either.
         repair = import_policy(
             config, policy_document.tag_document_bytes(),
             deadline_seconds=30.0, first_policy="MergeOverwrite",

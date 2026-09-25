@@ -306,7 +306,7 @@ def provision_providers(base_url: str, token: str) -> dict[str, Any]:
     """The three Tag-provider config resources ticket #36 is about.
 
     They are ordinary `ignition/tag-provider` resources created through the Gateway's own
-    Native REST API — the same route the deployment-owned `setup-native apply` uses for the
+    Native REST API — the same route the deployment-owned `ignition-mcp setup` uses for the
     policy provider, and the same *type* D30 §5 keeps allowed. Creating
     ``IgnitionMCPPolicy`` here is deliberately part of the fixture: the cases must be able
     to show that a refused call left the policy's storage provider exactly as it was, which

@@ -19,7 +19,6 @@ import contextlib
 import hashlib
 import io
 import json
-import os
 import re
 import sys
 import time
@@ -43,10 +42,6 @@ from ignition_rest_mcp.artifacts.local import LocalArtifactStore, quotas_from_se
 from ignition_rest_mcp.audit.sink import Auditor, SqliteAuditSink
 from ignition_rest_mcp.auth import build_auth, principal_from_token
 from ignition_rest_mcp.capabilities.registry import CapabilityRegistry
-from ignition_rest_mcp.cli.setup_native import doctor as setup_doctor
-from ignition_rest_mcp.cli.setup_native import plan as setup_plan
-from ignition_rest_mcp.cli.setup_native import verify as setup_verify
-from ignition_rest_mcp.cli.setup_native.inputs import load_inputs
 from ignition_rest_mcp.client.gateway import GatewayClient
 from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.errors import GatewayError
@@ -433,64 +428,6 @@ class Driver:
                          and self.settings.config_mutation_enabled,
                          {"gatewayId": self.settings.gateway_id, "writer": True})
         return project
-
-    async def stage_setup_native(self) -> None:
-        self.stage.stage("setup-native")
-        # The token file lives inside the 0700 data dir, never under an uploaded
-        # evidence directory (secrets must never reach evidence).
-        token_path = self.data_dir / "setup-native.token"
-        token_path.write_text(self.settings.gateway_api_token + "\n", encoding="utf-8")
-        os.chmod(token_path, 0o600)
-        base = [
-            "--bundle-manifest", str(self.args.release_manifest),
-            "--bundle-zip", str(self.args.release_zip),
-            "--gateway-url", self.settings.gateway_url,
-            "--mcp-url", self.args.runtime_mcp_url,
-            "--gateway-token-file", str(token_path),
-            "--mcp-token-file", str(token_path),
-            "--profile", "readonly",
-            "--server-config-name", self.args.server_config_name,
-            "--json",
-        ]
-        reports: dict[str, Any] = {}
-        for command, runner in (("doctor", setup_doctor.run), ("plan", setup_plan.run), ("verify", setup_verify.run)):
-            inputs = load_inputs(base, command)
-            buffer = io.StringIO()
-            with contextlib.redirect_stdout(buffer):
-                code = await runner(inputs)
-            text = buffer.getvalue()
-            payload: Any = None
-            if text.strip():
-                candidate = text if command != "plan" else text[: text.rindex("}") + 1]
-                try:
-                    payload = json.loads(candidate)
-                except ValueError:
-                    payload = {"raw": text[:2000]}
-            reports[command] = payload
-            # Persist the report before asserting, so a FAIL still carries the
-            # machine-readable diagnosis in observations.
-            self.observations["setupNative"] = {
-                "doctor": reports.get("doctor"), "plan": reports.get("plan"),
-                "verify": reports.get("verify"),
-            }
-            self.stage.check(f"{command}-exit-zero", code == 0 and isinstance(payload, dict),
-                             {"exitCode": code, "failedChecks": [
-                                 c for c in (payload or {}).get("checks", [])
-                                 if isinstance(c, dict) and c.get("status") not in ("PASS", "SKIP", "NOT_APPLICABLE", "UNKNOWN")
-                             ] if isinstance(payload, dict) else {"raw": str(payload)[:1500]}})
-        plan_report = reports.get("plan") or {}
-        actions = plan_report.get("actions", []) if isinstance(plan_report, dict) else []
-        blocked = [a for a in actions if isinstance(a, dict) and a.get("action") == "BLOCKED"]
-        changed = [a for a in actions if isinstance(a, dict) and a.get("action") in ("CREATE", "UPDATE")]
-        self.stage.check("plan-no-change-only", not blocked and not changed,
-                         {"actions": actions, "applied": plan_report.get("applied")})
-        doctor_checks = (reports.get("doctor") or {}).get("checks", [])
-        self.observations["setupNative"] = {
-            "doctor": reports.get("doctor"),
-            "plan": reports.get("plan"),
-            "verify": reports.get("verify"),
-            "managedProject": [c for c in doctor_checks if isinstance(c, dict) and c.get("name") == "bundle-project"],
-        }
 
     async def stage_rest_plane(self, project: str) -> None:
         """Export/download/diagnose over the real Streamable-HTTP server."""
@@ -943,7 +880,6 @@ class Driver:
         fatal: str | None = None
         try:
             project = await self.stage_identity_l5()
-            await self.stage_setup_native()
             await self.stage_rest_plane(project)
             await self.stage_runtime_plane()
             await self.stage_authz_denials(project)

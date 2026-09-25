@@ -20,7 +20,7 @@ D30 §1 fixes three properties for the storage location:
 
 1. a Runtime Tool handler (`onToolCalled.py`) reads it **at bounded cost**;
 2. the **Runtime MCP server cannot write it**;
-3. `setup-native apply` can write it later **through Native REST**.
+3. `ignition-mcp setup` can write it later **through Native REST**.
 
 It must also live outside the Runtime Bundle so one deterministic bundle ZIP
 (D21) serves every deployment, and a missing/malformed document fails closed
@@ -72,7 +72,7 @@ produced the same policy facts.
 - **The write path needs a readiness retry, not a stronger bound.** One 8.3.8
   run had a freshly created provider answer the first import with
   `Bad 776 … cleanPath is null`; the identical request succeeded on retry and on
-  the other row. `setup-native apply` must therefore poll (or retry) the policy
+  the other row. `ignition-mcp setup` must therefore poll (or retry) the policy
   import under a deadline instead of assuming one import is enough. Recorded as
   `phase4/tag-import-provider-not-ready.json`.
 - **A second 8.3.8 run showed the other half of the same hazard: an *accepted*
@@ -147,10 +147,10 @@ The reader:
 3. only then reads the policy Tag and refuses the document if its byte length
    does not match the declared length.
 
-The write side carries the same cap: `setup-native apply` refuses to write a
+The write side carries the same cap: `ignition-mcp setup` refuses to write a
 document larger than the cap, writes the length Tag in the same import, and
-`verify` re-reads the export and fails when the stored bytes or the declared
-length disagree. Together with the refusal rule above, `apply` is the only writer
+`status` re-reads the export and fails when the stored bytes or the declared
+length disagree. Together with the refusal rule above, `setup` is the only writer
 of the reserved provider, so the declared length is an enforced maximum rather
 than a hint.
 
@@ -344,7 +344,7 @@ also returns no materialized result for the handler to collect.
   the document is missing, over the cap, or malformed. They must also apply the
   reserved-provider refusal rule — including `tag_create` and the source side of
   `tag_copy`/`tag_move`/`tag_rename` — before Preflight runs.
-- **Ticket #21 (`setup-native apply`)** creates the provider with
+- **Ticket #21 (`ignition-mcp setup`)** creates the provider with
   `POST /data/api/v1/resources/ignition/tag-provider`, imports the policy *and*
   its length Tag with a bounded retry loop (the first import on a fresh provider
   can fail while the provider starts), refuses a document over

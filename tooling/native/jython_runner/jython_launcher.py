@@ -558,7 +558,7 @@ def _main():
     ordered = [arguments[name] for name in fixture["parameterOrder"]]
     result = namespace["onToolCalled"](_Builder(), *ordered)
     recorder.verify_exhausted()
-    sys.stdout.write(json.dumps(result, ensure_ascii=False, separators=(",", ":")))
+    sys.stdout.write(json.dumps(result, ensure_ascii=True, separators=(",", ":")))
 
 
 if __name__ == "__main__":

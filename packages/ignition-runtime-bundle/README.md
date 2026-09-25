@@ -1,72 +1,167 @@
 # ignition-runtime-bundle
 
-Designer Project source for the `ignition-runtime` server provided by the Ignition Official MCP Module.
+This folder holds the Tools of the `ignition-runtime` MCP server, written as an Ignition Designer
+project. The official Ignition MCP Module runs them inside the Gateway. This repository ships only the
+project, called the bundle. It is not a separate server program.
 
-Phase 0 native response binding is characterized on the D27 baseline tuple. The official MCP Module returns real `structuredContent` and `isError`, but does not publish Tool `outputSchema` in `tools/list`. D27 therefore keeps repo-owned JSON Schemas as mandatory semantic output contracts and records the native discovery limitation explicitly.
+To install it, follow [Quick start](../../docs/guide/quick-start.md). To see what each
+Tool does and needs, read the [Tool catalog](../../docs/guide/tools.md#the-runtime-server-ignition-runtime).
+This page is for people who change the bundle.
 
-The Phase 1 bundle publishes exactly `bundle_info`, `tag_browse`, `tag_read`, three schema Text Resources, and no Prompts. It is buildable, but G0/G1 do **not** make a tuple production `SUPPORTED`; later D26 gates still apply.
+## Contents
 
-The pinned Module drops object-valued JSON null members during serialization. [D28](../../docs/decisions/D28-runtime-null-wire-encoding.md) specifies the lossless `ignition-null-v1` wire encoding: null becomes `{"$ignition":"null"}`; arrays recurse; ordinary objects recurse; a Tag document containing the reserved `$ignition` key is escaped as `{"$ignition":"object","entries":[[key,encodedValue],...]}`. Decode escaped entries once to recover the original document. This applies to Tag values/quality/timestamps and unknown module build, not the external REST plane. Actual structured responses are schema-validated in G1; text is not a fallback.
+The bundle has 22 Tools, 3 Text Resources and no Prompts.
 
-After editing a source schema, run `uv run --no-sync python -m tooling.native.sync_schemas` and validate/build with `tooling.native.cli`. The live harness deploys the exact generated ZIP. An empty Prompt inventory may omit its initialize capability; G1 records prompts/list as `NOT_APPLICABLE`, not a fictional PASS.
+- 13 read Tools: `bundle_info`, `tag_browse`, `tag_query`, `tag_read`, `tag_get_config`,
+  `udt_type_list`, `udt_type_get`, `alarm_shelved_list`, `historian_browse`,
+  `historian_query_series`, `historian_query_aggregate`, `database_query_list` and `database_query`.
+- 3 CONTROL Tools: `tag_write`, `alarm_shelve` and `alarm_unshelve`.
+- 6 CONFIG Tools: `tag_update`, `tag_create`, `tag_copy`, `tag_delete`, `tag_move` and `tag_rename`.
+- 3 Text Resources with the output schemas of `bundle_info`, `tag_browse` and `tag_read`.
 
-## Release artifacts (D21)
+The profiles in `contracts/profiles/` decide which Tools a Server Config offers: `readonly` has 13,
+`operator` 16, `configurator` 19 and `full` 22. Every profile lists its Tools by name, never with `*`.
 
-`uv run --no-sync python -m tooling.native.cli release --project-dir packages/ignition-runtime-bundle/project --out-dir dist/release --source-revision <40-hex git SHA> --evidence-dir tests/compatibility/evidence` writes three deterministic files: `ignition-runtime-bundle-<bundleVersion>.zip`, `…manifest.json`, `…sha256` (`sha256sum -c` compatible). CI builds twice and byte-compares all three.
+`deferred/` holds `alarm_status` and `alarm_journal`, which are switched off. See
+[deferred/README.md](deferred/README.md).
 
-- `BUNDLE_VERSION` (this directory) is the only version authority. The native validator fails unless the `bundle_info` handler's `bundleVersion` literal and the project ownership marker both equal it. The marker is the trailing `project.json` description line `ignition-mcp-managed: product=ignition-runtime-bundle; bundle=<bundleVersion>`; `setup-native doctor` classifies deployments through it and `release` checks it. `RESOURCE_SCHEMA_VERSION` tracks resource-shape changes.
-- The release ZIP stamps the source revision into the `bundle_info` handler (`__BUNDLE_SOURCE_REVISION__`), so a deployed bundle answers `bundleSourceRevision` with the 40-hex git SHA; a plain `build` output stays `UNSTAMPED`.
-- The manifest publishes the bundled Tool/Resource/Prompt inventories, the per-profile inventories, per-Tool native requirements, and `testedTuples` generated only from evidence rows that pass the `tooling.compat` validator. The release runs the validator itself and rejects production compatibility claims during Phase 3.
-- The G3 live harness deploys exactly the release ZIP, and the evidence row records its SHA-256 (`deployedBundleSha256`) plus the manifest.
+## Layout and coding rules
 
-## Phase 4: Mutation Tools (D30)
+```text
+project/com.inductiveautomation.mcp/
+  tools/<name>/resource.json                parameters and description
+  tools/<name>/onToolCalled.py              the handler
+  resources/contracts/<name>/resource.json  a Text Resource
+  resources/contracts/<name>/data.bin       its content
+```
 
-The bundle now ships nine Mutation Tools next to the 13 READ Tools. Their behaviour is fixed by D30
-and their contracts live in `contracts/tools/runtime/`:
+- Handlers are Jython 2.7 and indented with tabs. Use `unicode`, `long`, `basestring` and Java
+  classes. Python 3 syntax does not work.
+- Each handler is self-contained. There are no shared modules, so helpers such as `toolError` and
+  `encodeNulls` are copied into every handler.
+- Handlers call Ignition's `system.*` functions and return MCP structured output, or an error with the
+  shared codes from `contracts/shared/error-codes.json`.
 
-| Tool | Class | Destructive | Precondition token | Target check (D30 §6) |
-|---|---|---|---|---|
-| `tag_write` | CONTROL | no | — | the Target; the per-item Native outcome is the result |
-| `alarm_shelve`, `alarm_unshelve` | CONTROL | no | — | the exact Alarm path (`alarm_shelved_list` is the Observed state) |
-| `tag_update` | CONFIG | no | Tag config fingerprint | the Target |
-| `tag_create` | CONFIG | no | — (an existing target is `conflict`) | the Target |
-| `tag_copy` | CONFIG | no | — (an existing destination is `conflict`) | the **destination** |
-| `tag_delete` | CONFIG | yes | Tag config fingerprint | the Target |
-| `tag_move` | CONFIG | yes | Tag config fingerprint (source) | the **source and the destination** |
-| `tag_rename` | CONFIG | no | Tag config fingerprint | the **new path** |
+## Output contract
 
-Every one of them reads the **Runtime Target Policy** before it acts and fails closed with
-`operation_disabled` when that document is missing, unreadable, malformed or oversized. The policy is
-a Tag in the reserved `IgnitionMCPPolicy` provider (`[IgnitionMCPPolicy]RuntimeTargetPolicy`, with a
-companion `RuntimeTargetPolicyLength` Int4 Tag that gates the read at 32 KiB), written by
-`ignition-mcp setup-native apply` and never by the Runtime server. It carries the per-Tool Target
-allowlists, the Service identity used as the audit actor, the D18 audit mode and the `alarm_shelve`
-duration cap. Mutation-class enablement stays in the Server Config profile: `readonly` is unchanged
-(13 Tools), `operator` adds the three CONTROL Tools (16), `configurator` adds the six CONFIG Tools
-(19) and `full` adds both (22). Every profile list is explicit — never `*`.
+The pinned MCP Module returns real `structuredContent` and `isError`, but does not publish each Tool's
+`outputSchema` in `tools/list`. The JSON Schemas in `contracts/schemas/` are therefore the
+output contract, and the tests check handler output against them. A text answer is never a fallback
+for structured output.
 
-Cross-cutting rules, all implemented in each handler and pinned by its D29 fixtures:
+The Module also drops JSON `null` values inside objects. Handlers use the `ignition-null-v1` encoding:
 
-- **Preflight.** Input bounds, the reserved-provider refusal and the Target allowlist are checked for
-  every item before any item executes; one bad item refuses the whole batch and nothing runs. After
-  Preflight, items execute one at a time with per-item outcomes and no rollback.
-- **Reserved provider.** Any target inside `IgnitionMCPPolicy` is refused with `permission_denied`
-  before the allowlist is consulted, including under an explicit `*`. The match is on the provider
-  component, and for a move, copy or rename it covers both ends.
-- **UDT definitions.** A Tag CONFIG Mutation reaches `[provider]_types_/…` only when the policy lists
-  an explicit `_types_` prefix; a bare `*` does not cover it.
-- **Fixed knobs.** `references=ABORT`, `allowInvalidReferences=false` and `collisionPolicy=Abort` are
-  not caller parameters.
-- **Observed state.** Each Tool re-reads its own targets within a bounded budget and reports what it
-  observed; the Observed state never decides success. A read that cannot be made bounded is reported
-  as an explicit `limit_exceeded` observed error instead of being materialized.
-- **Audit.** `system.util.audit` runs in the policy's mode with the policy's Service identity as
-  actor. `required` checks the named audit profile before executing and fails closed with
-  `operation_disabled` when it is unavailable; a refused item is audited with a `decision` row; a
-  failed result write leaves the outcome alone and reports `auditRecorded=false` (D18).
-- **No retry.** A dispatch is attempted once. An item whose Native outcome is itself indeterminate is
-  `outcome_unknown`, and later items are `not_executed` — never replayed.
+- `null` becomes `{"$ignition":"null"}`.
+- Lists and ordinary objects are encoded item by item.
+- An object that has the reserved key `$ignition` is written as
+  `{"$ignition":"object","entries":[[key, encodedValue], ...]}`. Decode it once to get the original.
 
-`BUNDLE_VERSION` tracks the released milestones (Phase 3 closed at 0.2.0; Phase 4 4a–4d bump it per
-milestone). `bundle_info` gains nothing for the Mutations — the inventory it reports is the bundle's
-own, not the deployment's profile.
+This covers Tag values, qualities, timestamps and an unknown module build. The REST server does not
+use it.
+
+## Write Tools
+
+Each Tool's contract is in `contracts/tools/runtime/`.
+
+| Tool | Class | Destructive | Precondition token | Target the allowlist checks |
+| --- | --- | --- | --- | --- |
+| `tag_write` | CONTROL | no | none | the Tag. The result per item is the Ignition write result |
+| `alarm_shelve`, `alarm_unshelve` | CONTROL | no | none | the exact alarm path. `alarm_shelved_list` shows the result |
+| `tag_update` | CONFIG | no | Tag config fingerprint | the Tag |
+| `tag_create` | CONFIG | no | none. An existing target is `conflict` | the Tag |
+| `tag_copy` | CONFIG | no | none. An existing destination is `conflict` | the destination |
+| `tag_delete` | CONFIG | yes | Tag config fingerprint | the Tag |
+| `tag_move` | CONFIG | yes | Tag config fingerprint of the source | the source and the destination |
+| `tag_rename` | CONFIG | no | Tag config fingerprint | the new path |
+
+Every write Tool reads the Runtime Target Policy before it acts, and refuses with
+`operation_disabled` when the policy is missing, unreadable, invalid or larger than 32 KiB. The policy
+is the Tag `[IgnitionMCPPolicy]RuntimeTargetPolicy`, with a companion Int4 Tag
+`RuntimeTargetPolicyLength` that is read first so an oversized policy is never loaded. Only
+`ignition-mcp setup` writes it. The policy holds the per-Tool allowlists, the service
+identity used as the audit actor, the audit mode, the per-call item limits and the `alarm_shelve`
+duration limit. Its fields are listed in the
+[Configuration reference](../../docs/guide/configuration.md#runtime-target-policy).
+
+Rules every write handler follows, each covered by its recorded Jython test fixtures:
+
+- **Preflight.** Input limits, the reserved-provider check and the allowlist are checked for every item
+  before any item runs. One bad item refuses the whole batch. After that, items run one at a time,
+  each with its own result, and nothing is rolled back.
+- **Reserved provider.** A target in the `IgnitionMCPPolicy` provider is refused with
+  `permission_denied` before the allowlist is checked, even under `*`. Only the provider part is
+  compared. For a move, copy or rename, both ends are checked.
+- **UDT definitions.** A CONFIG write reaches `[provider]_types_/...` only when the policy lists an
+  explicit `_types_` entry. `*` does not cover it.
+- **Fixed settings.** `references=ABORT`, `allowInvalidReferences=false` and `collisionPolicy=Abort`
+  are not parameters.
+- **Observed state.** Each Tool reads its targets again, within a bounded budget, and reports what it
+  saw. That read never decides success. A read that cannot stay within its bound is reported as a
+  `limit_exceeded` observed error instead of being loaded.
+- **Audit.** `system.util.audit` runs in the policy's audit mode with the policy's service identity as
+  actor. In `required` mode the handler checks the audit profile first and refuses with
+  `operation_disabled` when it is unavailable. A refused item gets a `decision` audit row. If the
+  result audit write fails, the outcome stands and the answer says `auditRecorded=false`.
+- **No retry.** Each write is sent once. An item whose Ignition result is itself uncertain is
+  `outcome_unknown`, and the items after it are `not_executed`.
+
+## Named Query registry
+
+`database_query_list` and `database_query` read their approved queries from the environment variable
+`IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON` of the Gateway process. The caller cannot choose the
+project, the Named Query path or the datasource, and cannot send SQL. The format is in the
+[Configuration reference](../../docs/guide/configuration.md#named-query-registry). A missing variable is
+an empty registry. A malformed one makes both Tools fail.
+
+## Versions and releases
+
+`BUNDLE_VERSION` in this folder is the only version number. The validator fails unless the
+`bundle_info` handler's `bundleVersion` value and the project's ownership mark both equal it. The
+ownership mark is the last line of the `project.json` description:
+
+```text
+ignition-mcp-managed: product=ignition-runtime-bundle; bundle=<bundleVersion>
+```
+
+`ignition-mcp status` uses that mark to tell a project it deployed from a project someone else made.
+`RESOURCE_SCHEMA_VERSION` tracks changes to the resource file format.
+
+Build a release:
+
+```bash
+uv run --no-sync python -m tooling.native.cli release \
+  --project-dir packages/ignition-runtime-bundle/project \
+  --out-dir dist/release \
+  --source-revision <40-hex git SHA> \
+  --evidence-dir tests/compatibility/evidence
+```
+
+It writes three files: `ignition-runtime-bundle-<bundleVersion>.zip`, `.manifest.json` and a
+`.sha256` file that `sha256sum -c` accepts. CI builds them twice and compares the bytes.
+
+- The release ZIP writes the Git revision into the `bundle_info` handler, in place of
+  `__BUNDLE_SOURCE_REVISION__`, so a deployed bundle reports `bundleSourceRevision`. A plain `build`
+  reports `UNSTAMPED`.
+- The manifest lists the bundle's Tools, Resources and Prompts, the Tools per profile, each Tool's
+  Ignition requirements, and `testedTuples`, built only from evidence rows that pass the
+  `tooling.compat` validator. `release` runs the validator itself and refuses any production
+  compatibility claim.
+- The live tests deploy exactly the release ZIP, and each evidence row records its SHA-256 as
+  `deployedBundleSha256`.
+
+## After you change the bundle
+
+```bash
+# after editing a schema in contracts/schemas/ that is also a Text Resource
+uv run --no-sync python -m tooling.native.sync_schemas
+
+uv run --no-sync python -m tooling.native.cli validate --project-dir packages/ignition-runtime-bundle/project
+uv run --no-sync python -m tooling.native.cli build --project-dir packages/ignition-runtime-bundle/project --output dist/runtime.zip
+uv run --no-sync python -m tooling.contracts.lint
+```
+
+The handler tests run each `onToolCalled.py` under Jython 2.7.4 and need Java 11. See
+`tooling/native/jython_runner/README.md`.
+
+An empty Prompt list may leave out the prompts capability in `initialize`. The tests record
+`prompts/list` as `NOT_APPLICABLE` in that case, not as a pass.
