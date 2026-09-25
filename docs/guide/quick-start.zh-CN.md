@@ -210,6 +210,7 @@ ignition-mcp reset \
 | `unexpected_error` | 1 | CLI 的 bug。只报告异常类型，所以机密不会泄漏。 |
 | `gateway_unreachable` | 1 | DNS、TCP、TLS 或超时，Gateway 根本没回答，所以什么都没判断。 |
 | `not_confirmed` | 2 | 计划显示了，但没有被确认。什么都没写。 |
+| `conflict` | 1 | 另一个 setup 或本部署的 REST 服务器持有项目锁，或者托管项目在基线导出和导入之间被改了，例如 Designer 保存。什么都没导入；再运行一次 `setup` 查看新的计划。 |
 
 ## 常见问题
 

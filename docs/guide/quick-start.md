@@ -267,6 +267,7 @@ released, so a script can match on it.
 | `unexpected_error` | 1 | A bug. Only the exception type is reported, so no secret can leak. |
 | `gateway_unreachable` | 1 | DNS, TCP, TLS or a timeout: the Gateway never answered, so nothing was judged. |
 | `not_confirmed` | 2 | The plan was shown and not confirmed. Nothing was written. |
+| `conflict` | 1 | Another setup run or the deployment's REST server holds the project lock, or the managed project changed on the Gateway between the baseline export and the import, for example through a Designer save. Nothing was imported; run `setup` again to see the new plan. |
 
 ## Common problems
 

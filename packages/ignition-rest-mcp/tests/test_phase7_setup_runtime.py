@@ -14,9 +14,10 @@ import hashlib
 import io
 import itertools
 import json
+import re
 import secrets
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -29,6 +30,8 @@ from ignition_rest_mcp.cli.engine.report import JsonReporter
 from ignition_rest_mcp.cli.setup import runtime
 from ignition_rest_mcp.cli.gateway_ops import security
 from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpProbeError
+from ignition_rest_mcp.errors import GatewayError
+from ignition_rest_mcp.projects.locks import ProjectFileLock, ProjectLockRegistry, project_lock_path
 
 ROOT = Path(__file__).resolve().parents[3]
 MODULES = ROOT / "tests/fixtures/modules"
@@ -72,6 +75,12 @@ class FakeGateway:
         self.bundle_resources = runtime.read_bundle(ROOT).inventories["readonly"]["resources"]
         #: Levels someone adds while the Gateway restarts after the Module install.
         self.levels_added_on_restart: list[dict[str, Any]] = []
+        #: Called before each project export is answered, as a Designer save would land.
+        self.on_export: Callable[[int], None] | None = None
+        self.exports = 0
+        #: Store an import the way 8.3.8 does: ``resource.json`` re-serialized and a
+        #: ``parent`` key in ``project.json``.
+        self.reserialize_on_import = False
 
     # ---------------------------------------------------------------- helpers
 
@@ -143,6 +152,9 @@ class FakeGateway:
             document = self.project_json(path.rsplit("/", 1)[-1])
             return httpx.Response(200, json=document) if document is not None else httpx.Response(404, json={})
         if path.startswith("/data/api/v1/projects/export/"):
+            self.exports += 1
+            if self.on_export is not None:
+                self.on_export(self.exports)
             archive = self.projects.get(path.rsplit("/", 1)[-1])
             return httpx.Response(200, content=archive) if archive else httpx.Response(404, json={})
         if path == "/data/api/v1/resources/singleton/ignition/security-levels":
@@ -204,7 +216,7 @@ class FakeGateway:
             name = path.rsplit("/", 1)[-1]
             if name in self.projects and query.get("overwrite") != "true":
                 return httpx.Response(409, json={"message": "exists"})
-            self.projects[name] = body
+            self.projects[name] = _reserialize(body) if self.reserialize_on_import else body
             return ok
         if path == "/data/api/v1/api-token/generate":
             key = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
@@ -276,6 +288,31 @@ class FakeGateway:
         else:
             return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "error": {"code": -32601}})
         return httpx.Response(200, json={"jsonrpc": "2.0", "id": message["id"], "result": result})
+
+
+def _rewrite(archive: bytes, change: Callable[[str, bytes], bytes | None]) -> bytes:
+    """``archive`` with each entry passed through ``change``; ``None`` drops the entry."""
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(archive)) as source, zipfile.ZipFile(buffer, "w") as target:
+        for name in source.namelist():
+            data = change(name, source.read(name))
+            if data is not None:
+                target.writestr(name, data)
+    return buffer.getvalue()
+
+
+def _reserialize(archive: bytes) -> bytes:
+    def change(name: str, data: bytes) -> bytes:
+        if name.endswith("resource.json"):
+            document = json.loads(data)
+            document["attributes"] = dict(reversed(list(document["attributes"].items())))
+            return json.dumps(document, indent=2).encode()
+        if name == "project.json":
+            return json.dumps({**json.loads(data), "parent": ""}, indent=2).encode()
+        return data
+
+    return _rewrite(archive, change)
 
 
 async def _no_sleep(_seconds: float) -> None:
@@ -708,3 +745,157 @@ def test_each_role_token_is_refused_on_the_other_role_endpoint(tmp_path: Path, g
     assert asyncio.run(initialize("engineer", "engineer")) == "OK"
     assert "HTTP 403" in asyncio.run(initialize("engineer", "analysis"))
     assert "HTTP 403" in asyncio.run(initialize("analysis", "engineer"))
+
+
+# ------------------------------------------- issue #80: D16, content drift, ownership
+
+
+TOOL_SCRIPT = "com.inductiveautomation.mcp/tools/tag_read/onToolCalled.py"
+STAMPED_SCRIPT = "com.inductiveautomation.mcp/tools/bundle_info/onToolCalled.py"
+
+
+def _edit_tool(gateway: FakeGateway, line: bytes = b"# hand edit\n") -> bytes:
+    """Append ``line`` to one Tool's script inside the managed project, as a Designer save would."""
+
+    edited = _rewrite(
+        gateway.projects[runtime.PROJECT], lambda name, data: data + line if name == TOOL_SCRIPT else data
+    )
+    gateway.projects[runtime.PROJECT] = edited
+    return edited
+
+
+def _imports(gateway: FakeGateway) -> list[str]:
+    return [path for _, path in gateway.writes if path.startswith("/data/api/v1/projects/import/")]
+
+
+def test_a_rerun_after_the_gateway_reserialized_the_import_changes_nothing(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    gateway.reserialize_on_import = True
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    # A checkout on a later commit stamps another revision into bundle_info.
+    gateway.projects[runtime.PROJECT] = _rewrite(
+        gateway.projects[runtime.PROJECT],
+        lambda name, data: re.sub(rb'"[0-9a-f]{40}"', b'"' + b"a" * 40 + b'"', data) if name == STAMPED_SCRIPT else data,
+    )
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path)
+
+    assert code == 0, document
+    assert document["plan"] == []
+    assert steps(document)["runtime bundle"] == "OK"
+    assert gateway.writes == []
+
+
+def test_a_hand_edited_tool_is_reported_and_restored_only_after_acceptance(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    deployed = gateway.projects[runtime.PROJECT]
+    edited = _edit_tool(gateway)
+
+    code, document, _ = setup(tmp_path)
+
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert "overwrite_hand_edit" in document["error"]["message"]
+    change = next(item["change"] for item in document["plan"] if "restore the managed project" in item["change"])
+    assert "changed it by hand: tools/tag_read (onToolCalled.py)" in change
+    assert gateway.projects[runtime.PROJECT] == edited
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 0, document
+    assert steps(document)["runtime bundle"] == "CHANGED"
+    assert "overwrite_hand_edit" in {item["item"] for item in document["accepted"]}
+    assert gateway.projects[runtime.PROJECT] == deployed
+    version = runtime.read_bundle(ROOT).version
+    assert (deployment(tmp_path) / "backups" / f"ignition_runtime-{version}.zip").read_bytes() == edited
+
+
+def test_a_change_between_the_baseline_and_the_import_is_refused_and_nothing_is_imported(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _edit_tool(gateway)
+    before = gateway.exports
+
+    def designer_save(count: int) -> None:
+        # The plan's export, the baseline, then the re-check just before the import.
+        if count == before + 3:
+            _edit_tool(gateway, b"# saved in the Designer\n")
+
+    gateway.on_export = designer_save
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 1
+    assert document["error"]["code"] == "conflict"
+    message = document["error"]["message"]
+    assert "between the baseline export and the import" in message and "Designer save" in message
+    assert "nothing was imported" in message
+    assert steps(document)["runtime bundle"] == "FAILED"
+    assert _imports(gateway) == []
+    assert b"# saved in the Designer" in gateway.projects[runtime.PROJECT]
+
+
+def test_a_held_project_lock_refuses_the_replace(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _edit_tool(gateway)
+    lock = ProjectFileLock(project_lock_path(deployment(tmp_path) / "rest-data", "default", runtime.PROJECT))
+    assert lock.try_acquire()
+    gateway.requests.clear()
+    try:
+        code, document, _ = setup(tmp_path, "--yes")
+    finally:
+        lock.release()
+
+    assert code == 1
+    assert document["error"]["code"] == "conflict"
+    assert "this deployment's REST server is writing the project" in document["error"]["message"]
+    assert _imports(gateway) == []
+
+
+def test_the_rest_project_lock_refuses_while_setup_holds_the_lock_file(tmp_path: Path) -> None:
+    held = ProjectFileLock(project_lock_path(tmp_path, "default", runtime.PROJECT))
+    assert held.try_acquire()
+    # A 1 ms deadline and no poll interval: the refusal comes without a sleep.
+    registry = ProjectLockRegistry(timeout_seconds=0.001, max_entries=4, data_dir=tmp_path, poll_seconds=0.0)
+
+    async def mutate() -> str:
+        async with registry.acquire("default", runtime.PROJECT):
+            return "written"
+
+    try:
+        with pytest.raises(GatewayError) as refused:
+            asyncio.run(mutate())
+    finally:
+        held.release()
+    assert refused.value.code == "conflict"
+    assert asyncio.run(mutate()) == "written"
+
+
+def test_a_role_resource_setup_did_not_create_is_left_in_place(tmp_path: Path, gateway: FakeGateway) -> None:
+    secure = "https://gw.test:8043"
+    assert setup(tmp_path, *ACCEPT, url=secure)[0] == 0
+    toml = deployment(tmp_path) / "deployment.toml"
+    text = toml.read_text()
+    for entry in ('"server-config:engineer"', '"runtime-token:ignition-mcp-engineer"',
+                  '"level:Authenticated/IgnitionMcpEngineer"'):
+        assert entry in text
+        text = re.sub(rf"\s*{re.escape(entry)},?", "", text)
+    toml.write_text(text)
+
+    code, document, _ = setup(tmp_path, "--yes", environment="prod", url=secure)
+
+    assert code == 0, document
+    assert steps(document)["runtime keep engineer"] == "SKIPPED"
+    changes = " | ".join(change["change"] for change in document["plan"])
+    assert "leave the Server Config engineer in place: the deployment does not record" in changes
+    assert "engineer" in gateway.configs and "ignition-mcp-engineer" in gateway.tokens
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert "IgnitionMcpEngineer" in [child["name"] for child in authenticated["children"]]
+    assert (deployment(tmp_path) / "runtime-engineer.secret").exists()
+    assert not (deployment(tmp_path) / "permissions-engineer.json").exists()

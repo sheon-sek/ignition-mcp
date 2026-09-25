@@ -35,6 +35,9 @@ class ErrorCode(StrEnum):
     GATEWAY_UNREACHABLE = "gateway_unreachable"
     #: The operator saw the plan and did not confirm it. Nothing was written.
     NOT_CONFIRMED = "not_confirmed"
+    #: Another writer holds the project lock, or the project changed on the Gateway
+    #: between the baseline export and the import (D16). Nothing was imported.
+    CONFLICT = "conflict"
 
 
 #: Exit code for each error code. ``0`` is success, ``1`` a failed step, ``2`` a
@@ -52,6 +55,7 @@ EXIT_CODES: dict[ErrorCode, int] = {
     ErrorCode.UNEXPECTED_ERROR: 1,
     ErrorCode.GATEWAY_UNREACHABLE: 1,
     ErrorCode.NOT_CONFIRMED: 2,
+    ErrorCode.CONFLICT: 1,
 }
 
 
