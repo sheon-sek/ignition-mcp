@@ -9,6 +9,10 @@ Two decisions live here, and both are made before anything reaches the Gateway:
    serves. The same build is ``NO CHANGE``, a newer file build is an ``UPGRADE`` and
    anything else is ``REFUSED``, because a lower build never replaces a higher one.
 
+:func:`state_problem` adds the other half of "installed": a Module the listing shows
+in any state but ``ACTIVE`` hosts no route, so ``setup`` fails on it instead of
+carrying its own 404 further along (issue #81).
+
 The Gateway's own module REST flow, the certificate and EULA acceptance and the
 restart live in :mod:`ignition_rest_mcp.cli.gateway_ops.writer`. Nothing here
 downloads anything: the only artifact is the file the operator named.
@@ -37,6 +41,11 @@ REFUSED = "REFUSED"
 MODULE_READ_BLOCK_BYTES = 1024 * 1024
 MODULE_XML_NAME = "module.xml"
 MODULE_XML_LIMIT_BYTES = 1_048_576
+
+#: The ``modules/healthy`` state of a Module the Gateway has loaded and is serving.
+#: Anything else means the routes the Module hosts do not exist yet, so ``setup``
+#: treats it as not installed (issue #81).
+MODULE_ACTIVE = "ACTIVE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,3 +174,24 @@ def classify_build(installed: gw.ModuleIdentity | None, artifact: Artifact) -> s
     if installed.build == artifact.build:
         return NO_CHANGE
     return UPGRADE if installed.build < artifact.build else REFUSED
+
+
+def state_problem(identity: gw.ModuleIdentity) -> str:
+    """Why the listing does not show an ACTIVE Module, as the entry words it.
+
+    The caller fails on any non-empty answer, so a Module the Gateway installed but
+    did not start, or one it faulted, is named with its state and whatever else the
+    entry carries. ``modules/healthy`` documents ``state`` as available on fully
+    loaded modules only, so an entry without one is not judged here: the caller keeps
+    its build comparison alone.
+    """
+
+    state = identity.state
+    if state is None or state.upper() == MODULE_ACTIVE:
+        return ""
+    detail = [f"state {state}"]
+    if identity.on_startup is not None:
+        detail.append(f"onStartup {identity.on_startup}")
+    if identity.fault_cause is not None:
+        detail.append(f"fault cause {identity.fault_cause}")
+    return ", ".join(detail)

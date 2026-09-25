@@ -52,7 +52,7 @@ from ignition_rest_mcp.cli.gateway_ops.inputs import (
     SECURITY_LEVEL_PARENT,
     SECURITY_LEVELS_TYPE,
 )
-from ignition_rest_mcp.cli.gateway_ops.writer import RESOURCE_COLLECTION_PATH, WriteError
+from ignition_rest_mcp.cli.gateway_ops.writer import RESOURCE_COLLECTION_PATH, WriteError, WriteRefused
 
 STAGE_NAME = "reset"
 
@@ -429,6 +429,18 @@ async def _uninstall_module(ctx: engine.ApplyContext, reset_plan: ResetPlan) -> 
                 content_type="application/json",
                 action=f"uninstall MCP Module {gw.MCP_MODULE_ID}",
             )
+        except WriteRefused as error:
+            raise CliError(
+                ErrorCode.MODULE_UNINSTALL_REFUSED,
+                f"the Gateway refused to mark MCP Module build {build} for uninstall ({error}). The known "
+                "cause is GATEWAY_MODULES_ENABLED: while that environment variable names Module IDs, the "
+                "Gateway refuses every Module uninstall",
+                next_action=(
+                    "remove GATEWAY_MODULES_ENABLED from the Gateway's environment and restart it, then run "
+                    f"{PROG} reset --deployment {ctx.deployment.name} again, or uninstall the Module under "
+                    "Gateway > Modules"
+                ),
+            ) from error
         except WriteError as error:
             raise _failed(f"the MCP Module was not marked for uninstall: {error}", ctx) from error
         try:

@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 from urllib.parse import quote
 
@@ -95,11 +95,19 @@ class Probe:
 
 @dataclass(frozen=True, slots=True)
 class ModuleIdentity:
-    """What the module list says about the MCP Module."""
+    """What the module list says about the MCP Module.
+
+    ``state``, ``on_startup`` and ``fault_cause`` come from the same entry as the
+    version. The route documents ``state`` as available on fully loaded modules only,
+    so ``None`` means the entry said nothing about it, never that the Module is fine.
+    """
 
     raw_version: str
     version: str | None
     build: str | None
+    state: str | None = None
+    on_startup: str | None = None
+    fault_cause: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,6 +161,25 @@ def parse_module_identity(raw_version: Any) -> ModuleIdentity | None:
             build = candidate
             logical = ".".join(parts[:3]) + parts[3][len(candidate):]
     return ModuleIdentity(raw_version=value, version=logical, build=build)
+
+
+def _entry_text(item: dict[str, Any], key: str) -> str | None:
+    value = item.get(key)
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def parse_module_entry(item: dict[str, Any]) -> ModuleIdentity | None:
+    """One ``modules/healthy`` entry: the identity of its version and the rest it reports."""
+
+    identity = parse_module_identity(item.get("version"))
+    if identity is None:
+        return None
+    return replace(
+        identity,
+        state=_entry_text(item, "state"),
+        on_startup=_entry_text(item, "onStartup"),
+        fault_cause=_entry_text(item, "faultCause"),
+    )
 
 
 def classify_project(name: str, document: dict[str, Any] | None) -> ProjectState:
@@ -280,7 +307,7 @@ class GatewayRest:
         return await self.module_identity(MCP_MODULE_ID)
 
     async def module_identity(self, module_id: str) -> ModuleIdentity | None:
-        """Identity of one installed module, or ``None`` when a complete read lacks it."""
+        """Identity and reported state of one installed module, or ``None`` when a complete read lacks it."""
 
         items, complete = await self.module_inventory()
         if not complete:
@@ -290,7 +317,7 @@ class GatewayRest:
             )
         for item in items:
             if item.get("id") == module_id:
-                identity = parse_module_identity(item.get("version"))
+                identity = parse_module_entry(item)
                 if identity is None:
                     raise GatewayProbeError(f"the {module_id} entry carries no usable version")
                 return identity

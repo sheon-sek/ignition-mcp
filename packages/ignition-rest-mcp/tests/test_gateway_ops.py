@@ -442,6 +442,55 @@ def test_classify_build_names_every_build_relation(
     assert install_module.classify_build(installed, artifact) == expected
 
 
+@pytest.mark.parametrize(
+    ("state", "on_startup", "fault_cause", "expected"),
+    [
+        (None, None, None, ""),
+        ("ACTIVE", "true", None, ""),
+        ("inactive", None, None, "state inactive"),
+        ("INACTIVE", "disabled", None, "state INACTIVE, onStartup disabled"),
+        ("FAULTED", None, "MissingDependency", "state FAULTED, fault cause MissingDependency"),
+    ],
+    ids=["no-state", "active", "inactive", "inactive-disabled-startup", "faulted"],
+)
+def test_the_module_state_problem_names_what_the_listing_reports(
+    state: str | None, on_startup: str | None, fault_cause: str | None, expected: str
+) -> None:
+    """Issue #81: only an ACTIVE Module serves the routes setup writes through."""
+
+    identity = gateway.ModuleIdentity(
+        raw_version=FILE_VERSION, version="1.3.5-SNAPSHOT", build=FILE_BUILD,
+        state=state, on_startup=on_startup, fault_cause=fault_cause,
+    )
+    assert install_module.state_problem(identity) == expected
+
+
+def test_the_module_read_keeps_the_state_the_listing_reports() -> None:
+    """The entry carries the state beside the version, and the read keeps it."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={
+            "items": [{
+                "id": MODULE_ID,
+                "version": "1.3.5-SNAPSHOT (b2026021307)",
+                "state": "INACTIVE",
+                "onStartup": "disabled",
+                "faultCause": "  ",
+            }],
+            "metadata": {"total": 1},
+        })
+
+    async def exercise() -> gateway.ModuleIdentity | None:
+        async with gateway.GatewayRest(GATEWAY_ENDPOINT, GATEWAY_TOKEN,
+                                       transport=httpx.MockTransport(handler)) as client:
+            return await client.mcp_module()
+
+    identity = asyncio.run(exercise())
+    assert identity is not None
+    assert (identity.build, identity.state, identity.on_startup) == (FILE_BUILD, "INACTIVE", "disabled")
+    assert identity.fault_cause is None
+
+
 # ------------------------------------------------------------------- upgrade class
 
 

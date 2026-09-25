@@ -35,6 +35,10 @@ class ErrorCode(StrEnum):
     GATEWAY_UNREACHABLE = "gateway_unreachable"
     #: The operator saw the plan and did not confirm it. Nothing was written.
     NOT_CONFIRMED = "not_confirmed"
+    #: The Gateway lists the MCP Module but does not run it, so nothing it hosts exists.
+    MODULE_NOT_ACTIVE = "module_not_active"
+    #: The Gateway refused to mark the MCP Module for uninstall (issue #81).
+    MODULE_UNINSTALL_REFUSED = "module_uninstall_refused"
 
 
 #: Exit code for each error code. ``0`` is success, ``1`` a failed step, ``2`` a
@@ -52,6 +56,8 @@ EXIT_CODES: dict[ErrorCode, int] = {
     ErrorCode.UNEXPECTED_ERROR: 1,
     ErrorCode.GATEWAY_UNREACHABLE: 1,
     ErrorCode.NOT_CONFIRMED: 2,
+    ErrorCode.MODULE_NOT_ACTIVE: 1,
+    ErrorCode.MODULE_UNINSTALL_REFUSED: 1,
 }
 
 
