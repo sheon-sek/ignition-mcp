@@ -348,7 +348,7 @@ copy. A read therefore publishes no artifact and never returns the archive. Only
 returned. A View inherited from a parent project is not in the export and answers `not_found`.
 
 `perspective_view_validate` dispatches nothing. It takes a View document as a JSON object, requires a
-`root` object with a string `type`, and applies the output limits: at most 1 MiB, measured on the compact
+`root` object with a string `type`, and applies the document limits: at most 1 MiB, measured on the compact
 re-serialization, and at most 64 JSON levels. Unknown component types are accepted. A passing
 validation does not promise that Ignition accepts the document.
 

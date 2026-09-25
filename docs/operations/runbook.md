@@ -169,9 +169,10 @@ acceptances and the exit codes.
    own `*.secret` file.
 4. Deploy the Runtime bundle project. A managed project is backed up before it is replaced, under the
    Project writer lock, and its `pcf1` fingerprint is compared before the import. A project with the
-   bundle's name that `setup` did not create is never taken over. A managed project whose Tools, Text
-   Resources or Prompts differ from the bundle is reported as a hand edit, and the restore needs the
-   `overwrite_hand_edit` acceptance.
+   bundle's name that `setup` did not create is never taken over. When the deployed bundle version
+   equals the checkout's version, a managed project whose Tools, Text Resources or Prompts differ from
+   the bundle is reported as a hand edit, and the restore needs the `overwrite_hand_edit` acceptance.
+   A version difference is an update, not a hand-edit restore.
 5. Create or update one Server Config per role with an explicit Tool list and the generated
    permissions tree.
 6. Write the Runtime Target Policy.
@@ -511,3 +512,11 @@ The tool table in [Prerequisites](#prerequisites) is the Windows starting point.
   not with a real upgrade.
 - `status` does not wait for a Gateway that is starting. Only the live test setups under
   `tests/harness/` wait.
+
+## Sources
+
+`CONTEXT.md` defines Module install, Module upgrade and Bundle upgrade. Every flag was checked
+against `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`,
+`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/engine/` and
+`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup/`, and each command's `--help`. The
+console samples in this runbook show the shape of the output; they are not recorded runs.

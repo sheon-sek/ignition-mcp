@@ -172,7 +172,7 @@ bundle 项目的改动在计划里写明版本变化的类型：`patch`、`minor
 `setup` 先显示计划，取出确认，然后按这个顺序写入：
 
 1. MCP Module。需要时安装并重启 Gateway，每 5 秒检查一次，最多 10 分钟，直到新 build 运行起来。
-2. 受管 bundle 项目 `ignition_runtime`。替换已有项目之前，先把旧项目备份进部署文件夹，替换时持有 Project writer 的写入锁，并先比对 `pcf1` 指纹。受管项目的 Tool、Text Resource 或 Prompt 内容与 bundle 不一致时，会报告为手工改动，恢复需要 `overwrite_hand_edit` 接受项。
+2. 受管 bundle 项目 `ignition_runtime`。替换已有项目之前，先把旧项目备份进部署文件夹，替换时持有 Project writer 的写入锁，并先比对 `pcf1` 指纹。已部署的 bundle 版本与本仓库的版本相同时，受管项目的 Tool、Text Resource 或 Prompt 内容与 bundle 不一致才会报告为手工改动，恢复需要 `overwrite_hand_edit` 接受项；版本不同时属于升级，不是恢复手工改动。
 3. 每个角色的安全级别，用一次最小的 singleton 修改完成，写完读回校验结构。
 4. 每个角色的 Gateway API token，只获得上面那个安全级别，密钥以 `0600` 权限写入部署文件夹。
 5. 每个角色的 Server Config。新建时先以关闭状态创建，读回后再打开；已有的 Server Config 只更新 Tool 列表和权限树。Tool 列表总是逐个列出，从不用 `*`。
@@ -345,3 +345,7 @@ Windows 不是受支持的平台，不过目前没有已知的问题。范围、
 - bundle 版本仍是 0.x。
 - 仓库里只有一个 Module build，所以 Module 升级只由单元测试覆盖，没有做过真实升级。
 - `status` 不等待正在启动的 Gateway。只有 `tests/harness/` 下的实机测试环境会等待。
+
+## 来源
+
+Module 安装、Module 升级和 Bundle 升级的定义在 `CONTEXT.md`。每个参数都与 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`、`cli/engine/` 和 `cli/setup/`，以及各命令的 `--help` 核对过；`status` 的输出格式取自源码。本手册里的控制台示例只展示输出的形式，不是真实运行记录。
