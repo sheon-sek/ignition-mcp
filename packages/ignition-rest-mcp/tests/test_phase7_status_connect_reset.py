@@ -628,6 +628,7 @@ def test_reset_names_the_cause_when_the_gateway_refuses_the_module_uninstall(
     assert "success=false" in module_step["reason"]
     assert "GATEWAY_MODULES_ENABLED" in module_step["next_action"]
     assert "Gateway > Modules" in module_step["next_action"]
+    assert module_step["next_action"].endswith("reset --deployment default")
     assert document["error"]["code"] == "module_uninstall_refused"
     # The route was called and refused: the Module is still installed and never restarted.
     assert gateway.uninstalled == [{"uninstall": [gw.MCP_MODULE_ID]}]

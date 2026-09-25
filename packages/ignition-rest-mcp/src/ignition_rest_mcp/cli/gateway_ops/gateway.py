@@ -99,7 +99,9 @@ class ModuleIdentity:
 
     ``state``, ``on_startup`` and ``fault_cause`` come from the same entry as the
     version. The route documents ``state`` as available on fully loaded modules only,
-    so ``None`` means the entry said nothing about it, never that the Module is fine.
+    so ``None`` means the entry said nothing about the state. It is never evidence
+    that the Module is running: a caller that needs the Module to serve its routes has
+    to see ``ACTIVE`` itself.
     """
 
     raw_version: str

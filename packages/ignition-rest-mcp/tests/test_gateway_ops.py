@@ -445,18 +445,19 @@ def test_classify_build_names_every_build_relation(
 @pytest.mark.parametrize(
     ("state", "on_startup", "fault_cause", "expected"),
     [
-        (None, None, None, ""),
         ("ACTIVE", "true", None, ""),
-        ("inactive", None, None, "state inactive"),
-        ("INACTIVE", "disabled", None, "state INACTIVE, onStartup disabled"),
-        ("FAULTED", None, "MissingDependency", "state FAULTED, fault cause MissingDependency"),
+        ("active", None, None, ""),
+        (None, None, None, "the Gateway reports no state"),
+        ("inactive", None, None, "the Gateway reports state inactive"),
+        ("INACTIVE", "disabled", None, "the Gateway reports state INACTIVE, onStartup disabled"),
+        ("FAULTED", None, "MissingDependency", "the Gateway reports state FAULTED, fault cause MissingDependency"),
     ],
-    ids=["no-state", "active", "inactive", "inactive-disabled-startup", "faulted"],
+    ids=["active", "active-lower-case", "no-state", "inactive", "inactive-disabled-startup", "faulted"],
 )
 def test_the_module_state_problem_names_what_the_listing_reports(
     state: str | None, on_startup: str | None, fault_cause: str | None, expected: str
 ) -> None:
-    """Issue #81: only an ACTIVE Module serves the routes setup writes through."""
+    """Issue #81: only a listing that reports ACTIVE proves the routes exist."""
 
     identity = gateway.ModuleIdentity(
         raw_version=FILE_VERSION, version="1.3.5-SNAPSHOT", build=FILE_BUILD,

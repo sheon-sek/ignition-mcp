@@ -436,9 +436,9 @@ async def _uninstall_module(ctx: engine.ApplyContext, reset_plan: ResetPlan) -> 
                 "cause is GATEWAY_MODULES_ENABLED: while that environment variable names Module IDs, the "
                 "Gateway refuses every Module uninstall",
                 next_action=(
-                    "remove GATEWAY_MODULES_ENABLED from the Gateway's environment and restart it, then run "
-                    f"{PROG} reset --deployment {ctx.deployment.name} again, or uninstall the Module under "
-                    "Gateway > Modules"
+                    "remove GATEWAY_MODULES_ENABLED from the Gateway's environment and restart it, or "
+                    "uninstall the Module under Gateway > Modules, then run "
+                    f"{PROG} reset --deployment {ctx.deployment.name}"
                 ),
             ) from error
         except WriteError as error:

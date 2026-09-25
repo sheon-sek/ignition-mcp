@@ -9,9 +9,10 @@ Two decisions live here, and both are made before anything reaches the Gateway:
    serves. The same build is ``NO CHANGE``, a newer file build is an ``UPGRADE`` and
    anything else is ``REFUSED``, because a lower build never replaces a higher one.
 
-:func:`state_problem` adds the other half of "installed": a Module the listing shows
-in any state but ``ACTIVE`` hosts no route, so ``setup`` fails on it instead of
-carrying its own 404 further along (issue #81).
+:func:`state_problem` adds the other half of "installed": only a Module the listing
+reports as ``ACTIVE`` hosts its routes, so ``setup`` fails on anything else, an entry
+that reports no state included, instead of carrying its own 404 further along
+(issue #81).
 
 The Gateway's own module REST flow, the certificate and EULA acceptance and the
 restart live in :mod:`ignition_rest_mcp.cli.gateway_ops.writer`. Nothing here
@@ -179,17 +180,18 @@ def classify_build(installed: gw.ModuleIdentity | None, artifact: Artifact) -> s
 def state_problem(identity: gw.ModuleIdentity) -> str:
     """Why the listing does not show an ACTIVE Module, as the entry words it.
 
-    The caller fails on any non-empty answer, so a Module the Gateway installed but
-    did not start, or one it faulted, is named with its state and whatever else the
-    entry carries. ``modules/healthy`` documents ``state`` as available on fully
-    loaded modules only, so an entry without one is not judged here: the caller keeps
-    its build comparison alone.
+    The caller fails on any non-empty answer, so the state has to be evidenced, not
+    merely uncontradicted: a Module the Gateway installed but did not start, one it
+    faulted, and one whose entry says nothing about its state are all not ACTIVE.
+    ``modules/healthy`` documents ``state`` as available on fully loaded modules only,
+    which is why an entry without one reads as the Gateway reporting no state rather
+    than as a pass.
     """
 
     state = identity.state
-    if state is None or state.upper() == MODULE_ACTIVE:
+    if state is not None and state.upper() == MODULE_ACTIVE:
         return ""
-    detail = [f"state {state}"]
+    detail = ["the Gateway reports no state" if state is None else f"the Gateway reports state {state}"]
     if identity.on_startup is not None:
         detail.append(f"onStartup {identity.on_startup}")
     if identity.fault_cause is not None:

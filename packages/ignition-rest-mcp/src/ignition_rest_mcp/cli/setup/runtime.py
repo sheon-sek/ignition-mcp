@@ -683,9 +683,9 @@ def plan_runtime(ctx: Context) -> Plan:
         if problem:
             raise CliError(
                 ErrorCode.MODULE_NOT_ACTIVE,
-                f"the Gateway lists MCP Module build {installed.build or installed.raw_version} as {problem}, "
-                "and setup needs it ACTIVE: a Module the Gateway does not run hosts no Server Config route, "
-                "so setup stops before it writes anything",
+                f"MCP Module build {installed.build or installed.raw_version} is not ACTIVE, so setup stops "
+                f"before it writes anything: {problem}. A Module the Gateway does not run hosts no Server "
+                "Config route",
                 next_action=f"curl -sS {endpoint.url}{gw.MODULES_PATH}",
             )
     if project.classification in (gw.UNMANAGED_SAME_NAME, gw.MARKER_INVALID):
@@ -1218,7 +1218,7 @@ async def _install_module(ctx: ApplyContext, plan: RuntimePlan) -> None:
                     problem = install_module.state_problem(identity)
                     if identity.build == artifact.build and not problem:
                         return
-                    last = f"it serves build {build}" + (f", {problem}" if problem else "")
+                    last = f"it serves build {build}" + (f": {problem}" if problem else "")
             if attempt + 1 < polls:
                 await SETTINGS.sleep(RESTART_POLL_SECONDS)
     raise CliError(

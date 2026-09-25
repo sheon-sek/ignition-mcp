@@ -116,7 +116,7 @@ token 文件的规则：
 
 `setup` 运行整个部署，可以重复运行。它先只读地算出要做什么，把每一处改动显示一行，取出确认，然后才写任何东西。`--dry-run` 只显示计划就停下。第一次运行时向导会问缺少的值，参数给全时它什么都不问。命令和参数见[快速开始](../guide/quick-start.zh-CN.md#setup)。
 
-Module 安装是 `setup` 的一步。它只安装本地那个 SHA-256 对得上的文件，从不下载，也拒绝更低的 build。已经装好同一个 build，但 Gateway 列出的状态不是 `ACTIVE` 时，它在任何写入之前就停下，因为 Gateway 不运行的 Module 不承载任何路由。证书、EULA 和需要时的重启各自需要一个具名确认。Module 文件默认从 `tests/fixtures/modules/` 或 `~/Downloads` 找，用 `--module-file` 可以指定。Module id 和 build 取自文件里的 `module.xml`。仓库里只有一个 Module build，所以升级路径由单元测试覆盖，没有做过真实的升级。
+Module 安装是 `setup` 的一步。它只安装本地那个 SHA-256 对得上的文件，从不下载，也拒绝更低的 build。已经装好同一个 build，但 Gateway 没有把它列为 `ACTIVE`，或者根本没有给出状态时，它在任何写入之前就停下，因为 Gateway 不运行的 Module 不承载任何路由。证书、EULA 和需要时的重启各自需要一个具名确认。Module 文件默认从 `tests/fixtures/modules/` 或 `~/Downloads` 找，用 `--module-file` 可以指定。Module id 和 build 取自文件里的 `module.xml`。仓库里只有一个 Module build，所以升级路径由单元测试覆盖，没有做过真实的升级。
 
 `setup` 从不期望任何一步失败。一步在该状态下无法成功时，它要么先把状态改对，要么跳过那一步并说明原因。
 

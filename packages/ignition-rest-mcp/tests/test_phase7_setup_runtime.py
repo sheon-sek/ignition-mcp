@@ -50,10 +50,10 @@ class FakeGateway:
         self.signatures = itertools.count(1)
         self.requests: list[tuple[str, str]] = []
         self.module_build: str | None = None
-        #: What the Module's ``modules/healthy`` entry says besides its version. All
-        #: three stay unset by default, which is the recorded answer this suite has
-        #: always used and what a Gateway that reports only versions sends.
-        self.module_state: str | None = None
+        #: What the Module's ``modules/healthy`` entry says besides its version. The
+        #: state defaults to what a running Module reports, and ``None`` omits the
+        #: field, which is the answer the recorded Gateway sends.
+        self.module_state: str | None = "ACTIVE"
         self.module_on_startup: str | None = None
         self.module_fault_cause: str | None = None
         self.uploaded = False
@@ -498,6 +498,25 @@ def test_a_module_that_comes_back_inactive_fails_the_wait_and_stops_before_the_s
     assert "onStartup disabled" in document["error"]["message"]
     # The Module flow itself ran; the Server Config write, which answered 404 live, did not.
     assert any(path == "/data/api/v1/modules/install" for _, path in gateway.writes)
+    assert not any(MCP_TYPE in path for _, path in gateway.writes)
+    assert "runtime server config analysis" not in steps(document)
+
+
+def test_a_listing_without_a_state_is_not_proof_the_module_is_active(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    """Issue #81 item 1: an absent state is no evidence, so the wait fails and says so."""
+
+    gateway.module_state = None
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 1
+    module_step = next(step for step in document["steps"] if step["step"] == "runtime module")
+    assert module_step["status"] == "FAILED"
+    assert module_step["code"] == "module_not_active"
+    assert "the Gateway reports no state" in document["error"]["message"]
+    assert "did not come back ACTIVE" in document["error"]["message"]
     assert not any(MCP_TYPE in path for _, path in gateway.writes)
     assert "runtime server config analysis" not in steps(document)
 

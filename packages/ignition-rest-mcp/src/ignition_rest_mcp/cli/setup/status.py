@@ -246,8 +246,8 @@ def _module_reason(ctx: engine.Context, facts: Observation) -> str:
     if problem:
         raise CliError(
             ErrorCode.MODULE_NOT_ACTIVE,
-            f"the Gateway lists MCP Module build {build} as {problem}, and status needs it ACTIVE: a Module "
-            "the Gateway does not run hosts no Server Config route, so the role endpoints below cannot answer",
+            f"MCP Module build {build} is not ACTIVE: {problem}. A Module the Gateway does not run hosts no "
+            "Server Config route, so the role endpoints below cannot answer",
             next_action=_setup_next(ctx),
         )
     return f"build {build} is installed, the pinned build"
