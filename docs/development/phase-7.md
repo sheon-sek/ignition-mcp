@@ -1,6 +1,6 @@
 # Phase 7: setup CLI and G7
 
-Status: G7 RECORDED on both tuples (run 36056634095), waiting for the owner's Windows run (item 9) and merge decision. D32 approved on 2026-09-25.
+Status: G7 RECORDED on both tuples (run 36056634095). The owner ran the wizard on Windows and approved the merge. Merged to `main` on 2026-09-25. D32 approved on 2026-09-25.
 
 Branch: `phase-7/setup-ux`, created from `fix/windows-portability` at `98d9456` on the owner's instruction, because that branch is about to merge into `main`. Rebase onto `main` after it merges. Each ticket runs on its own branch and worktree and merges into `phase-7/setup-ux`.
 
@@ -38,7 +38,7 @@ P7-3 and P7-4 can run in parallel once P7-2 merges. Both edit the `setup` comman
 - [x] 6. A second `setup` run reports no change. The three re-run rules in D32 section 10 behave as decided. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `setupAgain` step. The three re-run rules are covered by the unit tests of P7-3 to P7-5, not by the live run.
 - [x] 7. `reset` removes everything `setup` created and is refused in `prod`. Evidence: `g7-8.3.8-mcp-2026021307` and `g7-8.3.9-mcp-2026021307`, run 36056634095, the `reset` step, including the Module uninstall. The `prod` refusal is covered by the P7-5 tests, not by the live run.
 - [x] 8. The old entry points are deleted and the guides describe only the new commands. Evidence: P7-6 (#77, merge 24f3839). A repository grep finds `setup-native` only in decision records, phase records, compatibility evidence and the `tooling/compat` code that reads the frozen G4 and G6 artifacts.
-- [ ] 9. The owner runs the wizard once on a Windows Gateway and records the result.
+- [x] 9. The owner runs the wizard once on a Windows Gateway and records the result. Evidence: on 2026-09-25 the owner reported running it by hand on Windows and finding no significant problems.
 
 ## Owner rulings
 
