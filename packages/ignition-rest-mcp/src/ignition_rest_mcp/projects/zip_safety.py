@@ -207,13 +207,13 @@ def _check_entry_type(info: zipfile.ZipInfo, name: str) -> None:
 
     mode = info.external_attr >> 16
     if stat.S_ISLNK(mode):
-        _refuse(RULE_ENTRY_TYPE, name, "symbolic links are refused (D15)")
+        _refuse(RULE_ENTRY_TYPE, name, "symbolic links are refused")
     if stat.S_ISCHR(mode) or stat.S_ISBLK(mode):
-        _refuse(RULE_ENTRY_TYPE, name, "device entries are refused (D15)")
+        _refuse(RULE_ENTRY_TYPE, name, "device entries are refused")
     if stat.S_ISFIFO(mode):
-        _refuse(RULE_ENTRY_TYPE, name, "FIFO entries are refused (D15)")
+        _refuse(RULE_ENTRY_TYPE, name, "FIFO entries are refused")
     if stat.S_ISSOCK(mode):
-        _refuse(RULE_ENTRY_TYPE, name, "socket entries are refused (D15)")
+        _refuse(RULE_ENTRY_TYPE, name, "socket entries are refused")
     if is_directory_entry(name) and info.file_size > 0:
         _refuse(
             RULE_DIRECTORY_ENTRY_DATA,

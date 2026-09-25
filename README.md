@@ -78,7 +78,6 @@ Known limitations in v1:
   query functions cannot limit how many rows they return, so these Tools cannot promise a bounded
   answer.
 - Windows has not been tested. The runbook includes Windows steps marked as not run on Windows yet.
-  See [D31](docs/decisions/D31-windows-support-scope.md).
 - The MCP Module does not publish output schemas for Runtime Tools. This repository publishes them
   in `contracts/schemas/`.
 
@@ -91,8 +90,8 @@ Known limitations in v1:
 | `contracts/` | The Tool contracts, output schemas and shared error codes that both servers are checked against. |
 | `tooling/` | The bundle builder, the contract linter and CI helpers. |
 | `tests/` | Live Gateway test setups and the recorded test evidence. |
-| `docs/decisions/` | The architecture decisions D01 to D31. They are binding. Start at [INDEX.md](docs/decisions/INDEX.md). |
-| `docs/development/` | One delivery record per development phase. |
+| `docs/decisions/` | Architecture decision records, kept by the contributors. They are binding. |
+| `docs/development/` | Development records, kept by the contributors, one per delivery. |
 
 Checks to run before a change:
 

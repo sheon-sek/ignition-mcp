@@ -8,7 +8,7 @@
   ],
   "attributes": {
     "title": "tag_get_config",
-    "description": "Read bounded Tag configuration with system.tag.getConfiguration, plus the Tag config fingerprint (D30 2, `tcf1:`) of exactly the configuration the read returned: the Precondition token tag_update compares. One exact UDT definition can be read (recursive=false) so a CONFIG Mutation's token can be obtained; the recursive view of the definition namespace stays udt_type_get's.",
+    "description": "Read bounded Tag configuration with system.tag.getConfiguration, plus the Tag config fingerprint (`tcf1:`) of exactly the configuration the read returned: the Precondition token tag_update compares. One exact UDT definition can be read (recursive=false) so a CONFIG Mutation's token can be obtained; the recursive view of the definition namespace stays udt_type_get's.",
     "parameters": [
       {
         "name": "path",

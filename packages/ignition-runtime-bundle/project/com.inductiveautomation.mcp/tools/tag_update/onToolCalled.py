@@ -907,7 +907,7 @@ def onToolCalled(builder, items):
 				bytesOverCeiling = problem[0] in ("configStringOverLimit", "configOverByteBudget")
 				counted = "at least " if bytesOverCeiling else ""
 				clause = " (a reported byte amount is counted only up to that ceiling)" if bytesOverCeiling else ""
-				return toolError("limit_exceeded", "A configuration is over the D10 " + problem[0] + " input ceiling with " + counted + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + clause + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
+				return toolError("limit_exceeded", "A configuration is over the " + problem[0] + " input ceiling with " + counted + unicode(problem[1]) + " requested against a limit of " + unicode(problem[2]) + clause + "; no item was executed. " + advice, {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2], "advice": advice})
 			totalInputBytes += pathBytes + configBytes + len(fingerprints[index])
 		stage = "policy_read"
 		policy, policyFailure = readPolicy()

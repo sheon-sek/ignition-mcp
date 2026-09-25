@@ -60,7 +60,7 @@ Ignition MCP 让 Claude 这类 AI 助手能够操作
 第 1 版的已知限制：
 
 - 报警状态、报警日志和报警确认这三个 Tool 被关闭了。Ignition 的报警查询函数无法限制返回的行数，所以这些 Tool 无法保证回答有上限。
-- 没有在 Windows 上测试过。指南里的 Windows 步骤都标注了“尚未在 Windows 上运行”。见 [D31](docs/decisions/D31-windows-support-scope.md)。
+- 没有在 Windows 上测试过。指南里的 Windows 步骤都标注了“尚未在 Windows 上运行”。
 - MCP Module 不发布 Runtime Tool 的输出 schema。本仓库在 `contracts/schemas/` 里提供它们。
 
 ## 给贡献者
@@ -72,8 +72,8 @@ Ignition MCP 让 Claude 这类 AI 助手能够操作
 | `contracts/` | Tool 契约、输出 schema 和共享错误码，两个 server 都以它为准做检查。 |
 | `tooling/` | bundle 构建器、契约 linter 和 CI 辅助脚本。 |
 | `tests/` | 实机 Gateway 测试环境和已记录的测试证据。 |
-| `docs/decisions/` | 架构决策 D01 到 D31，具有约束力。从 [INDEX.md](docs/decisions/INDEX.md) 开始看。 |
-| `docs/development/` | 每个开发阶段一份交付记录。 |
+| `docs/decisions/` | 架构决策记录，由贡献者维护，具有约束力。 |
+| `docs/development/` | 开发记录，由贡献者维护，每次交付一份。 |
 
 提交修改前要跑的检查：
 

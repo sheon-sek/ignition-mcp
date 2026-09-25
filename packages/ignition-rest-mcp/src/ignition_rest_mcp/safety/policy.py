@@ -79,7 +79,7 @@ class MutationOperation:
 
     def __post_init__(self) -> None:
         if self.mutation_class not in MUTATION_CLASSES:
-            raise ValueError("mutation operations must declare a real D08 mutation class")
+            raise ValueError("mutation operations must declare a real mutation class")
         if self.target_denial_code not in TARGET_DENIAL_CODES:
             raise ValueError(f"unknown Target denial code: {self.target_denial_code}")
         if self.gateway_backed and self.capability in LOCAL_CAPABILITIES:

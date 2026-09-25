@@ -1,7 +1,7 @@
 {
   "content": [
     {
-      "text": "{\"code\": \"limit_exceeded\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"index\": 0, \"limit\": 2048, \"path\": \"__LONG_PATH__\", \"reason\": \"pathOverLength\", \"requested\": \"__PATH_BYTES__\"}, \"message\": \"A target path is over a documented D10 input ceiling; no item was executed.\"}",
+      "text": "{\"code\": \"limit_exceeded\", \"correlationId\": \"__CORRELATION__\", \"details\": {\"index\": 0, \"limit\": 2048, \"path\": \"__LONG_PATH__\", \"reason\": \"pathOverLength\", \"requested\": \"__PATH_BYTES__\"}, \"message\": \"A target path is over the documented input ceiling; no item was executed.\"}",
       "type": "text"
     }
   ],

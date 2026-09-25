@@ -17,7 +17,7 @@
       "additionalProperties": true
     },
     "signature": {
-      "description": "The Gateway's Resource signature (D30 Precondition token) for this resource; null when the Gateway reports none.",
+      "description": "The Gateway's Resource signature, the Precondition token for this resource; null when the Gateway reports none.",
       "type": [
         "string",
         "null"

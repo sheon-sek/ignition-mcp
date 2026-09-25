@@ -540,7 +540,7 @@ def onToolCalled(builder, items):
 		for index in range(len(paths)):
 			pathBytes = utf8Bytes(paths[index])
 			if pathBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
+				return toolError("limit_exceeded", "A target path is over the documented input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
 			totalInputBytes += pathBytes + len(fingerprints[index])
 		if totalInputBytes > INPUT_MAX_BYTES:
 			return toolError("limit_exceeded", "The delete batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})

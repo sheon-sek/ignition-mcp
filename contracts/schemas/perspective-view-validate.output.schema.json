@@ -6,7 +6,7 @@
   "properties": {
     "correlationId": {"type": "string", "minLength": 1},
     "valid": {
-      "description": "True for every returned result: an invalid document is refused with a D06 error code instead.",
+      "description": "True for every returned result: an invalid document is refused with an error code instead.",
       "type": "boolean"
     },
     "bytes": {

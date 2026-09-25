@@ -638,10 +638,10 @@ def onToolCalled(builder, items):
 		for index in range(len(sources)):
 			sourceBytes = utf8Bytes(sources[index])
 			if sourceBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(sources[index], 256), "requested": sourceBytes, "limit": PATH_MAX_BYTES})
+				return toolError("limit_exceeded", "A target path is over the documented input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(sources[index], 256), "requested": sourceBytes, "limit": PATH_MAX_BYTES})
 			destinationBytes = utf8Bytes(destinations[index])
 			if destinationBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(destinations[index], 256), "requested": destinationBytes, "limit": PATH_MAX_BYTES})
+				return toolError("limit_exceeded", "A target path is over the documented input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(destinations[index], 256), "requested": destinationBytes, "limit": PATH_MAX_BYTES})
 			totalInputBytes += sourceBytes + destinationBytes + len(fingerprints[index])
 		if totalInputBytes > INPUT_MAX_BYTES:
 			return toolError("limit_exceeded", "The move batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})

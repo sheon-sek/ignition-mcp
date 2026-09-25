@@ -607,10 +607,10 @@ def onToolCalled(builder, items):
 		for index in range(len(paths)):
 			pathBytes = utf8Bytes(paths[index])
 			if pathBytes > PATH_MAX_BYTES:
-				return toolError("limit_exceeded", "A target path is over a documented D10 input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
+				return toolError("limit_exceeded", "A target path is over the documented input ceiling; no item was executed.", {"reason": "pathOverLength", "index": index, "path": boundedText(paths[index], 256), "requested": pathBytes, "limit": PATH_MAX_BYTES})
 			configBytes, problem = configSize(configurations[index], 1)
 			if problem is not None:
-				return toolError("limit_exceeded", "A configuration is over a documented D10 input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
+				return toolError("limit_exceeded", "A configuration is over the documented input ceiling; no item was executed.", {"reason": problem[0], "index": index, "path": boundedText(paths[index], 256), "requested": problem[1], "limit": problem[2]})
 			totalInputBytes += pathBytes + configBytes
 		if totalInputBytes > INPUT_MAX_BYTES:
 			return toolError("limit_exceeded", "The create batch is " + unicode(totalInputBytes) + " bytes, over the " + unicode(INPUT_MAX_BYTES) + "-byte input budget; split it across calls.", {"reason": "inputOverByteBudget", "requested": totalInputBytes, "limit": INPUT_MAX_BYTES})

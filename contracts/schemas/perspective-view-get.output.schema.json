@@ -13,7 +13,7 @@
       "additionalProperties": true
     },
     "fingerprint": {
-      "description": "The D16 pcf1 Project fingerprint of the export this document was read from.",
+      "description": "The pcf1 Project fingerprint of the export this document was read from.",
       "type": "string",
       "pattern": "^pcf1:[0-9a-f]{64}$"
     }

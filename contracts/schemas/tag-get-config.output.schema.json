@@ -15,7 +15,7 @@
       "type": "boolean"
     },
     "fingerprint": {
-      "description": "The Tag config fingerprint (D30 2) of the configuration this read returned: `tcf1:` plus the SHA-256 of the canonical JSON text of `configuration`. This is the Precondition token a Tag CONFIG Mutation compares, so it is taken from the value the caller reads here, never from the Gateway.",
+      "description": "The Tag config fingerprint of the configuration this read returned: `tcf1:` plus the SHA-256 of the canonical JSON text of `configuration`. This is the Precondition token a Tag CONFIG Mutation compares, so it is taken from the value the caller reads here, never from the Gateway.",
       "type": "string",
       "pattern": "^tcf1:[0-9a-f]{64}$"
     },

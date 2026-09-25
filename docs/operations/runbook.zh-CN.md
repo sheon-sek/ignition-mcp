@@ -39,11 +39,11 @@
 | 工具 | Linux 或 macOS | Windows |
 | --- | --- | --- |
 | Python 3.11+ 与 [`uv`](https://docs.astral.sh/uv/) | [官方安装脚本](https://docs.astral.sh/uv/)或包管理器。`uv` 会替你安装 Python | `winget install --id=astral-sh.uv -e`，或同一个官方安装脚本 |
-| Shell | 任意 POSIX shell | PowerShell 7。D31 第 6 节的检查清单用到 `-SkipHttpErrorCheck`，需要 7 版 |
+| Shell | 任意 POSIX shell | PowerShell 7。Windows 检查清单用到 `-SkipHttpErrorCheck`，需要 7 版 |
 | Git Bash 或 WSL | 不需要 | 只在运行 `bash` 脚本时需要：`tooling.ci.check_workflows` |
-| Java 11 | 只有 Jython 测试需要（D29）。两个 server 都不需要 | 同左 |
+| Java 11 | 只有 Jython 测试需要。两个 server 都不需要 | 同左 |
 
-本手册里的 Windows 指令都标注为**尚未在 Windows 上运行**。见 [D31](../decisions/D31-windows-support-scope.md)。
+本手册里的 Windows 指令都标注为**尚未在 Windows 上运行**。
 
 在仓库文件夹里构建发布产物：
 
@@ -63,7 +63,7 @@ V=$(cat packages/ignition-runtime-bundle/BUNDLE_VERSION)
 
 ### 在 Windows 上构建发布产物
 
-**尚未在 Windows 上运行。** 见 [D31](../decisions/D31-windows-support-scope.md)。先把 Git 版本存进一个变量，再以 `--source-revision $rev` 传入。用 `Get-FileHash` 或 `certutil` 代替 `sha256sum -c` 校验，把结果和 `.sha256` 文件里的值比对：
+**尚未在 Windows 上运行。** 先把 Git 版本存进一个变量，再以 `--source-revision $rev` 传入。用 `Get-FileHash` 或 `certutil` 代替 `sha256sum -c` 校验，把结果和 `.sha256` 文件里的值比对：
 
 ```powershell
 $rev = git rev-parse HEAD
@@ -90,7 +90,7 @@ printf '%s\n' '<name>:<your-ignition-api-key>' > ~/.config/ignition-mcp/gateway-
 chmod 0600 ~/.config/ignition-mcp/gateway-token
 ```
 
-在 Windows 上，**尚未在 Windows 上运行**，见 [D31](../decisions/D31-windows-support-scope.md)：
+在 Windows 上，**尚未在 Windows 上运行**：
 
 ```powershell
 New-Item -ItemType Directory -Force "$env:USERPROFILE\.config\ignition-mcp"
@@ -144,7 +144,7 @@ ignition-mcp status \
 | `named-query registry` FAILED | Gateway 没有设置 `IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON`。 | 在 Gateway 上设置它，见 [Tool 目录](../guide/tools.zh-CN.md#named-query-注册表)。 |
 | `leftover files` | 部署不再服务的角色在部署文件夹里留下了文件。 | 用 `reset` 删掉这个部署，或手工清理。 |
 
-`status` 报告状态，不修复它。D32 第 10 节的机密丢失和手工改动两种情况，会连同修复它的命令一起报告出来。
+`status` 报告状态，不修复它。机密丢失和手工改动这两种情况，会连同修复它的命令一起报告出来。
 
 ## 阅读 setup 的计划
 
@@ -172,7 +172,7 @@ bundle 项目的改动在计划里写明版本变化的类型：`patch`、`minor
 `setup` 先显示计划，取出确认，然后按这个顺序写入：
 
 1. MCP Module。需要时安装并重启 Gateway，每 5 秒检查一次，最多 10 分钟，直到新 build 运行起来。
-2. 受管 bundle 项目 `ignition_runtime`。替换已有项目之前，先把旧项目备份进部署文件夹。
+2. 受管 bundle 项目 `ignition_runtime`。替换已有项目之前，先把旧项目备份进部署文件夹，替换时持有 Project writer 的写入锁，并先比对 `pcf1` 指纹。受管项目的 Tool、Text Resource 或 Prompt 内容与 bundle 不一致时，会报告为手工改动，恢复需要 `overwrite_hand_edit` 接受项。
 3. 每个角色的安全级别，用一次最小的 singleton 修改完成，写完读回校验结构。
 4. 每个角色的 Gateway API token，只获得上面那个安全级别，密钥以 `0600` 权限写入部署文件夹。
 5. 每个角色的 Server Config。新建时先以关闭状态创建，读回后再打开；已有的 Server Config 只更新 Tool 列表和权限树。Tool 列表总是逐个列出，从不用 `*`。
@@ -327,25 +327,21 @@ REST server 按以下顺序检查一次写入，第一个拒绝决定错误码�
 
 ## Windows
 
-Windows 不是受支持的平台，不过目前没有已知的问题。[D31](../decisions/D31-windows-support-scope.md) 记录了范围、已知限制，以及一份还没有人执行过的手动检查清单。
+Windows 不是受支持的平台，不过目前没有已知的问题。范围、已知限制，以及一份还没有人执行过的手动检查清单都记在本手册里。
 
 [前置条件](#前置条件)里的工具表和[部署状态与凭证文件](#部署状态与凭证文件)里的 PowerShell 代码块是 Windows 的起点，两处都带有**尚未在 Windows 上运行**的标注。
 
-- **换行符。** 使用 Windows（CRLF）换行符的仓库副本可以直接使用：bundle 工具会把这些文件按 LF 读取，构建出的 ZIP 与 Linux 副本完全相同。见 [D31 修订 1](../decisions/D31-windows-support-scope.md#amendment-1-2026-09-25-crlf-checkouts-build)。
+- **换行符。** 使用 Windows（CRLF）换行符的仓库副本可以直接使用：bundle 工具会把这些文件按 LF 读取，构建出的 ZIP 与 Linux 副本完全相同。
 - **校验和。** Windows 没有 `sha256sum -c`。在 `dist/release` 里运行 `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` 或 `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`，把结果和 `ignition-runtime-bundle-<version>.sha256` 里的值比对。
 - **向导。** 在 Git Bash 的 mintty 里没有伪控制台时，向导退回普通逐行提示，问题和校验不变。这样的提示关不掉终端回显，粘贴的机密会在输入时显示在屏幕上，问题里会说明这一点。
 - **token 文件和数据文件夹。** Windows 跳过 `0600` 的 token 文件检查和 `0700` 的数据文件夹检查，只记录一条 WARNING。请用文件系统 ACL，只让服务账号能读取 token 文件和 `IGNITION_MCP_DATA_DIR`。
 
 ## 第 1 版的已知限制
 
-- `alarm_status`、`alarm_journal` 和 `alarm_acknowledge` 被关闭了。Ignition 的报警查询函数没有行数上限，也不支持续取，所以这些 Tool 无法限制回答或预检查的规模。它们的代码在 `packages/ignition-runtime-bundle/deferred/`，没有任何 profile 列出它们。要重新打开其中任何一个，需要一个有上限的机制和新的实机测试证据。见 D12。
-- MCP Module 返回结构化结果，但不发布 Tool 输出 schema（D27）。以 `contracts/schemas/` 里的 schema 为准。
-- MCP Module 会丢掉对象里的 `null` 值，所以 Runtime 的回答会对它们编码（D28）。见[运作原理](../guide/how-it-works.zh-CN.md#给客户端开发者的两个细节)。
+- `alarm_status`、`alarm_journal` 和 `alarm_acknowledge` 被关闭了。Ignition 的报警查询函数没有行数上限，也不支持续取，所以这些 Tool 无法限制回答或预检查的规模。它们的代码在 `packages/ignition-runtime-bundle/deferred/`，没有任何 profile 列出它们。要重新打开其中任何一个，需要一个有上限的机制和新的实机测试证据。
+- MCP Module 返回结构化结果，但不发布 Tool 输出 schema。以 `contracts/schemas/` 里的 schema 为准。
+- MCP Module 会丢掉对象里的 `null` 值，所以 Runtime 的回答会对它们编码。见[运作原理](../guide/how-it-works.zh-CN.md#给客户端开发者的两个细节)。
 - 在 8.3.9 上，Module 回应格式记为 `FAILED_NATIVE_BINDING`；在 8.3.8 上记为 `VERIFIED_WITH_LIMITATION`。两者都没有记为获得生产支持，本手册里的任何命令也不会这样记录。
 - bundle 版本仍是 0.x。
 - 仓库里只有一个 Module build，所以 Module 升级只由单元测试覆盖，没有做过真实升级。
 - `status` 不等待正在启动的 Gateway。只有 `tests/harness/` 下的实机测试环境会等待。
-
-## 来源
-
-本手册的规则来自这些决策：D20 规定安装命令及其安全规则，D26 Phase 6 修订规定第 1 版的范围，D27 和 D28 规定 Runtime 的回应行为，D30 规定写入规则。`CONTEXT.md` 定义了 Module install、Module upgrade 和 Bundle upgrade。每个参数都与 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`、`cli/engine/` 和 `cli/setup/` 以及各命令的 `--help` 核对过。`status` 的输出格式取自源码。
