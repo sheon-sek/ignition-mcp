@@ -1,9 +1,9 @@
 ---
-name: ignition-evidence
-description: How to find, read and look back through plant data with the Ignition MCP Tools. Covers locating equipment Tags, reading live values, Historian trends and aggregates, rebuilding an alarm, and finding what changed. Use before the first data query of any question, incident or routine report.
+name: graphene-evidence
+description: How to find, read and look back through plant data with the Graphene data Tools. Covers locating equipment Tags, reading live values, Historian trends and aggregates, rebuilding an alarm, and finding what changed. Use before the first data query of any question, incident or routine report.
 ---
 
-# Ignition evidence
+# Graphene evidence
 
 Load the reference that matches the question:
 
