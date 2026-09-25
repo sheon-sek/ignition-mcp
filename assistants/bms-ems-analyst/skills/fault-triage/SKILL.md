@@ -10,7 +10,7 @@ Work through the steps in order. A step is finished only when its **Done when** 
 1. **Frame.** Record the equipment, the alarm text, the time it was first seen and the reported impact.
    Done when you can state the incident in one sentence with a time anchor. If the anchor is missing, ask for it.
 
-2. **Locate.** Find the Tag paths for every piece of equipment named, plus the equipment directly upstream and downstream of it. Recipes: [references/evidence-playbook.md](references/evidence-playbook.md).
+2. **Locate.** Find the Tag paths for every piece of equipment named, plus the equipment directly upstream and downstream of it. Use the `ignition-evidence` skill.
    Done when each item has its paths, or is marked "no Tag found".
 
 3. **Risk and redundancy.** Read [references/risk-and-redundancy.md](references/risk-and-redundancy.md).
@@ -19,7 +19,7 @@ Work through the steps in order. A step is finished only when its **Done when** 
 4. **Data or plant.** If any key signal has quality other than Good, is flat, steps suddenly, or disagrees with its redundant partner, load the `ot-data-layer` skill.
    Done when each key signal is marked **trusted** or **suspect**, with the reason.
 
-5. **Timeline.** Query the Historian from before the alarm to now. Check what changed in the same window: `audit_query`, `alarm_shelved_list`, recent configuration, and operator actions the user reports.
+5. **Timeline.** Query the Historian from before the alarm to now. Check what changed in the same window with the `ignition-evidence` alarms-and-changes reference.
    Done when the timeline starts at the **first deviation**, not at the alarm time, and every change in the window is listed or confirmed absent.
 
 6. **Differential.** Load `power-systems` or `cooling-systems` for the failure-mode tables. List at least three candidate causes, with at least one physical and at least one in controls or data.
