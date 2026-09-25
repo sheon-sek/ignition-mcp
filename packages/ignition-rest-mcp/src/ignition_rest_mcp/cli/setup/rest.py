@@ -53,6 +53,7 @@ import asyncio
 import json
 import secrets
 import time
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -704,21 +705,31 @@ async def _write_levels(
     expected = security.level_paths(before)
     expected = expected | {REST_LEVEL_PATH} if want else expected - {REST_LEVEL_PATH}
     # The paths show the level landed or went; the shape shows no other node's name,
-    # description, order or children moved.
-    if served is None or security.level_paths(served) != expected or _shape(served) != _shape(tree):
+    # description or children moved. The Gateway keeps siblings in its own order, so
+    # the order is not compared.
+    if served is None or security.level_paths(served) != expected:
         raise _failed(ctx, "the Security Level edit was accepted but the served tree is not the one written")
+    served_shape, written_shape = Counter(_shape(served)), Counter(_shape(tree))
+    moved = list((served_shape - written_shape) + (written_shape - served_shape))
+    if moved:
+        raise _failed(
+            ctx,
+            "the Security Level edit was accepted but these levels read back differently: "
+            + ", ".join(sorted({path for path, _ in moved})),
+        )
 
 
-def _shape(nodes: Any) -> list[tuple[Any, Any, Any]]:
-    """Each node's name, description and children, in order, for the read-back comparison."""
+def _shape(nodes: Any, prefix: str = "") -> list[tuple[str, str]]:
+    """Each level's path and description, for the read-back comparison."""
 
-    if not isinstance(nodes, list):
-        return []
-    return [
-        (node.get("name"), node.get("description"), _shape(node.get("children")))
-        for node in nodes
-        if isinstance(node, dict)
-    ]
+    shape: list[tuple[str, str]] = []
+    for node in nodes if isinstance(nodes, list) else ():
+        if not isinstance(node, dict):
+            continue
+        path = f"{prefix}/{node.get('name')}" if prefix else str(node.get("name"))
+        shape.append((path, str(node.get("description"))))
+        shape.extend(_shape(node.get("children"), path))
+    return shape
 
 
 async def add_rest_level(ctx: engine.Context, writer: GatewayWriter) -> None:
