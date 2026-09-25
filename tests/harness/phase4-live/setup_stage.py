@@ -14,9 +14,14 @@ then plays the operator of D32 and runs the shipped CLI as a subprocess:
 3. ``roles``: per role, ``initialize`` and ``tools/list`` at ``/data/mcp/<role>``
    with that role's Runtime token, compared with the role's profile in
    ``contracts/profiles/``. Each token must be refused at the other role's endpoint.
-4. ``rest``: ``ignition-mcp start``, then the Analysis Named static token calls a
+4. ``restGrant`` (issue #79): the ``ignition-mcp-rest`` token holds only
+   ``Authenticated/IgnitionMcpRest``, and General Settings lists that level under
+   ``readPermissions`` and ``writePermissions`` (dev) and nowhere else.
+   ``rest``: ``ignition-mcp start``, then the Analysis Named static token calls a
    read Tool and is refused a Mutation Tool, and the Engineer token is given the
-   Mutation scope. A call with empty arguments shows that; it cannot write.
+   Mutation scope. A call with empty arguments shows that; it cannot write. Both
+   roles call the read Tool through the dedicated level, and the Engineer role
+   creates and deletes one audit profile, a real REST Mutation that reaches the Gateway.
 5. ``setupAgain``: the same command again. It must plan nothing and change nothing.
 6. ``reset``: ``ignition-mcp reset --yes``. Every resource the deployment recorded
    as created must be gone from the Gateway, and the deployment directory too.
@@ -67,6 +72,13 @@ GATEWAY_PERMISSIONS = ("accessPermissions", "readPermissions", "writePermissions
 #: A read Tool and a Mutation Tool of the REST server (D32 section 8).
 REST_READ_TOOL = "gateway_info"
 REST_MUTATION_TOOL = "config_resource_update"
+#: Issue #79: the REST server's own level and the General Settings entries dev grants it.
+REST_LEVEL = ("Authenticated", "IgnitionMcpRest")
+REST_GRANTED = ("readPermissions", "writePermissions")
+REST_CREATE_TOOL = "config_resource_create"
+REST_DELETE_TOOL = "config_resource_delete"
+REST_MUTATION_TYPE = "ignition/audit-profile"
+REST_MUTATION_NAME = "IgnitionMcpG7RestProbe"
 REST_READY_SECONDS = 60.0
 REST_POLL_SECONDS = 0.5
 REST_STOP_SECONDS = 20.0
@@ -310,7 +322,9 @@ def check_rest(home: Path, deployment: Path, evidence: Path) -> dict[str, Any]:
         _, engineer_text = _call_text(engineer, REST_MUTATION_TOOL)
         if REST_MUTATION_TOOL not in engineer_tools or "permission_denied" in engineer_text:
             raise StageError(f"the Engineer token was not given the Mutation scope: {engineer_text}")
+        dedicated = check_rest_through_level(analysis, engineer)
         return {
+            "throughDedicatedLevel": dedicated,
             "bind": REST_BIND,
             "analysis": {
                 "readTool": REST_READ_TOOL,
@@ -336,6 +350,56 @@ def check_rest(home: Path, deployment: Path, evidence: Path) -> dict[str, Any]:
         log.close()
 
 
+def check_rest_grant(base_url: str, token: str) -> dict[str, Any]:
+    """Issue #79: the REST token holds only its own level, granted read and write in dev."""
+
+    status, document = get_json(base_url, token, "/data/api/v1/resources/find/ignition/api-token/ignition-mcp-rest")
+    if status != 200:
+        raise StageError(f"ignition-mcp-rest is not readable (HTTP {status})")
+    held = leaves(document["config"]["profile"]["securityLevels"])
+    if held != [REST_LEVEL]:
+        raise StageError(f"ignition-mcp-rest holds {held}, not only {'/'.join(REST_LEVEL)}")
+    status, properties = get_json(base_url, token, SECURITY_PROPERTIES)
+    if status != 200:
+        raise StageError(f"security-properties is not readable (HTTP {status})")
+    listed = {
+        field: REST_LEVEL in leaves((properties["config"].get(field) or {}).get("securityLevels"))
+        for field in GATEWAY_PERMISSIONS
+    }
+    wanted = {field: field in REST_GRANTED for field in GATEWAY_PERMISSIONS}
+    if listed != wanted:
+        raise StageError(f"General Settings list {'/'.join(REST_LEVEL)} under {listed}, not {wanted}")
+    return {"tokenLevels": ["/".join(path) for path in held], "generalSettings": listed}
+
+
+def check_rest_through_level(analysis: mcp_client.McpClient, engineer: mcp_client.McpClient) -> dict[str, Any]:
+    """Both roles read through the dedicated level, and one Engineer Mutation reaches the Gateway."""
+
+    reads = {}
+    for role, client in (("analysis", analysis), ("engineer", engineer)):
+        info = client.structured(REST_READ_TOOL, {})
+        reads[role] = {"tool": REST_READ_TOOL, "ignitionVersion": info.get("ignitionVersion")}
+    created = engineer.structured(REST_CREATE_TOOL, {
+        "resourceType": REST_MUTATION_TYPE,
+        "name": REST_MUTATION_NAME,
+        "description": "Disposable G7 probe for the REST server's own level (issue #79)",
+        "config": {"profile": {"type": "local", "retentionDays": 1}},
+    })
+    signature = created.get("signature")
+    if not isinstance(signature, str) or not signature:
+        raise StageError(f"{REST_CREATE_TOOL} returned no signature: {json.dumps(created)[:400]}")
+    deleted = engineer.structured(REST_DELETE_TOOL, {
+        "resourceType": REST_MUTATION_TYPE, "name": REST_MUTATION_NAME, "expectedSignature": signature,
+    })
+    if deleted.get("present") is not False:
+        raise StageError(f"{REST_DELETE_TOOL} did not report the probe gone: {json.dumps(deleted)[:400]}")
+    return {
+        "reads": reads,
+        "mutation": {"create": REST_CREATE_TOOL, "delete": REST_DELETE_TOOL, "resourceType": REST_MUTATION_TYPE,
+                     "name": REST_MUTATION_NAME, "created": True, "deleted": True},
+    }
+
+
 def check_reset(document: dict[str, Any], created: list[str], base_url: str, token: str, directory: Path) -> dict[str, Any]:
     if document.get("exit_code") != 0 or document.get("error") is not None:
         raise StageError(f"reset failed: {json.dumps(document.get('error'))}")
@@ -350,9 +414,12 @@ def check_reset(document: dict[str, Any], created: list[str], base_url: str, tok
             if module_ids is None or MODULE_ID in module_ids:
                 left[entry] = "the Gateway still lists the MCP Module" if module_ids else "modules unreadable"
             continue
-        if kind == "level":
+        if kind in ("level", "rest-level"):
             if level_paths is None or any(path == name or path.startswith(name + "/") for path in level_paths):
                 left[entry] = "the level is still in the Security Level tree"
+            continue
+        if kind == "rest-permission":
+            left.update(rest_permission_left(entry, name, base_url, token))
             continue
         path = {
             "project": f"/data/api/v1/projects/find/{name}",
@@ -378,6 +445,17 @@ def check_reset(document: dict[str, Any], created: list[str], base_url: str, tok
         "deploymentDirectoryRemoved": True,
         "steps": [{"step": s["step"], "status": s["status"], "reason": s["reason"]} for s in document["steps"]],
     }
+
+
+def rest_permission_left(entry: str, field: str, base_url: str, token: str) -> dict[str, str]:
+    """Issue #79: a recorded General Settings grant must be gone after reset."""
+
+    status, properties = get_json(base_url, token, SECURITY_PROPERTIES)
+    if status != 200:
+        return {entry: f"security-properties is not readable (HTTP {status})"}
+    if REST_LEVEL in leaves((properties["config"].get(field) or {}).get("securityLevels")):
+        return {entry: f"{field} still lists {'/'.join(REST_LEVEL)}"}
+    return {}
 
 
 # -------------------------------------------------------------------------- main
@@ -423,6 +501,8 @@ def main(argv: list[str] | None = None) -> int:
         print("setup:", steps["setup"]["changedSteps"], flush=True)
         steps["roles"] = check_roles(args.base_url, deployment)
         print("roles:", {role: data["toolCount"] for role, data in steps["roles"].items()}, flush=True)
+        steps["restGrant"] = check_rest_grant(args.base_url, args.api_token)
+        print("restGrant:", json.dumps(steps["restGrant"]), flush=True)
         steps["rest"] = check_rest(home, deployment, args.evidence_dir)
         print("rest: analysis read allowed, mutation refused; engineer mutation scope granted", flush=True)
         cli["setupAgain"] = run_cli(home, *setup_words)

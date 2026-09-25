@@ -79,7 +79,10 @@ chmod 0600 ~/.config/ignition-mcp/gateway-token
 
 The CLI checks the key against the Gateway at once and asks again if the Gateway refuses it or the
 key lacks a permission. The setup key is used during setup only. It is never given to the REST
-server, which gets its own token, `ignition-mcp-rest`.
+server, which gets its own token, `ignition-mcp-rest`. That token holds one Security Level,
+`Authenticated/IgnitionMcpRest`, which `setup` creates and adds to the General Settings entries the
+REST server needs: Gateway Read in `prod`, Gateway Read and Gateway Write in `dev`. `setup` leaves
+Gateway Access, Designer and every other setting as they are.
 
 ## The two Assistant roles
 
@@ -144,7 +147,7 @@ shows the plan and stops. It is safe to re-run.
 | `--gateway-token-file PATH` | A file holding one `<name>:<key>` line, where the name is the API key's name on the Gateway. On Linux and macOS its mode must be `0600`. |
 | `--module-file PATH` | The MCP Module `.modl` file. `setup` looks in `tests/fixtures/modules/` and `~/Downloads` first and uses a file whose SHA-256 matches the pinned build. |
 | `--recreate-tokens` | Delete and recreate every managed token whose local secret file is lost. Use this after a lost secret file. |
-| `--provision-security-levels` | In `prod`, create the roles' missing Security Levels. `dev` does this already. |
+| `--provision-security-levels` | In `prod`, create the missing Security Levels of the roles and of the REST server, and add the REST server's level to Gateway Read. `dev` does this already. |
 | `--rest-mutation-classes LIST` | Which REST Mutation classes the server may offer: `none`, or a comma-separated list of `config`, `control` and `admin`. Default `config,control` in `dev` and `none` in `prod`. Adding `admin` needs the ADMIN acceptance, which `--yes` covers. |
 | `--rest-target-allowlist *\|none` | Whether the enabled REST Mutation classes may target anything (`*`) or nothing (`none`). Default `*` in `dev` and `none` in `prod`. `*` with a class enabled needs the wildcard acceptance, which `--yes` covers. |
 | `--rest-project-writer on\|off` | Whether the REST server may import a Project. Default `on` in `dev` and `off` in `prod`. |
@@ -155,15 +158,20 @@ reason:
 
 1. Install the MCP Module from the local file. The same build already installed is `OK` with nothing
    uploaded. A lower build is always refused.
-2. Create the roles' Security Levels. `dev` creates them; in `prod` this needs
-   `--provision-security-levels`.
-3. Create each role's Runtime token and the `ignition-mcp-rest` token, and save each secret to its own
-   `*.secret` file with mode `0600`.
-4. Deploy the Runtime bundle project. A managed project is backed up before it is replaced. A project
+2. Create the roles' Security Levels and the REST server's level, `Authenticated/IgnitionMcpRest`.
+   `dev` creates them; in `prod` this needs `--provision-security-levels`.
+3. Add the REST server's level to Gateway Read, and in `dev` to Gateway Write, in Security > General
+   Settings. A move from `dev` to `prod` removes the Gateway Write entry again. `setup` refuses an
+   entry of type `AllOf`, because an added level there would lock out everyone who holds only the
+   others.
+4. Create each role's Runtime token and the `ignition-mcp-rest` token, and save each secret to its own
+   `*.secret` file with mode `0600`. The `ignition-mcp-rest` token holds the REST server's level only.
+   A token that an earlier `setup` gave the setup key's level moves to it on the next run.
+5. Deploy the Runtime bundle project. A managed project is backed up before it is replaced. A project
    with the bundle's name that `setup` did not create is never taken over.
-5. Create one Server Config per role with an explicit Tool list and its permissions tree.
-6. Write the Runtime Target Policy to the `IgnitionMCPPolicy` Tag provider.
-7. Write the REST server settings from the role and the environment.
+6. Create one Server Config per role with an explicit Tool list and its permissions tree.
+7. Write the Runtime Target Policy to the `IgnitionMCPPolicy` Tag provider.
+8. Write the REST server settings from the role and the environment.
 
 ```bash
 ignition-mcp setup --deployment default \
@@ -233,8 +241,9 @@ ignition-mcp connect engineer --client codex
 ## `reset`
 
 `reset` removes what `setup` created, on the Gateway and locally. It deletes only a resource the
-deployment's own record says `setup` created, and it lists anything else it finds as left in place. It
-is refused outside `dev`.
+deployment's own record says `setup` created, and it lists anything else it finds as left in place.
+That includes the REST server's level and each General Settings entry `setup` added it to. It is
+refused outside `dev`.
 
 ```bash
 ignition-mcp reset \

@@ -44,6 +44,7 @@ from test_phase7_setup_runtime import (
     SETUP_TOKEN,
     URL,
     FakeGateway,
+    _grant,
     _no_sleep,
     _probe,
     _token_file,
@@ -58,6 +59,7 @@ ROLE_SECRETS = {
     "engineer": ("ignition-mcp-engineer", "static-engineer-key-0000000000000000"),
 }
 REST_KEY = "restkey0000000000000000000000000000000"
+PROPERTIES_WRITE = "/data/api/v1/resources/ignition/security-properties"
 
 
 def _key() -> str:
@@ -73,6 +75,7 @@ class CliGateway(FakeGateway):
         #: What ``database_query_list`` answers with.
         self.queries: list[dict[str, Any]] = [{"alias": "recent_alarms"}]
         self.uninstalled: list[dict[str, Any]] = []
+        self.properties_signature = self._sign()
 
     # -------------------------------------------------------------- interception
 
@@ -82,6 +85,10 @@ class CliGateway(FakeGateway):
         return super().handle(request)
 
     def _get(self, path: str, query: dict[str, str]) -> httpx.Response:
+        if path == rest.SECURITY_PROPERTIES_PATH:
+            return httpx.Response(
+                200, json={"collection": "core", "signature": self.properties_signature, "config": self.properties}
+            )
         if path == PROVIDER_FIND:
             if self.policy_provider is None:
                 return httpx.Response(404, json={})
@@ -109,6 +116,13 @@ class CliGateway(FakeGateway):
         return super()._delete(path)
 
     def _write(self, method: str, path: str, query: dict[str, str], body: bytes) -> httpx.Response:
+        if path == PROPERTIES_WRITE and method == "PUT":
+            item = json.loads(body)[0]
+            if item["signature"] != self.properties_signature:
+                return httpx.Response(409, json={"message": "signature mismatch"})
+            self.properties = item["config"]
+            self.properties_signature = self._sign()
+            return httpx.Response(200, json={"success": True})
         if path == f"/data/api/v1/resources/{docs.TAG_PROVIDER_TYPE}" and method == "POST":
             self.policy_provider = {
                 "name": docs.PROVIDER,
@@ -192,11 +206,16 @@ def record(tmp_path: Path, *resources: str) -> None:
 
 
 def _seed_rest(tmp_path: Path, gateway: CliGateway, roles: Sequence[str]) -> None:
-    """Add the REST plane state the REST stage writes: the token, the secrets, the settings."""
+    """Add the REST plane state the REST stage writes: the level, its General Settings
+    grants, the token, the secrets and the settings."""
 
     served = deployment(tmp_path)
     key = _key()
-    gateway._add_token(rest.REST_TOKEN_NAME, key, SETUP_LEVEL, secure=False)
+    leaf = {"name": rest.REST_LEVEL, "children": []}
+    next(node for node in gateway.levels if node["name"] == "Authenticated")["children"].append(dict(leaf))
+    for entry in rest.PERMISSION_ENTRIES:
+        gateway.properties[entry]["securityLevels"][0]["children"].append(dict(leaf))
+    gateway._add_token(rest.REST_TOKEN_NAME, key, rest.dedicated_grant(), secure=False)
     write_secret(served, rest.REST_TOKEN_SECRET, security.token_secret(rest.REST_TOKEN_NAME, key))
     for role in roles:
         name, value = ROLE_SECRETS[role]
@@ -210,7 +229,12 @@ def _seed_rest(tmp_path: Path, gateway: CliGateway, roles: Sequence[str]) -> Non
             rest.RECORD_KEY: ["wildcard_target_allowlist:config,control"],
         },
     )
-    record(tmp_path, rest.REST_TOKEN_RECORD)
+    record(
+        tmp_path,
+        rest.REST_TOKEN_RECORD,
+        rest.REST_LEVEL_RECORD,
+        *(rest.permission_record(entry) for entry in rest.PERMISSION_ENTRIES),
+    )
 
 
 def healthy(tmp_path: Path, gateway: CliGateway, *, roles: Sequence[str] = ("analysis", "engineer")) -> Deployment:
@@ -292,6 +316,18 @@ def test_status_on_a_lost_secret_names_the_cause_and_the_next_action(
     assert steps(document)["endpoint analysis"] == "SKIPPED"
     assert steps(document)["token engineer"] == "OK"
     assert document["error"] is None
+
+
+def test_status_reports_a_rest_level_that_lost_its_write_grant(tmp_path: Path, gateway: CliGateway) -> None:
+    healthy(tmp_path, gateway)
+    gateway.properties["writePermissions"] = _grant()
+
+    code, document, _ = run_json(status_argv(tmp_path), tmp_path / "deployments", token_probe=_probe)
+
+    assert code == 1
+    assert steps(document)["rest token"] == "FAILED"
+    assert "does not pass the General Settings entries writePermissions" in reasons(document)["rest token"]
+    assert next_actions(document)["rest token"] == "ignition-mcp setup --deployment default --yes"
 
 
 def test_status_on_a_hand_edited_server_config_reports_it(tmp_path: Path, gateway: CliGateway) -> None:
@@ -576,8 +612,56 @@ def test_reset_leaves_nothing_behind(tmp_path: Path, gateway: CliGateway) -> Non
     assert gateway.uninstalled == [{"uninstall": ["com.inductiveautomation.mcp"]}]
     authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
     assert [child["name"] for child in authenticated["children"]] == ["Setup"]
+    for entry, _ in runtime.GATEWAY_PERMISSIONS:
+        assert gateway.properties[entry]["securityLevels"] == SETUP_LEVEL, entry
     assert not directory.exists()
     assert SETUP_KEY not in raw
+
+
+def test_reset_keeps_the_rest_level_while_an_unrecorded_entry_names_it(
+    tmp_path: Path, gateway: CliGateway
+) -> None:
+    healthy(tmp_path, gateway)
+    gateway.properties["designerPermissions"]["securityLevels"][0]["children"].append(
+        {"name": rest.REST_LEVEL, "children": []}
+    )
+
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 0, document
+    assert steps(document)["reset rest general settings"] == "CHANGED"
+    assert steps(document)["reset rest level"] == "OK"
+    assert gateway.properties["writePermissions"]["securityLevels"] == SETUP_LEVEL
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Setup", rest.REST_LEVEL]
+
+
+def test_reset_leaves_the_rest_level_and_grants_it_did_not_record(tmp_path: Path, gateway: CliGateway) -> None:
+    healthy(tmp_path, gateway)
+    served = deployment(tmp_path)
+    created = [item for item in served.values[engine.CREATED_KEY] if not str(item).startswith("rest-")]
+    save_deployment(served, {engine.CREATED_KEY: [*created, rest.REST_TOKEN_RECORD]})
+
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 0, document
+    changes = [change["change"] for change in document["plan"]]
+    assert f"leave the Security Level {rest.REST_LEVEL_NAME} in place: the deployment does not record that setup " \
+        "created it" in changes
+    assert steps(document)["reset rest general settings"] == "OK"
+    assert steps(document)["reset rest level"] == "OK"
+    assert not any(path == PROPERTIES_WRITE for _, path in gateway.writes)
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Setup", rest.REST_LEVEL]
+    assert gateway.properties["writePermissions"]["securityLevels"][0]["children"][-1]["name"] == rest.REST_LEVEL
 
 
 def test_reset_needs_the_acceptance_and_the_confirmation_before_any_write(
@@ -946,7 +1030,7 @@ def test_status_gives_the_unreadable_checks_a_specific_next_action(
 ) -> None:
     healthy(tmp_path, gateway)
     gateway.levels = "not a tree"
-    gateway.tokens["setup"]["config"]["profile"].pop("securityLevels")
+    gateway.properties = "not an object"
 
     code, document, _ = run_json(status_argv(tmp_path), tmp_path / "deployments", token_probe=_probe)
 
@@ -954,5 +1038,4 @@ def test_status_gives_the_unreadable_checks_a_specific_next_action(
     assert steps(document)["level analysis"] == "FAILED"
     assert next_actions(document)["level analysis"] == f"curl -sS {URL}{gw.SECURITY_LEVELS_PATH}"
     assert steps(document)["rest token"] == "FAILED"
-    key = next_actions(document)["rest token"]
-    assert key.startswith("curl -sS ") and key.endswith("/data/api/v1/resources/find/ignition/api-token/setup")
+    assert next_actions(document)["rest token"] == f"curl -sS {URL}{rest.SECURITY_PROPERTIES_PATH}"

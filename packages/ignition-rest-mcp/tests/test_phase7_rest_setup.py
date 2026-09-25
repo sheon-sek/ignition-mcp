@@ -24,6 +24,7 @@ from starlette.testclient import TestClient
 from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.deployment import open_deployment, save_deployment
 from ignition_rest_mcp.cli.engine.report import JsonReporter
+from ignition_rest_mcp.cli.gateway_ops import security
 from ignition_rest_mcp.cli.setup import rest, start
 from ignition_rest_mcp.config import Settings
 from ignition_rest_mcp.server import create_server
@@ -37,6 +38,18 @@ from recorded_gateway import API_TOKEN, RecordedGateway  # noqa: E402
 PIPELINE = "project:MCP_CI_ALARM:/pipeline:Notify"
 EVENT = "6f1c8e2a-0f3f-4a44-9d5f-1c2b3a4d5e6f"
 SETUP_GRANT = [{"name": "Authenticated", "children": [{"name": "Administrator", "children": []}]}]
+PROPERTIES = "ignition/security-properties"
+#: The General Settings the recorded Gateway serves: the setup key's level under
+#: every entry, as D32 section 9 asks, and one entry that lets everyone through.
+GENERAL_SETTINGS = {
+    **{
+        entry: {"type": "AnyOf", "securityLevels": SETUP_GRANT}
+        for entry in ("accessPermissions", "readPermissions", "writePermissions", "designerPermissions")
+    },
+    "createProjectPermissions": {"type": "AllOf", "securityLevels": []},
+    "userInactivityTimeout": 10,
+}
+REST_LEAF = ("Authenticated", "IgnitionMcpRest")
 
 
 @pytest.fixture
@@ -56,8 +69,9 @@ def cli() -> Iterator[None]:
     def configure(parser: argparse.ArgumentParser) -> None:
         if original is not None:
             original(parser)
-        if "--recreate-tokens" not in parser._option_string_actions:
-            parser.add_argument("--recreate-tokens", action="store_true")
+        for flag in ("--recreate-tokens", "--provision-security-levels"):
+            if flag not in parser._option_string_actions:
+                parser.add_argument(flag, action="store_true")
 
     setup.configure = configure
     rest.register()
@@ -80,7 +94,25 @@ def gateway() -> Iterator[RecordedGateway]:
                 "settings": {"tokenHash": "unused"},
             },
         )
+        recorded.seed_resource(PROPERTIES, "security-properties", config=json.loads(json.dumps(GENERAL_SETTINGS)))
         yield recorded
+
+
+def general_settings(gateway: RecordedGateway) -> dict[str, Any]:
+    config: dict[str, Any] = gateway.resource(PROPERTIES, "security-properties")["config"]
+    return config
+
+
+def holds_rest_level(permission: dict[str, Any]) -> bool:
+    return any(
+        node["name"] == REST_LEAF[0] and any(child["name"] == REST_LEAF[1] for child in node.get("children", []))
+        for node in permission["securityLevels"]
+    )
+
+
+def token_levels(gateway: RecordedGateway) -> list[tuple[str, ...]]:
+    grant = gateway.resource("ignition/api-token", "ignition-mcp-rest")["config"]["profile"]["securityLevels"]
+    return [(node["name"], child["name"]) for node in grant for child in node["children"]]
 
 
 def run_json(argv: list[str], root: Path) -> tuple[int, dict[str, Any], str]:
@@ -111,19 +143,32 @@ def test_setup_then_start_gives_each_role_its_own_scopes(
     assert code == 0, document
     assert statuses(document) == {
         "plan rest": "OK",
+        "rest level": "CHANGED",
+        "rest general settings": "CHANGED",
         "rest token ignition-mcp-rest": "CHANGED",
         "rest static token ignition-mcp-analysis": "CHANGED",
         "rest static token ignition-mcp-engineer": "CHANGED",
         "rest settings": "CHANGED",
     }
     assert [item["item"] for item in document["accepted"]] == ["wildcard_target_allowlist"]
-    assert "Authenticated/Administrator" in document["steps"][1]["reason"]
-    created = [json.loads(request["body"]) for request in write_requests(gateway, "POST")
-               if request["path"] == "/data/api/v1/resources/ignition/api-token"]
-    assert created[0][0]["name"] == "ignition-mcp-rest"
-    assert created[0][0]["config"]["profile"]["securityLevels"] == SETUP_GRANT
+    assert "with Authenticated/IgnitionMcpRest as its only level" in document["steps"][3]["reason"]
+    assert token_levels(gateway) == [REST_LEAF]
+    authenticated = next(node for node in gateway.security_levels() or [] if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Roles", "IgnitionMcpRest"]
+    # dev: read and write. Access, Designer and every other setting stay as they were.
+    settings = general_settings(gateway)
+    assert holds_rest_level(settings["readPermissions"]) and holds_rest_level(settings["writePermissions"])
+    for key, value in GENERAL_SETTINGS.items():
+        if key not in ("readPermissions", "writePermissions"):
+            assert settings[key] == value, key
 
     deployment = open_deployment("default", root)
+    assert deployment.values["created"] == [
+        "rest-level:Authenticated/IgnitionMcpRest",
+        "rest-permission:readPermissions",
+        "rest-permission:writePermissions",
+        "rest-token:ignition-mcp-rest",
+    ]
     assert deployment.values["rest_mutation_classes"] == "config,control"
     assert deployment.values["rest_target_allowlist"] == "*"
     assert deployment.values["rest_project_writer"] == "on"
@@ -209,9 +254,20 @@ def test_the_admin_class_needs_its_own_acceptance(tmp_path: Path, gateway: Recor
 def test_prod_turns_every_mutation_class_off(tmp_path: Path, gateway: RecordedGateway, cli: None) -> None:
     root = tmp_path / "deployments"
     code, document, _ = run_json(setup_argv(tmp_path, gateway, "--environment", "prod", "--yes"), root)
+    assert code == 2
+    assert document["error"]["code"] == "acceptance_required"
+    assert document["error"]["next_action"].endswith("--provision-security-levels")
+    assert write_requests(gateway, "POST") == [] and write_requests(gateway, "PUT") == []
+
+    argv = setup_argv(tmp_path, gateway, "--environment", "prod", "--provision-security-levels", "--yes")
+    code, document, _ = run_json(argv, root)
 
     assert code == 0, document
     assert document["accepted"] == []
+    settings = general_settings(gateway)
+    assert holds_rest_level(settings["readPermissions"])
+    assert settings["writePermissions"] == GENERAL_SETTINGS["writePermissions"]
+    assert token_levels(gateway) == [REST_LEAF]
     deployment = open_deployment("default", root)
     assert deployment.values["roles"] == ["analysis"]
     assert not deployment.secret_path("rest-engineer-token").exists()
@@ -316,6 +372,8 @@ def test_an_environment_change_resets_the_saved_rest_settings(
 
     assert code == 0, document
     assert [entry["change"] for entry in document["plan"]] == [
+        "remove Authenticated/IgnitionMcpRest from the General Settings entries writePermissions "
+        "(environment prod: read access only)",
         "narrow rest-mutation-classes from config,control to none (environment dev to prod)",
         "narrow rest-target-allowlist from * to none (environment dev to prod)",
         "narrow rest-project-writer from on to off (environment dev to prod)",
@@ -324,11 +382,20 @@ def test_an_environment_change_resets_the_saved_rest_settings(
     deployment = open_deployment("default", root)
     assert (deployment.values["rest_mutation_classes"], deployment.values["rest_target_allowlist"]) == ("none", "none")
     assert (deployment.values["rest_project_writer"], deployment.values["rest_accepted"]) == ("off", [])
+    assert statuses(document)["rest general settings"] == "CHANGED"
+    assert not holds_rest_level(general_settings(gateway)["writePermissions"])
+    assert holds_rest_level(general_settings(gateway)["readPermissions"])
+    assert "rest-permission:writePermissions" not in deployment.values["created"]
 
-    # Widening back into dev asks for the '*' allowlist again.
+    # Widening back into dev asks for the '*' allowlist again, and adds the write grant.
     code, document, _ = run_json(setup_argv(tmp_path, gateway, "--environment", "dev"), root)
     assert code == 2
     assert "wildcard_target_allowlist" in document["error"]["message"]
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--environment", "dev", "--yes"), root)
+    assert code == 0, document
+    assert statuses(document)["rest general settings"] == "CHANGED"
+    assert holds_rest_level(general_settings(gateway)["writePermissions"])
+    assert "rest-permission:writePermissions" in open_deployment("default", root).values["created"]
 
 
 def test_a_hand_edited_rest_token_is_restored_after_acceptance(
@@ -344,15 +411,54 @@ def test_a_hand_edited_rest_token_is_restored_after_acceptance(
     code, document, _ = run_json(setup_argv(tmp_path, gateway), root)
     assert code == 2
     assert "overwrite_hand_edit" in document["error"]["message"]
-    assert write_requests(gateway, "PUT") == []
+    assert not any("/api-token" in request["path"] for request in write_requests(gateway, "PUT"))
 
     code, document, _ = run_json(setup_argv(tmp_path, gateway, "--yes"), root)
     assert code == 0, document
     assert statuses(document)["rest token ignition-mcp-rest"] == "CHANGED"
     assert [item["item"] for item in document["accepted"]] == ["overwrite_hand_edit"]
     restored = gateway.resource("ignition/api-token", "ignition-mcp-rest")["config"]
-    assert restored["profile"]["securityLevels"] == SETUP_GRANT
+    assert token_levels(gateway) == [REST_LEAF]
     assert restored["settings"] == served["config"]["settings"], "the key must not change"
+
+
+def test_a_token_on_the_setup_key_level_moves_to_the_dedicated_level(
+    tmp_path: Path, gateway: RecordedGateway, cli: None,
+) -> None:
+    """A Phase 7 deployment's token copied the setup key's level; the next run moves it."""
+
+    root = tmp_path / "deployments"
+    assert run_json(setup_argv(tmp_path, gateway, "--yes"), root)[0] == 0
+    served = gateway.resource("ignition/api-token", "ignition-mcp-rest")
+    config = {**served["config"], "profile": {**served["config"]["profile"], "securityLevels": SETUP_GRANT}}
+    gateway.change_resource_out_of_band("ignition/api-token", "ignition-mcp-rest", config=config)
+
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--yes"), root)
+
+    assert code == 0, document
+    assert document["accepted"] == []
+    assert statuses(document)["rest token ignition-mcp-rest"] == "CHANGED"
+    reason = {step["step"]: step["reason"] for step in document["steps"]}["rest token ignition-mcp-rest"]
+    assert reason == (
+        "moved from the setup key's level Authenticated/Administrator to Authenticated/IgnitionMcpRest; "
+        "the key is unchanged"
+    )
+    assert token_levels(gateway) == [REST_LEAF]
+
+
+def test_an_all_of_entry_is_refused_before_any_write(tmp_path: Path, gateway: RecordedGateway, cli: None) -> None:
+    """Adding a level to an AllOf entry would lock out everyone who holds only the others."""
+
+    settings = general_settings(gateway)
+    settings["writePermissions"] = {"type": "AllOf", "securityLevels": SETUP_GRANT}
+
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--yes"), tmp_path / "deployments")
+
+    assert code == 1, document
+    assert document["error"]["code"] == "step_failed"
+    assert "writePermissions is AllOf" in document["error"]["message"]
+    assert document["error"]["next_action"].endswith("/data/api/v1/resources/singleton/ignition/security-properties")
+    assert write_requests(gateway, "POST") == [] and write_requests(gateway, "PUT") == []
 
 
 def test_start_asks_for_a_risk_that_setup_never_recorded(
@@ -377,3 +483,25 @@ def test_start_asks_for_a_risk_that_setup_never_recorded(
     assert calls[0].admin_mutation_enabled is True
     risks = {step["step"]: step["reason"] for step in document["steps"]}["risks"]
     assert "admin_mutation_class (accepted in this run)" in risks
+
+
+def test_the_general_settings_edit_never_narrows_anyone_else() -> None:
+    everyone = {"type": "AnyOf", "securityLevels": []}
+    assert security.permission_with_level(everyone, "readPermissions", REST_LEAF) == (None, "")
+
+    only_rest = {"type": "AnyOf", "securityLevels": [{"name": "Authenticated", "children": [
+        {"name": "IgnitionMcpRest", "children": []}]}]}
+    changed, reason = security.permission_without_level(only_rest, "readPermissions", REST_LEAF)
+    assert changed is None and "lets every token through" in reason
+
+    shared = {"type": "AnyOf", "securityLevels": [*SETUP_GRANT, {"name": "Public", "children": []}]}
+    added, _ = security.permission_with_level(shared, "writePermissions", REST_LEAF)
+    assert added is not None and security.permission_holds(added, REST_LEAF)
+    # The removal drops the level and, when that leaves it childless, its parent, so a
+    # bare Authenticated never ends up granting every signed-in user.
+    removed, _ = security.permission_without_level(
+        {"type": "AnyOf", "securityLevels": [only_rest["securityLevels"][0], {"name": "Public", "children": []}]},
+        "writePermissions", REST_LEAF,
+    )
+    assert removed == {"type": "AnyOf", "securityLevels": [{"name": "Public", "children": []}]}
+    assert security.permission_without_level(added, "writePermissions", REST_LEAF)[0] == shared

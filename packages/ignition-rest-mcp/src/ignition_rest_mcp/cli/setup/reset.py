@@ -10,7 +10,10 @@ What ``setup`` created, and what the apply therefore removes:
 
 * per role, its Server Config and its Gateway API token, with the two deletes
   :mod:`ignition_rest_mcp.cli.setup.runtime` already verified;
-* the ``ignition-mcp-rest`` Gateway API token;
+* the ``ignition-mcp-rest`` Gateway API token, then the REST server's level
+  ``Authenticated/IgnitionMcpRest`` from each General Settings entry setup added it
+  to, then the level itself (issue #79). Each is one D20 edit that re-reads the
+  singleton right before the write and reads it back;
 * the roles' Security Levels, by one minimal edit of the singleton;
 * the Runtime Target Policy, by deleting the reserved Tag provider that holds it;
 * the managed bundle project;
@@ -78,6 +81,10 @@ class ResetPlan:
     removals: list[RemovalPlan] = field(default_factory=list)
     #: The served ``ignition-mcp-rest`` document.
     rest_token: dict[str, Any] | None = None
+    #: The General Settings entries setup added the REST server's level to, and
+    #: whether the level itself goes (issue #79).
+    rest_revoke: list[str] = field(default_factory=list)
+    rest_level: bool = False
     #: The served reserved Tag provider document, when the policy provider exists.
     provider: dict[str, Any] | None = None
     #: The served bundle version when the managed project exists.
@@ -234,6 +241,7 @@ def plan(ctx: engine.Context) -> engine.Plan:
     if rest_token is not None:
         what = f"the Gateway API token {rest.REST_TOKEN_NAME}"
         changes.append(f"delete {what}" if reset_plan.rest_token is not None else _left(what))
+    _plan_rest_level(ctx, reset_plan, tree, created, changes)
     if provider is not None:
         what = f"the Runtime Target Policy, the reserved {docs.PROVIDER} Tag provider"
         changes.append(f"delete {what}" if reset_plan.provider is not None else _left(what))
@@ -255,6 +263,56 @@ def plan(ctx: engine.Context) -> engine.Plan:
     if reset_plan.entries:
         changes.append(f"delete the deployment directory {deployment.directory} ({len(reset_plan.entries)} entries)")
     return engine.Plan(changes=changes, needed=needed, data=reset_plan)
+
+
+def _plan_rest_level(
+    ctx: engine.Context, reset_plan: ResetPlan, tree: list[dict[str, Any]], created: set[str], changes: list[str]
+) -> None:
+    """The REST server's level and its General Settings grants, removed only as recorded."""
+
+    recorded = [entry for entry in rest.PERMISSION_ENTRIES if rest.permission_record(entry) in created]
+    config: dict[str, Any] | None = None
+    if recorded or rest.REST_LEVEL_RECORD in created:
+
+        async def read() -> dict[str, Any] | None:
+            async with ctx.gateway_reader(runtime.SETTINGS.transport) as client:
+                return await client.singleton_document(security.SECURITY_PROPERTIES_TYPE)
+
+        try:
+            config = security.properties_config(asyncio.run(read()))
+        except gw.GatewayProbeError as error:
+            raise CliError(
+                ErrorCode.STEP_FAILED,
+                f"the Gateway's General Settings could not be read ({error})",
+                next_action=f"curl -sS {str(ctx.resolved.values['gateway_url']).rstrip('/')}"
+                f"{rest.SECURITY_PROPERTIES_PATH}",
+            ) from error
+    # A level that an entry setup did not record still names would leave that entry
+    # pointing at nothing, so the level stays too.
+    kept = any(
+        security.permission_lists(value, rest.REST_LEVEL_PATH)
+        for key, value in (config or {}).items()
+        if key not in recorded
+    )
+    for entry in recorded:
+        changed, reason = security.permission_without_level((config or {}).get(entry), entry, rest.REST_LEVEL_PATH)
+        if reason:
+            kept = True
+            changes.append(f"leave {rest.REST_LEVEL_NAME} in the General Settings entry {entry}: {reason}")
+        elif changed is not None:
+            reset_plan.rest_revoke.append(entry)
+            changes.append(f"remove {rest.REST_LEVEL_NAME} from the General Settings entry {entry}")
+    found = security.find_level(tree, rest.REST_LEVEL)
+    if found is None or tuple(found[0]) != rest.REST_LEVEL_PATH or security.level_shape_problem(found[1]):
+        return
+    what = f"the Security Level {rest.REST_LEVEL_NAME}"
+    if rest.REST_LEVEL_RECORD not in created:
+        changes.append(_left(what))
+    elif kept:
+        changes.append(f"leave {what} in place: a General Settings entry still names it")
+    else:
+        reset_plan.rest_level = True
+        changes.append(f"remove {what}")
 
 
 # ------------------------------------------------------------------------ apply
@@ -293,6 +351,13 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
             end.set(Status.OK, "the Gateway holds no REST server token")
         else:
             end.set(Status.CHANGED, asyncio.run(_delete_rest_token(ctx, reset_plan)))
+    with ctx.reporter.step("reset rest general settings", ", ".join(reset_plan.rest_revoke) or "none") as end:
+        if not reset_plan.rest_revoke:
+            end.set(Status.OK, f"no General Settings entry setup added {rest.REST_LEVEL_NAME} to is left")
+        else:
+            writer = ctx.gateway_writer(runtime.SETTINGS.transport)
+            done = asyncio.run(rest.edit_general_settings(ctx, writer, [], reset_plan.rest_revoke))
+            end.set(Status.CHANGED, "; ".join(done))
     with ctx.reporter.step(
         "reset security levels",
         ", ".join(role.level_path for role in reset_plan.removed_levels) or "none",
@@ -301,6 +366,13 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
             end.set(Status.OK, "no Security Level created by setup is left")
         else:
             end.set(Status.CHANGED, asyncio.run(_remove_levels(ctx, reset_plan)))
+    with ctx.reporter.step("reset rest level", rest.REST_LEVEL_NAME) as end:
+        if not reset_plan.rest_level:
+            end.set(Status.OK, f"setup created no {rest.REST_LEVEL_NAME} that is still there")
+        elif asyncio.run(rest.remove_rest_level(ctx, ctx.gateway_writer(runtime.SETTINGS.transport))):
+            end.set(Status.CHANGED, f"removed {rest.REST_LEVEL_NAME}")
+        else:
+            end.set(Status.OK, f"{rest.REST_LEVEL_NAME} was already gone")
     with ctx.reporter.step("reset runtime policy", docs.POLICY_PATH) as end:
         if reset_plan.provider is None:
             end.set(Status.OK, f"the reserved {docs.PROVIDER} Tag provider is absent")

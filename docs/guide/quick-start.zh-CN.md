@@ -54,7 +54,7 @@ printf '%s\n' '<name>:<your-ignition-api-key>' > ~/.config/ignition-mcp/gateway-
 chmod 0600 ~/.config/ignition-mcp/gateway-token
 ```
 
-CLI 立刻拿这个 key 去问 Gateway，被拒绝或缺少某项权限时会再问一次。setup key 只在 setup 期间使用，永远不交给 REST server，后者有自己的 token `ignition-mcp-rest`。
+CLI 立刻拿这个 key 去问 Gateway，被拒绝或缺少某项权限时会再问一次。setup key 只在 setup 期间使用，永远不交给 REST server，后者有自己的 token `ignition-mcp-rest`。这个 token 只持有一个安全级别 `Authenticated/IgnitionMcpRest`。`setup` 创建这个级别，并把它加进 REST server 需要的 General Settings 条目：`prod` 里是 Gateway Read，`dev` 里是 Gateway Read 和 Gateway Write。Gateway Access、Designer 和其他设置保持原样。
 
 ## 两个助手角色
 
@@ -106,7 +106,7 @@ operator 从不手写 policy 文件或 permissions 文件。CLI 从环境和角�
 | `--gateway-token-file PATH` | 存有 Gateway API key 的单行文件，格式是 `名称:密钥`。在 Linux 和 macOS 上权限必须是 `0600`。 |
 | `--module-file PATH` | MCP Module 的 `.modl` 文件。`setup` 先在 `tests/fixtures/modules/` 和 `~/Downloads` 里找，并用 SHA-256 对得上固定 build 的文件。 |
 | `--recreate-tokens` | 本地机密文件丢失时，删除并重建每个受管 token。机密文件丢失后用这个。 |
-| `--provision-security-levels` | 在 `prod` 里创建角色缺少的安全级别。`dev` 已经会创建。 |
+| `--provision-security-levels` | 在 `prod` 里创建角色和 REST server 缺少的安全级别，并把 REST server 的级别加进 Gateway Read。`dev` 已经会做这些。 |
 | `--rest-mutation-classes LIST` | REST server 可以提供的修改类别：`none`，或 `config`、`control`、`admin` 的逗号分隔列表。`dev` 默认 `config,control`，`prod` 默认 `none`。加上 `admin` 需要 ADMIN 确认，`--yes` 覆盖它。 |
 | `--rest-target-allowlist *\|none` | 已打开的 REST 修改类别是否可以针对任何目标（`*`）或什么都不针对（`none`）。`dev` 默认 `*`，`prod` 默认 `none`。有类别打开时的 `*` 需要通配确认，`--yes` 覆盖它。 |
 | `--rest-project-writer on\|off` | REST server 是否可以导入 Project。`dev` 默认 `on`，`prod` 默认 `off`。 |
@@ -115,12 +115,13 @@ operator 从不手写 policy 文件或 permissions 文件。CLI 从环境和角�
 各步骤按固定顺序运行，每一步报告 `OK`、`CHANGED`、`SKIPPED` 或 `FAILED` 以及原因：
 
 1. 从本地文件安装 MCP Module。同一个 build 已经装好时是 `OK`，不上传任何东西。更低的 build 一律拒绝。
-2. 创建角色的安全级别。`dev` 会创建它们；在 `prod` 里这一步需要 `--provision-security-levels`。
-3. 创建每个角色的 Runtime token 和 `ignition-mcp-rest` token，每个机密写进自己的 `*.secret` 文件，权限 `0600`。
-4. 部署 Runtime bundle 项目。替换受管项目之前先备份。带着 bundle 名字、但不是 `setup` 创建的项目，永远不会被接管。
-5. 为每个角色创建一个 Server Config，带明确的 Tool 列表和它的权限树。
-6. 把 Runtime Target Policy 写进 `IgnitionMCPPolicy` Tag provider。
-7. 从角色和环境写出 REST server 的设置。
+2. 创建角色的安全级别和 REST server 的级别 `Authenticated/IgnitionMcpRest`。`dev` 会创建它们；在 `prod` 里这一步需要 `--provision-security-levels`。
+3. 在 Security > General Settings 里把 REST server 的级别加进 Gateway Read，`dev` 里再加进 Gateway Write。从 `dev` 换到 `prod` 会再把它从 Gateway Write 里移除。类型为 `AllOf` 的条目会被拒绝，因为在那里多加一个级别会把只持有其他级别的人都挡在外面。
+4. 创建每个角色的 Runtime token 和 `ignition-mcp-rest` token，每个机密写进自己的 `*.secret` 文件，权限 `0600`。`ignition-mcp-rest` 只持有 REST server 的级别。之前的 `setup` 给了它 setup key 级别的 token，会在下一次运行时换到这个级别。
+5. 部署 Runtime bundle 项目。替换受管项目之前先备份。带着 bundle 名字、但不是 `setup` 创建的项目，永远不会被接管。
+6. 为每个角色创建一个 Server Config，带明确的 Tool 列表和它的权限树。
+7. 把 Runtime Target Policy 写进 `IgnitionMCPPolicy` Tag provider。
+8. 从角色和环境写出 REST server 的设置。
 
 ```bash
 ignition-mcp setup --deployment default \
@@ -178,7 +179,7 @@ ignition-mcp connect engineer --client codex
 
 ## `reset`
 
-`reset` 删除 `setup` 创建的东西，在 Gateway 上和本地都删。它只删除部署自己的记录写明由 `setup` 创建的资源，发现的其他东西会作为保留项列出。它在 `dev` 以外的环境被拒绝。
+`reset` 删除 `setup` 创建的东西，在 Gateway 上和本地都删。它只删除部署自己的记录写明由 `setup` 创建的资源，发现的其他东西会作为保留项列出。REST server 的级别和 `setup` 把它加进的每个 General Settings 条目也按这条规则处理。它在 `dev` 以外的环境被拒绝。
 
 ```bash
 ignition-mcp reset \
