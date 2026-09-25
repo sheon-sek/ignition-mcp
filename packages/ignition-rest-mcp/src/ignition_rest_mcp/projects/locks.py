@@ -218,7 +218,7 @@ class ProjectLockRegistry:
                     yield
                 finally:
                     if file_lock is not None:
-                        await asyncio.to_thread(file_lock.release)
+                        file_lock.release()
             finally:
                 entry.lock.release()
         finally:
@@ -227,14 +227,19 @@ class ProjectLockRegistry:
                 self._entries.pop(key, None)  # idle removal
 
     async def _file_lock(self, gateway_id: str, project: str) -> ProjectFileLock | None:
-        """Take the pair's lock file within the timeout, or ``None`` without a data directory."""
+        """Take the pair's lock file within the timeout, or ``None`` without a data directory.
+
+        Each attempt runs on the event loop, not in a worker thread: a non-blocking
+        ``flock`` never waits, and a cancelled waiter then can never leave behind a
+        lock that a thread took after the cancellation (issue #80 review).
+        """
 
         if self._data_dir is None:
             return None
         file_lock = ProjectFileLock(project_lock_path(self._data_dir, gateway_id, project))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self._timeout
-        while not await asyncio.to_thread(file_lock.try_acquire):
+        while not file_lock.try_acquire():
             if loop.time() >= deadline:
                 raise GatewayError(
                     "conflict",

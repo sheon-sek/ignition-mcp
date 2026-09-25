@@ -389,6 +389,10 @@ def check_hand_edit(
         item.get("change"))]
     if len(reported) != 1 or f"tools/{tool} (onToolCalled.py)" not in reported[0]:
         raise StageError(f"the dry run did not report the hand edit of {tool}: {report.get('plan')}")
+    # The Gateway's Designer listing must be readable and empty here, or the plan names it (D16).
+    designer = [str(item.get("change")) for item in report.get("plan", []) if "Designer" in str(item.get("change"))]
+    if designer:
+        raise StageError(f"the dry run names a Designer session or an unreadable listing: {designer}")
     if restore.get("exit_code") != 0 or restore.get("error") is not None:
         raise StageError(f"the restoring setup failed: {json.dumps(restore.get('error'))}")
     bundle = steps_by_name(restore).get("runtime bundle", {})

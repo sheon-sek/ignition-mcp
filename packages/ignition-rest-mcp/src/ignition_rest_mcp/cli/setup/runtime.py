@@ -96,8 +96,10 @@ from ignition_rest_mcp.cli.gateway_ops.inputs import (
     UsageError,
 )
 from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
-from ignition_rest_mcp.cli.gateway_ops.writer import WriteError
+from ignition_rest_mcp.cli.gateway_ops.writer import GatewayWriter, WriteError
 from ignition_rest_mcp.cli.setup.start import DATA_DIRECTORY as REST_DATA_DIRECTORY
+from ignition_rest_mcp.errors import GatewayError
+from ignition_rest_mcp.projects import designers
 from ignition_rest_mcp.projects.fingerprint import project_fingerprint
 from ignition_rest_mcp.projects.locks import SINGLE_WRITER_LIMITATION, ProjectFileLock, project_lock_path
 from ignition_rest_mcp.projects.zip_safety import UnsafeArchiveError
@@ -607,6 +609,8 @@ class RuntimePlan:
     project_fingerprint: str = ""
     #: The bundle's Tools, Text Resources and Prompts the managed project holds differently.
     project_drift: list[str] = field(default_factory=list)
+    #: The Designer sessions on the managed project the plan showed and dev accepted.
+    designer_note: str = ""
 
     @property
     def install_module(self) -> bool:
@@ -777,6 +781,20 @@ def plan_runtime(ctx: Context) -> Plan:
             f"it by hand: {edited}"
         )
         needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"project {PROJECT}: {edited}"))
+    if plan.project_action in ("update", "restore"):
+        plan.designer_note = asyncio.run(_designer_note(ctx))
+        if plan.designer_note and environment == "prod":
+            raise CliError(
+                ErrorCode.CONFLICT,
+                f"{plan.designer_note}; in prod setup never replaces the managed project while a Designer may "
+                "hold unsaved work on it. Nothing was written",
+                next_action=_close_designer(ctx),
+            )
+        if plan.designer_note:
+            changes.append(
+                f"replace the managed project {PROJECT} although {plan.designer_note}; unsaved work there is lost"
+            )
+            needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"project {PROJECT}: {plan.designer_note}"))
     for role in new_levels:
         changes.append(f"create the Security Level {role.level_path}")
     for removal in _plan_removals(ctx, roles, tree, token_docs, config_docs):
@@ -976,6 +994,43 @@ def _plan_project(
     fingerprint = _fingerprint(ctx, served)
     drift = bundle_content.differences(served, archive) if project.bundle_version == bundle.version else []
     return archive, fingerprint, drift
+
+
+async def _designer_note(ctx: Context, client: gw.GatewayRest | None = None) -> str:
+    """D16's Designer-session check: ``""``, or what holds or may hold the managed project.
+
+    A listing the Gateway cannot provide counts as a session, because an open
+    Designer cannot be ruled out (coordinator ruling on issue #80).
+    """
+
+    async def read(reader: gw.GatewayRest) -> list[dict[str, str]]:
+        async def fetch(limit: int, offset: int) -> Any:
+            return await reader.get_json(
+                designers.DESIGNERS_PATH, params={"limit": str(limit), "offset": str(offset)}
+            )
+
+        return await designers.list_project_sessions(fetch, PROJECT)
+
+    try:
+        if client is not None:
+            sessions = await read(client)
+        else:
+            async with ctx.gateway_reader(SETTINGS.transport) as reader:
+                sessions = await read(reader)
+    except (GatewayError, gw.GatewayProbeError) as error:
+        return (
+            f"the Gateway's Designer session listing could not be read ({error}), so an open Designer on "
+            f"{PROJECT} cannot be ruled out"
+        )
+    if not sessions:
+        return ""
+    who = [session["user"] or session["id"] or "unnamed" for session in sessions]
+    shown = ", ".join(who[:5]) + (f" and {len(who) - 5} more" if len(who) > 5 else "")
+    return f"{len(sessions)} active Designer session(s) hold the project {PROJECT} ({shown})"
+
+
+def _close_designer(ctx: Context) -> str:
+    return f"close the Designer on {PROJECT}, then run: {PROG} setup --deployment {ctx.deployment.name}"
 
 
 async def _export_project(ctx: Context) -> bytes:
@@ -1369,16 +1424,19 @@ def _conflict(ctx: ApplyContext, what: str, backup: Path) -> CliError:
 
 
 async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
-    """Import the bundle; a replace follows D16's baseline, re-check and read-back.
+    """Import the bundle; a replace follows D16's baseline, re-checks and read-back.
 
     Only the managed project is replaced here, and the writer lock is held by the
     caller. The baseline export is the durable backup, so a failure after it leaves
-    the recovery copy in place. Nothing is retried after the import was sent.
+    the recovery copy in place. Nothing is retried after the import was sent: an
+    import whose answer was lost is reconciled from a fresh export instead.
     """
 
     archive = plan.archive
     replace = plan.project_action != "create"
     note = ""
+    baseline = ""
+    backup: Path | None = None
     async with ctx.gateway_writer(SETTINGS.transport) as writer:
         try:
             if replace:
@@ -1388,8 +1446,21 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
                     raise _conflict(ctx, "after the plan read it", backup)
                 if _fingerprint(ctx, await writer.project_export(PROJECT)) != baseline:
                     raise _conflict(ctx, "between the baseline export and the import", backup)
+                designer = await _designer_note(ctx, writer.reads)
+                if designer and not plan.designer_note:
+                    raise CliError(
+                        ErrorCode.CONFLICT,
+                        f"{designer} since the plan read the Gateway; nothing was imported. The baseline is in "
+                        f"{backup}",
+                        next_action=_close_designer(ctx),
+                    )
                 note = f"; backed up to {backup}, whose pcf1 matched the project just before the import"
-            await writer.import_project(PROJECT, archive, overwrite=replace)
+            try:
+                await writer.import_project(PROJECT, archive, overwrite=replace)
+            except WriteError as error:
+                if error.status != 0:
+                    raise
+                return await _reconcile(ctx, plan, writer, baseline, backup, str(error)) + note
             state = await writer.reads.find_project(PROJECT)
             result = await writer.project_export(PROJECT)
         except (WriteError, gw.GatewayProbeError) as error:
@@ -1407,6 +1478,51 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
             f"the import was accepted but {PROJECT} reads back other content: {bundle_content.summary(drift)}", ctx
         )
     return f"deployed managed bundle {plan.bundle.version} ({len(archive)} bytes) and read it back equal{note}"
+
+
+async def _reconcile(
+    ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter, baseline: str, backup: Path | None, lost: str
+) -> str:
+    """D16's reconciliation after an import whose answer was lost: export C and compare.
+
+    C equal to the bundle means the import was applied. C equal to baseline A, or no
+    project where setup was creating one, means it was not applied. Anything else is
+    an unknown outcome, and setup stops without a retry.
+    """
+
+    kept = f" The baseline is in {backup}." if backup is not None else ""
+    try:
+        state = await writer.reads.find_project(PROJECT)
+        current = None if state.classification == gw.ABSENT else await writer.project_export(PROJECT)
+    except (WriteError, gw.GatewayProbeError) as error:
+        raise _failed(
+            f"the import answer was lost ({lost}) and {PROJECT} could not be read back ({error}), so the outcome "
+            f"is unknown and setup does not retry.{kept}",
+            ctx,
+        ) from error
+    if (
+        current is not None
+        and state.managed
+        and state.bundle_version == plan.bundle.version
+        and not bundle_content.differences(current, plan.archive)
+    ):
+        return (
+            f"deployed managed bundle {plan.bundle.version} ({len(plan.archive)} bytes); the import answer was lost "
+            f"({lost}), and the project read back afterwards holds the bundle"
+        )
+    unchanged = current is None if not baseline else current is not None and _fingerprint(ctx, current) == baseline
+    if unchanged:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"the import answer was lost ({lost}) and {PROJECT} reads back unchanged, so the import was not "
+            f"applied; re-running setup is safe.{kept}",
+            next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
+        )
+    raise _failed(
+        f"the import answer was lost ({lost}) and {PROJECT} reads back neither as before nor as the bundle, so the "
+        f"outcome is unknown and setup does not retry.{kept}",
+        ctx,
+    )
 
 
 def _backup(ctx: ApplyContext, plan: RuntimePlan, archive: bytes) -> Path:

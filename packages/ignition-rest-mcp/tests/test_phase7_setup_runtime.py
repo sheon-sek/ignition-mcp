@@ -28,7 +28,7 @@ import pytest
 from ignition_rest_mcp.cli.engine import main as engine
 from ignition_rest_mcp.cli.engine.report import JsonReporter
 from ignition_rest_mcp.cli.setup import runtime
-from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops import bundle_content, security
 from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpProbeError
 from ignition_rest_mcp.errors import GatewayError
 from ignition_rest_mcp.projects.locks import ProjectFileLock, ProjectLockRegistry, project_lock_path
@@ -81,6 +81,11 @@ class FakeGateway:
         #: Store an import the way 8.3.8 does: ``resource.json`` re-serialized and a
         #: ``parent`` key in ``project.json``.
         self.reserialize_on_import = False
+        #: The Designer sessions ``GET /data/api/v1/designers`` lists; ``None`` answers 404.
+        self.designers: list[dict[str, Any]] | None = []
+        #: ``lost``: store the import and drop the answer; ``refused``: drop it unstored;
+        #: ``garbled``: store something else and drop the answer.
+        self.import_fault = ""
 
     # ---------------------------------------------------------------- helpers
 
@@ -157,6 +162,8 @@ class FakeGateway:
                 self.on_export(self.exports)
             archive = self.projects.get(path.rsplit("/", 1)[-1])
             return httpx.Response(200, content=archive) if archive else httpx.Response(404, json={})
+        if path == "/data/api/v1/designers" and self.designers is not None:
+            return httpx.Response(200, json={"items": self.designers, "metadata": {"matching": len(self.designers)}})
         if path == "/data/api/v1/resources/singleton/ignition/security-levels":
             return httpx.Response(200, json={
                 "name": "security-levels", "collection": "core", "signature": self.levels_signature,
@@ -216,7 +223,13 @@ class FakeGateway:
             name = path.rsplit("/", 1)[-1]
             if name in self.projects and query.get("overwrite") != "true":
                 return httpx.Response(409, json={"message": "exists"})
-            self.projects[name] = _reserialize(body) if self.reserialize_on_import else body
+            fault, self.import_fault = self.import_fault, ""
+            if fault == "garbled":
+                body = _rewrite(body, lambda entry, data: data + b"# half written\n" if entry.endswith(".py") else data)
+            if fault != "refused":
+                self.projects[name] = _reserialize(body) if self.reserialize_on_import else body
+            if fault:
+                raise httpx.ReadTimeout("the answer never came")
             return ok
         if path == "/data/api/v1/api-token/generate":
             key = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
@@ -899,3 +912,149 @@ def test_a_role_resource_setup_did_not_create_is_left_in_place(tmp_path: Path, g
     assert "IgnitionMcpEngineer" in [child["name"] for child in authenticated["children"]]
     assert (deployment(tmp_path) / "runtime-engineer.secret").exists()
     assert not (deployment(tmp_path) / "permissions-engineer.json").exists()
+
+
+def test_a_changed_hex_string_outside_the_revision_stamp_is_a_hand_edit() -> None:
+    def archive(tag_read: bytes, revision: bytes) -> bytes:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as target:
+            root = "com.inductiveautomation.mcp/tools/"
+            target.writestr(root + "tag_read/onToolCalled.py", b'\tpinned = "' + tag_read + b'"\n')
+            target.writestr(root + "bundle_info/onToolCalled.py", b'\tbundleSourceRevision = "' + revision + b'"\n')
+        return buffer.getvalue()
+
+    bundle = archive(b"0" * 40, b"a" * 40)
+
+    assert bundle_content.differences(archive(b"0" * 40, b"b" * 40), bundle) == []
+    assert bundle_content.differences(archive(b"1" * 40, b"a" * 40), bundle) == [
+        "tools/tag_read (onToolCalled.py)"
+    ]
+
+
+def test_a_json_true_changed_to_1_is_a_hand_edit(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    entry = "com.inductiveautomation.mcp/tools/tag_read/resource.json"
+    gateway.projects[runtime.PROJECT] = _rewrite(
+        gateway.projects[runtime.PROJECT],
+        lambda name, data: data.replace(b'"required": true', b'"required": 1', 1) if name == entry else data,
+    )
+
+    code, document, _ = setup(tmp_path)
+
+    assert code == 2
+    assert any("tools/tag_read (resource.json)" in change["change"] for change in document["plan"])
+
+
+def test_a_cancelled_rest_lock_wait_leaves_the_lock_file_free(tmp_path: Path) -> None:
+    holder = ProjectFileLock(project_lock_path(tmp_path, "default", runtime.PROJECT))
+    assert holder.try_acquire()
+    registry = ProjectLockRegistry(timeout_seconds=60.0, max_entries=4, data_dir=tmp_path, poll_seconds=0.0)
+
+    async def scenario() -> bool:
+        async def mutate() -> None:
+            async with registry.acquire("default", runtime.PROJECT):
+                await asyncio.Event().wait()
+
+        waiter = asyncio.create_task(mutate())
+        for _ in range(3):
+            await asyncio.sleep(0)
+        holder.release()
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+        probe = ProjectFileLock(holder.path)
+        free = probe.try_acquire()
+        probe.release()
+        return free and len(registry) == 0
+
+    assert asyncio.run(scenario())
+
+
+def test_an_open_designer_needs_acceptance_in_dev(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _set_marker(gateway, "0.0.1")
+    gateway.designers = [{"id": "d-1", "user": "alice", "project": runtime.PROJECT}]
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path, "--accept-certificate")
+
+    assert code == 2
+    assert "overwrite_hand_edit" in document["error"]["message"]
+    assert any("1 active Designer session(s) hold the project ignition_runtime (alice)" in change["change"]
+               for change in document["plan"])
+    assert gateway.writes == []
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 0, document
+    assert steps(document)["runtime bundle"] == "CHANGED"
+
+
+def test_an_open_designer_or_an_unreadable_listing_refuses_the_replace_in_prod(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    secure = "https://gw.test:8043"
+    assert setup(tmp_path, *ACCEPT, url=secure)[0] == 0
+    assert setup(tmp_path, "--yes", environment="prod", url=secure)[0] == 0
+    _set_marker(gateway, "0.0.1")
+    for designers, cause in (
+        ([{"id": "d-1", "user": "alice", "project": runtime.PROJECT}], "(alice)"),
+        (None, "Designer session listing could not be read"),
+    ):
+        gateway.designers = designers
+        gateway.requests.clear()
+
+        code, document, _ = setup(tmp_path, "--yes", environment="prod", url=secure)
+
+        assert code == 1
+        assert document["error"]["code"] == "conflict"
+        assert cause in document["error"]["message"]
+        assert "close the Designer on ignition_runtime" in document["error"]["next_action"]
+        assert gateway.writes == []
+
+
+def test_a_designer_opened_after_the_plan_refuses_the_import(tmp_path: Path, gateway: FakeGateway) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _edit_tool(gateway)
+    before = gateway.exports
+
+    def open_designer(count: int) -> None:
+        if count == before + 2:
+            gateway.designers = [{"id": "d-2", "user": "bob", "project": runtime.PROJECT}]
+
+    gateway.on_export = open_designer
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 1
+    assert document["error"]["code"] == "conflict"
+    assert "(bob) since the plan read the Gateway" in document["error"]["message"]
+    assert _imports(gateway) == []
+
+
+@pytest.mark.parametrize(
+    ("fault", "code", "expected"),
+    [
+        ("lost", 0, "the import answer was lost"),
+        ("refused", 1, "re-running setup is safe"),
+        ("garbled", 1, "the outcome is unknown and setup does not retry"),
+    ],
+)
+def test_an_import_whose_answer_was_lost_is_reconciled_from_a_fresh_export(
+    tmp_path: Path, gateway: FakeGateway, fault: str, code: int, expected: str
+) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _edit_tool(gateway)
+    gateway.import_fault = fault
+    gateway.requests.clear()
+
+    result, document, _ = setup(tmp_path, "--yes")
+
+    assert result == code, document
+    bundle = next(step for step in document["steps"] if step["step"] == "runtime bundle")
+    assert expected in bundle["reason"]
+    assert bundle["status"] == ("CHANGED" if fault == "lost" else "FAILED")
+    assert len(_imports(gateway)) == 1
+    if fault == "garbled":
+        assert "backups/ignition_runtime-" in bundle["reason"]

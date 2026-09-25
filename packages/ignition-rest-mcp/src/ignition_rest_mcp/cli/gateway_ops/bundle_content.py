@@ -10,13 +10,15 @@ The comparison, ``bundle-content-v1``, removes what the Gateway changes on impor
 and nothing else. The 8.3.8 live rehearsal of issue #80 showed two changes:
 
 * ``resource.json`` comes back re-serialized, with its ``attributes`` keys in
-  another order and no trailing newline. It is compared as parsed JSON.
+  another order and no trailing newline. It is compared as canonical JSON: sorted
+  keys and fixed separators, so ``true`` and ``1`` still differ.
 * nothing else. The Tool scripts and ``data.bin`` files come back byte for byte.
 
 One more difference is setup's own: the builder stamps the checkout's git revision
 into ``bundle_info``, and a checkout on a later commit with the same bundle version
-stamps another one. A file the bundle stamps is compared with any stamped revision
-replaced by one placeholder on both sides.
+stamps another one. Only that one assignment, ``bundleSourceRevision = "<revision>"``
+in ``tools/bundle_info/onToolCalled.py``, is compared with the revision replaced by a
+placeholder on both sides. Every other byte of every file counts.
 
 Both archives must have passed the D15 ZIP safety gate before they reach this
 module; the D16 fingerprint pass does that for the export.
@@ -36,8 +38,10 @@ MANAGED_KINDS = ("tools", "resources", "prompts")
 #: How many differing resources a report names before it counts the rest.
 REPORT_LIMIT = 10
 
-_STAMP = re.compile(rb'"(?:[0-9a-f]{40}|UNSTAMPED)"')
-_PLACEHOLDER = b'"<source revision>"'
+#: The one file the builder stamps, and the assignment the stamp lands in.
+STAMPED_FILE = ("tools/bundle_info", "onToolCalled.py")
+_STAMP = re.compile(rb'^([ \t]*bundleSourceRevision = )"(?:[0-9a-f]{40}|UNSTAMPED)"([ \t]*)$', re.MULTILINE)
+_PLACEHOLDER = rb'\1"<source revision>"\2'
 
 
 def managed_resources(archive: bytes) -> dict[str, dict[str, bytes]]:
@@ -56,13 +60,16 @@ def managed_resources(archive: bytes) -> dict[str, dict[str, bytes]]:
     return resources
 
 
-def _normal(file: str, data: bytes, stamped: bool) -> object:
+def _normal(resource: str, file: str, data: bytes) -> bytes:
     if file == "resource.json":
         try:
-            return json.loads(data)
+            parsed = json.loads(data)
         except ValueError:
             return data
-    return _STAMP.sub(_PLACEHOLDER, data) if stamped else data
+        return json.dumps(parsed, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if (resource, file) == STAMPED_FILE:
+        return _STAMP.sub(_PLACEHOLDER, data, count=1)
+    return data
 
 
 def differences(served: bytes, bundle: bytes) -> list[str]:
@@ -89,8 +96,7 @@ def differences(served: bytes, bundle: bytes) -> list[str]:
             if file not in have[name] or file not in want[name]:
                 changed.append(file)
                 continue
-            stamped = _STAMP.search(want[name][file]) is not None and file != "resource.json"
-            if _normal(file, have[name][file], stamped) != _normal(file, want[name][file], stamped):
+            if _normal(name, file, have[name][file]) != _normal(name, file, want[name][file]):
                 changed.append(file)
         if changed:
             found.append(f"{name} ({', '.join(changed)})")
