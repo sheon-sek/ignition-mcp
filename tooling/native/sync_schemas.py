@@ -5,23 +5,22 @@ import json
 from pathlib import Path
 import sys
 
-from .validation import CRLF_LINE_ENDING_HINT, ValidationError, require
+from .validation import ValidationError, to_lf
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_NAMES = ("bundle-info", "tag-browse", "tag-read")
 
 
 def sync_schemas(root: Path = ROOT) -> None:
-    """Copy each source schema into its Text Resource, refusing CRLF sources.
+    """Copy each source schema into its Text Resource, written with LF line endings.
 
-    Every source is read and checked before any target is written, so a CRLF checkout
-    leaves the bundle tree untouched instead of committing a mixed line-ending state.
+    Every source is read and checked before any target is written, so a source with a
+    lone CR leaves the bundle tree untouched.
     """
     sources: list[tuple[str, bytes]] = []
     for name in SCHEMA_NAMES:
         relative = f"contracts/schemas/{name}.output.schema.json"
-        payload = (root / relative).read_bytes()
-        require(b"\r" not in payload, relative, CRLF_LINE_ENDING_HINT)
+        payload = to_lf((root / relative).read_bytes(), relative)
         sources.append((name, payload))
 
     for name, payload in sources:

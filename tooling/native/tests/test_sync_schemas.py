@@ -28,29 +28,37 @@ class SyncSchemasTest(unittest.TestCase):
             )
         return root
 
-    def test_rejects_crlf_schema_before_writing_any_resource(self) -> None:
+    def test_writes_a_crlf_schema_with_lf_line_endings(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(temporary)
             crlf = root / "contracts/schemas/tag-browse.output.schema.json"
-            crlf.write_bytes(crlf.read_bytes().replace(b"\n", b"\r\n"))
+            lf = crlf.read_bytes()
+            crlf.write_bytes(lf.replace(b"\n", b"\r\n"))
 
-            with self.assertRaises(ValidationError) as caught:
+            sync_schemas(root)
+
+            target = root / RESOURCES / "tag-browse-output"
+            self.assertEqual((target / "data.bin").read_bytes(), lf)
+            written = json.loads((target / "resource.json").read_text(encoding="utf-8"))
+            self.assertEqual(written["attributes"]["size"], len(lf))
+
+    def test_rejects_a_lone_cr_before_writing_any_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self._root(temporary)
+            bad = root / "contracts/schemas/tag-browse.output.schema.json"
+            bad.write_bytes(bad.read_bytes().replace(b"\n", b"\r", 1))
+
+            with self.assertRaises(ValidationError):
                 sync_schemas(root)
 
-            message = str(caught.exception)
-            self.assertTrue(message.startswith("contracts/schemas/tag-browse.output.schema.json: must use LF line endings"), message)
-            self.assertIn("D31 section 5", message)
             for name in SCHEMA_NAMES:
-                target = root / RESOURCES / f"{name}-output"
-                self.assertFalse((target / "data.bin").exists())
-                written = json.loads((target / "resource.json").read_text(encoding="utf-8"))
-                self.assertEqual(written["attributes"]["size"], -1)
+                self.assertFalse((root / RESOURCES / f"{name}-output" / "data.bin").exists())
 
     def test_main_prints_one_error_line_and_exits_nonzero(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = self._root(temporary)
-            crlf = root / "contracts/schemas/tag-read.output.schema.json"
-            crlf.write_bytes(crlf.read_bytes().replace(b"\n", b"\r\n"))
+            bad = root / "contracts/schemas/tag-read.output.schema.json"
+            bad.write_bytes(bad.read_bytes().replace(b"\n", b"\r", 1))
 
             stderr = io.StringIO()
             with contextlib.redirect_stderr(stderr):
@@ -59,8 +67,7 @@ class SyncSchemasTest(unittest.TestCase):
             self.assertEqual(status, 1)
             lines = stderr.getvalue().splitlines()
             self.assertEqual(len(lines), 1, lines)
-            self.assertTrue(lines[0].startswith("ERROR: contracts/schemas/tag-read.output.schema.json: must use LF line endings"), lines[0])
-            self.assertIn("D31 section 5", lines[0])
+            self.assertTrue(lines[0].startswith("ERROR: contracts/schemas/tag-read.output.schema.json: contains a carriage return"), lines[0])
 
 
 if __name__ == "__main__":

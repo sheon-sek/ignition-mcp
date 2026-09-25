@@ -479,10 +479,9 @@ checklist that nobody has run yet.
 The tool table in [Prerequisites](#prerequisites) is the Windows starting point. It carries the
 **not run on Windows yet** marker.
 
-- **Line endings.** A clone made before `.gitattributes` was added keeps Windows line endings, and
-  `tooling.native.cli validate` rejects them with `must use LF line endings`. Run
-  `git rm --cached -rq . && git reset --hard` once, or clone again. Both discard uncommitted changes.
-  See [D31 section 5](../decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones).
+- **Line endings.** A checkout with Windows (CRLF) line endings works: the bundle tooling reads
+  those files as LF and builds the same ZIP as a Linux checkout. See
+  [D31 amendment 1](../decisions/D31-windows-support-scope.md#amendment-1-2026-09-25-crlf-checkouts-build).
 - **Checksums.** Windows has no `sha256sum -c`. In `dist/release`, run
   `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
   `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`, and compare the result with the

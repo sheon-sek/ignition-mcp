@@ -47,6 +47,12 @@ git rm --cached -rq . && git reset --hard
 
 Making a fresh clone also works. Either step discards uncommitted work, so commit or copy that work first.
 
+## Amendment 1 (2026-09-25): CRLF checkouts build
+
+Section 5 made a CRLF checkout fail and asked the operator to re-check out. The owner ran `ignition-mcp setup` from a Windows copy of the repository that had CRLF files, and setup stopped at the bundle build. The owner ruled that setup must work on both Windows and Linux without that step.
+
+The bundle tooling (`tooling/native/project.py` and `sync_schemas.py`) now reads every CRLF line ending as LF. The validated sizes, the built ZIP and the synced Text Resources are byte-identical to those from an LF checkout, so the deterministic build still holds. A carriage return that is not part of a CRLF pair is not a line ending and still fails validation. Section 5 remains valid but is no longer required.
+
 ## 6. Manual Windows verification checklist
 
 **Nobody has run this checklist yet.** Run the steps in order in PowerShell 7, from a clone made after §5, with `uv` installed. Record the outcome in the ticket that runs it.

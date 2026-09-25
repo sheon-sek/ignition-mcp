@@ -53,19 +53,31 @@ class ValidationFailureTest(unittest.TestCase):
                 validate_project(project)
 
 
-    def test_rejects_crlf_data_bin_with_line_ending_message(self) -> None:
+    def test_reads_a_crlf_checkout_as_lf_and_builds_the_same_zip(self) -> None:
+        from tooling.native.archive import build_project
+
+        with tempfile.TemporaryDirectory() as temporary:
+            lf = self._copy(temporary)
+            shutil.copy(PROJECT.parent / "BUNDLE_VERSION", Path(temporary) / "BUNDLE_VERSION")
+            crlf = Path(temporary) / "crlf"
+            shutil.copytree(lf, crlf)
+            for path in crlf.rglob("*"):
+                if path.is_file():
+                    path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+            validate_project(crlf)
+            build_project(lf, Path(temporary) / "lf.zip")
+            build_project(crlf, Path(temporary) / "crlf.zip")
+            self.assertEqual((Path(temporary) / "lf.zip").read_bytes(), (Path(temporary) / "crlf.zip").read_bytes())
+
+    def test_rejects_a_lone_carriage_return(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             project = self._copy(temporary)
             relative = "com.inductiveautomation.mcp/resources/contracts/bundle-info-output/data.bin"
             payload = project / relative
-            payload.write_bytes(payload.read_bytes().replace(b"\n", b"\r\n"))
+            payload.write_bytes(payload.read_bytes().replace(b"\n", b"\r", 1))
             with self.assertRaises(ValidationError) as caught:
                 validate_project(project)
-            message = str(caught.exception)
-            self.assertTrue(message.startswith(relative + ": must use LF line endings"), message)
-            self.assertIn("D31 section 5", message)
-            self.assertNotIn("size must match", message)
-
+            self.assertTrue(str(caught.exception).startswith(relative + ": contains a carriage return"))
 
 if __name__ == "__main__":
     unittest.main()
