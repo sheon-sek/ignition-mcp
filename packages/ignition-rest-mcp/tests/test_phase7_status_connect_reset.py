@@ -60,6 +60,7 @@ ROLE_SECRETS = {
 }
 REST_KEY = "restkey0000000000000000000000000000000"
 PROPERTIES_WRITE = "/data/api/v1/resources/ignition/security-properties"
+SESSION_ID = "session-0001"
 
 
 def _key() -> str:
@@ -148,6 +149,9 @@ class CliGateway(FakeGateway):
             ):
                 if self._token_for(request.headers.get("X-Ignition-API-Token")) is None:
                     return httpx.Response(403, json={"message": "Forbidden"})
+                if request.headers.get("Mcp-Session-Id") != SESSION_ID:
+                    # The live module's answer to a call outside an initialized session.
+                    return httpx.Response(400, json={"message": "Session is required for method: tools/call"})
                 result = {
                     "entries": self.queries,
                     "summary": {"approved": len(self.queries)},
@@ -157,6 +161,10 @@ class CliGateway(FakeGateway):
                     200,
                     json={"jsonrpc": "2.0", "id": message["id"], "result": {"structuredContent": result, "content": []}},
                 )
+            if message.get("method") == "initialize":
+                response = super()._mcp(request, name)
+                response.headers["Mcp-Session-Id"] = SESSION_ID
+                return response
         return super()._mcp(request, name)
 
 

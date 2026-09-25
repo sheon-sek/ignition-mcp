@@ -561,6 +561,8 @@ def _named_query_reason(ctx: engine.Context, roles: list[Role]) -> str:
         async with McpHttpClient(
             endpoint, security.token_secret(secret.name, secret.key), transport=runtime.SETTINGS.transport
         ) as client:
+            # The Gateway module refuses tools/call outside an initialized session.
+            await client.initialize()
             result = await client.tool_call(QUERY_LIST_TOOL, {})
         return result.structured
 
