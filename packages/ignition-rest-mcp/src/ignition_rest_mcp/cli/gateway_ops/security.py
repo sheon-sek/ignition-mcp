@@ -518,3 +518,163 @@ async def observe(client: gw.GatewayRest, inputs: Inputs) -> Observation:
         token_error=token_error,
         secret=secret,
     )
+
+
+# ------------------------------------------------ General Settings permissions
+
+
+#: The singleton behind Security > General Settings (issue #79).
+SECURITY_PROPERTIES_TYPE = "ignition/security-properties"
+PERMISSION_TYPES = ("AnyOf", "AllOf")
+
+
+def with_child_level(
+    tree: list[dict[str, Any]], parent: str, node: dict[str, Any]
+) -> tuple[list[dict[str, Any]] | None, str]:
+    """The tree with ``node`` added under the top-level ``parent``, or ``(None, reason)``.
+
+    The same checks as :func:`with_managed_level`, for a level that is not a Runtime
+    profile's. Every other node is copied unchanged.
+    """
+
+    matches = [item for item in tree if isinstance(item, dict) and item.get("name") == parent]
+    if len(matches) != 1:
+        return None, f"the Gateway's security tree carries {len(matches)} top-level {parent} levels, not one"
+    if not isinstance(matches[0].get("children"), list):
+        return None, f"the Gateway's {parent} level carries no children list"
+    return [_with_child(item, parent, node) for item in tree], ""
+
+
+def without_child_level(tree: list[dict[str, Any]], parent: str, name: str) -> list[dict[str, Any]]:
+    """The tree without the leaf ``parent/name``. Every other node is copied unchanged."""
+
+    result: list[dict[str, Any]] = []
+    for node in tree:
+        children = node.get("children")
+        if node.get("name") == parent and isinstance(children, list):
+            node = {**node, "children": [c for c in children if not (isinstance(c, dict) and c.get("name") == name)]}
+        result.append(node)
+    return result
+
+
+def properties_config(document: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The ``config`` object of the General Settings singleton, or ``None``."""
+
+    config = document.get("config") if isinstance(document, dict) else None
+    return config if isinstance(config, dict) else None
+
+
+def _permission_leaves(nodes: Any, prefix: tuple[str, ...] = ()) -> list[tuple[str, ...]] | None:
+    """Every leaf path of a permission's level tree, or ``None`` for a shape setup does not know."""
+
+    if not isinstance(nodes, list):
+        return None
+    paths: list[tuple[str, ...]] = []
+    for node in nodes:
+        if not isinstance(node, dict) or not isinstance(node.get("name"), str):
+            return None
+        here = (*prefix, str(node["name"]))
+        children = node.get("children")
+        if children is None or children == []:
+            paths.append(here)
+            continue
+        below = _permission_leaves(children, here)
+        if below is None:
+            return None
+        paths.extend(below)
+    return paths
+
+
+def _permission_shape(permission: Any, entry: str) -> tuple[list[tuple[str, ...]], str]:
+    if not isinstance(permission, dict):
+        return [], f"the General Settings entry {entry} is missing or not an object"
+    if permission.get("type") not in PERMISSION_TYPES:
+        return [], f"the General Settings entry {entry} has the type {permission.get('type')!r}, not AnyOf or AllOf"
+    leaves = _permission_leaves(permission.get("securityLevels"))
+    if leaves is None:
+        return [], f"the General Settings entry {entry} carries a level tree setup cannot read"
+    return leaves, ""
+
+
+def permission_holds(permission: Any, path: tuple[str, ...]) -> bool:
+    """Whether a token that holds only ``path`` passes one General Settings entry.
+
+    A level passes a required level when it is that level or one below it. An entry
+    that lists no level lets every token through.
+    """
+
+    leaves, problem = _permission_shape(permission, "")
+    if problem:
+        return False
+    if not leaves:
+        return True
+    hits = [path[: len(want)] == want for want in leaves]
+    return all(hits) if permission.get("type") == "AllOf" else any(hits)
+
+
+def permission_lists(permission: Any, path: tuple[str, ...]) -> bool:
+    """Whether a General Settings entry names the level ``path`` itself."""
+
+    leaves, problem = _permission_shape(permission, "")
+    return not problem and path in leaves
+
+
+def permission_with_level(permission: Any, entry: str, path: tuple[str, str]) -> tuple[dict[str, Any] | None, str]:
+    """The entry with the level ``path`` added, ``(None, "")`` when it already passes, or ``(None, reason)``.
+
+    Only an ``AnyOf`` entry that lists levels can take one more without narrowing
+    anyone else's access. In an ``AllOf`` entry every listed level must be held, so an
+    added level would lock out everyone who holds the others; that is refused.
+    """
+
+    leaves, problem = _permission_shape(permission, entry)
+    if problem:
+        return None, problem
+    if permission_holds(permission, path):
+        return None, ""
+    if permission.get("type") != "AnyOf":
+        return None, (
+            f"the General Settings entry {entry} is AllOf, so every listed level must be held; adding "
+            f"{'/'.join(path)} would lock out everyone who holds only the others"
+        )
+    parent, name = path
+    levels = [dict(node) for node in permission["securityLevels"]]
+    leaf = {"name": name, "children": []}
+    top = next((node for node in levels if node.get("name") == parent), None)
+    if top is None:
+        levels.append({"name": parent, "children": [leaf]})
+    else:
+        top["children"] = [*top["children"], leaf]
+    return {**permission, "securityLevels": levels}, ""
+
+
+def permission_without_level(
+    permission: Any, entry: str, path: tuple[str, str]
+) -> tuple[dict[str, Any] | None, str]:
+    """The entry without the leaf ``path``, ``(None, "")`` when it does not list it, or ``(None, reason)``.
+
+    A parent the removal leaves childless is removed too, because a childless
+    ``Authenticated`` would let every signed-in user through. Removal that would leave
+    the entry empty is refused, because an empty entry lets every token through.
+    """
+
+    _, problem = _permission_shape(permission, entry)
+    if problem:
+        return None, problem
+    if not permission_lists(permission, path):
+        return None, ""
+    parent, name = path
+    levels: list[dict[str, Any]] = []
+    for node in permission["securityLevels"]:
+        if node.get("name") == parent and isinstance(node.get("children"), list):
+            children = [child for child in node["children"] if child.get("name") != name]
+            if not children:
+                continue
+            node = {**node, "children": children}
+        levels.append(node)
+    if not levels:
+        return None, (
+            f"the General Settings entry {entry} lists only {'/'.join(path)}; removing it would leave the "
+            "entry empty, which lets every token through"
+        )
+    return {**permission, "securityLevels": levels}, ""

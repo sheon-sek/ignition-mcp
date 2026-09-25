@@ -76,8 +76,8 @@ class Observation:
     configs: dict[str, dict[str, Any] | None]
     policy: docs.PolicyObservation
     rest_token: dict[str, Any] | None
-    setup_key: str
-    setup_document: dict[str, Any] | None
+    #: The ``config`` of the General Settings singleton, ``None`` when it is unreadable.
+    properties: dict[str, Any] | None
 
     @property
     def runtime_plain_http(self) -> bool:
@@ -124,12 +124,11 @@ async def _read(ctx: engine.Context, roles: list[Role]) -> Observation:
     deployment = ctx.deployment
     url = str(ctx.resolved.values["gateway_url"]).rstrip("/")
     installed, project, levels, tokens, configs, policy = await runtime._observe(ctx, roles)
-    setup_key = ctx.resolved.secrets["gateway_token"].reveal().partition(":")[0]
     try:
         async with ctx.gateway_reader(runtime.SETTINGS.transport) as client:
             info = await client.gateway_info()
             rest_token = await client.resource_document(API_TOKEN_TYPE, rest.REST_TOKEN_NAME)
-            setup_document = await client.resource_document(API_TOKEN_TYPE, setup_key)
+            properties = await client.singleton_document(security.SECURITY_PROPERTIES_TYPE)
     except gw.GatewayProbeError as error:
         raise CliError(
             ErrorCode.STEP_FAILED,
@@ -169,8 +168,7 @@ async def _read(ctx: engine.Context, roles: list[Role]) -> Observation:
         configs=configs,
         policy=policy,
         rest_token=rest_token,
-        setup_key=setup_key,
-        setup_document=setup_document,
+        properties=security.properties_config(properties),
     )
 
 
@@ -470,26 +468,34 @@ def _rest_token_reason(ctx: engine.Context, facts: Observation) -> str:
             f"{path} holds a key that does not match the API token {rest.REST_TOKEN_NAME}",
             next_action=_recreate(ctx),
         )
-    grant = rest._grant(facts.setup_document)
-    if not grant:
-        raise CliError(
-            ErrorCode.STEP_FAILED,
-            f"the setup key {facts.setup_key} reads back no Security Level grant to compare against",
-            next_action=(
-                f"curl -sS {facts.url}"
-                + gw.RESOURCE_FIND_PATH.format(resource_type=API_TOKEN_TYPE, name=facts.setup_key)
-            ),
-        )
-    drift = rest.token_drift(document, grant, facts.rest_requires_secure_channel)
+    drift = rest.token_drift(document, rest.dedicated_grant(), facts.rest_requires_secure_channel)
     if drift:
         raise CliError(
             ErrorCode.STEP_FAILED,
-            f"the API token {rest.REST_TOKEN_NAME} was changed on the Gateway: {', '.join(drift)}",
+            f"the API token {rest.REST_TOKEN_NAME} does not match what setup writes: {', '.join(drift)}; it must "
+            f"hold {rest.REST_LEVEL_NAME} only",
+            next_action=_setup_yes(ctx),
+        )
+    if facts.properties is None:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            "the Gateway's General Settings (security-properties) are not readable",
+            next_action=f"curl -sS {facts.url}{rest.SECURITY_PROPERTIES_PATH}",
+        )
+    entries = rest.permission_entries(facts.environment)
+    missing = [
+        entry for entry in entries if not security.permission_holds(facts.properties.get(entry), rest.REST_LEVEL_PATH)
+    ]
+    if missing:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"{rest.REST_LEVEL_NAME} does not pass the General Settings entries {', '.join(missing)}, so the REST "
+            f"server cannot reach Native REST as the {facts.environment} environment needs",
             next_action=_setup_yes(ctx),
         )
     return (
-        f"grants {rest._level_names(grant)} with secureChannelRequired "
-        f"{str(facts.rest_requires_secure_channel).lower()}; its secret is in {path}"
+        f"grants {rest.REST_LEVEL_NAME} only, which passes {', '.join(entries)} ({facts.environment}), with "
+        f"secureChannelRequired {str(facts.rest_requires_secure_channel).lower()}; its secret is in {path}"
     )
 
 
