@@ -169,6 +169,7 @@ def create_server(settings: Settings) -> FastMCP:
             locks=ProjectLockRegistry(
                 timeout_seconds=settings.project_lock_timeout_seconds,
                 max_entries=settings.project_lock_max_entries,
+                data_dir=data_dir,
             ),
             identity=gateway_identity(settings.gateway_id, settings.gateway_url),
             db=storage.state, metrics=metrics,

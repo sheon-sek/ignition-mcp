@@ -8,7 +8,10 @@ writes nothing. Its apply runs these steps in order, each with a start and an en
    ends when the listing shows the pinned build in state ACTIVE; any other state fails
    the step, because the routes the Module hosts do not exist without it (issue #81);
 2. the Runtime bundle: built from the checkout with ``tooling.native`` and imported
-   as the managed project, after a backup of the managed project it replaces;
+   as the managed project. A replace follows D16: the per-Gateway and per-Project
+   writer lock, a baseline export kept as the backup, a fresh export just before the
+   import whose ``pcf1`` fingerprint must equal the baseline's, and an export of the
+   result that must hold the bundle's content;
 3. the Security Levels ``Authenticated/IgnitionMcpAnalysis`` and
    ``Authenticated/IgnitionMcpEngineer``, in one edit of the singleton;
 4. per role, one Gateway API token granted the role's level, its secret in the
@@ -24,8 +27,15 @@ writes nothing. Its apply runs these steps in order, each with a start and an en
 
 A role the saved deployment served and this run does not, as after a move from
 ``dev`` to ``prod``, is removed before step 3: its Server Config, its token, its
-local files, and in step 3 its Security Level. A Module upgrade and a MAJOR or
+local files, and in step 3 its Security Level. Only a Gateway resource the
+deployment's ``created`` record names is removed; one it does not name is left in
+place and reported as ``SKIPPED``, as ``reset`` does. A Module upgrade and a MAJOR or
 downgrade Bundle change each need their own Explicit acceptance.
+
+The plan exports the managed project and compares its Tools, Text Resources and
+Prompts with the bundle it would import (:mod:`~ignition_rest_mcp.cli.gateway_ops.bundle_content`).
+A difference at the same bundle version is a hand edit: the plan names it, and the
+restore needs the ``overwrite_hand_edit`` Explicit acceptance (D32 section 10).
 
 The Gateway writes go through the curated writer in ``cli/gateway_ops``, so the guards, the
 optimistic preconditions and the read-backs Phases 4 to 6 verified still apply. The
@@ -56,7 +66,7 @@ from urllib.parse import quote, urlsplit
 
 import httpx
 
-from ignition_rest_mcp.cli.engine.deployment import read_secret, remove_secret
+from ignition_rest_mcp.cli.engine.deployment import CREATED_KEY, DIRECTORY_MODE, read_secret, remove_secret
 from ignition_rest_mcp.cli.engine.errors import CliError, ErrorCode
 from ignition_rest_mcp.cli.engine.main import (
     COMMANDS,
@@ -69,6 +79,7 @@ from ignition_rest_mcp.cli.engine.main import (
 )
 from ignition_rest_mcp.cli.engine.report import Status
 from ignition_rest_mcp.cli.engine.resolve import PROG, TOKEN_CHECKS, InputSpec, Kind, Needed, Risk, Source
+from ignition_rest_mcp.cli.gateway_ops import bundle_content
 from ignition_rest_mcp.cli.gateway_ops import documents as docs
 from ignition_rest_mcp.cli.gateway_ops import gateway as gw
 from ignition_rest_mcp.cli.gateway_ops import install_module, security, verify
@@ -88,6 +99,12 @@ from ignition_rest_mcp.cli.gateway_ops.inputs import (
 )
 from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpMethodNotFound, McpProbeError
 from ignition_rest_mcp.cli.gateway_ops.writer import GatewayWriter, WriteError
+from ignition_rest_mcp.cli.setup.start import DATA_DIRECTORY as REST_DATA_DIRECTORY
+from ignition_rest_mcp.errors import GatewayError
+from ignition_rest_mcp.projects import designers
+from ignition_rest_mcp.projects.fingerprint import project_fingerprint
+from ignition_rest_mcp.projects.locks import SINGLE_WRITER_LIMITATION, ProjectFileLock, project_lock_path
+from ignition_rest_mcp.projects.zip_safety import UnsafeArchiveError
 
 STAGE_NAME = "runtime"
 
@@ -560,6 +577,8 @@ class RemovalPlan:
     token_signature: str = ""
     level: bool = False
     files: list[str] = field(default_factory=list)
+    #: What the Gateway holds of the role that the ``created`` record does not name.
+    kept: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -586,6 +605,16 @@ class RuntimePlan:
     #: The saved environment, when this run moves the deployment to another one.
     previous_environment: str = ""
     removals: list[RemovalPlan] = field(default_factory=list)
+    #: The bundle archive this run imports, built from the checkout by the plan.
+    archive: bytes = b""
+    #: The D16 ``pcf1`` fingerprint of the managed project the plan exported.
+    project_fingerprint: str = ""
+    #: The bundle's Tools, Text Resources and Prompts the managed project holds differently.
+    project_drift: list[str] = field(default_factory=list)
+    #: The Designer sessions on the managed project the plan showed and dev accepted.
+    designer_note: str = ""
+    #: What the plan's Designer listing held; the check under the lock compares with it.
+    designer_view: DesignerView | None = None
 
     @property
     def install_module(self) -> bool:
@@ -593,9 +622,13 @@ class RuntimePlan:
 
     @property
     def project_action(self) -> str:
+        """``create``, ``update`` (another bundle version), ``restore`` (a hand edit) or ``none``."""
+
         if self.project.classification == gw.ABSENT:
             return "create"
-        return "none" if self.project.bundle_version == self.bundle.version else "update"
+        if self.project.bundle_version != self.bundle.version:
+            return "update"
+        return "restore" if self.project_drift else "none"
 
 
 @dataclass(frozen=True, slots=True)
@@ -704,6 +737,7 @@ def plan_runtime(ctx: Context) -> Plan:
 
     tree, signature, collection = _levels(levels_doc, endpoint)
     new_levels = _new_levels(ctx, roles, tree, environment)
+    archive, fingerprint, drift = _plan_project(ctx, bundle, project, endpoint)
     insecure = endpoint.scheme == "http" and environment == "dev"
     plan = RuntimePlan(
         endpoint=endpoint,
@@ -725,6 +759,9 @@ def plan_runtime(ctx: Context) -> Plan:
         policy_action="none",
         documents={},
         previous_environment=previous,
+        archive=archive,
+        project_fingerprint=fingerprint,
+        project_drift=drift,
     )
     changes: list[str] = []
     needed: list[Needed] = []
@@ -750,6 +787,29 @@ def plan_runtime(ctx: Context) -> Plan:
         )
         if needs_acknowledgement(kind):
             needed.append(Needed(Risk.BUNDLE_UPGRADE, f"{kind}: {project.bundle_version} to {bundle.version}"))
+    elif plan.project_action == "restore":
+        edited = bundle_content.summary(drift)
+        changes.append(
+            f"restore the managed project {PROJECT} to bundle {bundle.version}, after a backup into "
+            f"{ctx.deployment.directory / BACKUP_DIR}; its content differs from the bundle, so someone changed "
+            f"it by hand: {edited}"
+        )
+        needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"project {PROJECT}: {edited}"))
+    if plan.project_action in ("update", "restore"):
+        plan.designer_view = asyncio.run(_designer_view(ctx))
+        plan.designer_note = plan.designer_view.note
+        if plan.designer_note and environment == "prod":
+            raise CliError(
+                ErrorCode.CONFLICT,
+                f"{plan.designer_note}; in prod setup never replaces the managed project while a Designer may "
+                "hold unsaved work on it. Nothing was written",
+                next_action=_close_designer(ctx),
+            )
+        if plan.designer_note:
+            changes.append(
+                f"replace the managed project {PROJECT} although {plan.designer_note}; unsaved work there is lost"
+            )
+            needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"project {PROJECT}: {plan.designer_note}"))
     for role in new_levels:
         changes.append(f"create the Security Level {role.level_path}")
     for removal in _plan_removals(ctx, roles, tree, token_docs, config_docs):
@@ -763,7 +823,12 @@ def plan_runtime(ctx: Context) -> Plan:
             )
             if present
         ] + [str(ctx.deployment.directory / name) for name in removal.files]
-        changes.append(f"remove the {removal.role.name} role, which this run no longer deploys: {', '.join(what)}")
+        if what:
+            changes.append(
+                f"remove the {removal.role.name} role, which this run no longer deploys: {', '.join(what)}"
+            )
+        for kept in removal.kept:
+            changes.append(_left(kept))
 
     for role in roles:
         token = _plan_token(ctx, plan, role, token_docs.get(role.name), needed)
@@ -817,6 +882,8 @@ def _plan_removals(
     """The saved roles this run no longer deploys, with what of each is still there."""
 
     saved = ctx.deployment.values.get("roles")
+    record = ctx.deployment.values.get(CREATED_KEY)
+    created = {str(item) for item in record} if isinstance(record, list) else set()
     keep = {role.name for role in roles}
     removals: list[RemovalPlan] = []
     for name in saved if isinstance(saved, list) else []:
@@ -827,21 +894,42 @@ def _plan_removals(
         level = found is not None and found[0] == [SECURITY_LEVEL_PARENT, role.level] and not (
             security.level_shape_problem(found[1])
         )
+        config_signature = str((config_docs.get(name) or {}).get("signature") or "")
+        token_signature = str((token_docs.get(name) or {}).get("signature") or "")
+        # A token left in place keeps its secret file, so the token stays usable.
+        secret_file = ctx.deployment.secret_path(role.secret).name
+        keep_secret = bool(token_signature) and role.token_record not in created
         files = [
             file
-            for file in (ctx.deployment.secret_path(role.secret).name, PERMISSIONS_FILE.format(role=role.name))
-            if (ctx.deployment.directory / file).exists()
+            for file in (secret_file, PERMISSIONS_FILE.format(role=role.name))
+            if (ctx.deployment.directory / file).exists() and not (keep_secret and file == secret_file)
+        ]
+        kept = [
+            what
+            for what, present, entry in (
+                (f"the Server Config {role.server_config}", config_signature, role.config_record),
+                (f"the API token {role.token}", token_signature, role.token_record),
+                (f"the Security Level {role.level_path}", level, role.level_record),
+            )
+            if present and entry not in created
         ]
         removal = RemovalPlan(
             role,
-            config_signature=str((config_docs.get(name) or {}).get("signature") or ""),
-            token_signature=str((token_docs.get(name) or {}).get("signature") or ""),
-            level=level,
+            config_signature=config_signature if role.config_record in created else "",
+            token_signature=token_signature if role.token_record in created else "",
+            level=level and role.level_record in created,
             files=files,
+            kept=kept,
         )
-        if removal.config_signature or removal.token_signature or removal.level or removal.files:
+        if removal.config_signature or removal.token_signature or removal.level or removal.files or removal.kept:
             removals.append(removal)
     return removals
+
+
+def _left(what: str) -> str:
+    """The plan line and step reason for a resource the ``created`` record does not name."""
+
+    return f"leave {what} in place: the deployment does not record that setup created it"
 
 
 Observed = tuple[
@@ -894,6 +982,118 @@ def _levels(document: dict[str, Any] | None, endpoint: Endpoint) -> tuple[list[d
             next_action=f"curl -sS {endpoint.url}{gw.SECURITY_LEVELS_PATH}",
         )
     return tree, signature, security.singleton_collection(document)
+
+
+def _plan_project(
+    ctx: Context, bundle: Bundle, project: gw.ProjectState, endpoint: Endpoint
+) -> tuple[bytes, str, list[str]]:
+    """The bundle archive, and for a managed project its ``pcf1`` and its content drift.
+
+    Drift is looked for only at the bundle version the checkout has. Across versions
+    every changed Tool differs, and the replace already reports the version change.
+    """
+
+    with tempfile.TemporaryDirectory(prefix="ignition-mcp-bundle-") as scratch:
+        archive = build_bundle(bundle.checkout, Path(scratch) / f"ignition-runtime-bundle-{bundle.version}.zip")
+    if not project.managed:
+        return archive, "", []
+    try:
+        served = asyncio.run(_export_project(ctx))
+    except gw.GatewayProbeError as error:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"the managed project {PROJECT} could not be exported ({error})",
+            next_action=f"curl -sS -o /dev/null -w '%{{http_code}}' {endpoint.url}"
+            f"{gw.PROJECT_EXPORT_PATH.format(name=PROJECT)}",
+        ) from error
+    fingerprint = _fingerprint(ctx, served)
+    drift = bundle_content.differences(served, archive) if project.bundle_version == bundle.version else []
+    return archive, fingerprint, drift
+
+
+@dataclass(frozen=True, slots=True)
+class DesignerView:
+    """One read of the Gateway's Designer sessions on the managed project."""
+
+    #: ``(id, user)`` of each active session.
+    sessions: frozenset[tuple[str, str]]
+    #: Whether the Gateway provided the listing at all.
+    readable: bool
+    #: ``""``, or what holds or may hold the project, for the plan and the refusal.
+    note: str
+
+    def news(self, planned: DesignerView) -> str:
+        """What this later read shows that ``planned`` did not; ``""`` when nothing.
+
+        A session the plan did not list, or a listing that has become unreadable,
+        refuses the import in both environments (issue #80 review round 2).
+        """
+
+        if not self.readable and planned.readable:
+            return self.note
+        added = self.sessions - planned.sessions
+        if not added:
+            return ""
+        who = sorted(user or identifier or "unnamed" for identifier, user in added)
+        return f"{len(added)} Designer session(s) the plan did not list now hold the project {PROJECT} " \
+            f"({', '.join(who[:5])}{f' and {len(who) - 5} more' if len(who) > 5 else ''})"
+
+
+async def _designer_view(ctx: Context, client: gw.GatewayRest | None = None) -> DesignerView:
+    """D16's Designer-session check on the managed project.
+
+    A listing the Gateway cannot provide counts as a session, because an open
+    Designer cannot be ruled out (coordinator ruling on issue #80).
+    """
+
+    async def read(reader: gw.GatewayRest) -> list[dict[str, str]]:
+        async def fetch(limit: int, offset: int) -> Any:
+            return await reader.get_json(
+                designers.DESIGNERS_PATH, params={"limit": str(limit), "offset": str(offset)}
+            )
+
+        return await designers.list_project_sessions(fetch, PROJECT)
+
+    try:
+        if client is not None:
+            sessions = await read(client)
+        else:
+            async with ctx.gateway_reader(SETTINGS.transport) as reader:
+                sessions = await read(reader)
+    except (GatewayError, gw.GatewayProbeError) as error:
+        return DesignerView(
+            frozenset(),
+            False,
+            f"the Gateway's Designer session listing could not be read ({error}), so an open Designer on "
+            f"{PROJECT} cannot be ruled out",
+        )
+    found = frozenset((session["id"], session["user"]) for session in sessions)
+    if not sessions:
+        return DesignerView(found, True, "")
+    who = [session["user"] or session["id"] or "unnamed" for session in sessions]
+    shown = ", ".join(who[:5]) + (f" and {len(who) - 5} more" if len(who) > 5 else "")
+    return DesignerView(found, True, f"{len(sessions)} active Designer session(s) hold the project {PROJECT} ({shown})")
+
+
+def _close_designer(ctx: Context) -> str:
+    return f"close the Designer on {PROJECT}, then run: {PROG} setup --deployment {ctx.deployment.name}"
+
+
+async def _export_project(ctx: Context) -> bytes:
+    async with ctx.gateway_reader(SETTINGS.transport) as client:
+        return await client.project_archive(PROJECT)
+
+
+def _fingerprint(ctx: Context, archive: bytes) -> str:
+    """The D16 ``pcf1`` fingerprint of one export, after the D15 ZIP safety gate."""
+
+    with tempfile.TemporaryDirectory(prefix="ignition-mcp-export-") as scratch:
+        path = Path(scratch) / f"{PROJECT}.zip"
+        path.write_bytes(archive)
+        try:
+            return project_fingerprint(str(path))
+        except UnsafeArchiveError as error:
+            raise _failed(f"the export of {PROJECT} is not a safe project archive: {error}", ctx) from error
 
 
 def _new_levels(ctx: Context, roles: list[Role], tree: list[dict[str, Any]], environment: str) -> list[Role]:
@@ -1114,15 +1314,21 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
             end.set(Status.OK, f"build {plan.artifact.build} is installed; the pinned file is {plan.module_file}")
     with ctx.reporter.step("runtime bundle", f"project {PROJECT}") as end:
         if plan.project_action == "none":
-            end.set(Status.OK, f"managed bundle {plan.bundle.version} is deployed")
+            end.set(Status.OK, f"managed bundle {plan.bundle.version} is deployed and holds the bundle's content")
         else:
-            result = asyncio.run(_deploy_bundle(ctx, plan))
+            result = _deploy_bundle(ctx, plan)
             if plan.project_action == "create":
                 ctx.record_created(PROJECT_RECORD)
             end.set(Status.CHANGED, result)
     for removal in plan.removals:
         with ctx.reporter.step(f"runtime remove {removal.role.name}", "a role this run no longer deploys") as end:
-            end.set(Status.CHANGED, asyncio.run(_remove_role(ctx, removal)))
+            if removal.config_signature or removal.token_signature or removal.files:
+                end.set(Status.CHANGED, asyncio.run(_remove_role(ctx, removal)))
+            else:
+                end.set(Status.SKIPPED, "nothing of the role that setup created is left on the Gateway")
+        if removal.kept:
+            with ctx.reporter.step(f"runtime keep {removal.role.name}", "resources setup did not create") as end:
+                end.set(Status.SKIPPED, "; ".join(_left(what) for what in removal.kept))
     removed_levels = [removal.role for removal in plan.removals if removal.level]
     with ctx.reporter.step("runtime security levels", ", ".join(r.level_path for r in plan.roles)) as end:
         if plan.new_levels or removed_levels:
@@ -1229,16 +1435,89 @@ async def _install_module(ctx: ApplyContext, plan: RuntimePlan) -> None:
     )
 
 
-async def _deploy_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
-    with tempfile.TemporaryDirectory(prefix="ignition-mcp-bundle-") as scratch:
-        archive = build_bundle(plan.bundle.checkout, Path(scratch) / f"ignition-runtime-bundle-{plan.bundle.version}.zip")
+def _project_lock(ctx: ApplyContext) -> ProjectFileLock:
+    """The D16 writer lock for the managed project, shared with this deployment's REST server.
+
+    ``start`` gives the REST server the data directory ``rest-data`` and the Gateway
+    ID of the deployment's name, and the server takes this same lock file for each
+    project Mutation. It is held for one project write, so a running REST server
+    does not keep ``setup`` out, and a second ``setup`` run is refused while it is held.
+    """
+
+    data = ctx.deployment.directory / REST_DATA_DIRECTORY
+    data.mkdir(mode=DIRECTORY_MODE, parents=True, exist_ok=True)
+    lock = ProjectFileLock(project_lock_path(data, ctx.deployment.name, PROJECT))
+    if not lock.try_acquire():
+        raise CliError(
+            ErrorCode.CONFLICT,
+            f"another setup run or this deployment's REST server is writing the project {PROJECT} "
+            f"({lock.path} is locked); nothing was imported. D16 limits the lock to writers on this machine "
+            f"({SINGLE_WRITER_LIMITATION})",
+            next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
+        )
+    return lock
+
+
+def _deploy_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
+    lock = _project_lock(ctx)
+    try:
+        return asyncio.run(_import_bundle(ctx, plan))
+    finally:
+        lock.release()
+
+
+def _conflict(ctx: ApplyContext, what: str, backup: Path) -> CliError:
+    return CliError(
+        ErrorCode.CONFLICT,
+        f"the managed project {PROJECT} changed on the Gateway {what}, for example through a Designer save or "
+        f"another writer; nothing was imported. The baseline is in {backup}",
+        next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
+    )
+
+
+async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
+    """Import the bundle; a replace follows D16's baseline, re-checks and read-back.
+
+    Only the managed project is replaced here, and the writer lock is held by the
+    caller. The baseline export is the durable backup, so a failure after it leaves
+    the recovery copy in place. Nothing is retried after the import was sent: an
+    import without a clear answer is reconciled from a fresh export instead.
+    """
+
+    archive = plan.archive
+    replace = plan.project_action != "create"
+    note = ""
+    baseline = ""
+    backup: Path | None = None
     async with ctx.gateway_writer(SETTINGS.transport) as writer:
-        backup = ""
         try:
-            if plan.project_action == "update":
-                backup = "; backed up to " + str(await _backup(ctx, plan, writer))
-            await writer.import_project(PROJECT, archive, overwrite=plan.project_action == "update")
+            if replace:
+                backup = _backup(ctx, plan, await writer.project_export(PROJECT))
+                baseline = _fingerprint(ctx, backup.read_bytes())
+                if baseline != plan.project_fingerprint:
+                    raise _conflict(ctx, "after the plan read it", backup)
+                if _fingerprint(ctx, await writer.project_export(PROJECT)) != baseline:
+                    raise _conflict(ctx, "between the baseline export and the import", backup)
+                planned = plan.designer_view or DesignerView(frozenset(), True, "")
+                designer = (await _designer_view(ctx, writer.reads)).news(planned)
+                if designer:
+                    raise CliError(
+                        ErrorCode.CONFLICT,
+                        f"{designer} since the plan read the Gateway; nothing was imported. The baseline is in "
+                        f"{backup}",
+                        next_action=_close_designer(ctx),
+                    )
+                note = f"; backed up to {backup}, whose pcf1 matched the project just before the import"
+            try:
+                await writer.import_project(PROJECT, archive, overwrite=replace)
+            except WriteError as error:
+                # D16: a lost answer or a 5xx leaves the outcome open; a 4xx or an
+                # explicit refusal inside a 2xx body is a definite "not applied".
+                if 0 < error.status < 500:
+                    raise
+                return await _reconcile(ctx, plan, writer, baseline, backup, str(error)) + note
             state = await writer.reads.find_project(PROJECT)
+            result = await writer.project_export(PROJECT)
         except (WriteError, gw.GatewayProbeError) as error:
             raise _failed(f"the bundle import stopped: {error}", ctx) from error
     if not state.managed or state.bundle_version != plan.bundle.version:
@@ -1247,13 +1526,63 @@ async def _deploy_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
             f"bundle {state.bundle_version}",
             ctx,
         )
-    return f"deployed managed bundle {plan.bundle.version} ({len(archive)} bytes){backup}"
+    _fingerprint(ctx, result)
+    drift = bundle_content.differences(result, archive)
+    if drift:
+        raise _failed(
+            f"the import was accepted but {PROJECT} reads back other content: {bundle_content.summary(drift)}", ctx
+        )
+    return f"deployed managed bundle {plan.bundle.version} ({len(archive)} bytes) and read it back equal{note}"
 
 
-async def _backup(ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter) -> Path:
-    """D32 section 7: a managed project is backed up before setup replaces it."""
+async def _reconcile(
+    ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter, baseline: str, backup: Path | None, lost: str
+) -> str:
+    """D16's reconciliation after an import without a clear answer: export C and compare.
 
-    archive = await writer.project_export(PROJECT)
+    C equal to the bundle means the import was applied. C equal to baseline A, or no
+    project where setup was creating one, means it was not applied. Anything else is
+    an unknown outcome, and setup stops without a retry.
+    """
+
+    kept = f" The baseline is in {backup}." if backup is not None else ""
+    try:
+        state = await writer.reads.find_project(PROJECT)
+        current = None if state.classification == gw.ABSENT else await writer.project_export(PROJECT)
+    except (WriteError, gw.GatewayProbeError) as error:
+        raise _failed(
+            f"the import gave no clear answer ({lost}) and {PROJECT} could not be read back ({error}), so the outcome "
+            f"is unknown and setup does not retry.{kept}",
+            ctx,
+        ) from error
+    if (
+        current is not None
+        and state.managed
+        and state.bundle_version == plan.bundle.version
+        and not bundle_content.differences(current, plan.archive)
+    ):
+        return (
+            f"deployed managed bundle {plan.bundle.version} ({len(plan.archive)} bytes); the import gave no clear answer "
+            f"({lost}), and the project read back afterwards holds the bundle"
+        )
+    unchanged = current is None if not baseline else current is not None and _fingerprint(ctx, current) == baseline
+    if unchanged:
+        raise CliError(
+            ErrorCode.STEP_FAILED,
+            f"the import gave no clear answer ({lost}) and {PROJECT} reads back unchanged, so the import was not "
+            f"applied; re-running setup is safe.{kept}",
+            next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
+        )
+    raise _failed(
+        f"the import gave no clear answer ({lost}) and {PROJECT} reads back neither as before nor as the bundle, so the "
+        f"outcome is unknown and setup does not retry.{kept}",
+        ctx,
+    )
+
+
+def _backup(ctx: ApplyContext, plan: RuntimePlan, archive: bytes) -> Path:
+    """D32 section 7 and D16: the baseline export, stored before the project is replaced."""
+
     directory = ctx.deployment.directory / BACKUP_DIR
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     stem = f"{PROJECT}-{plan.project.bundle_version}"
@@ -1262,7 +1591,12 @@ async def _backup(ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter) -
     while path.exists():
         counter += 1
         path = directory / f"{stem}-{counter}.zip"
-    path.write_bytes(archive)
+    staging = path.with_name(path.name + ".tmp")
+    with staging.open("wb") as stream:
+        stream.write(archive)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(staging, path)
     return path
 
 

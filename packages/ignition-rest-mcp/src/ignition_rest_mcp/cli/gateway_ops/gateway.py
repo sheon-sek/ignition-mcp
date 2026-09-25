@@ -35,6 +35,9 @@ MODULES_PATH = "/data/api/v1/modules/healthy"
 MODULE_CERTIFICATE_PATH = "/data/api/v1/modules/certificate"
 MODULE_EULA_PATH = "/data/api/v1/modules/eula"
 PROJECT_FIND_PATH = "/data/api/v1/projects/find/{name}"
+PROJECT_EXPORT_PATH = "/data/api/v1/projects/export/{name}"
+#: The bound on one Project export read through this client (D10).
+PROJECT_ARCHIVE_LIMIT_BYTES = 64 * 1024 * 1024
 SERVER_CONFIG_FIND_PATH = "/data/api/v1/resources/find/com.inductiveautomation.mcp/server-config/{name}"
 #: The find route of any config resource type, for the reads ``apply`` reasons over
 #: (the reserved policy Tag provider's resource).
@@ -351,6 +354,12 @@ class GatewayRest:
     async def find_project(self, name: str) -> ProjectState:
         document = await self.get_json(PROJECT_FIND_PATH.format(name=quote(name, safe="")), allow_404=True)
         return classify_project(name, document if isinstance(document, dict) else None)
+
+    async def project_archive(self, name: str) -> bytes:
+        """The Project archive the Gateway exports, bounded; an absent project is an error."""
+
+        path = PROJECT_EXPORT_PATH.format(name=quote(name, safe=""))
+        return (await self._request("GET", path, limit_bytes=PROJECT_ARCHIVE_LIMIT_BYTES)).content
 
     async def server_config_document(self, name: str) -> dict[str, Any] | None:
         """The Server Config resource document, or ``None`` when it is absent."""

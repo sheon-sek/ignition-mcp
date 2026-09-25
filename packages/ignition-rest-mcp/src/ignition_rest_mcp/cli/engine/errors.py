@@ -39,6 +39,9 @@ class ErrorCode(StrEnum):
     MODULE_NOT_ACTIVE = "module_not_active"
     #: The Gateway refused to mark the MCP Module for uninstall (issue #81).
     MODULE_UNINSTALL_REFUSED = "module_uninstall_refused"
+    #: Another writer holds the project lock, or the project changed on the Gateway
+    #: between the baseline export and the import (D16). Nothing was imported.
+    CONFLICT = "conflict"
 
 
 #: Exit code for each error code. ``0`` is success, ``1`` a failed step, ``2`` a
@@ -58,6 +61,7 @@ EXIT_CODES: dict[ErrorCode, int] = {
     ErrorCode.NOT_CONFIRMED: 2,
     ErrorCode.MODULE_NOT_ACTIVE: 1,
     ErrorCode.MODULE_UNINSTALL_REFUSED: 1,
+    ErrorCode.CONFLICT: 1,
 }
 
 

@@ -212,6 +212,7 @@ ignition-mcp reset \
 | `not_confirmed` | 2 | 计划显示了，但没有被确认。什么都没写。 |
 | `module_not_active` | 1 | Gateway 列出了 MCP Module，但没有运行它，所以它承载的路由不存在。 |
 | `module_uninstall_refused` | 1 | Gateway 拒绝把 Module 标记为卸载；`GATEWAY_MODULES_ENABLED` 里列了 Module ID 时它就会拒绝。 |
+| `conflict` | 1 | 另一个 setup 或本部署的 REST 服务器持有项目锁，或者托管项目在基线导出和导入之间被改了，例如 Designer 保存。什么都没导入；再运行一次 `setup` 查看新的计划。 |
 
 ## 常见问题
 

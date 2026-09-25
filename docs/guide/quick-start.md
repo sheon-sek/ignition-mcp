@@ -269,6 +269,7 @@ released, so a script can match on it.
 | `not_confirmed` | 2 | The plan was shown and not confirmed. Nothing was written. |
 | `module_not_active` | 1 | The Gateway lists the MCP Module but is not running it, so the routes it hosts do not exist. |
 | `module_uninstall_refused` | 1 | The Gateway refused to mark the Module for uninstall, which it does while `GATEWAY_MODULES_ENABLED` names Module IDs. |
+| `conflict` | 1 | Another setup run or the deployment's REST server holds the project lock, or the managed project changed on the Gateway between the baseline export and the import, for example through a Designer save. Nothing was imported; run `setup` again to see the new plan. |
 
 ## Common problems
 

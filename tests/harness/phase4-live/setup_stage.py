@@ -18,6 +18,10 @@ then plays the operator of D32 and runs the shipped CLI as a subprocess:
    read Tool and is refused a Mutation Tool, and the Engineer token is given the
    Mutation scope. A call with empty arguments shows that; it cannot write.
 5. ``setupAgain``: the same command again. It must plan nothing and change nothing.
+5a. ``handEdit`` (issue #80): one Tool script inside ``ignition_runtime`` is changed
+   through a project import, as a Designer save would change it. A ``--dry-run`` of
+   the same command must report that Tool as a hand edit that needs
+   ``overwrite_hand_edit``, and the command itself must restore the bundle's script.
 6. ``reset``: ``ignition-mcp reset --yes``. Every resource the deployment recorded
    as created must be gone from the Gateway, and the deployment directory too.
 
@@ -31,6 +35,7 @@ Exit 0 means every step passed. The evidence document is ``setup-g7.json``.
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 from pathlib import Path
@@ -44,6 +49,7 @@ from typing import Any
 import urllib.error
 import urllib.parse
 import urllib.request
+import zipfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -60,6 +66,9 @@ REST_BIND = "127.0.0.1:8094"
 ROLE_PROFILES = {"analysis": "readonly", "engineer": "full"}
 MODULE_ID = "com.inductiveautomation.mcp"
 PROJECT = "ignition_runtime"
+#: The Tool script the ``handEdit`` step changes, and the line it appends.
+HAND_EDIT_ENTRY = "com.inductiveautomation.mcp/tools/tag_read/onToolCalled.py"
+HAND_EDIT_LINE = b"# hand edit by the G7 stage (issue #80)\n"
 POLICY_PROVIDER = "IgnitionMCPPolicy"
 SECURITY_PROPERTIES = "/data/api/v1/resources/singleton/ignition/security-properties"
 SECURITY_LEVELS = "/data/api/v1/resources/singleton/ignition/security-levels"
@@ -336,6 +345,73 @@ def check_rest(home: Path, deployment: Path, evidence: Path) -> dict[str, Any]:
         log.close()
 
 
+def _project_entry(base_url: str, token: str, entry: str) -> tuple[bytes, bytes]:
+    """``(the project export, one entry of it)``."""
+
+    status, archive = gateway_rest.request(
+        base_url, token, "GET", f"/data/api/v1/projects/export/{PROJECT}", timeout=60.0
+    )
+    if status != 200:
+        raise StageError(f"the export of {PROJECT} answered HTTP {status}")
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        return archive, zipped.read(entry)
+
+
+def hand_edit_tool(base_url: str, token: str) -> bytes:
+    """Append a line to one Tool script of the managed project; returns the script before."""
+
+    archive, script = _project_entry(base_url, token, HAND_EDIT_ENTRY)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(io.BytesIO(archive)) as source, zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as target:
+        for info in source.infolist():
+            data = source.read(info)
+            target.writestr(info.filename, data + HAND_EDIT_LINE if info.filename == HAND_EDIT_ENTRY else data)
+    status, payload = gateway_rest.request(
+        base_url, token, "POST", f"/data/api/v1/projects/import/{PROJECT}", query={"overwrite": "true"},
+        body=buffer.getvalue(), content_type="application/zip", timeout=60.0,
+    )
+    if status != 200:
+        raise StageError(f"the hand edit import answered HTTP {status}: {payload[:400]!r}")
+    if not _project_entry(base_url, token, HAND_EDIT_ENTRY)[1].endswith(HAND_EDIT_LINE):
+        raise StageError(f"the hand edit of {HAND_EDIT_ENTRY} did not land")
+    return script
+
+
+def check_hand_edit(
+    report: dict[str, Any], restore: dict[str, Any], base_url: str, token: str, original: bytes
+) -> dict[str, Any]:
+    """The dry run names the edited Tool; the run restores it and accepts the overwrite."""
+
+    tool = HAND_EDIT_ENTRY.split("/")[-2]
+    if report.get("exit_code") != 0:
+        raise StageError(f"the dry run failed: {json.dumps(report.get('error'))}")
+    reported = [str(item.get("change")) for item in report.get("plan", []) if "restore the managed project" in str(
+        item.get("change"))]
+    if len(reported) != 1 or f"tools/{tool} (onToolCalled.py)" not in reported[0]:
+        raise StageError(f"the dry run did not report the hand edit of {tool}: {report.get('plan')}")
+    # The Gateway's Designer listing must be readable and empty here, or the plan names it (D16).
+    designer = [str(item.get("change")) for item in report.get("plan", []) if "Designer" in str(item.get("change"))]
+    if designer:
+        raise StageError(f"the dry run names a Designer session or an unreadable listing: {designer}")
+    if restore.get("exit_code") != 0 or restore.get("error") is not None:
+        raise StageError(f"the restoring setup failed: {json.dumps(restore.get('error'))}")
+    bundle = steps_by_name(restore).get("runtime bundle", {})
+    if bundle.get("status") != "CHANGED":
+        raise StageError(f"the restoring setup did not replace the project: {bundle}")
+    accepted = [item.get("item") for item in restore.get("accepted", [])]
+    if "overwrite_hand_edit" not in accepted:
+        raise StageError(f"the restore ran without overwrite_hand_edit: {accepted}")
+    if _project_entry(base_url, token, HAND_EDIT_ENTRY)[1] != original:
+        raise StageError(f"{HAND_EDIT_ENTRY} was not restored to the bundle's script")
+    return {
+        "tool": tool,
+        "reported": reported[0],
+        "restoredStep": {"status": bundle.get("status"), "reason": bundle.get("reason")},
+        "accepted": accepted,
+        "scriptRestored": True,
+    }
+
+
 def check_reset(document: dict[str, Any], created: list[str], base_url: str, token: str, directory: Path) -> dict[str, Any]:
     if document.get("exit_code") != 0 or document.get("error") is not None:
         raise StageError(f"reset failed: {json.dumps(document.get('error'))}")
@@ -428,6 +504,13 @@ def main(argv: list[str] | None = None) -> int:
         cli["setupAgain"] = run_cli(home, *setup_words)
         steps["setupAgain"] = check_setup(cli["setupAgain"], first=False)
         print("setupAgain: no change", flush=True)
+        original = hand_edit_tool(args.base_url, args.api_token)
+        cli["handEditReport"] = run_cli(home, *setup_words, "--dry-run")
+        cli["handEditRestore"] = run_cli(home, *setup_words)
+        steps["handEdit"] = check_hand_edit(
+            cli["handEditReport"], cli["handEditRestore"], args.base_url, args.api_token, original
+        )
+        print("handEdit: reported and restored", steps["handEdit"]["tool"], flush=True)
         created = tomllib.loads((deployment / "deployment.toml").read_text("utf-8")).get("created", [])
         cli["reset"] = run_cli(home, "reset", "--gateway-token-file", str(key_file), "--yes")
         steps["reset"] = check_reset(
