@@ -6,7 +6,7 @@
   "files": ["onToolCalled.py"],
   "attributes": {
     "title": "tag_read",
-    "description": "Read current Tag values via system.tag.readBlocking. Bad/Uncertain quality remains domain data, not Tool failure. Tag property/document sub-paths are rejected. Preserves request order and duplicate paths. D28 ignition-null-v1 encodes logical null as {\"$ignition\":\"null\"}; documents containing $ignition are escaped as {\"$ignition\":\"object\",\"entries\":[[key,encodedValue],...]}. Arrays and objects recurse; see tag_read_output Resource schema. Example: {\"tagPaths\":[\"[System]Gateway/SystemName\"]}.",
+    "description": "Read current Tag values via system.tag.readBlocking. Bad/Uncertain quality remains domain data, not Tool failure. Tag property/document sub-paths are rejected. Preserves request order and duplicate paths. The ignition-null-v1 encoding writes logical null as {\"$ignition\":\"null\"}; documents containing $ignition are escaped as {\"$ignition\":\"object\",\"entries\":[[key,encodedValue],...]}. Arrays and objects recurse; see tag_read_output Resource schema. Example: {\"tagPaths\":[\"[System]Gateway/SystemName\"]}.",
     "parameters": [
       {"name": "tagPaths", "description": "1..500 absolute provider-qualified current Tag paths.", "type": "array", "required": true},
       {"name": "timeout", "description": "Timeout in milliseconds, 0..30000. Default 10000.", "type": "integer", "required": false, "default": 10000},

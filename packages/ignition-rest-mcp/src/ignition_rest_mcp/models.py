@@ -23,7 +23,7 @@ class GatewayInfoResult(StrictModel):
 
 
 class StorageDiagnostics(StrictModel):
-    """Additive (D19) low-cost self-diagnostics for the local data plane."""
+    """Additive low-cost self-diagnostics for the local data plane."""
 
     dataDirectoryConfigured: bool
     stateHealthy: bool
@@ -125,7 +125,7 @@ class ConfigResourceGetResult(StrictModel):
 
 
 class ConfigResourceUpdateResult(StrictModel):
-    """D30: the change is verified by re-reading the resource; the read-back is
+    """The change is verified by re-reading the resource; the read-back is
     reported as Observed state and the resulting Resource signature is the token
     for the caller's next change."""
 
@@ -138,8 +138,8 @@ class ConfigResourceUpdateResult(StrictModel):
 
 
 class ConfigResourceCreateResult(StrictModel):
-    """D30 §2: a create takes no Precondition token, so the resource it published is
-    what the bounded re-read reports — as Observed state, plus the Resource signature
+    """A create takes no Precondition token, so the resource it published is
+    what the bounded re-read reports, as Observed state, plus the Resource signature
     the caller needs for the next change to it."""
 
     correlationId: str
@@ -151,7 +151,7 @@ class ConfigResourceCreateResult(StrictModel):
 
 
 class ConfigResourceDeleteResult(StrictModel):
-    """D30: a delete is verified by the Target's absence. That absence is the whole
+    """A delete is verified by the Target's absence. That absence is the whole
     Observed state a delete leaves, so the read-back reports exactly it."""
 
     correlationId: str
@@ -164,7 +164,7 @@ class ConfigResourceDeleteResult(StrictModel):
 
 
 class ConfigResourceRenameResult(StrictModel):
-    """D30: the rename is verified by the old name being vacant and the new name
+    """The rename is verified by the old name being vacant and the new name
     holding the resource, whose Resource signature is the token for the next change."""
 
     correlationId: str
@@ -178,13 +178,13 @@ class ConfigResourceRenameResult(StrictModel):
 
 
 class ProjectImportResult(StrictModel):
-    """D16: the terminal transaction state of a Project import, as data.
+    """The terminal transaction state of a Project import, as data.
 
     Only a satisfied outcome is a result: ``COMMITTED`` (the import landed and the
     post-import export C equals the candidate) or ``NO_CHANGE`` (the candidate was
     semantically equal to the baseline, so nothing was backed up or imported). Every
-    other D16 terminal state is a Tool error carrying the D30 §7 code, and its message
-    names the state and the ``transactionId`` reported here.
+    other terminal state is a Tool error carrying the error code the state maps to,
+    and its message names the state and the ``transactionId`` reported here.
     """
 
     correlationId: str
@@ -209,7 +209,7 @@ class ProjectImportResult(StrictModel):
 
 
 class PerspectiveViewListResult(StrictModel):
-    """D15: the Local Views of one Project, one bounded page per call."""
+    """The Local Views of one Project, one bounded page per call."""
 
     correlationId: str
     projectName: str = Field(min_length=1, max_length=256)
@@ -219,7 +219,7 @@ class PerspectiveViewListResult(StrictModel):
 
 
 class PerspectiveViewGetResult(StrictModel):
-    """D15: one View document plus the Project fingerprint of the export it came from."""
+    """One View document plus the Project fingerprint of the export it came from."""
 
     correlationId: str
     projectName: str = Field(min_length=1, max_length=256)
@@ -229,7 +229,7 @@ class PerspectiveViewGetResult(StrictModel):
 
 
 class PerspectiveViewValidateResult(StrictModel):
-    """D15 offline validation: no Gateway call, and no claim that an import accepts it."""
+    """Offline validation: no Gateway call, and no claim that an import accepts it."""
 
     correlationId: str
     valid: bool
@@ -240,7 +240,7 @@ class PerspectiveViewValidateResult(StrictModel):
 
 
 class PerspectivePageConfigGetResult(StrictModel):
-    """D15: the Project's Page configuration document and the Project fingerprint."""
+    """The Project's Page configuration document and the Project fingerprint."""
 
     correlationId: str
     projectName: str = Field(min_length=1, max_length=256)
@@ -249,7 +249,7 @@ class PerspectivePageConfigGetResult(StrictModel):
 
 
 class PerspectiveSessionPropsGetResult(StrictModel):
-    """D15: the Project's Session properties document and the Project fingerprint."""
+    """The Project's Session properties document and the Project fingerprint."""
 
     correlationId: str
     projectName: str = Field(min_length=1, max_length=256)
@@ -258,12 +258,12 @@ class PerspectiveSessionPropsGetResult(StrictModel):
 
 
 class PerspectiveWriteResult(StrictModel):
-    """D16: the terminal transaction state of one Perspective write, as data.
+    """The terminal transaction state of one Perspective write, as data.
 
-    The fields are exactly the ``project_import`` result's, because the same D16
+    The fields are exactly the ``project_import`` result's, because the same
     transaction produces them: only a satisfied outcome is a result (``COMMITTED``,
     or ``NO_CHANGE`` when the candidate was semantically equal to the baseline), and
-    every other D16 terminal state is a Tool error carrying the D30 §7 code.
+    every other terminal state is a Tool error carrying the error code the state maps to.
     """
 
     correlationId: str
@@ -335,7 +335,7 @@ class AlarmPipelineStatusResult(StrictModel):
 
 
 class AlarmPipelineCancelObservedState(StrictModel):
-    """D30 §6: the bounded ``alarm_pipeline_status`` re-read of the same pipeline path.
+    """The bounded ``alarm_pipeline_status`` re-read of the same pipeline path.
 
     ``items`` is what that read returned (one page, at most the Tool's own page size),
     and ``alarmEventReported`` is the comparison the verification made: whether a run
@@ -348,11 +348,11 @@ class AlarmPipelineCancelObservedState(StrictModel):
 
 
 class AlarmPipelineCancelResult(StrictModel):
-    """D12/D30: a pipeline cancel addresses one exact pipeline path and one Alarm Event.
+    """A pipeline cancel addresses one exact pipeline path and one Alarm Event.
 
-    Only a satisfied outcome is returned as data — the Gateway claimed the cancel and
-    the bounded re-read no longer reports that run. Every other outcome is a Tool error
-    (D06), and the observed state it carries is the re-read that was taken.
+    Only a satisfied outcome is returned as data: the Gateway claimed the cancel and
+    the bounded re-read no longer reports that run. Every other outcome is a Tool error,
+    and the observed state it carries is the re-read that was taken.
     """
 
     correlationId: str
@@ -378,7 +378,7 @@ class ArtifactDownload(StrictModel):
 
 
 class ArtifactRefModel(StrictModel):
-    """contracts/shared/artifact-ref.schema.json (D17). Owner principal is internal."""
+    """contracts/shared/artifact-ref.schema.json. Owner principal is internal."""
 
     artifactId: str = Field(min_length=1, max_length=128)
     mediaType: str = Field(min_length=1)
@@ -417,13 +417,13 @@ class ArtifactInfoResult(StrictModel):
 
 
 class ArtifactDeleteResult(StrictModel):
-    """D17/D30: removing an artifact is verified by its absence from the store.
+    """Removing an artifact is verified by its absence from the store.
 
     A delete leaves nothing to describe, so the bounded read-back reports exactly what
-    it found — no READY artifact at the identifier — and the kind of the artifact that
+    it found, no READY artifact at the identifier, and the kind of the artifact that
     was removed names what went away. Only a satisfied outcome is returned as data:
     a refusal (a retention-locked artifact, a Target the deployment does not name) or
-    an unestablished state is a Tool error (D06).
+    an unestablished state is a Tool error.
     """
 
     correlationId: str
@@ -470,7 +470,7 @@ class TagConfigExportResult(StrictModel):
 
 
 class TagImportObservedState(StrictModel):
-    """The bounded re-export's comparison (D30 §6 Observed state, D10 bounded).
+    """The bounded re-export's comparison (Observed state, bounded).
 
     Both lists hold the provider-relative Tag paths the import document declares: the
     ones the re-export of the same provider and path showed, and the ones it did not.
@@ -481,7 +481,7 @@ class TagImportObservedState(StrictModel):
 
 
 class TagConfigImportResult(StrictModel):
-    """D11/D30: a Tag config import creates Tags only, and its verification is the
+    """A Tag config import creates Tags only, and its verification is the
     bounded re-export of the same provider and path.
 
     Only a satisfied outcome is a result: the Gateway claimed the import succeeded and

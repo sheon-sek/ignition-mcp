@@ -19,7 +19,7 @@
       "type": "string"
     },
     "signature": {
-      "description": "The Resource signature the created resource reports (D30 Precondition token for the caller's next change to it).",
+      "description": "The Resource signature the created resource reports, the Precondition token for the caller's next change to it.",
       "type": [
         "string",
         "null"

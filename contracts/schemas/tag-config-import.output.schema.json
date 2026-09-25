@@ -8,7 +8,7 @@
     "provider": {"type": "string", "minLength": 1, "maxLength": 256},
     "path": {"type": "string", "maxLength": 1024},
     "artifact": {
-      "description": "The READY JSON Tag export this call consumed (D17/D30 §6).",
+      "description": "The READY JSON Tag export this call consumed.",
       "$ref": "#/$defs/artifactRef"
     },
     "observedState": {

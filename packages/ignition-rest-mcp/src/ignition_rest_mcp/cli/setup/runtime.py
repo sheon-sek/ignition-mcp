@@ -1451,7 +1451,7 @@ def _project_lock(ctx: ApplyContext) -> ProjectFileLock:
         raise CliError(
             ErrorCode.CONFLICT,
             f"another setup run or this deployment's REST server is writing the project {PROJECT} "
-            f"({lock.path} is locked); nothing was imported. D16 limits the lock to writers on this machine "
+            f"({lock.path} is locked); nothing was imported. The lock covers writers on this machine only "
             f"({SINGLE_WRITER_LIMITATION})",
             next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
         )

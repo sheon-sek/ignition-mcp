@@ -176,7 +176,7 @@ def _retention_refusal(error: GatewayError) -> GatewayError | None:
         return None
     return GatewayError(
         "conflict",
-        "the artifact is retention-locked and cannot be removed: only the owning D16 "
+        "the artifact is retention-locked and cannot be removed: only the owning Project "
         "transaction releases a RECOVERY artifact's lock, and no read-back turns the "
         "refusal into a removal",
         error.status_code,

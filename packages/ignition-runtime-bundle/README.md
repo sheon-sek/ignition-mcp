@@ -45,12 +45,11 @@ project/com.inductiveautomation.mcp/
 ## Output contract
 
 The pinned MCP Module returns real `structuredContent` and `isError`, but does not publish each Tool's
-`outputSchema` in `tools/list` (D27). The JSON Schemas in `contracts/schemas/` are therefore the
+`outputSchema` in `tools/list`. The JSON Schemas in `contracts/schemas/` are therefore the
 output contract, and the tests check handler output against them. A text answer is never a fallback
 for structured output.
 
-The Module also drops JSON `null` values inside objects. Handlers use the `ignition-null-v1` encoding
-(D28):
+The Module also drops JSON `null` values inside objects. Handlers use the `ignition-null-v1` encoding:
 
 - `null` becomes `{"$ignition":"null"}`.
 - Lists and ordinary objects are encoded item by item.
@@ -62,7 +61,7 @@ use it.
 
 ## Write Tools
 
-The write rules come from D30. Each Tool's contract is in `contracts/tools/runtime/`.
+Each Tool's contract is in `contracts/tools/runtime/`.
 
 | Tool | Class | Destructive | Precondition token | Target the allowlist checks |
 | --- | --- | --- | --- | --- |
@@ -84,7 +83,7 @@ identity used as the audit actor, the audit mode, the per-call item limits and t
 duration limit. Its fields are listed in the
 [Configuration reference](../../docs/guide/configuration.md#runtime-target-policy).
 
-Rules every write handler follows, each covered by its recorded Jython test fixtures (D29):
+Rules every write handler follows, each covered by its recorded Jython test fixtures:
 
 - **Preflight.** Input limits, the reserved-provider check and the allowlist are checked for every item
   before any item runs. One bad item refuses the whole batch. After that, items run one at a time,
@@ -102,14 +101,14 @@ Rules every write handler follows, each covered by its recorded Jython test fixt
 - **Audit.** `system.util.audit` runs in the policy's audit mode with the policy's service identity as
   actor. In `required` mode the handler checks the audit profile first and refuses with
   `operation_disabled` when it is unavailable. A refused item gets a `decision` audit row. If the
-  result audit write fails, the outcome stands and the answer says `auditRecorded=false` (D18).
+  result audit write fails, the outcome stands and the answer says `auditRecorded=false`.
 - **No retry.** Each write is sent once. An item whose Ignition result is itself uncertain is
   `outcome_unknown`, and the items after it are `not_executed`.
 
 ## Named Query registry
 
 `database_query_list` and `database_query` read their approved queries from the environment variable
-`IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON` of the Gateway process (D14). The caller cannot choose the
+`IGNITION_MCP_DATABASE_QUERY_REGISTRY_JSON` of the Gateway process. The caller cannot choose the
 project, the Named Query path or the datasource, and cannot send SQL. The format is in the
 [Configuration reference](../../docs/guide/configuration.md#named-query-registry). A missing variable is
 an empty registry. A malformed one makes both Tools fail.
@@ -127,7 +126,7 @@ ignition-mcp-managed: product=ignition-runtime-bundle; bundle=<bundleVersion>
 `ignition-mcp status` uses that mark to tell a project it deployed from a project someone else made.
 `RESOURCE_SCHEMA_VERSION` tracks changes to the resource file format.
 
-Build a release (D21):
+Build a release:
 
 ```bash
 uv run --no-sync python -m tooling.native.cli release \
@@ -161,7 +160,7 @@ uv run --no-sync python -m tooling.native.cli build --project-dir packages/ignit
 uv run --no-sync python -m tooling.contracts.lint
 ```
 
-The handler tests run each `onToolCalled.py` under Jython 2.7.4 and need Java 11 (D29). See
+The handler tests run each `onToolCalled.py` under Jython 2.7.4 and need Java 11. See
 `tooling/native/jython_runner/README.md`.
 
 An empty Prompt list may leave out the prompts capability in `initialize`. The tests record

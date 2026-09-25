@@ -116,8 +116,8 @@ async def alarm_pipeline_cancel(
         #: `*` is neither, so it is refused rather than looked up as a Target.
         raise GatewayError(
             "invalid_argument",
-            "path must name one exact pipeline path; '*' is a Target-allowlist entry "
-            "(D30 §6), not a pipeline",
+            "path must name one exact pipeline path; '*' is a Target-allowlist "
+            "entry, not a pipeline",
         )
     target_id = pipeline_target_id(path)
     read_state: dict[str, Any] = {}

@@ -399,7 +399,7 @@ RISK_QUESTIONS: dict[Risk, str] = {
     Risk.EULA: "Accept the MCP Module's EULA on this Gateway's behalf?",
     Risk.RESTART: "Allow a Gateway restart? Every session and client connection on it drops.",
     Risk.UNENCRYPTED_CHANNEL: "Allow Runtime tokens to travel over plain http to this Gateway?",
-    Risk.WILDCARD_ALLOWLIST: "Allow '*' Target allowlists, so Mutations may touch every target D30 does not refuse?",
+    Risk.WILDCARD_ALLOWLIST: "Allow '*' Target allowlists, so Mutations may touch every target the safety rules do not refuse?",
     Risk.ADMIN_CLASS: "Turn on ADMIN Mutations, which change the Gateway's own configuration?",
     Risk.NON_LOOPBACK_BIND: "Bind the REST server to an address other hosts can reach?",
     Risk.OVERWRITE_HAND_EDIT: "Overwrite a change someone made on the Gateway by hand?",

@@ -402,7 +402,7 @@ class _DeclaredTags:
             raise GatewayError(
                 "invalid_argument",
                 "the artifact declares UDT definitions: import it into the provider's "
-                f"'{UDT_SEGMENT}' path, which is the explicit Target D30 §6 requires",
+                f"'{UDT_SEGMENT}' path, the explicit UDT-definition target",
             )
 
     def _collect(self, document: dict[str, Any]) -> None:

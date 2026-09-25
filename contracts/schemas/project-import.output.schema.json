@@ -13,12 +13,12 @@
       "minLength": 1
     },
     "transactionId": {
-      "description": "The D16 Project transaction this call ran; operation_diagnose reports it for the same correlationId.",
+      "description": "The Project transaction this call ran; operation_diagnose reports it for the same correlationId.",
       "type": "string",
       "minLength": 1
     },
     "state": {
-      "description": "The terminal transaction state, as data, for a satisfied outcome: COMMITTED (the import landed and the post-import re-export C equals the candidate) or NO_CHANGE (the candidate was semantically equal to the baseline, so nothing was backed up or imported). Every other D16 terminal state is a Tool error carrying the D30 §7 code, with the state named in the message.",
+      "description": "The terminal transaction state, as data, for a satisfied outcome: COMMITTED (the import landed and the post-import re-export C equals the candidate) or NO_CHANGE (the candidate was semantically equal to the baseline, so nothing was backed up or imported). Every other terminal state is a Tool error carrying the error code the state maps to, with the state named in the message.",
       "enum": [
         "COMMITTED",
         "NO_CHANGE"

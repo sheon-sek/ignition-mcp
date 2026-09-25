@@ -45,11 +45,10 @@ The tools you need on your own computer:
 | Tool | Linux or macOS | Windows |
 | --- | --- | --- |
 | Python 3.11+ and [`uv`](https://docs.astral.sh/uv/) | the [official installer](https://docs.astral.sh/uv/) or a package manager. `uv` installs Python for you | `winget install --id=astral-sh.uv -e`, or the same official installer |
-| A shell | any POSIX shell | PowerShell 7. The D31 section 6 checklist uses `-SkipHttpErrorCheck`, which needs version 7 |
-| Java 11 | only for the Jython tests (D29). Neither server needs it | same |
+| A shell | any POSIX shell | PowerShell 7. The Windows checklist uses `-SkipHttpErrorCheck`, which needs version 7 |
+| Java 11 | only for the Jython tests. Neither server needs it | same |
 
-The Windows instructions in this runbook are marked **not run on Windows yet**. See
-[D31](../decisions/D31-windows-support-scope.md).
+The Windows instructions in this runbook are marked **not run on Windows yet**.
 
 Repository maintainers build a release from the checkout, for the compatibility evidence:
 
@@ -73,8 +72,8 @@ itself, so an operator never handles these files.
 
 ### Building on Windows
 
-**Not run on Windows yet.** See [D31](../decisions/D31-windows-support-scope.md). Store the Git
-revision in a variable and pass it as `--source-revision $rev`. Check the checksum with `Get-FileHash`
+**Not run on Windows yet.** Store the Git revision in a variable and pass it as
+`--source-revision $rev`. Check the checksum with `Get-FileHash`
 or `certutil` instead of `sha256sum -c`, and compare the result with the hash in the `.sha256` file:
 
 ```powershell
@@ -168,8 +167,12 @@ acceptances and the exit codes.
    `--provision-security-levels`.
 3. Create the roles' Runtime tokens and the `ignition-mcp-rest` token, and save each secret to its
    own `*.secret` file.
-4. Deploy the Runtime bundle project. A managed project is backed up before it is replaced. A project
-   with the bundle's name that `setup` did not create is never taken over.
+4. Deploy the Runtime bundle project. A managed project is backed up before it is replaced, under the
+   Project writer lock, and its `pcf1` fingerprint is compared before the import. A project with the
+   bundle's name that `setup` did not create is never taken over. When the deployed bundle version
+   equals the checkout's version, a managed project whose Tools, Text Resources or Prompts differ from
+   the bundle is reported as a hand edit, and the restore needs the `overwrite_hand_edit` acceptance.
+   A version difference is an update, not a hand-edit restore.
 5. Create or update one Server Config per role with an explicit Tool list and the generated
    permissions tree.
 6. Write the Runtime Target Policy.
@@ -472,16 +475,14 @@ so a secret cannot leak through a stack trace.
 
 ## Windows
 
-Windows is not a supported platform, although nothing is known to be broken.
-[D31](../decisions/D31-windows-support-scope.md) records the scope, the known limitations and a manual
-checklist that nobody has run yet.
+Windows is not a supported platform, although nothing is known to be broken. The scope, the known
+limitations and a manual checklist that nobody has run yet are recorded in this runbook.
 
 The tool table in [Prerequisites](#prerequisites) is the Windows starting point. It carries the
 **not run on Windows yet** marker.
 
 - **Line endings.** A checkout with Windows (CRLF) line endings works: the bundle tooling reads
-  those files as LF and builds the same ZIP as a Linux checkout. See
-  [D31 amendment 1](../decisions/D31-windows-support-scope.md#amendment-1-2026-09-25-crlf-checkouts-build).
+  those files as LF and builds the same ZIP as a Linux checkout.
 - **Checksums.** Windows has no `sha256sum -c`. In `dist/release`, run
   `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` or
   `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`, and compare the result with the
@@ -498,10 +499,10 @@ The tool table in [Prerequisites](#prerequisites) is the Windows starting point.
 - `alarm_status`, `alarm_journal` and `alarm_acknowledge` are switched off. Ignition's alarm query
   functions have no row limit or continuation, so these Tools cannot bound their answer or their
   pre-checks. Their code is in `packages/ignition-runtime-bundle/deferred/`, no profile lists them,
-  and turning one on needs a bounded mechanism plus new live test evidence. See D12.
-- The MCP Module returns structured results but publishes no Tool output schemas (D27). The schemas in
+  and turning one on needs a bounded mechanism plus new live test evidence.
+- The MCP Module returns structured results but publishes no Tool output schemas. The schemas in
   `contracts/schemas/` are the reference.
-- The MCP Module drops `null` values inside objects, so Runtime answers encode them (D28). See
+- The MCP Module drops `null` values inside objects, so Runtime answers encode them. See
   [How it works](../guide/how-it-works.md#two-details-for-client-developers).
 - On 8.3.9 the Module's response format is recorded as `FAILED_NATIVE_BINDING`. On 8.3.8 it is
   `VERIFIED_WITH_LIMITATION`. Neither is recorded as production-supported, and no command in this
@@ -511,17 +512,11 @@ The tool table in [Prerequisites](#prerequisites) is the Windows starting point.
   not with a real upgrade.
 - `status` does not wait for a Gateway that is starting. Only the live test setups under
   `tests/harness/` wait.
-- The hand-edit rule does not yet cover the content of the managed bundle project, and replacing that
-  project does not yet take the D16 lock or compare `pcf1` fingerprints. Both are deferred to issue
-  #80.
 
 ## Sources
 
-The rules in this runbook come from D20 for the setup commands and their safety rules, D32 for the
-CLI, the environments and the roles, the D26 Phase 6 amendment for the v1 scope, D27 and D28 for
-Runtime response behavior, and D30 for the write rules. `CONTEXT.md` defines Module install, Module
-upgrade and Bundle upgrade. Every flag was checked against
-`packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`,
+`CONTEXT.md` defines Module install, Module upgrade and Bundle upgrade. Every flag was checked
+against `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/gateway_ops/`,
 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/engine/` and
 `packages/ignition-rest-mcp/src/ignition_rest_mcp/cli/setup/`, and each command's `--help`. The
 console samples in this runbook show the shape of the output; they are not recorded runs.

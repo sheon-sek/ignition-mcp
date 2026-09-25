@@ -38,7 +38,7 @@ def onToolCalled(builder, writes, timeout):
 	# D10 input ceilings are pure validation over the request, and every count stops at
 	# the ceiling or the aggregate budget it is checked against, so a reported amount is
 	# a lower bound and every refusal says so.
-	INPUT_CEILING_MESSAGE = "A write item is over a documented D10 input ceiling; a reported byte amount is counted only up to that ceiling, so it is a lower bound. No item was executed."
+	INPUT_CEILING_MESSAGE = "A write item is over the documented input ceiling; a reported byte amount is counted only up to that ceiling, so it is a lower bound. No item was executed."
 	# D10 output: the Observed state carries its own budget, so a value it cannot
 	# return never becomes the reason a completed write's outcomes disappear.
 	OBSERVED_VALUE_MAX_BYTES = 8192

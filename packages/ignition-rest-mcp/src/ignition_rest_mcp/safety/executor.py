@@ -621,7 +621,7 @@ def _capability_present(registry: CapabilityRegistry | None, operation: Mutation
     if registry is None:
         raise GatewayError(
             "internal_error",
-            "a Gateway-backed mutation requires the D04 capability registry; nothing was dispatched",
+            "a Gateway-backed mutation requires the capability registry; nothing was dispatched",
         )
     return registry.supports(operation.capability)
 

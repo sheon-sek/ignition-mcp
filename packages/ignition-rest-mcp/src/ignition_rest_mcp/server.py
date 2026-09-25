@@ -532,7 +532,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="project_import",
         description=(
             "Import a Project archive artifact into an existing Project through Native REST, "
-            "preconditioned on the fingerprint project_export reported and reconciled by the D16 "
+            "preconditioned on the fingerprint project_export reported and reconciled by the "
             "Project transaction (deployment-gated; destructive)."
         ),
         output_schema=ProjectImportResult.model_json_schema(),
@@ -614,10 +614,10 @@ def create_server(settings: Settings) -> FastMCP:
     @mcp.tool(
         name="artifact_delete",
         description=(
-            "Delete one server-held artifact through the D17 ArtifactStore — the only delete "
-            "path, because D30 drops the artifact HTTP route — verified by a bounded read-back "
-            "of the same identifier (deployment-gated; destructive; only the owning principal "
-            "or ignition.admin; a retention-locked artifact is a conflict)."
+            "Delete one server-held artifact through the ArtifactStore, the only delete path, "
+            "verified by a bounded read-back of the same identifier (deployment-gated; "
+            "destructive; only the owning principal or ignition.admin; a retention-locked "
+            "artifact is a conflict)."
         ),
         output_schema=ArtifactDeleteResult.model_json_schema(),
         tags={
@@ -839,7 +839,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="perspective_view_upsert",
         description=(
             "Replace one Local Perspective View document in a Project, creating it when the "
-            "Project has none, through the D16 Project transaction and preconditioned on the "
+            "Project has none, through the Project transaction and preconditioned on the "
             "fingerprint perspective_view_get reported (deployment-gated; refuses a View an "
             "ancestor defines)."
         ),
@@ -867,7 +867,7 @@ def create_server(settings: Settings) -> FastMCP:
     @mcp.tool(
         name="perspective_view_delete",
         description=(
-            "Remove one Local Perspective View from a Project through the D16 Project "
+            "Remove one Local Perspective View from a Project through the Project "
             "transaction, preconditioned on the fingerprint perspective_view_get reported "
             "(deployment-gated; destructive, one View never a folder)."
         ),
@@ -898,7 +898,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="perspective_page_config_update",
         description=(
             "Replace a Project's Local Perspective Page configuration document, creating it "
-            "when the Project has none, through the D16 Project transaction and preconditioned "
+            "when the Project has none, through the Project transaction and preconditioned "
             "on the fingerprint perspective_page_config_get reported (deployment-gated)."
         ),
         output_schema=PerspectiveWriteResult.model_json_schema(),
@@ -926,7 +926,7 @@ def create_server(settings: Settings) -> FastMCP:
         name="perspective_session_props_update",
         description=(
             "Replace a Project's Local Perspective Session properties document, creating it "
-            "when the Project has none, through the D16 Project transaction and preconditioned "
+            "when the Project has none, through the Project transaction and preconditioned "
             "on the fingerprint perspective_session_props_get reported (deployment-gated)."
         ),
         output_schema=PerspectiveWriteResult.model_json_schema(),
@@ -983,7 +983,7 @@ def create_server(settings: Settings) -> FastMCP:
 
     @mcp.tool(
         name="operation_diagnose",
-        description="Diagnose one prior operation by its exact UUIDv7 correlationId (D19, principal-scoped).",
+        description="Diagnose one prior operation by its exact UUIDv7 correlationId (principal-scoped).",
         output_schema=OperationDiagnoseResult.model_json_schema(),
         tags={"read", "scope:ignition.read", "diagnostic", "storage", "principal-scoped"},
     )

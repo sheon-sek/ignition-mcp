@@ -16,15 +16,14 @@ To install and use them, read the guides instead of this page:
 - [Operations runbook](../../docs/operations/runbook.md), for upgrades, the policy and exit codes
 
 This page describes the server's behavior in detail: how it authenticates callers, stores data, and
-decides the result of each write Tool. The binding rules are in `docs/decisions/`, and each section
-names the decisions it follows.
+decides the result of each write Tool. Each section states the rule it follows.
 
 ## Server structure
 
 - `server.py` registers every Tool and resource, and serves `/health/live`, `/health/ready` and
   `/metrics`.
 - `capabilities/registry.py` reads the Gateway's OpenAPI document at start and on a timer, and derives
-  the set of semantic capabilities the Gateway offers (D04). A Tool whose capability is missing is
+  the set of semantic capabilities the Gateway offers. A Tool whose capability is missing is
   hidden from `tools/list`.
 - `client/gateway.py` holds the one shared `httpx.AsyncClient`. Responses are streamed with a size
   cap, and compressed responses are refused if the Gateway ignores the request for identity encoding.
@@ -32,14 +31,14 @@ names the decisions it follows.
 - `services/` holds the Tool logic, `artifacts/` the file store, and `projects/` the project
   transaction.
 - `operation.py` and `observability/` create a correlation id per call, write structured logs, and
-  keep low-cardinality metrics (D18).
+  keep low-cardinality metrics.
 
 The caller's credential never reaches the Gateway. The Gateway only sees the deployment's own API
 token.
 
 ## Authentication and scopes
 
-The rules follow D07 and D07-A. Plain HTTP and authentication are separate choices.
+Plain HTTP and authentication are separate choices.
 
 ### Named static tokens
 
@@ -93,8 +92,7 @@ CONFIG or ADMIN component or write anything.
 `IGNITION_MCP_GATEWAY_TIMEOUT_SECONDS`, 10 by default and 30 at most, limits the total time of one
 Gateway request. Gateway JSON responses are capped at 1 MiB, and the internal OpenAPI document at
 16 MiB. Tool and resource output is capped by `IGNITION_MCP_STRUCTURED_OUTPUT_LIMIT_BYTES`, 256 KiB by
-default and 1 MiB at most. An oversized answer fails with `limit_exceeded` and is never cut short
-(D10).
+default and 1 MiB at most. An oversized answer fails with `limit_exceeded` and is never cut short.
 
 Each Tool has a budget class with its own time limit, checked at start:
 
@@ -131,7 +129,7 @@ Records are pruned by age and count: `IGNITION_MCP_AUDIT_MAX_ROWS` (50000),
 
 ## Artifacts
 
-Artifacts are files the server stores, such as exports and pre-import backups (D17). Their limits are
+Artifacts are files the server stores, such as exports and pre-import backups. Their limits are
 listed in the [Configuration reference](../../docs/guide/configuration.md#limits-and-timing).
 
 - `GET /artifacts/{id}` and `HEAD /artifacts/{id}` require authentication and only serve the caller's
@@ -146,8 +144,8 @@ listed in the [Configuration reference](../../docs/guide/configuration.md#limits
 
 ### Sensitive exports
 
-`project_export` and `tag_config_export` also need `IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true`
-(D08, D17). The switch is off by default. It is checked when building the Tool list and again at call
+`project_export` and `tag_config_export` also need `IGNITION_MCP_SENSITIVE_EXPORTS_ENABLED=true`.
+The switch is off by default. It is checked when building the Tool list and again at call
 time, where it answers `operation_disabled`. Every attempt is audited, including refusals.
 
 ## Write Tools
@@ -168,7 +166,7 @@ refused at call time.
 
 These apply to all REST write Tools unless a section below says otherwise.
 
-- A Target outside the allowlist is `permission_denied` (D30 §7).
+- A Target outside the allowlist is `permission_denied`.
 - The class switch is checked for the Tool list and again at call time.
 - An explicit Gateway rejection is final. That covers any 4xx answer, and a 2xx answer that carries
   `success=false` with a `problem`. No read-back can turn it into a success, because a target that
@@ -183,11 +181,11 @@ These apply to all REST write Tools unless a section below says otherwise.
 ### Configuration resources
 
 `config_resource_create`, `config_resource_update`, `config_resource_delete` and
-`config_resource_rename` follow D30. They need scope `ignition.config`, class `CONFIG_MUTATION`, an
+`config_resource_rename` need scope `ignition.config`, class `CONFIG_MUTATION`, an
 entry in the operation allowlist and an entry in the Target allowlist.
 
 **Targets and the core collection.** A Target is `<resourceType>/<name>`, or the bare `<resourceType>`
-for a singleton, always in the `core` configuration collection (D30 owner ruling 5). The Gateway
+for a singleton, always in the `core` configuration collection. The Gateway
 selects a resource by collection as well as by name, so every read and every write names
 `collection=core`:
 
@@ -207,7 +205,7 @@ the file does not classify is refused too.
 
 **The reserved Tag provider.** The `ignition/tag-provider` resource named `IgnitionMCPPolicy` holds
 the Runtime Target Policy. All four Tools refuse it with `permission_denied` before they check the
-allowlist, even under `*` (D30 §5, owner ruling 4). Rules for the match:
+allowlist, even under `*`. Rules for the match:
 
 - The whole name must match. `IgnitionMCPPolicyStaging` is a different resource.
 - Case is ignored and surrounding spaces are trimmed, because Ignition documents no rule for comparing
@@ -223,7 +221,7 @@ allowlist, even under `*` (D30 §5, owner ruling 4). Rules for the match:
 - The caller passes the `expectedSignature` it read with `config_resource_get`. The Tool compares it
   with a fresh bounded read just before dispatch, then sends it to the Gateway as the native
   `signature`. A stale signature is `conflict`, and nothing is dispatched.
-- The change item is validated against the Gateway's own documented `PUT` request schema (D03). The
+- The change item is validated against the Gateway's own documented `PUT` request schema. The
   Tool takes that schema from the capability snapshot and turns it into a self-contained, immutable
   JSON Schema when the snapshot refreshes. A value the schema forbids is `invalid_argument`, and no
   request leaves the server. A Gateway that documents an update route without a usable request schema
@@ -233,7 +231,7 @@ allowlist, even under `*` (D30 §5, owner ruling 4). Rules for the match:
 - The result carries the resource as observed after the change, plus its new signature for the next
   change.
 
-**`config_resource_create`** takes no signature (D30 §2). The target must not exist. The Tool checks
+**`config_resource_create`** takes no signature. The target must not exist. The Tool checks
 that before dispatch, and an existing target, including one created in the meantime, is `conflict`.
 The item is validated against the documented `POST` request schema first. The result carries the new
 resource and its signature.
@@ -243,19 +241,19 @@ resource and its signature.
 Gateway enforces it. A bounded read-compare before dispatch still turns a stale signature into
 `conflict` without touching the resource. Success means the target is absent, reported as
 `present: false`. The route's optional `confirm` flag is never sent, so a delete the Gateway says would
-affect other resources is refused. The Tool is `destructive: true` (D26), and its audit rows say so.
+affect other resources is refused. The Tool is `destructive: true`, and its audit rows say so.
 
 **`config_resource_rename`** renames one resource to `newName`. The rename route takes no signature,
 so the Precondition token is only a server-side read-compare. A short race window remains between that
-read and the dispatch, and the Tool does not claim atomicity (D30 §2). `references=ABORT` is always
-sent (D30 §4), and the body is validated against the documented rename schema. Both names are Targets
-and both must be allowlisted (D30 §3). The new name must be free before dispatch, and a collision is
+read and the dispatch, and the Tool does not claim atomicity. `references=ABORT` is always
+sent, and the body is validated against the documented rename schema. Both names are Targets
+and both must be allowlisted. The new name must be free before dispatch, and a collision is
 `conflict`. Success needs the old name vacant and the new name holding the resource, whose read-back
 and signature are returned.
 
 ### `project_import`
 
-`project_import` (D30, D16) replaces an existing project.
+`project_import` replaces an existing project.
 
 - It needs scope `ignition.config`, class `CONFIG_MUTATION`, an operation allowlist entry, and a
   Target allowlist entry for the project name. The name matches exactly and with case. Any other
@@ -266,7 +264,7 @@ and signature are returned.
   Nothing is staged, backed up or dispatched until that token equals the baseline export, called A. A
   mismatch ends the transaction as `CONFLICTED` with `conflict`.
 
-The D16 transaction then runs:
+The project transaction then runs:
 
 1. Stage the candidate and fingerprint it, called B.
 2. Save a durable backup.
@@ -282,7 +280,7 @@ sending the import again.
 
 ### `tag_config_import`
 
-`tag_config_import` (D30, D11) creates Tags from a READY `tag_config_export` artifact.
+`tag_config_import` creates Tags from a READY `tag_config_export` artifact.
 
 - It needs scope `ignition.config` and class `CONFIG_MUTATION`.
 - The caller gives the destination `provider` and `path`. The Target is the provider-qualified
@@ -292,14 +290,14 @@ sending the import again.
 - It takes no Precondition token. `collisionPolicy=Abort` is always sent, so the import only creates
   Tags. A destination that already holds a declared Tag is `conflict`, checked before dispatch and
   refused by the Gateway if one appears in the meantime.
-- A UDT definition document is refused unless the destination is the `_types_` folder (D30 §6).
+- A UDT definition document is refused unless the destination is the `_types_` folder.
 - The Tool re-exports the destination and compares it with the declared Tag paths. A claimed success
   counts only when every declared Tag is there. A partial import is `recovery_required`. An ambiguous
   dispatch is `outcome_unknown`, because another writer may have created the same Tags.
 
 ### `alarm_pipeline_cancel`
 
-`alarm_pipeline_cancel` (D30, D12) stops one running Alarm Notification Pipeline instance.
+`alarm_pipeline_cancel` stops one running Alarm Notification Pipeline instance.
 
 - It needs scope `ignition.control` and class `CONTROL_MUTATION`.
 - The Target is the exact pipeline path. Allowlist entries are exact paths or `*`, never prefixes.
@@ -315,7 +313,7 @@ sending the import again.
 
 ### `artifact_delete`
 
-`artifact_delete` (D30, D17) deletes a stored artifact and sends nothing to the Gateway. It is a
+`artifact_delete` deletes a stored artifact and sends nothing to the Gateway. It is a
 destructive `CONFIG_MUTATION`. There is no `DELETE /artifacts/{id}` route, so this Tool is the only way
 to delete an artifact, and its visibility depends only on the class switch.
 
@@ -331,7 +329,7 @@ to delete an artifact, and its visibility depends only on the class switch.
 
 ### Reads
 
-The Perspective reads (D15) return a project's Local resources and change nothing.
+The Perspective reads return a project's Local resources and change nothing.
 
 - `perspective_view_list` lists a project's Local View paths, paginated with `limit` and `offset`.
 - `perspective_view_get` returns one View document.
@@ -350,7 +348,7 @@ copy. A read therefore publishes no artifact and never returns the archive. Only
 returned. A View inherited from a parent project is not in the export and answers `not_found`.
 
 `perspective_view_validate` dispatches nothing. It takes a View document as a JSON object, requires a
-`root` object with a string `type`, and applies the D10 limits: at most 1 MiB, measured on the compact
+`root` object with a string `type`, and applies the document limits: at most 1 MiB, measured on the compact
 re-serialization, and at most 64 JSON levels. Unknown component types are accepted. A passing
 validation does not promise that Ignition accepts the document.
 
@@ -360,7 +358,7 @@ embedded protected credentials, come back as `<redacted>`.
 
 ### Writes
 
-The Perspective writes (D15, D16) each replace one Local resource and run the same project
+The Perspective writes each replace one Local resource and run the same project
 transaction as `project_import`:
 
 - `perspective_view_upsert` and `perspective_view_delete` change one View at a Logical resource path.
@@ -374,7 +372,7 @@ matching read returned.
 
 - A stale fingerprint is `conflict`.
 - A transaction that succeeds ends as `COMMITTED` or `NO_CHANGE`. Any other final state is a Tool error
-  with the D30 §7 code. A Gateway rejection is final.
+  with a shared error code. A Gateway rejection is final.
 - Deleting a View the project does not define locally is `not_found`.
 
 Three rules limit what a write may touch:
@@ -382,7 +380,7 @@ Three rules limit what a write may touch:
 - The server first reads the project's own export to see whether the target is Local. Only when it is
   not does it walk the parent chain, at most 16 projects deep, and it refuses a deeper or looping
   chain instead of stopping early. If a parent defines the target, the write is `invalid_argument` with
-  reason `inherited_resource`. So a write never creates a silent local override (D15).
+  reason `inherited_resource`. So a write never creates a silent local override.
 - A document that contains the exact value `<redacted>`, which is what a read returns in place of a
   secret, is `invalid_argument` with reason `redacted_value`, before anything is exported.
 - All four are CONFIG writes. The Target allowlist, the class switch, the `project_import` capability
@@ -390,7 +388,7 @@ Three rules limit what a write may touch:
 
 ## Project writer
 
-The Project writer runs the D16 project transaction for `project_import` and the Perspective writes.
+The Project writer runs the project transaction for `project_import` and the Perspective writes.
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
@@ -409,7 +407,7 @@ line of `ignition-mcp status` names whether the writer is on.
 
 ## The `ignition-mcp` command
 
-`ignition-mcp` is separate from the server code (D25). It has five commands: `setup`, `status`,
+`ignition-mcp` is separate from the server code. It has five commands: `setup`, `status`,
 `start`, `connect` and `reset`. The [quick start](../../docs/guide/quick-start.md) walks through
 setup, and the [Configuration reference](../../docs/guide/configuration.md#cli-settings) lists the
 flags.
