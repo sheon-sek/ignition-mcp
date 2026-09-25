@@ -1,5 +1,5 @@
 def onToolCalled(builder):
-	bundleVersion = "0.7.0"
+	bundleVersion = "0.8.0"
 	# Stamped at build time by tooling.native; never a secret.
 	bundleSourceRevision = "__BUNDLE_SOURCE_REVISION__"
 	gatewayVersion = str(system.util.getVersion())

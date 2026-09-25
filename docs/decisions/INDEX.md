@@ -20,7 +20,7 @@ D01–D32 are binding unless explicitly reopened through a new decision or amend
 | D08 | DECIDED | Mutation Safety Model | |
 | D09 | DECIDED | Ignition Runtime MCP Permission and Security Model | one Runtime MCP Bundle: Tools + Text Resources + Prompts |
 | D10 | DECIDED | Request Budgets, Pagination and Output Limits | bounded interface extended to Resource/Prompt payloads |
-| D11 | DECIDED | Tag Tool Surface | |
+| D11 | DECIDED | Tag Tool Surface | amended 2026-09-25 with D30: `*` can cover UDT Definitions when the Runtime Target Policy enables it |
 | D12 | DECIDED | Alarm Tool Surface | |
 | D13 | DECIDED | Historian Tool Surface | |
 | D14 | DECIDED | Database Tool Surface | approved Named Query registry; no arbitrary SQL |
@@ -39,9 +39,9 @@ D01–D32 are binding unless explicitly reopened through a new decision or amend
 | D27 | DECIDED | Runtime Native outputSchema Limitation | exact baseline tuple exception; structuredContent/isError remain mandatory |
 | D28 | DECIDED | [Runtime lossless null encoding](D28-runtime-null-wire-encoding.md) | owner-approved ignition-null-v1; capability-aware empty Prompt discovery |
 | D29 | DECIDED | [Recorded Jython runner for Runtime Tool handlers](D29-recorded-jython-runtime-runner.md) | owner-approved test-only `jython-standalone` 2.7.4 + Java 11, required locally and in CI; adds to D23 L4, does not replace it |
-| D30 | DECIDED | [Phase 4 Mutation Contract Rules](D30-phase4-mutation-contract-rules.md) | owner-approved 2026-09-22: Runtime Target Policy, Precondition tokens, batch Preflight, fixed Gateway knobs, Refused resource types; amends D07 (named static-token scopes), D11 (Tag Mutation contracts), D12 (acknowledge pairs, shelve cap); owner rulings 2026-09-22 (reserved policy provider, acknowledge parked, phase4-live env, core collection) |
+| D30 | DECIDED | [Phase 4 Mutation Contract Rules](D30-phase4-mutation-contract-rules.md) | owner-approved 2026-09-22: Runtime Target Policy, Precondition tokens, batch Preflight, fixed Gateway knobs, Refused resource types; amended 2026-09-25 so explicit wildcard can include UDT Definitions by policy; amends D07 (named static-token scopes), D11 (Tag Mutation contracts), D12 (acknowledge pairs, shelve cap) |
 | D31 | DECIDED | [Windows support scope and declared limitations](D31-windows-support-scope.md) | Windows is `NOT_BROKEN`, not supported; LF pinning, `msvcrt` single-writer guard, binary artifact fds; POSIX modes skipped (operators use ACLs); manual Windows checklist not yet run; `windows-latest` CI is a separate ticket |
-| D32 | DECIDED | [Setup CLI, deployment environments and Assistant roles](D32-setup-cli-environments-assistant-roles.md) | owner-approved 2026-09-25 for Phase 7; replaces `setup-native` with `setup`/`status`/`start`/`connect`/`reset`; `dev` default with generated policy and permissions; Analysis and Engineer Assistant roles; amends D20 |
+| D32 | DECIDED | [Setup CLI, deployment environments and Assistant roles](D32-setup-cli-environments-assistant-roles.md) | owner-approved 2026-09-25 for Phase 7; amended 2026-09-25 for profile-derived wildcard UDT access; replaces `setup-native` with `setup`/`status`/`start`/`connect`/`reset`; generated policy and permissions; Analysis and Engineer Assistant roles; amends D20 |
 
 ## Cross-decision amendment
 

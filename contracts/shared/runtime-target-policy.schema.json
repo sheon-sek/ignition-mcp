@@ -18,6 +18,11 @@
         }
       }
     },
+    "allowlistsWildcardIncludeUdtTypes": {
+      "description": "When true, a `*` Tag Target allowlist entry also authorizes targets in the provider's `_types_` UDT definition namespace. Setup defaults this to true when any deployed Runtime role uses the `full` profile and false otherwise. Missing means false for older policy documents.",
+      "default": false,
+      "type": "boolean"
+    },
     "serviceIdentity": {
       "type": "string",
       "minLength": 1

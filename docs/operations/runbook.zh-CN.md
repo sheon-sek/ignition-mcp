@@ -225,6 +225,7 @@ Runtime 写入 Tool 的 allowlist 来自 Gateway 上的一份文档，而不是 
   "serviceIdentity": "ignition-mcp-service",
   "auditMode": "best_effort",
   "auditProfile": "MCP_AUDIT",
+  "allowlistsWildcardIncludeUdtTypes": true,
   "allowlists": {
     "tag_write": ["[default]Plant/AHU"],
     "alarm_shelve": ["prov:default:/tag:Plant/AHU"],
@@ -239,7 +240,7 @@ Runtime 写入 Tool 的 allowlist 来自 Gateway 上的一份文档，而不是 
 
 - `schemaVersion`、`allowlists`、`serviceIdentity` 和 `auditMode` 必填。`schemaVersion` 为 `1`。
 - `allowlists` 每个 Tool 名一个键，所以 Tag 条目永远不会放行报警 Tool。没有对应键的 Tool 什么都改不了。`"*"` 允许全部，必须明确写出。
-- Tag 条目覆盖该路径及其下的路径，以 `/` 为边界：`[default]AHU` 覆盖 `[default]AHU/Temp`，但不覆盖 `[default]AHU2`。`_types_` 下的 UDT 定义需要明确的 `_types_` 条目，`*` 不覆盖它们。
+- Tag 条目覆盖该路径及其下的路径，以 `/` 为边界：`[default]AHU` 覆盖 `[default]AHU/Temp`，但不覆盖 `[default]AHU2`。`allowlistsWildcardIncludeUdtTypes` 决定 `*` 是否也覆盖 `_types_` 下的 UDT 定义。`setup` 在部署的任一角色使用 `full` 时默认设为 `true`，否则为 `false`。旧 policy 缺少此字段时按 `false` 处理。
 - 报警条目是以 `prov:` 开头、不含 `*` 的带 provider 前缀的报警路径，覆盖该路径及其下的路径，以 `/` 或 `:` 为边界。
 - `serviceIdentity` 是每次 Runtime 写入在 Ignition 审计日志里的执行者名字。agent 不能设置它。
 - `auditMode` 为 `best_effort`、`required` 或 `off`。`required` 模式下，`auditProfile` 指定的审计 profile 不可用时拒绝写入。
@@ -249,7 +250,7 @@ Runtime 写入 Tool 的 allowlist 来自 Gateway 上的一份文档，而不是 
 
 `setup` 以固定格式存储 policy：键排序、没有空格。这样它可以把生成的文档和已存储的副本逐字节比较。你不用写这个文件。
 
-要修改 policy，就改部署环境或角色，再运行 `setup`。计划里那一行会说明这次写入多少字节，以及新旧 SHA-256 的开头部分。例如 `dev` 的 allowlist 是每个 Runtime 修改 Tool 的 `*`，`prod` 的是空。
+要修改 policy，就改部署环境或角色，再运行 `setup`。计划会显示 `*` 是否包括 UDT 定义；首次写入启用该设置的开发 policy 时，还会单独要求确认。例如 `dev` 的 allowlist 是每个 Runtime 修改 Tool 的 `*`，`prod` 的是空。`*` 仍需存在于具体 Tool 的 allowlist 中才会放行；此设置本身不会创建 allowlist。
 
 policy 缺失、无法读取、过大或无效时，所有 Runtime 写入 Tool 都返回 `operation_disabled`。删除 policy 会关闭 Runtime 写入，而不会放开它们。
 
@@ -261,7 +262,7 @@ policy 缺失、无法读取、过大或无效时，所有 Runtime 写入 Tool �
 
 1. 助手角色决定 endpoint 用哪个 profile，也决定它提供哪些 Tool。Analysis 用 `readonly`，没有写入 Tool。Engineer 用 `full`，两组写入 Tool 都有。要换 profile 就换角色，再运行一次 `setup`。
 2. Server Config 的权限树决定谁可以连接，`setup` 从角色生成它。
-3. Runtime Target Policy 的 allowlist 决定每个 Tool 可以修改哪些目标。`dev` 默认对每个 Runtime 修改 Tool 都是 `*`，`prod` 默认是空。角色提供了某个 Tool，但没有 allowlist 条目时，它仍然什么都改不了。
+3. Runtime Target Policy 的 allowlist 决定每个 Tool 可以修改哪些目标。`dev` 默认对每个 Runtime 修改 Tool 都是 `*`，且 Engineer 的 `full` profile 默认让 `*` 包括 `_types_` 下的 UDT 定义；`prod` 默认 allowlist 为空。角色提供了某个 Tool，但没有 allowlist 条目时，它仍然什么都改不了。
 
 在 REST server 上，写在它的环境设置里：
 

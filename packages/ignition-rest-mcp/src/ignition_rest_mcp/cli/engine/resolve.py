@@ -384,6 +384,7 @@ class Risk(StrEnum):
     RESTART = "gateway_restart"
     UNENCRYPTED_CHANNEL = "unencrypted_token_channel"
     WILDCARD_ALLOWLIST = "wildcard_target_allowlist"
+    WILDCARD_UDT_TYPES = "wildcard_udt_types"
     ADMIN_CLASS = "admin_mutation_class"
     NON_LOOPBACK_BIND = "non_loopback_bind"
     OVERWRITE_HAND_EDIT = "overwrite_hand_edit"
@@ -399,7 +400,13 @@ RISK_QUESTIONS: dict[Risk, str] = {
     Risk.EULA: "Accept the MCP Module's EULA on this Gateway's behalf?",
     Risk.RESTART: "Allow a Gateway restart? Every session and client connection on it drops.",
     Risk.UNENCRYPTED_CHANNEL: "Allow Runtime tokens to travel over plain http to this Gateway?",
-    Risk.WILDCARD_ALLOWLIST: "Allow '*' Target allowlists, so Mutations may touch every target the safety rules do not refuse?",
+    Risk.WILDCARD_ALLOWLIST: (
+        "Allow '*' Target allowlists, so Mutations may touch every target the safety rules do not refuse?"
+    ),
+    Risk.WILDCARD_UDT_TYPES: (
+        "Let '*' Runtime Target allowlists include UDT definitions under _types_? "
+        "The Engineer full profile defaults this on."
+    ),
     Risk.ADMIN_CLASS: "Turn on ADMIN Mutations, which change the Gateway's own configuration?",
     Risk.NON_LOOPBACK_BIND: "Bind the REST server to an address other hosts can reach?",
     Risk.OVERWRITE_HAND_EDIT: "Overwrite a change someone made on the Gateway by hand?",

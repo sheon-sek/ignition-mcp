@@ -26,7 +26,7 @@
           "type": "string",
           "providerQualified": true,
           "configPath": true,
-          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry"
+          "udtDefinitionNamespace": "under an explicit _types_ allowlist entry, or under * when allowlistsWildcardIncludeUdtTypes is true"
         },
         "expectedFingerprint": {
           "type": "string",
@@ -69,7 +69,7 @@
     "missingOrMalformed": "operation_disabled",
     "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
     "allowlistKey": "tag_update",
-    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider; it includes UDT Definitions only when allowlistsWildcardIncludeUdtTypes is true",
     "reservedProvider": "IgnitionMCPPolicy",
     "reservedProviderRefusal": "permission_denied before Preflight, whatever the allowlist says, including an explicit *",
     "reservedProviderRefusalCode": "permission_denied"
@@ -79,7 +79,7 @@
     "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
     "leaf": "the target's last segment is the definition name sent to system.tag.configure"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target whose first post-provider segment is _types_ (D30 6's [provider]_types_/...) is refused with permission_denied unless a matching entry whose own first post-provider segment is _types_ covers it, so a bare * does not cover a UDT definition, while a folder that is merely called _types_ deeper in the path stays an ordinary target (D30 6)",
+  "udtDefinitionTargets": "A UDT Definition target whose first post-provider segment is _types_ is allowed by a matching explicit _types_ allowlist entry, or by * when allowlistsWildcardIncludeUdtTypes is true. When the property is absent or false, * does not cover UDT Definitions. A folder named _types_ deeper in the path remains an ordinary target.",
   "neverCreatesTarget": "not_found",
   "creatingMissingTargets": "Preflight reads every target's configuration and refuses the whole batch with not_found when a target is not there, so the handler never creates one",
   "collisionPolicy": "MergeOverwrite",

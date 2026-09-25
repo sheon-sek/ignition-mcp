@@ -274,6 +274,7 @@ below describes the fields of the generated document.
 | `auditMode` | yes | `best_effort` records an audit entry when it can. `required` refuses to write when the audit profile is unavailable. `off` records nothing. |
 | `auditProfile` | no | The Ignition audit profile to write to. Needed for `required`. |
 | `allowlists` | yes | An object with one key per Tool name. Each value is a list of paths that Tool may change. |
+| `allowlistsWildcardIncludeUdtTypes` | no | Whether a Tag Tool's `*` entry also covers UDT Definitions under `_types_`. `setup` sets this to true when any deployed Runtime role uses `full`, false otherwise. Missing means false. |
 | `alarmShelveMaxSeconds` | no | The longest shelve `alarm_shelve` accepts. At most 86400, one day. |
 | `tagWriteMaxWrites` | no | Writes per `tag_write` call, 1 to 100. Default 20. |
 | `tagCreateMaxItems`, `tagUpdateMaxItems`, `tagCopyMaxItems`, `tagDeleteMaxItems`, `tagMoveMaxItems`, `tagRenameMaxItems` | no | Items per call for each Tag Tool, 1 to 100. Default 20. |

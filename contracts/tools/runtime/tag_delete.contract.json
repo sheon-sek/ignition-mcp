@@ -25,7 +25,7 @@
           "type": "string",
           "providerQualified": true,
           "configPath": true,
-          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "udtDefinitionNamespace": "under an explicit _types_ allowlist entry, or under * when allowlistsWildcardIncludeUdtTypes is true",
           "cascade": "a Folder target takes everything beneath it in one system.tag.deleteTags call, so the token the caller reasons about is the Folder's own configuration"
         },
         "expectedFingerprint": {
@@ -65,7 +65,7 @@
     "missingOrMalformed": "operation_disabled",
     "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
     "allowlistKey": "tag_delete",
-    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "allowlistMatch": "provider-qualified config path prefix at segment boundaries; explicit * allows every provider; it includes UDT Definitions only when allowlistsWildcardIncludeUdtTypes is true",
     "reservedProvider": "IgnitionMCPPolicy",
     "reservedProviderRefusal": "permission_denied before Preflight, whatever the allowlist says, including an explicit *: a delete inside the policy provider would remove the document every Runtime Mutation reads (owner ruling 1)",
     "reservedProviderRefusalCode": "permission_denied"
@@ -75,7 +75,7 @@
     "noWildcard": "a config target is one exact path: a *, ? or : anywhere in it is invalid_argument",
     "leaf": "the target's last segment names the node the call removes, and one path-list entry is one target: the handler never expands a Folder into its children"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only, and the rule is positional: D30 6 names [provider]_types_/..., so only the first post-provider segment selects the definition namespace, and an entry has to name _types_ the same way. A bare * does not cover a UDT definition; a folder that merely happens to be called _types_ deeper in the path is an ordinary target (D30 6)",
+  "udtDefinitionTargets": "A UDT Definition target whose first post-provider segment is _types_ is allowed by a matching explicit _types_ allowlist entry, or by * when allowlistsWildcardIncludeUdtTypes is true. When the property is absent or false, * does not cover UDT Definitions. A folder named _types_ deeper in the path remains an ordinary target.",
   "neverCreatesTarget": "not_found",
   "missingTargetFails": "not_found (details.items[].reason = targetMissing): a target the Preflight existence check does not find refuses the whole batch before anything is dispatched, so a delete never creates a node it was asked to remove",
   "collisionPolicy": "not_applicable",

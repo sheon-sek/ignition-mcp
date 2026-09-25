@@ -243,7 +243,7 @@ profile 只让写入 Tool 变得可见。Tool 在改动任何东西之前，还�
 - Tag 条目覆盖该路径及其下的所有路径。`[default]Plant/AHU` 覆盖 `[default]Plant/AHU/Temp`，但不覆盖 `[default]Plant/AHU2`。
 - 报警条目是带 provider 前缀、不含 `*` 的报警路径，覆盖该路径及其下的报警路径。
 - `allowlists` 里没有对应键的 Tool 什么都改不了。`["*"]` 允许全部。
-- `[provider]_types_/` 下的 UDT 定义需要单独的条目，例如 `[default]_types_/Motor`。`*` 不覆盖它们。
+- 当 Runtime Target Policy 的 `allowlistsWildcardIncludeUdtTypes` 为 `true` 时，`*` 会覆盖 `[provider]_types_/` 下的 UDT 定义。部署的任一角色使用 `full` profile 时，`setup` 默认将其设为 `true`。若该值为 `false` 或字段缺失，则需要单独的条目，例如 `[default]_types_/Motor`。
 - 任何东西都不能修改存放 policy 本身的 `IgnitionMCPPolicy` Tag provider。
 
 policy 的所有字段见[配置参考](configuration.zh-CN.md#runtime-target-policy)。

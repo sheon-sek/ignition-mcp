@@ -26,7 +26,7 @@
           "type": "string",
           "providerQualified": true,
           "configPath": true,
-          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "udtDefinitionNamespace": "under an explicit _types_ allowlist entry, or under * when allowlistsWildcardIncludeUdtTypes is true",
           "readable": "the target must exist and its configuration must be readable, and its fingerprint is the item's Precondition token"
         },
         "newName": {
@@ -71,7 +71,7 @@
     "missingOrMalformed": "operation_disabled",
     "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
     "allowlistKey": "tag_rename",
-    "allowlistMatch": "the new path - the target's own parent plus items[].newName - as a provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition",
+    "allowlistMatch": "the new path - the target's own parent plus items[].newName - as a provider-qualified config path prefix at segment boundaries; explicit * allows every provider; it includes UDT Definitions only when allowlistsWildcardIncludeUdtTypes is true",
     "reservedProvider": "IgnitionMCPPolicy",
     "reservedProviderRefusal": "permission_denied before Preflight for the target and for its new path, whatever the allowlist says, including an explicit *: a rename into the provider would place a node beside the policy document, and a rename of one of its nodes would move it (owner ruling 1)",
     "reservedProviderRefusalCode": "permission_denied"
@@ -86,7 +86,7 @@
     "notAllowlistChecked": "D30 6 checks the new path of a rename, not the old one: the target is bounded by the reserved-provider rule, its own readability and its fingerprint, and by the new path the caller names",
     "reservedProvider": "a target inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only, and the rule is positional: D30 6 names [provider]_types_/..., so only the first post-provider segment of the new path selects the definition namespace, and an entry has to name _types_ the same way. A bare * does not cover a UDT definition; a folder that merely happens to be called _types_ deeper in the path is an ordinary target (D30 6)",
+  "udtDefinitionTargets": "A UDT Definition target whose first post-provider segment is _types_ is allowed by a matching explicit _types_ allowlist entry, or by * when allowlistsWildcardIncludeUdtTypes is true. When the property is absent or false, * does not cover UDT Definitions. A folder named _types_ deeper in the path remains an ordinary target.",
   "collisionPolicy": "Abort",
   "existingTargetFails": "conflict (details.items[].reason = newPathExists): the new path already holds something, and D11 forbids replacing it",
   "neverOverwrites": "the handler sends collisionPolicy=Abort, so a new path that appears between the Preflight existence check and the dispatch is never overwritten: the call either raises or answers a non-Good QualityCode, and one bounded system.tag.exists check for that item's own new path decides it - a new path the Gateway answers as present is that item's conflict (details.items[].reason = newPathExists, the same reason the Preflight refusal uses) with the provider's own Native outcome still attached, and the target keeps its own name and parent either way",

@@ -18,7 +18,8 @@ writes nothing. Its apply runs these steps in order, each with a start and an en
    deployment directory;
 5. per role, the Server Config with the explicit Tool list of the role's profile and
    a permissions tree generated from the role's level;
-6. the Runtime Target Policy generated from the environment;
+6. the Runtime Target Policy generated from the environment and roles, with an explicit
+   report and acceptance for wildcard UDT Definition access;
 7. the generated documents, stored in the deployment directory;
 8. per role, the closing check: the verify sequence at the role's
    endpoint with the role's own token, which checks the exact Tool, Resource and
@@ -58,7 +59,7 @@ import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -670,14 +671,18 @@ def role_inputs(plan: RuntimePlan | RuntimeTargets, role: Role, mcp_token: str |
     )
 
 
-def policy_document(bundle: Bundle, environment: str) -> str:
+def policy_document(bundle: Bundle, environment: str, roles: Sequence[Role] | None = None) -> str:
     """The generated Runtime Target Policy, in the canonical text the reader checks."""
 
     allowlists = {tool: ["*"] for tool in bundle.mutation_tools} if environment == "dev" else {}
+    if roles is None:
+        roles = [ROLES["analysis"]] if environment == "prod" else list(ROLES.values())
+    wildcard_includes_udt_types = any(role.profile == "full" for role in roles)
     return docs.canonical_text(
         {
             "schemaVersion": 1,
             "allowlists": allowlists,
+            "allowlistsWildcardIncludeUdtTypes": wildcard_includes_udt_types,
             "serviceIdentity": SERVICE_IDENTITY,
             "auditMode": "best_effort",
             "alarmShelveMaxSeconds": SHELVE_CAP_SECONDS,
@@ -755,7 +760,7 @@ def plan_runtime(ctx: Context) -> Plan:
         new_levels=new_levels,
         tokens={},
         configs={},
-        policy_text=policy_document(bundle, environment),
+        policy_text=policy_document(bundle, environment, roles),
         policy_action="none",
         documents={},
         previous_environment=previous,
@@ -858,8 +863,8 @@ def _environment_change(ctx: Context) -> str:
     """The saved environment when this run changes it, else ``""``.
 
     D32 section 5: the new environment's defaults replace the saved roles, unless
-    ``--roles`` sets them in this run. The policy allowlists always follow the
-    environment, so they need nothing here.
+    ``--roles`` sets them in this run. Policy allowlists follow the environment;
+    wildcard UDT access follows the deployed roles' profiles.
     """
 
     saved = ctx.deployment.values.get("environment")
@@ -1269,8 +1274,14 @@ def _plan_policy(ctx: Context, plan: RuntimePlan, policy: docs.PolicyObservation
         if plan.environment == "dev"
         else "empty allowlists"
     )
+    include_udt_types = any(role.profile == "full" for role in plan.roles)
+    summary += f"; wildcard includes UDT definitions: {'yes' if include_udt_types else 'no'}"
     if policy.provider_present and policy.matches(text):
         return ""
+    if include_udt_types and plan.environment == "dev":
+        needed.append(
+            Needed(Risk.WILDCARD_UDT_TYPES, f"Runtime Target Policy, {plan.environment}, Engineer full profile")
+        )
     if plan.environment == "dev":
         needed.append(Needed(Risk.WILDCARD_ALLOWLIST, f"Runtime Target Policy, {summary}"))
     if not policy.provider_present or policy.policy_text is None:
@@ -1360,9 +1371,23 @@ def apply_runtime(ctx: ApplyContext, plan_: Plan) -> None:
                 if config.action == "create":
                     ctx.record_created(role.config_record)
                 end.set(Status.CHANGED, result)
+    include_udt_types = any(role.profile == "full" for role in plan.roles)
+    with ctx.reporter.step("runtime UDT wildcard", "allowlistsWildcardIncludeUdtTypes") as end:
+        if include_udt_types and plan.environment == "dev":
+            detail = "enabled by the full profile; '*' allowlists include UDT Definitions"
+        elif include_udt_types:
+            detail = "enabled by the full profile; prod allowlists are empty, so no targets are granted"
+        else:
+            detail = "disabled by the readonly profile; UDT Definitions need explicit _types_ entries"
+        end.set(Status.OK, detail)
     with ctx.reporter.step("runtime policy", docs.POLICY_PATH) as end:
         if plan.policy_action == "none":
-            end.set(Status.OK, "the served document is the generated one")
+            setting = (
+                "wildcard includes UDT definitions"
+                if any(role.profile == "full" for role in plan.roles)
+                else "wildcard excludes UDT definitions"
+            )
+            end.set(Status.OK, f"the served document is the generated one; {setting}")
         else:
             result = asyncio.run(_write_policy(ctx, plan))
             if plan.policy_action == "create":
@@ -1765,7 +1790,12 @@ async def _write_policy(ctx: ApplyContext, plan: RuntimePlan) -> str:
             await confirm_policy(writer, docs.Documents(policy_text=text))
         except (WriteError, gw.GatewayProbeError) as error:
             raise _failed(f"the Runtime Target Policy was not written: {error}", ctx) from error
-    return f"wrote {docs.byte_length(text)} bytes in {outcome.attempt_count} import(s); read back equal"
+    setting = (
+        "wildcard includes UDT definitions"
+        if any(role.profile == "full" for role in plan.roles)
+        else "wildcard excludes UDT definitions"
+    )
+    return f"wrote {docs.byte_length(text)} bytes in {outcome.attempt_count} import(s); {setting}; read back equal"
 
 
 # ------------------------------------------------------------ the closing check

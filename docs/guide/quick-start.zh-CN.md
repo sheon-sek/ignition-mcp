@@ -83,6 +83,7 @@ CLI 立刻拿这个 key 去问 Gateway，被拒绝或缺少某项权限时会再
 | Runtime 和 REST 凭证 | 每个已部署角色都创建 | 只为 `--roles` 指名的角色创建 |
 | Server Config 权限树 | 由角色生成 | 由角色生成 |
 | Runtime Target Policy 的 allowlist | 每个 Runtime 修改 Tool 都是 `*` | 空 |
+| `*` 是否包括 UDT 定义 | Engineer 的 `full` profile 下是 | 只有 Analysis 时否 |
 | 报警搁置上限 | 3600 秒 | 3600 秒 |
 | REST 修改类别 | `CONFIG` 和 `CONTROL` 打开，`ADMIN` 关闭 | 全部关闭 |
 | REST Target allowlist | 已打开类别都是 `*` | 空 |

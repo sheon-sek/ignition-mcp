@@ -156,3 +156,15 @@ owner_rulings_2026_09_22:
   delivery_priority: speed_functional_io_first
   d10_accounting_precision: deferred_issue_41
 ```
+
+## Amendment — wildcard UDT Definition targets
+
+**Approved by the project owner on 2026-09-25.** This amendment supersedes section 6's and D11's rule that a bare `*` never covers a UDT Definition.
+
+- The Runtime Target Policy has an optional boolean `allowlistsWildcardIncludeUdtTypes`. If absent, it is `false` for compatibility with previously written policies. A non-boolean value makes Tag CONFIG Mutation handlers fail closed.
+- When it is `true`, `*` matches UDT Definition targets under `_types_`, like every other Tag target. When it is `false`, UDT Definitions still require a provider-qualified explicit `_types_` allowlist entry.
+- `setup` writes this setting as `true` when any deployed Runtime role uses the `full` profile, and `false` otherwise. A `*` allowlist still must be present for a Tool; the setting does not create or widen allowlists by itself.
+- When `setup` writes a development policy with the setting enabled, it separately asks the operator to accept that wildcard access includes UDT Definitions and reports the setting in the Runtime policy step.
+- The reserved `IgnitionMCPPolicy` provider remains refused even when the setting and wildcard are enabled.
+
+This keeps the role profile, Tool inventory, class authorization, and Target allowlist as separate controls while making an explicit `*` mean every non-reserved Tag target for the selected profile.
