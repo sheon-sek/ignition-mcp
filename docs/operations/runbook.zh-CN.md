@@ -331,7 +331,7 @@ Windows 不是受支持的平台，不过目前没有已知的问题。[D31](../
 
 [前置条件](#前置条件)里的工具表和[部署状态与凭证文件](#部署状态与凭证文件)里的 PowerShell 代码块是 Windows 的起点，两处都带有**尚未在 Windows 上运行**的标注。
 
-- **换行符。** 在 `.gitattributes` 加入之前 clone 的仓库保留 Windows 换行符，`tooling.native.cli validate` 会以 `must use LF line endings` 拒绝它们。运行一次 `git rm --cached -rq . && git reset --hard`，或者重新 clone。两种做法都会丢掉未提交的修改。见 [D31 第 5 节](../decisions/D31-windows-support-scope.md#5-migration-for-existing-windows-clones)。
+- **换行符。** 使用 Windows（CRLF）换行符的仓库副本可以直接使用：bundle 工具会把这些文件按 LF 读取，构建出的 ZIP 与 Linux 副本完全相同。见 [D31 修订 1](../decisions/D31-windows-support-scope.md#amendment-1-2026-09-25-crlf-checkouts-build)。
 - **校验和。** Windows 没有 `sha256sum -c`。在 `dist/release` 里运行 `certutil -hashfile ignition-runtime-bundle-<version>.zip SHA256` 或 `Get-FileHash ignition-runtime-bundle-<version>.zip -Algorithm SHA256`，把结果和 `ignition-runtime-bundle-<version>.sha256` 里的值比对。
 - **向导。** 在 Git Bash 的 mintty 里没有伪控制台时，向导退回普通逐行提示，问题和校验不变。这样的提示关不掉终端回显，粘贴的机密会在输入时显示在屏幕上，问题里会说明这一点。
 - **token 文件和数据文件夹。** Windows 跳过 `0600` 的 token 文件检查和 `0700` 的数据文件夹检查，只记录一条 WARNING。请用文件系统 ACL，只让服务账号能读取 token 文件和 `IGNITION_MCP_DATA_DIR`。
