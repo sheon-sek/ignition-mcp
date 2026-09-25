@@ -238,6 +238,10 @@ ignition-mcp connect analysis --client claude
 ignition-mcp connect engineer --client codex
 ```
 
+The Runtime entry authenticates with the `X-Ignition-API-Token` header and the REST entry with
+`Authorization: Bearer`. To configure another client by hand, see
+[Connecting an agent](configuration.md#connecting-an-agent).
+
 ## `reset`
 
 `reset` removes what `setup` created, on the Gateway and locally. It deletes only a resource the

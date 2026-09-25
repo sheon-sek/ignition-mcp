@@ -7,6 +7,7 @@ the [Tool catalog](tools.md).
 
 - [REST server settings](#rest-server-settings): environment variables for `ignition-rest-mcp`.
 - [CLI settings](#cli-settings): the flags an `ignition-mcp` command takes.
+- [Connecting an agent](#connecting-an-agent): the URL, header and token each MCP server takes.
 - [Runtime Target Policy](#runtime-target-policy): the JSON file that allows Runtime writes.
 - [Server Config permissions file](#server-config-permissions-file): who may connect to the Runtime server.
 - [Named Query registry](#named-query-registry): the database queries the Runtime server may run.
@@ -173,6 +174,90 @@ The [quick start](quick-start.md) explains the wizard, the one-line form and the
 | `--dry-run` | `setup` | Show the plan and stop before any write. |
 | `--bind HOST:PORT` | `start` | The address the REST server listens on. Default `127.0.0.1:8000`. |
 | `--client claude\|codex\|none` | `connect` | The client to register the role with. |
+
+## Connecting an agent
+
+Each role has two MCP servers, and they authenticate differently. `ignition-mcp connect <role>`
+writes both entries for Claude Code or Codex. To configure a client by hand, or to check what
+`connect` wrote, use the settings below. Both servers use the Streamable HTTP transport.
+
+| Server | URL | Header | Token |
+| --- | --- | --- | --- |
+| Runtime (`ignition-runtime-<role>`) | `<gateway-url>/data/mcp/<role>` | `X-Ignition-API-Token: <token>` | the role's Ignition API token, in `runtime-<role>.secret` |
+| REST (`ignition-rest-<role>`) | `http://<bind>/mcp`, default `http://127.0.0.1:8000/mcp` | `Authorization: Bearer <token>` | the role's static token, in `rest-<role>-token.secret` |
+
+The secret files are in the deployment directory, `~/.config/ignition-mcp/deployments/<name>/`. Each
+holds one `<name>:<key>` line, and the whole line is the token.
+
+### Runtime server
+
+The MCP Module reads the Ignition API token from the `X-Ignition-API-Token` header only. It does not
+accept `Authorization: Bearer`, so a client that offers only a bearer token setting cannot connect to
+the Runtime server. Put the whole `<name>:<key>` line in the header, with no `Bearer` prefix.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http ignition-runtime-analysis \
+  http://127.0.0.1:8088/data/mcp/analysis --scope user \
+  --header "X-Ignition-API-Token: ignition-mcp-analysis:<key>"
+```
+
+Codex, in `~/.codex/config.toml`. `codex mcp add` cannot set a custom header, so edit the file:
+
+```toml
+[mcp_servers.ignition-runtime-analysis]
+url = "http://127.0.0.1:8088/data/mcp/analysis"
+
+[mcp_servers.ignition-runtime-analysis.http_headers]
+"X-Ignition-API-Token" = "ignition-mcp-analysis:<key>"
+```
+
+A client that takes a JSON server list, such as `claude mcp add-json`:
+
+```json
+{
+  "type": "http",
+  "url": "http://127.0.0.1:8088/data/mcp/analysis",
+  "headers": {"X-Ignition-API-Token": "ignition-mcp-analysis:<key>"}
+}
+```
+
+### REST server
+
+The REST server reads the standard `Authorization: Bearer <token>` header. Which tokens it accepts
+depends on its auth mode; see [Deployment profile and authentication](#deployment-profile-and-authentication).
+A deployment `setup` created uses `static-token`, with one token per role. `start` must be running.
+
+Claude Code:
+
+```bash
+claude mcp add --transport http ignition-rest-analysis \
+  http://127.0.0.1:8000/mcp --scope user \
+  --header "Authorization: Bearer ignition-mcp-analysis:<key>"
+```
+
+Codex, in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.ignition-rest-analysis]
+url = "http://127.0.0.1:8000/mcp"
+
+[mcp_servers.ignition-rest-analysis.http_headers]
+"Authorization" = "Bearer ignition-mcp-analysis:<key>"
+```
+
+A JSON server list:
+
+```json
+{
+  "type": "http",
+  "url": "http://127.0.0.1:8000/mcp",
+  "headers": {"Authorization": "Bearer ignition-mcp-analysis:<key>"}
+}
+```
+
+With `IGNITION_MCP_AUTH_MODE=none` the REST server needs no header, and every caller is read-only.
 
 ## Runtime Target Policy
 

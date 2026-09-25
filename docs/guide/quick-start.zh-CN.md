@@ -175,6 +175,8 @@ ignition-mcp connect analysis --client claude
 ignition-mcp connect engineer --client codex
 ```
 
+Runtime 那一项用 `X-Ignition-API-Token` header 验证身份，REST 那一项用 `Authorization: Bearer`。要手工配置其他客户端，见[连接 agent](configuration.zh-CN.md#连接-agent)。
+
 ## `reset`
 
 `reset` 删除 `setup` 创建的东西，在 Gateway 上和本地都删。它只删除部署自己的记录写明由 `setup` 创建的资源，发现的其他东西会作为保留项列出。REST server 的级别和 `setup` 把它加进的每个 General Settings 条目也按这条规则处理。它在 `dev` 以外的环境被拒绝。

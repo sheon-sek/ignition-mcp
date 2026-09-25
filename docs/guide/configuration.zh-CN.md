@@ -6,6 +6,7 @@
 
 - [REST server 设置](#rest-server-设置)：`ignition-rest-mcp` 的环境变量。
 - [setup 命令的设置](#setup-命令的设置)：`ignition-mcp setup` 的参数。
+- [连接 agent](#连接-agent)：每个 MCP server 需要的 URL、header 和 token。
 - [Runtime Target Policy](#runtime-target-policy)：允许 Runtime 写入的 JSON 文件。
 - [Server Config 权限文件](#server-config-权限文件)：谁可以连接 Runtime server。
 - [Named Query 注册表](#named-query-注册表)：Runtime server 可以运行的数据库查询。
@@ -159,6 +160,83 @@ REST server 启动时从环境变量读取设置。它会检查每个值，只�
 每个命令都接受 `--deployment`、`--json`、`--yes`、`--accept-certificate` 和 `--accept-eula`。`status` 另外读一个 `--gateway-token-file`；不给时读 `setup` 保存在部署里的 `gateway-token.secret`。`start` 接受 `--bind HOST:PORT`，默认 `127.0.0.1:8000`。`connect` 接受 `--client claude|codex|none`。
 
 `setup` 不需要环境变量：每个值来自参数、上次保存的部署，或向导的问题。
+
+## 连接 agent
+
+每个角色有两个 MCP server，它们的身份验证方式不同。`ignition-mcp connect <role>` 会为 Claude Code 或 Codex 写好这两项。要手工配置客户端，或核对 `connect` 写了什么，用下面的设置。两个 server 都使用 Streamable HTTP transport。
+
+| Server | URL | Header | Token |
+| --- | --- | --- | --- |
+| Runtime（`ignition-runtime-<role>`） | `<gateway-url>/data/mcp/<role>` | `X-Ignition-API-Token: <token>` | 角色的 Ignition API token，在 `runtime-<role>.secret` 里 |
+| REST（`ignition-rest-<role>`） | `http://<bind>/mcp`，默认 `http://127.0.0.1:8000/mcp` | `Authorization: Bearer <token>` | 角色的 static token，在 `rest-<role>-token.secret` 里 |
+
+机密文件在部署目录 `~/.config/ignition-mcp/deployments/<name>/` 里。每个文件只有一行 `<name>:<key>`，整行就是 token。
+
+### Runtime server
+
+MCP Module 只从 `X-Ignition-API-Token` header 读取 Ignition API token，不接受 `Authorization: Bearer`。所以只提供 bearer token 设置的客户端连不上 Runtime server。header 里放整行 `<name>:<key>`，不加 `Bearer` 前缀。
+
+Claude Code：
+
+```bash
+claude mcp add --transport http ignition-runtime-analysis \
+  http://127.0.0.1:8088/data/mcp/analysis --scope user \
+  --header "X-Ignition-API-Token: ignition-mcp-analysis:<key>"
+```
+
+Codex，写在 `~/.codex/config.toml` 里。`codex mcp add` 设不了自定义 header，所以直接编辑文件：
+
+```toml
+[mcp_servers.ignition-runtime-analysis]
+url = "http://127.0.0.1:8088/data/mcp/analysis"
+
+[mcp_servers.ignition-runtime-analysis.http_headers]
+"X-Ignition-API-Token" = "ignition-mcp-analysis:<key>"
+```
+
+接受 JSON server 列表的客户端，例如 `claude mcp add-json`：
+
+```json
+{
+  "type": "http",
+  "url": "http://127.0.0.1:8088/data/mcp/analysis",
+  "headers": {"X-Ignition-API-Token": "ignition-mcp-analysis:<key>"}
+}
+```
+
+### REST server
+
+REST server 读取标准的 `Authorization: Bearer <token>` header。它接受哪些 token 取决于 auth mode，见[部署 profile 和身份验证](#部署-profile-和身份验证)。`setup` 创建的部署使用 `static-token`，每个角色一个 token。`start` 必须正在运行。
+
+Claude Code：
+
+```bash
+claude mcp add --transport http ignition-rest-analysis \
+  http://127.0.0.1:8000/mcp --scope user \
+  --header "Authorization: Bearer ignition-mcp-analysis:<key>"
+```
+
+Codex，写在 `~/.codex/config.toml` 里：
+
+```toml
+[mcp_servers.ignition-rest-analysis]
+url = "http://127.0.0.1:8000/mcp"
+
+[mcp_servers.ignition-rest-analysis.http_headers]
+"Authorization" = "Bearer ignition-mcp-analysis:<key>"
+```
+
+JSON server 列表：
+
+```json
+{
+  "type": "http",
+  "url": "http://127.0.0.1:8000/mcp",
+  "headers": {"Authorization": "Bearer ignition-mcp-analysis:<key>"}
+}
+```
+
+`IGNITION_MCP_AUTH_MODE=none` 时 REST server 不需要 header，每个调用方都只能读。
 
 ## Runtime Target Policy
 
