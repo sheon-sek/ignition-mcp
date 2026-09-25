@@ -356,7 +356,7 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
             end.set(Status.OK, f"no General Settings entry setup added {rest.REST_LEVEL_NAME} to is left")
         else:
             writer = ctx.gateway_writer(runtime.SETTINGS.transport)
-            done = asyncio.run(rest.edit_general_settings(ctx, writer, [], reset_plan.rest_revoke))
+            done, _ = asyncio.run(rest.edit_general_settings(ctx, writer, [], reset_plan.rest_revoke))
             end.set(Status.CHANGED, "; ".join(done))
     with ctx.reporter.step(
         "reset security levels",
@@ -367,8 +367,24 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
         else:
             end.set(Status.CHANGED, asyncio.run(_remove_levels(ctx, reset_plan)))
     with ctx.reporter.step("reset rest level", rest.REST_LEVEL_NAME) as end:
+        # An operator may have granted the level after the plan read General
+        # Settings. The recorded grants are gone by now, so any entry that still
+        # names the level is not setup's, and deleting the level would orphan it.
+        users = (
+            asyncio.run(rest.entries_naming_level(ctx, ctx.gateway_writer(runtime.SETTINGS.transport)))
+            if reset_plan.rest_level
+            else []
+        )
         if not reset_plan.rest_level:
             end.set(Status.OK, f"setup created no {rest.REST_LEVEL_NAME} that is still there")
+        elif users:
+            end.set(
+                Status.SKIPPED,
+                f"kept {rest.REST_LEVEL_NAME}: the General Settings entries {', '.join(users)} still name it "
+                "and setup did not add it there",
+                next_action=f"curl -sS {str(ctx.resolved.values['gateway_url']).rstrip('/')}"
+                f"{rest.SECURITY_PROPERTIES_PATH}",
+            )
         elif asyncio.run(rest.remove_rest_level(ctx, ctx.gateway_writer(runtime.SETTINGS.transport))):
             end.set(Status.CHANGED, f"removed {rest.REST_LEVEL_NAME}")
         else:

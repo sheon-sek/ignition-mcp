@@ -630,10 +630,12 @@ def apply(ctx: engine.ApplyContext, stage_plan: engine.Plan) -> None:
     with ctx.reporter.step("rest general settings", f"{REST_LEVEL_NAME} in {', '.join(entries)}") as end:
         stale = [permission_record(entry) for entry in PERMISSION_ENTRIES if entry not in entries]
         if rest_plan.grant_entries or rest_plan.revoke_entries:
-            done = asyncio.run(
+            done, added = asyncio.run(
                 edit_general_settings(ctx, ctx.gateway_writer(), rest_plan.grant_entries, rest_plan.revoke_entries)
             )
-            ctx.record_created(*(permission_record(entry) for entry in rest_plan.grant_entries))
+            # Only an entry this edit changed is setup's. One an operator granted
+            # between the plan and this write is theirs, and reset must leave it.
+            ctx.record_created(*(permission_record(entry) for entry in added))
             forget_created(ctx, *stale)
             end.set(Status.CHANGED, f"{'; '.join(done)} (environment {rest_plan.environment})")
         else:
@@ -701,8 +703,22 @@ async def _write_levels(
     served = security.level_tree(await writer.reads.singleton_document(SECURITY_LEVELS_TYPE))
     expected = security.level_paths(before)
     expected = expected | {REST_LEVEL_PATH} if want else expected - {REST_LEVEL_PATH}
-    if served is None or security.level_paths(served) != expected:
+    # The paths show the level landed or went; the shape shows no other node's name,
+    # description, order or children moved.
+    if served is None or security.level_paths(served) != expected or _shape(served) != _shape(tree):
         raise _failed(ctx, "the Security Level edit was accepted but the served tree is not the one written")
+
+
+def _shape(nodes: Any) -> list[tuple[Any, Any, Any]]:
+    """Each node's name, description and children, in order, for the read-back comparison."""
+
+    if not isinstance(nodes, list):
+        return []
+    return [
+        (node.get("name"), node.get("description"), _shape(node.get("children")))
+        for node in nodes
+        if isinstance(node, dict)
+    ]
 
 
 async def add_rest_level(ctx: engine.Context, writer: GatewayWriter) -> None:
@@ -741,8 +757,12 @@ async def remove_rest_level(ctx: engine.Context, writer: GatewayWriter) -> bool:
 
 async def edit_general_settings(
     ctx: engine.Context, writer: GatewayWriter, grant: list[str], revoke: list[str]
-) -> list[str]:
-    """Add the level to ``grant`` and remove it from ``revoke`` in one D20 edit; return what changed.
+) -> tuple[list[str], list[str]]:
+    """Add the level to ``grant`` and remove it from ``revoke`` in one D20 edit.
+
+    Returns the report lines and the entries of ``grant`` this edit added the level
+    to. An entry that already names the level when the singleton is read again is
+    left alone and not returned, so the caller never records it as created.
 
     The singleton is read right before the write and its signature is the
     precondition. The read-back must equal the written config exactly, so an entry
@@ -750,6 +770,7 @@ async def edit_general_settings(
     """
 
     done: list[str] = []
+    added: list[str] = []
     async with writer:
         try:
             current = await writer.reads.singleton_document(security.SECURITY_PROPERTIES_TYPE)
@@ -772,8 +793,10 @@ async def edit_general_settings(
                         changed_here.append(entry)
                 if changed_here:
                     done.append(f"{REST_LEVEL_NAME} {verb} {', '.join(changed_here)}")
+                if change is security.permission_with_level:
+                    added = changed_here
             if desired == config:
-                return [f"{REST_LEVEL_NAME} already had the planned General Settings entries"]
+                return [f"{REST_LEVEL_NAME} already had the planned General Settings entries"], []
             item = {"collection": security.singleton_collection(current), "signature": signature, "config": desired}
             await writer._write(
                 "PUT",
@@ -790,7 +813,22 @@ async def edit_general_settings(
     if served != desired:
         moved = sorted(key for key in {*desired, *(served or {})} if (served or {}).get(key) != desired.get(key))
         raise _failed(ctx, f"the General Settings edit was accepted but {', '.join(moved)} read back differently")
-    return done
+    return done, added
+
+
+async def entries_naming_level(ctx: engine.Context, writer: GatewayWriter) -> list[str]:
+    """The General Settings entries that name the REST server's level, read now."""
+
+    async with writer:
+        try:
+            config = security.properties_config(
+                await writer.reads.singleton_document(security.SECURITY_PROPERTIES_TYPE)
+            )
+        except gw.GatewayProbeError as error:
+            raise _failed(ctx, f"the General Settings could not be read ({error})") from error
+    if config is None:
+        raise _failed(ctx, "the General Settings are not readable, so the level's users cannot be checked")
+    return sorted(key for key, value in config.items() if security.permission_lists(value, REST_LEVEL_PATH))
 
 
 async def _restore_rest_token(rest_plan: RestPlan, writer: GatewayWriter) -> None:

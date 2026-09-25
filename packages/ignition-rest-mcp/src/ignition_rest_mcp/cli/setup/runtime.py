@@ -1536,7 +1536,10 @@ def _flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--provision-security-levels",
         action="store_true",
-        help="in prod, create the roles' missing Security Levels",
+        help=(
+            "in prod, create the missing Security Levels of the roles and of the REST server, "
+            "and add the REST server's level to Gateway Read in General Settings"
+        ),
     )
 
 

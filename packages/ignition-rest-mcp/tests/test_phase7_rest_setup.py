@@ -505,3 +505,26 @@ def test_the_general_settings_edit_never_narrows_anyone_else() -> None:
     )
     assert removed == {"type": "AnyOf", "securityLevels": [{"name": "Public", "children": []}]}
     assert security.permission_without_level(added, "writePermissions", REST_LEAF)[0] == shared
+
+
+def test_an_operator_grant_made_after_the_plan_is_not_recorded(
+    tmp_path: Path, gateway: RecordedGateway, cli: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An operator adds the level to writePermissions between the plan and the edit."""
+
+    create_level = rest.add_rest_level
+
+    async def then_operator_grants(ctx: engine.Context, writer: Any) -> None:
+        await create_level(ctx, writer)
+        config = json.loads(json.dumps(general_settings(gateway)))
+        config["writePermissions"]["securityLevels"][0]["children"].append({"name": REST_LEAF[1], "children": []})
+        gateway.change_resource_out_of_band(PROPERTIES, "security-properties", config=config)
+
+    monkeypatch.setattr(rest, "add_rest_level", then_operator_grants)
+    code, document, _ = run_json(setup_argv(tmp_path, gateway, "--yes"), tmp_path / "deployments")
+
+    assert code == 0, document
+    created = open_deployment("default", tmp_path / "deployments").values["created"]
+    assert "rest-permission:readPermissions" in created
+    assert "rest-permission:writePermissions" not in created
+    assert holds_rest_level(general_settings(gateway)["writePermissions"])

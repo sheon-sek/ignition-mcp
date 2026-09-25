@@ -640,6 +640,35 @@ def test_reset_keeps_the_rest_level_while_an_unrecorded_entry_names_it(
     assert [child["name"] for child in authenticated["children"]] == ["Setup", rest.REST_LEVEL]
 
 
+def test_reset_keeps_the_rest_level_an_operator_granted_after_the_plan(
+    tmp_path: Path, gateway: CliGateway, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    healthy(tmp_path, gateway)
+    revoke = rest.edit_general_settings
+
+    async def then_operator_grants(*args: Any) -> tuple[list[str], list[str]]:
+        result = await revoke(*args)
+        gateway.properties["designerPermissions"]["securityLevels"][0]["children"].append(
+            {"name": rest.REST_LEVEL, "children": []}
+        )
+        return result
+
+    monkeypatch.setattr(rest, "edit_general_settings", then_operator_grants)
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 0, document
+    assert steps(document)["reset rest general settings"] == "CHANGED"
+    assert steps(document)["reset rest level"] == "SKIPPED"
+    assert "designerPermissions" in reasons(document)["reset rest level"]
+    assert next_actions(document)["reset rest level"] == f"curl -sS {URL}{rest.SECURITY_PROPERTIES_PATH}"
+    authenticated = next(node for node in gateway.levels if node["name"] == "Authenticated")
+    assert [child["name"] for child in authenticated["children"]] == ["Setup", rest.REST_LEVEL]
+
+
 def test_reset_leaves_the_rest_level_and_grants_it_did_not_record(tmp_path: Path, gateway: CliGateway) -> None:
     healthy(tmp_path, gateway)
     served = deployment(tmp_path)
