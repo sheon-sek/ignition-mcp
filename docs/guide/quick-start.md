@@ -187,15 +187,15 @@ ignition-mcp setup --deployment default \
 check, each with a status. Run it after every Gateway restart, and after any change someone made on
 the Gateway by hand.
 
-It takes `--gateway-url` and the setup key file, `--gateway-token-file`. It reports the deployment
+It reads the Gateway URL from the deployment and the setup key from `gateway-token.secret`, which
+`setup` saves in the deployment directory. `--gateway-url` and `--gateway-token-file` override
+them, and when no key is saved the wizard asks you to paste it. It reports the deployment
 directory, the Gateway, the Module build, the bundle project, four lines per role (its Security Level,
 its token, its Server Config and its endpoint), the Runtime Target Policy, the REST token and static
 tokens, the REST settings, whether the Named Query registry is set, and any leftover file.
 
 ```bash
-ignition-mcp status \
-  --gateway-url http://127.0.0.1:8088 \
-  --gateway-token-file ~/.config/ignition-mcp/gateway-token
+ignition-mcp status
 ```
 
 ## `start`

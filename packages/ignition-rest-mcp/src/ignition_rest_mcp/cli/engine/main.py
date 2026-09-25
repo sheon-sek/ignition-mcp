@@ -39,6 +39,8 @@ from ignition_rest_mcp.cli.engine.deployment import (
     Deployment,
     Value,
     open_deployment,
+    read_secret,
+    remove_secret,
     save_deployment,
     write_secret,
 )
@@ -66,6 +68,8 @@ from ignition_rest_mcp.cli.gateway_ops.inputs import Endpoint
 from ignition_rest_mcp.cli.gateway_ops.writer import GatewayWriter
 
 DEFAULT_DEPLOYMENT = "default"
+#: The secret file that keeps the setup key, so ``status`` and ``reset`` find it.
+SETUP_KEY_SECRET = "gateway-token"
 ENVIRONMENTS = ("dev", "prod")
 ROLES = ("analysis", "engineer")
 
@@ -109,7 +113,7 @@ def standard_inputs(token_probe: TokenProbe | None = None) -> dict[str, InputSpe
                 "under every permission in Security > General Settings"
             ),
             kind=Kind.SECRET,
-            secret_name="gateway-token",
+            secret_name=SETUP_KEY_SECRET,
             check=gateway_token_check(token_probe),
             failure_code=ErrorCode.GATEWAY_TOKEN_REJECTED,
         ),
@@ -375,8 +379,36 @@ def _run_stages(ctx: Context) -> None:
         _gate=gate,
     )
     _open_gate(gate)
+    if ctx.command == "setup":
+        _keep_setup_key(apply_ctx)
     for stage, plan in plans:
         stage.apply(apply_ctx, plan)
+
+
+def _keep_setup_key(ctx: ApplyContext) -> None:
+    """Save the setup key as ``gateway-token.secret`` so later commands find it.
+
+    A key pasted into the wizard or read from another ``--gateway-token-file`` has
+    just passed the Gateway check, so it replaces a saved key that differs.
+    """
+
+    secret = ctx.resolved.secrets.get("gateway_token")
+    if secret is None:
+        return
+    path = ctx.deployment.secret_path(SETUP_KEY_SECRET)
+    with ctx.reporter.step("setup key", "keeping the Gateway API key for status and reset") as end:
+        try:
+            saved = read_secret(path)
+        except CliError:
+            saved = ""
+        if saved == secret.reveal():
+            end.set(Status.OK, f"already saved in {path}")
+        else:
+            ctx._gate.check("writing the setup key file")
+            remove_secret(ctx.deployment, SETUP_KEY_SECRET)
+            ctx.write_secret(SETUP_KEY_SECRET, secret.reveal())
+            end.set(Status.CHANGED, f"saved to {path}")
+        ctx.resolved.secret_files["gateway_token"] = path
 
 
 @dataclass(slots=True)

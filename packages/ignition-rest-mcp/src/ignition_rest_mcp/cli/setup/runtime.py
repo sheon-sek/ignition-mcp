@@ -228,8 +228,8 @@ OBSERVED_TOKEN_INPUT = InputSpec(
     name="gateway_token",
     flag="--gateway-token-file",
     question=(
-        "file that holds the Gateway API key whose Security Level is ticked under every "
-        "permission in Security > General Settings"
+        "No saved setup key was found. Paste the Gateway API key (<name>:<key>) you gave setup, "
+        "or run setup again to save it"
     ),
     kind=Kind.SECRET,
     secret_name="gateway-token",

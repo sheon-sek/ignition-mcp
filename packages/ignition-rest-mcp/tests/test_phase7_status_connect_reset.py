@@ -304,6 +304,15 @@ def test_status_on_a_healthy_deployment_reports_every_check_ok(tmp_path: Path, g
     assert SETUP_KEY not in raw
 
 
+def test_status_after_setup_needs_no_key_file(tmp_path: Path, gateway: CliGateway) -> None:
+    healthy(tmp_path, gateway)
+
+    code, document, _ = run_json(["status", "--deployment", "default"], tmp_path / "deployments", token_probe=_probe)
+
+    assert code == 0, document
+    assert set(steps(document).values()) == {"OK"}, document
+
+
 def test_status_on_a_lost_secret_names_the_cause_and_the_next_action(
     tmp_path: Path, gateway: CliGateway
 ) -> None:

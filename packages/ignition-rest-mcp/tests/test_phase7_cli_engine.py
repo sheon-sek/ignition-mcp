@@ -132,7 +132,7 @@ def test_one_line_and_wizard_resolve_the_same_inputs(tmp_path: Path, seen: Seen)
         token_probe=probe,
     )
     assert code == 0, document
-    assert [step["status"] for step in document["steps"]] == ["OK", "CHANGED"]
+    assert [step["status"] for step in document["steps"]] == ["OK", "CHANGED", "CHANGED"]
     assert document["plan"] == [{"stage": "deployment", "change": "save deployment.toml"}]
     assert GOOD_TOKEN not in raw
 
@@ -162,7 +162,7 @@ def test_one_line_and_wizard_resolve_the_same_inputs(tmp_path: Path, seen: Seen)
     assert words[:2] == ["ignition-mcp", "setup"]
     assert words[words.index("--gateway-url") + 1] == "http://gw:8088"
     assert words[words.index("--roles") + 1] == "analysis,engineer"
-    assert words[words.index("--gateway-token-file") + 1] == "FILE"
+    assert words[words.index("--gateway-token-file") + 1] == str(wizard_root / "default" / "gateway-token.secret")
 
 
 def test_equivalent_command_reruns_to_the_same_result(tmp_path: Path, seen: Seen) -> None:
@@ -197,6 +197,45 @@ def test_a_saved_deployment_answers_instead_of_asking(tmp_path: Path, seen: Seen
     assert GOOD_TOKEN not in raw
     if sys.platform != "win32":
         assert stat.S_IMODE(deployment.secret_path("gateway-token").stat().st_mode) == 0o600
+
+
+def test_setup_saves_a_pasted_key_for_later_commands(tmp_path: Path, seen: Seen) -> None:
+    prompter = ScriptedPrompter("dev", "analysis", GOOD_TOKEN, True)
+    reporter, _ = rich_reporter("setup")
+    code = engine.run(
+        ["setup", "--gateway-url", "http://gw:8088"],
+        root=tmp_path,
+        prompter=prompter,
+        interactive=True,
+        token_probe=probe,
+        reporter=reporter,
+    )
+    assert code == 0
+    path = open_deployment("default", tmp_path).secret_path("gateway-token")
+    assert path.read_text(encoding="utf-8").strip() == GOOD_TOKEN
+    assert str(path) in reporter.equivalent and "FILE" not in reporter.equivalent
+    # A re-run finds the saved key and asks for nothing.
+    code, document, _ = run_json(["setup", "--yes"], tmp_path, interactive=False, token_probe=probe)
+    assert code == 0, document
+    assert seen[1].resolved.secrets["gateway_token"].reveal() == GOOD_TOKEN
+
+
+def test_setup_replaces_a_saved_key_with_the_one_it_was_given(tmp_path: Path, seen: Seen) -> None:
+    deployment = open_deployment("default", tmp_path)
+    write_secret(deployment, "gateway-token", "old:T2xkS2V5T2xkS2V5T2xk")
+    words = ["setup", "--gateway-url", "http://gw:8088", "--gateway-token-file", str(token_file(tmp_path)), "--yes"]
+    code, document, _ = run_json(words, tmp_path, interactive=False, token_probe=probe)
+    assert code == 0, document
+    assert deployment.secret_path("gateway-token").read_text(encoding="utf-8").strip() == GOOD_TOKEN
+    if sys.platform != "win32":
+        assert stat.S_IMODE(deployment.secret_path("gateway-token").stat().st_mode) == 0o600
+
+
+def test_a_dry_run_saves_no_key(tmp_path: Path, seen: Seen) -> None:
+    words = ["setup", "--gateway-url", "http://gw:8088", "--gateway-token-file", str(token_file(tmp_path)), "--dry-run"]
+    code, document, _ = run_json(words, tmp_path, interactive=False, token_probe=probe)
+    assert code == 0, document
+    assert not open_deployment("default", tmp_path).secret_path("gateway-token").exists()
 
 
 # ------------------------------------------------------------ refusals

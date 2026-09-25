@@ -156,7 +156,7 @@ REST server 启动时从环境变量读取设置。它会检查每个值，只�
 | `--accept-certificate` | 信任 Module 的证书。 |
 | `--accept-eula` | 接受 Module 的 EULA。 |
 
-每个命令都接受 `--deployment`、`--json`、`--yes`、`--accept-certificate` 和 `--accept-eula`。`status` 另外读一个 `--gateway-token-file`。`start` 接受 `--bind HOST:PORT`，默认 `127.0.0.1:8000`。`connect` 接受 `--client claude|codex|none`。
+每个命令都接受 `--deployment`、`--json`、`--yes`、`--accept-certificate` 和 `--accept-eula`。`status` 另外读一个 `--gateway-token-file`；不给时读 `setup` 保存在部署里的 `gateway-token.secret`。`start` 接受 `--bind HOST:PORT`，默认 `127.0.0.1:8000`。`connect` 接受 `--client claude|codex|none`。
 
 `setup` 不需要环境变量：每个值来自参数、上次保存的部署，或向导的问题。
 

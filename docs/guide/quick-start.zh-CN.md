@@ -135,12 +135,10 @@ ignition-mcp setup --deployment default \
 
 `status` 什么都不改。它读取 Gateway 和部署文件夹，每个检查一行，每行带一个状态。每次 Gateway 重启后，以及有人在 Gateway 上手工改动之后，都要运行它。
 
-它接受 `--gateway-url` 和 setup key 文件 `--gateway-token-file`。它报告部署文件夹、Gateway、Module build、bundle 项目、每个角色四行（它的安全级别、token、Server Config 和端点）、Runtime Target Policy、REST token 和静态 token、REST 设置、Gateway 是否设置了 Named Query 注册表，以及任何残留文件。
+它从部署里读 Gateway URL，从 `setup` 保存在部署文件夹里的 `gateway-token.secret` 读 setup key。`--gateway-url` 和 `--gateway-token-file` 会覆盖它们；没有保存的 key 时，向导会让你粘贴。它报告部署文件夹、Gateway、Module build、bundle 项目、每个角色四行（它的安全级别、token、Server Config 和端点）、Runtime Target Policy、REST token 和静态 token、REST 设置、Gateway 是否设置了 Named Query 注册表，以及任何残留文件。
 
 ```bash
-ignition-mcp status \
-  --gateway-url http://127.0.0.1:8088 \
-  --gateway-token-file ~/.config/ignition-mcp/gateway-token
+ignition-mcp status
 ```
 
 ## `start`

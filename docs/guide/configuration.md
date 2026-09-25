@@ -164,7 +164,7 @@ The [quick start](quick-start.md) explains the wizard, the one-line form and the
 | `--accept-certificate` | all | Trust the Module certificate. |
 | `--accept-eula` | all | Accept the Module EULA. |
 | `--gateway-url URL` | `setup`, `status`, `reset` | The Gateway's web address. |
-| `--gateway-token-file PATH` | `setup`, `status`, `reset` | A file holding the Gateway API key on one line, mode `0600` on Linux and macOS. |
+| `--gateway-token-file PATH` | `setup`, `status`, `reset` | A file holding the Gateway API key on one line, mode `0600` on Linux and macOS. `setup` saves the key it used as `gateway-token.secret` in the deployment, and every command reads that file when this flag is absent. |
 | `--environment dev\|prod` | `setup` | The Deployment environment. Default `dev`. |
 | `--roles LIST` | `setup` | The Assistant roles to deploy. Default `analysis,engineer` in `dev` and `analysis` in `prod`. |
 | `--module-file PATH` | `setup` | The MCP Module `.modl` file. |

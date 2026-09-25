@@ -133,6 +133,10 @@ def statuses(document: dict[str, Any]) -> dict[str, str]:
     return {step["step"]: step["status"] for step in document["steps"]}
 
 
+def statuses_reason(document: dict[str, Any], name: str) -> str:
+    return str(next(step["reason"] for step in document["steps"] if step["step"] == name))
+
+
 def test_setup_then_start_gives_each_role_its_own_scopes(
     tmp_path: Path, gateway: RecordedGateway, cli: None, monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
@@ -143,6 +147,7 @@ def test_setup_then_start_gives_each_role_its_own_scopes(
     assert code == 0, document
     assert statuses(document) == {
         "plan rest": "OK",
+        "setup key": "CHANGED",
         "rest level": "CHANGED",
         "rest general settings": "CHANGED",
         "rest token ignition-mcp-rest": "CHANGED",
@@ -151,7 +156,7 @@ def test_setup_then_start_gives_each_role_its_own_scopes(
         "rest settings": "CHANGED",
     }
     assert [item["item"] for item in document["accepted"]] == ["wildcard_target_allowlist"]
-    assert "with Authenticated/IgnitionMcpRest as its only level" in document["steps"][3]["reason"]
+    assert "with Authenticated/IgnitionMcpRest as its only level" in statuses_reason(document, "rest token ignition-mcp-rest")
     assert token_levels(gateway) == [REST_LEAF]
     authenticated = next(node for node in gateway.security_levels() or [] if node["name"] == "Authenticated")
     assert [child["name"] for child in authenticated["children"]] == ["Roles", "IgnitionMcpRest"]
