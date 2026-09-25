@@ -267,6 +267,8 @@ released, so a script can match on it.
 | `unexpected_error` | 1 | A bug. Only the exception type is reported, so no secret can leak. |
 | `gateway_unreachable` | 1 | DNS, TCP, TLS or a timeout: the Gateway never answered, so nothing was judged. |
 | `not_confirmed` | 2 | The plan was shown and not confirmed. Nothing was written. |
+| `module_not_active` | 1 | The Gateway lists the MCP Module but is not running it, so the routes it hosts do not exist. |
+| `module_uninstall_refused` | 1 | The Gateway refused to mark the Module for uninstall, which it does while `GATEWAY_MODULES_ENABLED` names Module IDs. |
 
 ## Common problems
 
@@ -279,6 +281,8 @@ released, so a script can match on it.
 | The Gateway is unreachable. | The address is wrong, or the Gateway is down. Check that `--gateway-url` opens in a browser, then run `status` again. |
 | A value is missing and stdin is not a terminal. | The command fails with `missing_input`, exit 2, and lists every missing flag. Pass those flags, or run the command on a terminal to get the wizard. Nothing was written. |
 | The Module file is not found, its SHA-256 does not match, or its build is lower than the Gateway's. | `setup` installs only a local `.modl` file whose SHA-256 matches the pinned build, and it refuses a lower build. Pass the right file with `--module-file`, or put it in `~/Downloads`. |
+| `setup` fails on the Module with `module_not_active`. | The Gateway has the Module but is not running it, or does not report its state, so it hosts no route and the Server Config step would fail with a 404. The reason names the state and the rest of the listing, such as `onStartup disabled`, or says the Gateway reported no state. A Module the Gateway is not allowed to start stays `INACTIVE` with `onStartup disabled`: check `GATEWAY_MODULES_ENABLED` in the Gateway's environment. |
+| `reset` fails with `module_uninstall_refused`. | The uninstall route answers `success=false` and the Gateway logs that the Module cannot be uninstalled. While `GATEWAY_MODULES_ENABLED` names Module IDs in the Gateway's environment, the Gateway refuses every Module uninstall. Remove that variable, restart the Gateway and run `reset` again, or uninstall the Module under Gateway > Modules. |
 | A local secret file is lost. | `status` and `setup` report the mismatch: the Gateway token still exists but the file that held it is gone. Run `setup --recreate-tokens`; it deletes the Gateway token and makes a new one. |
 | Someone changed a managed resource on the Gateway by hand. | `setup` reports what differs and restores the desired state after confirmation, because that overwrites the other person's change. Accepted risks that no longer match their record are accepted again in the run that turns them on. |
 

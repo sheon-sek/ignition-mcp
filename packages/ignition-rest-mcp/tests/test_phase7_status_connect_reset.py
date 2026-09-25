@@ -73,6 +73,9 @@ class CliGateway(FakeGateway):
         #: What ``database_query_list`` answers with.
         self.queries: list[dict[str, Any]] = [{"alias": "recent_alarms"}]
         self.uninstalled: list[dict[str, Any]] = []
+        #: The uninstall route answers ``success=false`` when the Gateway is locked,
+        #: as it is while ``GATEWAY_MODULES_ENABLED`` is set (issue #81).
+        self.uninstall_refused = False
 
     # -------------------------------------------------------------- interception
 
@@ -95,6 +98,8 @@ class CliGateway(FakeGateway):
             del self.projects[runtime.PROJECT]
             return httpx.Response(200, json={"success": True})
         if path == MODULE_UNINSTALL:
+            if self.uninstall_refused:
+                return httpx.Response(200, json={"success": False})
             self.module_build = None
             return httpx.Response(200, json={"success": True})
         prefix = f"/data/api/v1/resources/{docs.TAG_PROVIDER_TYPE}/"
@@ -292,6 +297,26 @@ def test_status_on_a_lost_secret_names_the_cause_and_the_next_action(
     assert steps(document)["endpoint analysis"] == "SKIPPED"
     assert steps(document)["token engineer"] == "OK"
     assert document["error"] is None
+
+
+def test_status_names_a_module_the_gateway_does_not_run(tmp_path: Path, gateway: CliGateway) -> None:
+    """Issue #81: the module line does not read OK while the Gateway is not running it."""
+
+    healthy(tmp_path, gateway)
+    gateway.module_state = "INACTIVE"
+    gateway.module_on_startup = "disabled"
+
+    code, document, _ = run_json(status_argv(tmp_path), tmp_path / "deployments", token_probe=_probe)
+
+    assert code == 1
+    module = next(step for step in document["steps"] if step["step"] == "module")
+    assert module["status"] == "FAILED"
+    assert module["code"] == "module_not_active"
+    assert "state INACTIVE" in module["reason"] and "onStartup disabled" in module["reason"]
+    assert module["next_action"].endswith("setup --deployment default")
+    # Reporting reads; the Gateway still holds the Module, and the other checks still report.
+    assert gateway.module_build == runtime.PINNED_MODULE_BUILD
+    assert steps(document)["bundle"] == "OK"
 
 
 def test_status_on_a_hand_edited_server_config_reports_it(tmp_path: Path, gateway: CliGateway) -> None:
@@ -578,6 +603,37 @@ def test_reset_leaves_nothing_behind(tmp_path: Path, gateway: CliGateway) -> Non
     assert [child["name"] for child in authenticated["children"]] == ["Setup"]
     assert not directory.exists()
     assert SETUP_KEY not in raw
+
+
+def test_reset_names_the_cause_when_the_gateway_refuses_the_module_uninstall(
+    tmp_path: Path, gateway: CliGateway
+) -> None:
+    """Issue #81 item 3: the refusal names the known cause and what to do about it."""
+
+    healthy(tmp_path, gateway)
+    gateway.uninstall_refused = True
+    gateway.requests.clear()
+
+    code, document, _ = run_json(
+        ["reset", "--yes", "--gateway-token-file", str(_token_file(tmp_path)), "--deployment", "default"],
+        tmp_path / "deployments",
+        token_probe=_probe,
+    )
+
+    assert code == 1
+    module_step = next(step for step in document["steps"] if step["step"] == "reset module")
+    assert module_step["status"] == "FAILED"
+    assert module_step["code"] == "module_uninstall_refused"
+    assert "GATEWAY_MODULES_ENABLED" in module_step["reason"]
+    assert "success=false" in module_step["reason"]
+    assert "GATEWAY_MODULES_ENABLED" in module_step["next_action"]
+    assert "Gateway > Modules" in module_step["next_action"]
+    assert module_step["next_action"].endswith("reset --deployment default")
+    assert document["error"]["code"] == "module_uninstall_refused"
+    # The route was called and refused: the Module is still installed and never restarted.
+    assert gateway.uninstalled == [{"uninstall": [gw.MCP_MODULE_ID]}]
+    assert gateway.module_build == runtime.PINNED_MODULE_BUILD
+    assert not any(path.endswith("/restart-tasks/restart") for _, path in gateway.requests)
 
 
 def test_reset_needs_the_acceptance_and_the_confirmation_before_any_write(

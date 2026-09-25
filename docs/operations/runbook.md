@@ -286,13 +286,17 @@ The Module step runs in a fixed order, and each check happens before the step it
 1. Check the file. `setup` refuses a file whose SHA-256 does not match the pinned build, that is
    larger than 64 MiB, is not a ZIP, has no `module.xml`, has no `<id>` or `<version>`, has a version
    without a 10-digit build, or is not the MCP Module, `com.inductiveautomation.mcp`.
-2. Compare with the Gateway. The same build already installed is `OK` and uploads nothing. A lower
-   build is always refused. A newer build needs the upgrade acceptance, which `--yes` covers.
+2. Compare with the Gateway. The same build already installed is `OK` and uploads nothing. A Module
+   the listing does not report as `ACTIVE`, or does not report a state for at all, is refused before
+   any write, because a Module the Gateway does not run hosts no route. A lower build is always
+   refused. A newer build needs the upgrade acceptance, which `--yes` covers.
 3. Upload the file. If the Gateway reports a different Module id, the step stops and installs nothing.
 4. Install the Module. This needs `--accept-certificate` and `--accept-eula`; a missing acceptance
    stops the run before any write. If the Module has no certificate or no license, the step is
    skipped.
-5. Restart the Gateway and wait until the Module runs with the new build.
+5. Restart the Gateway and wait until the listing reports the Module `ACTIVE` on the new build. A
+   Module that comes back otherwise fails the step, which names the state, what the listing reports
+   beside it such as `onStartup disabled`, or that it reported no state at all.
 
 The acceptance for the restart is one of the named items too. Grant it with `--yes` in one-line mode.
 

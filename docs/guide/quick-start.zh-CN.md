@@ -210,6 +210,8 @@ ignition-mcp reset \
 | `unexpected_error` | 1 | CLI 的 bug。只报告异常类型，所以机密不会泄漏。 |
 | `gateway_unreachable` | 1 | DNS、TCP、TLS 或超时，Gateway 根本没回答，所以什么都没判断。 |
 | `not_confirmed` | 2 | 计划显示了，但没有被确认。什么都没写。 |
+| `module_not_active` | 1 | Gateway 列出了 MCP Module，但没有运行它，所以它承载的路由不存在。 |
+| `module_uninstall_refused` | 1 | Gateway 拒绝把 Module 标记为卸载；`GATEWAY_MODULES_ENABLED` 里列了 Module ID 时它就会拒绝。 |
 
 ## 常见问题
 
@@ -222,6 +224,8 @@ ignition-mcp reset \
 | 连不上 Gateway。 | 地址不对，或 Gateway 没运行。先在浏览器里打开 `--gateway-url` 确认，再运行一次 `status`。 |
 | 缺一个值，而且 stdin 不是终端。 | 命令以 `missing_input` 失败，退出码 2，并列出所有缺的参数。补上这些参数，或在终端上运行以得到向导。什么都没写。 |
 | 找不到 Module 文件，它的 SHA-256 对不上，或它的 build 比 Gateway 上的低。 | `setup` 只安装 SHA-256 对得上固定 build 的本地 `.modl` 文件，也会拒绝更低的 build。用 `--module-file` 传入正确的文件，或把它放进 `~/Downloads`。 |
+| `setup` 在 Module 上以 `module_not_active` 失败。 | Gateway 有 Module 但没有运行它，或者没有给出它的状态，所以它不承载任何路由，Server Config 那一步本来会以 404 失败。原因那一行写出状态和列表里的其他信息，例如 `onStartup disabled`，或者说明 Gateway 没有报告状态。Gateway 不允许启动的 Module 会停在 `INACTIVE` 加 `onStartup disabled`：检查 Gateway 环境里的 `GATEWAY_MODULES_ENABLED`。 |
+| `reset` 以 `module_uninstall_refused` 失败。 | 卸载路由回答 `success=false`，Gateway 日志说这个 Module 不能卸载。Gateway 环境里的 `GATEWAY_MODULES_ENABLED` 列了 Module ID 时，它会拒绝任何 Module 卸载。去掉这个变量，重启 Gateway，再运行一次 `reset`；或在 Gateway > Modules 里卸载这个 Module。 |
 | 本地机密文件丢失。 | `status` 和 `setup` 会报告这种不一致：Gateway 上的 token 还在，但保存它的文件不见了。运行 `setup --recreate-tokens`，它会删掉 Gateway 上的 token 并新建一个。 |
 | 有人手工改了 Gateway 上的受管资源。 | `setup` 报告差异并在确认后恢复目标状态，因为那会覆盖别人的改动。不再和记录对得上的已接受风险，会在打开它的那次运行里重新接受。 |
 

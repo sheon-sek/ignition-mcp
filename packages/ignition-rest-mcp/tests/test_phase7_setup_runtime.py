@@ -50,6 +50,12 @@ class FakeGateway:
         self.signatures = itertools.count(1)
         self.requests: list[tuple[str, str]] = []
         self.module_build: str | None = None
+        #: What the Module's ``modules/healthy`` entry says besides its version. The
+        #: state defaults to what a running Module reports, and ``None`` omits the
+        #: field, which is the answer the recorded Gateway sends.
+        self.module_state: str | None = "ACTIVE"
+        self.module_on_startup: str | None = None
+        self.module_fault_cause: str | None = None
         self.uploaded = False
         self.levels: list[dict[str, Any]] = [
             {"name": "Authenticated", "description": "Represents a user who has been authenticated by the system.",
@@ -86,6 +92,21 @@ class FakeGateway:
                 "settings": {"tokenHash": security.token_hash(key)},
             },
         }
+
+    def module_item(self) -> dict[str, Any]:
+        """The Module's ``modules/healthy`` entry, with whatever the knobs report."""
+
+        item: dict[str, Any] = {
+            "id": "com.inductiveautomation.mcp",
+            "version": f"1.3.5-SNAPSHOT (b{self.module_build})",
+        }
+        if self.module_state is not None:
+            item["state"] = self.module_state
+        if self.module_on_startup is not None:
+            item["onStartup"] = self.module_on_startup
+        if self.module_fault_cause is not None:
+            item["faultCause"] = self.module_fault_cause
+        return item
 
     def _token_for(self, header: str | None) -> dict[str, Any] | None:
         name, _, key = (header or "").partition(":")
@@ -131,7 +152,7 @@ class FakeGateway:
         if path == "/data/api/v1/modules/healthy":
             items = []
             if self.module_build is not None:
-                items.append({"id": "com.inductiveautomation.mcp", "version": f"1.3.5-SNAPSHOT (b{self.module_build})"})
+                items.append(self.module_item())
             return httpx.Response(200, json={"items": items, "metadata": {"total": len(items)}})
         if path in ("/data/api/v1/modules/certificate", "/data/api/v1/modules/eula"):
             if not self.uploaded:
@@ -434,6 +455,70 @@ def test_a_lower_module_build_is_refused(tmp_path: Path, gateway: FakeGateway) -
     assert code == 1
     assert "a lower build is never installed" in document["error"]["message"]
     assert gateway.writes == []
+
+
+def test_a_module_the_gateway_does_not_run_stops_the_plan_before_any_write(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    """Issue #81 item 2: the build matches, the state does not, and nothing is written."""
+
+    gateway.module_build = runtime.PINNED_MODULE_BUILD
+    gateway.module_state = "INACTIVE"
+    gateway.module_on_startup = "disabled"
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 1
+    assert steps(document)["plan runtime"] == "FAILED"
+    assert document["error"]["code"] == "module_not_active"
+    assert "state INACTIVE" in document["error"]["message"]
+    assert "onStartup disabled" in document["error"]["message"]
+    assert gateway.writes == []
+    assert "runtime module" not in steps(document)
+    assert not deployment(tmp_path).exists()
+
+
+def test_a_module_that_comes_back_inactive_fails_the_wait_and_stops_before_the_server_config(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    """Issue #81 item 1: the wait requires ACTIVE, so the 404 at the next step never happens."""
+
+    gateway.module_state = "INACTIVE"
+    gateway.module_on_startup = "disabled"
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 1
+    module_step = next(step for step in document["steps"] if step["step"] == "runtime module")
+    assert module_step["status"] == "FAILED"
+    assert module_step["code"] == "module_not_active"
+    assert document["error"]["code"] == "module_not_active"
+    assert "did not come back ACTIVE" in document["error"]["message"]
+    assert "state INACTIVE" in document["error"]["message"]
+    assert "onStartup disabled" in document["error"]["message"]
+    # The Module flow itself ran; the Server Config write, which answered 404 live, did not.
+    assert any(path == "/data/api/v1/modules/install" for _, path in gateway.writes)
+    assert not any(MCP_TYPE in path for _, path in gateway.writes)
+    assert "runtime server config analysis" not in steps(document)
+
+
+def test_a_listing_without_a_state_is_not_proof_the_module_is_active(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    """Issue #81 item 1: an absent state is no evidence, so the wait fails and says so."""
+
+    gateway.module_state = None
+
+    code, document, _ = setup(tmp_path, *ACCEPT)
+
+    assert code == 1
+    module_step = next(step for step in document["steps"] if step["step"] == "runtime module")
+    assert module_step["status"] == "FAILED"
+    assert module_step["code"] == "module_not_active"
+    assert "the Gateway reports no state" in document["error"]["message"]
+    assert "did not come back ACTIVE" in document["error"]["message"]
+    assert not any(MCP_TYPE in path for _, path in gateway.writes)
+    assert "runtime server config analysis" not in steps(document)
 
 
 def test_a_module_file_with_another_hash_is_refused(tmp_path: Path, gateway: FakeGateway) -> None:

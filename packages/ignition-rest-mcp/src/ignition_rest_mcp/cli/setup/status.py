@@ -43,7 +43,7 @@ from ignition_rest_mcp.cli.setup import rest, runtime, start
 from ignition_rest_mcp.cli.setup.runtime import Bundle, Role, RuntimeTargets
 from ignition_rest_mcp.cli.gateway_ops import documents as docs
 from ignition_rest_mcp.cli.gateway_ops import gateway as gw
-from ignition_rest_mcp.cli.gateway_ops import security
+from ignition_rest_mcp.cli.gateway_ops import install_module, security
 from ignition_rest_mcp.cli.gateway_ops.inputs import API_TOKEN_TYPE, SECURITY_LEVEL_PARENT
 from ignition_rest_mcp.cli.gateway_ops.mcp_http import McpHttpClient, McpProbeError
 
@@ -240,6 +240,14 @@ def _module_reason(ctx: engine.Context, facts: Observation) -> str:
             ErrorCode.STEP_FAILED,
             f"the Gateway runs MCP Module build {build}; this CLI installs the pinned build "
             f"{runtime.PINNED_MODULE_BUILD}",
+            next_action=_setup_next(ctx),
+        )
+    problem = install_module.state_problem(installed)
+    if problem:
+        raise CliError(
+            ErrorCode.MODULE_NOT_ACTIVE,
+            f"MCP Module build {build} is not ACTIVE: {problem}. A Module the Gateway does not run hosts no "
+            "Server Config route, so the role endpoints below cannot answer",
             next_action=_setup_next(ctx),
         )
     return f"build {build} is installed, the pinned build"

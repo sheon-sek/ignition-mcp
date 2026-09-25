@@ -4,7 +4,9 @@ One stage, ``runtime``. Its plan reads the Gateway and the repository checkout a
 writes nothing. Its apply runs these steps in order, each with a start and an end line:
 
 1. the MCP Module: the ``.modl`` whose SHA-256 matches the pinned build is uploaded,
-   its certificate and EULA accepted, installed, and the Gateway restarted;
+   its certificate and EULA accepted, installed, and the Gateway restarted. The wait
+   ends when the listing shows the pinned build in state ACTIVE; any other state fails
+   the step, because the routes the Module hosts do not exist without it (issue #81);
 2. the Runtime bundle: built from the checkout with ``tooling.native`` and imported
    as the managed project, after a backup of the managed project it replaces;
 3. the Security Levels ``Authenticated/IgnitionMcpAnalysis`` and
@@ -676,6 +678,16 @@ def plan_runtime(ctx: Context) -> Plan:
             f"{module_file} is build {artifact.build}; a lower build is never installed",
             next_action=f"curl -sS {endpoint.url}{gw.MODULES_PATH}",
         )
+    if installed is not None:
+        problem = install_module.state_problem(installed)
+        if problem:
+            raise CliError(
+                ErrorCode.MODULE_NOT_ACTIVE,
+                f"MCP Module build {installed.build or installed.raw_version} is not ACTIVE, so setup stops "
+                f"before it writes anything: {problem}. A Module the Gateway does not run hosts no Server "
+                "Config route",
+                next_action=f"curl -sS {endpoint.url}{gw.MODULES_PATH}",
+            )
     if project.classification in (gw.UNMANAGED_SAME_NAME, gw.MARKER_INVALID):
         detail = "no ownership marker" if project.classification == gw.UNMANAGED_SAME_NAME else "an invalid marker"
         raise CliError(
@@ -1200,14 +1212,20 @@ async def _install_module(ctx: ApplyContext, plan: RuntimePlan) -> None:
                 identity = await writer.reads.module_identity(artifact.module_id)
             except gw.GatewayProbeError as error:
                 identity, last = None, str(error)
-            if identity is not None and identity.build == artifact.build:
-                return
-            if identity is not None:
-                last = f"it serves build {identity.build}"
+            else:
+                if identity is not None:
+                    build = identity.build or identity.raw_version
+                    problem = install_module.state_problem(identity)
+                    if identity.build == artifact.build and not problem:
+                        return
+                    last = f"it serves build {build}" + (f": {problem}" if problem else "")
             if attempt + 1 < polls:
                 await SETTINGS.sleep(RESTART_POLL_SECONDS)
-    raise _failed(
-        f"the Module did not come back as build {artifact.build} within {RESTART_READY_SECONDS:g} s ({last})", ctx
+    raise CliError(
+        ErrorCode.MODULE_NOT_ACTIVE,
+        f"the Module did not come back ACTIVE as build {artifact.build} within {RESTART_READY_SECONDS:g} s "
+        f"({last})",
+        next_action=f"{PROG} status --deployment {ctx.deployment.name}",
     )
 
 
