@@ -228,6 +228,8 @@ class FakeGateway:
                 body = _rewrite(body, lambda entry, data: data + b"# half written\n" if entry.endswith(".py") else data)
             if fault != "refused":
                 self.projects[name] = _reserialize(body) if self.reserialize_on_import else body
+            if fault == "applied-5xx":
+                return httpx.Response(503, json={"message": "Service Unavailable"})
             if fault:
                 raise httpx.ReadTimeout("the answer never came")
             return ok
@@ -1036,7 +1038,8 @@ def test_a_designer_opened_after_the_plan_refuses_the_import(tmp_path: Path, gat
 @pytest.mark.parametrize(
     ("fault", "code", "expected"),
     [
-        ("lost", 0, "the import answer was lost"),
+        ("lost", 0, "the import gave no clear answer"),
+        ("applied-5xx", 0, "the import gave no clear answer (import project returned HTTP 503"),
         ("refused", 1, "re-running setup is safe"),
         ("garbled", 1, "the outcome is unknown and setup does not retry"),
     ],
@@ -1054,7 +1057,33 @@ def test_an_import_whose_answer_was_lost_is_reconciled_from_a_fresh_export(
     assert result == code, document
     bundle = next(step for step in document["steps"] if step["step"] == "runtime bundle")
     assert expected in bundle["reason"]
-    assert bundle["status"] == ("CHANGED" if fault == "lost" else "FAILED")
+    assert bundle["status"] == ("CHANGED" if code == 0 else "FAILED")
     assert len(_imports(gateway)) == 1
     if fault == "garbled":
         assert "backups/ignition_runtime-" in bundle["reason"]
+
+
+def test_a_designer_session_the_dev_plan_did_not_list_refuses_the_import(
+    tmp_path: Path, gateway: FakeGateway
+) -> None:
+    assert setup(tmp_path, *ACCEPT)[0] == 0
+    _set_marker(gateway, "0.0.1")
+    alice = {"id": "d-1", "user": "alice", "project": runtime.PROJECT}
+    gateway.designers = [alice]
+    before = gateway.exports
+
+    def open_second_designer(count: int) -> None:
+        # After the plan's export, before the check under the lock.
+        if count == before + 2:
+            gateway.designers = [alice, {"id": "d-2", "user": "bob", "project": runtime.PROJECT}]
+
+    gateway.on_export = open_second_designer
+    gateway.requests.clear()
+
+    code, document, _ = setup(tmp_path, "--yes")
+
+    assert code == 1
+    assert "overwrite_hand_edit" in {item["item"] for item in document["accepted"]}
+    assert document["error"]["code"] == "conflict"
+    assert "the plan did not list now hold the project ignition_runtime (bob)" in document["error"]["message"]
+    assert _imports(gateway) == []

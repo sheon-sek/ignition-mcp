@@ -611,6 +611,8 @@ class RuntimePlan:
     project_drift: list[str] = field(default_factory=list)
     #: The Designer sessions on the managed project the plan showed and dev accepted.
     designer_note: str = ""
+    #: What the plan's Designer listing held; the check under the lock compares with it.
+    designer_view: DesignerView | None = None
 
     @property
     def install_module(self) -> bool:
@@ -782,7 +784,8 @@ def plan_runtime(ctx: Context) -> Plan:
         )
         needed.append(Needed(Risk.OVERWRITE_HAND_EDIT, f"project {PROJECT}: {edited}"))
     if plan.project_action in ("update", "restore"):
-        plan.designer_note = asyncio.run(_designer_note(ctx))
+        plan.designer_view = asyncio.run(_designer_view(ctx))
+        plan.designer_note = plan.designer_view.note
         if plan.designer_note and environment == "prod":
             raise CliError(
                 ErrorCode.CONFLICT,
@@ -996,8 +999,36 @@ def _plan_project(
     return archive, fingerprint, drift
 
 
-async def _designer_note(ctx: Context, client: gw.GatewayRest | None = None) -> str:
-    """D16's Designer-session check: ``""``, or what holds or may hold the managed project.
+@dataclass(frozen=True, slots=True)
+class DesignerView:
+    """One read of the Gateway's Designer sessions on the managed project."""
+
+    #: ``(id, user)`` of each active session.
+    sessions: frozenset[tuple[str, str]]
+    #: Whether the Gateway provided the listing at all.
+    readable: bool
+    #: ``""``, or what holds or may hold the project, for the plan and the refusal.
+    note: str
+
+    def news(self, planned: DesignerView) -> str:
+        """What this later read shows that ``planned`` did not; ``""`` when nothing.
+
+        A session the plan did not list, or a listing that has become unreadable,
+        refuses the import in both environments (issue #80 review round 2).
+        """
+
+        if not self.readable and planned.readable:
+            return self.note
+        added = self.sessions - planned.sessions
+        if not added:
+            return ""
+        who = sorted(user or identifier or "unnamed" for identifier, user in added)
+        return f"{len(added)} Designer session(s) the plan did not list now hold the project {PROJECT} " \
+            f"({', '.join(who[:5])}{f' and {len(who) - 5} more' if len(who) > 5 else ''})"
+
+
+async def _designer_view(ctx: Context, client: gw.GatewayRest | None = None) -> DesignerView:
+    """D16's Designer-session check on the managed project.
 
     A listing the Gateway cannot provide counts as a session, because an open
     Designer cannot be ruled out (coordinator ruling on issue #80).
@@ -1018,15 +1049,18 @@ async def _designer_note(ctx: Context, client: gw.GatewayRest | None = None) -> 
             async with ctx.gateway_reader(SETTINGS.transport) as reader:
                 sessions = await read(reader)
     except (GatewayError, gw.GatewayProbeError) as error:
-        return (
+        return DesignerView(
+            frozenset(),
+            False,
             f"the Gateway's Designer session listing could not be read ({error}), so an open Designer on "
-            f"{PROJECT} cannot be ruled out"
+            f"{PROJECT} cannot be ruled out",
         )
+    found = frozenset((session["id"], session["user"]) for session in sessions)
     if not sessions:
-        return ""
+        return DesignerView(found, True, "")
     who = [session["user"] or session["id"] or "unnamed" for session in sessions]
     shown = ", ".join(who[:5]) + (f" and {len(who) - 5} more" if len(who) > 5 else "")
-    return f"{len(sessions)} active Designer session(s) hold the project {PROJECT} ({shown})"
+    return DesignerView(found, True, f"{len(sessions)} active Designer session(s) hold the project {PROJECT} ({shown})")
 
 
 def _close_designer(ctx: Context) -> str:
@@ -1429,7 +1463,7 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
     Only the managed project is replaced here, and the writer lock is held by the
     caller. The baseline export is the durable backup, so a failure after it leaves
     the recovery copy in place. Nothing is retried after the import was sent: an
-    import whose answer was lost is reconciled from a fresh export instead.
+    import without a clear answer is reconciled from a fresh export instead.
     """
 
     archive = plan.archive
@@ -1446,8 +1480,9 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
                     raise _conflict(ctx, "after the plan read it", backup)
                 if _fingerprint(ctx, await writer.project_export(PROJECT)) != baseline:
                     raise _conflict(ctx, "between the baseline export and the import", backup)
-                designer = await _designer_note(ctx, writer.reads)
-                if designer and not plan.designer_note:
+                planned = plan.designer_view or DesignerView(frozenset(), True, "")
+                designer = (await _designer_view(ctx, writer.reads)).news(planned)
+                if designer:
                     raise CliError(
                         ErrorCode.CONFLICT,
                         f"{designer} since the plan read the Gateway; nothing was imported. The baseline is in "
@@ -1458,7 +1493,9 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
             try:
                 await writer.import_project(PROJECT, archive, overwrite=replace)
             except WriteError as error:
-                if error.status != 0:
+                # D16: a lost answer or a 5xx leaves the outcome open; a 4xx or an
+                # explicit refusal inside a 2xx body is a definite "not applied".
+                if 0 < error.status < 500:
                     raise
                 return await _reconcile(ctx, plan, writer, baseline, backup, str(error)) + note
             state = await writer.reads.find_project(PROJECT)
@@ -1483,7 +1520,7 @@ async def _import_bundle(ctx: ApplyContext, plan: RuntimePlan) -> str:
 async def _reconcile(
     ctx: ApplyContext, plan: RuntimePlan, writer: GatewayWriter, baseline: str, backup: Path | None, lost: str
 ) -> str:
-    """D16's reconciliation after an import whose answer was lost: export C and compare.
+    """D16's reconciliation after an import without a clear answer: export C and compare.
 
     C equal to the bundle means the import was applied. C equal to baseline A, or no
     project where setup was creating one, means it was not applied. Anything else is
@@ -1496,7 +1533,7 @@ async def _reconcile(
         current = None if state.classification == gw.ABSENT else await writer.project_export(PROJECT)
     except (WriteError, gw.GatewayProbeError) as error:
         raise _failed(
-            f"the import answer was lost ({lost}) and {PROJECT} could not be read back ({error}), so the outcome "
+            f"the import gave no clear answer ({lost}) and {PROJECT} could not be read back ({error}), so the outcome "
             f"is unknown and setup does not retry.{kept}",
             ctx,
         ) from error
@@ -1507,19 +1544,19 @@ async def _reconcile(
         and not bundle_content.differences(current, plan.archive)
     ):
         return (
-            f"deployed managed bundle {plan.bundle.version} ({len(plan.archive)} bytes); the import answer was lost "
+            f"deployed managed bundle {plan.bundle.version} ({len(plan.archive)} bytes); the import gave no clear answer "
             f"({lost}), and the project read back afterwards holds the bundle"
         )
     unchanged = current is None if not baseline else current is not None and _fingerprint(ctx, current) == baseline
     if unchanged:
         raise CliError(
             ErrorCode.STEP_FAILED,
-            f"the import answer was lost ({lost}) and {PROJECT} reads back unchanged, so the import was not "
+            f"the import gave no clear answer ({lost}) and {PROJECT} reads back unchanged, so the import was not "
             f"applied; re-running setup is safe.{kept}",
             next_action=f"{PROG} setup --deployment {ctx.deployment.name}",
         )
     raise _failed(
-        f"the import answer was lost ({lost}) and {PROJECT} reads back neither as before nor as the bundle, so the "
+        f"the import gave no clear answer ({lost}) and {PROJECT} reads back neither as before nor as the bundle, so the "
         f"outcome is unknown and setup does not retry.{kept}",
         ctx,
     )
