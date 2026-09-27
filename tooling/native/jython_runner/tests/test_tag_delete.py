@@ -20,6 +20,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 CONTRACT = ROOT / "contracts/tools/runtime/tag_delete.contract.json"
 
 WRITE = "[default]IgnitionMCP_CI/WriteTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TEXT = "[default]IgnitionMCP_CI/TextTarget"
 SIBLING = "[default]IgnitionMCP_CI2/WriteTarget"
 UDT = "[default]_types_/IgnitionMCP_CI/ProbeType"
@@ -218,6 +219,17 @@ def test_audit_off_deletes_but_records_nothing() -> None:
     assert structured["summary"]["auditMode"] == "off"
     assert structured["summary"]["auditRecorded"] is False
     assert "system.util.audit" not in _recorded_targets("audit-off")
+
+
+def test_a_colon_in_a_tag_name_passes_preflight_and_reaches_the_fingerprint_read() -> None:
+    # Issue #84: ':' is a legal tag-name character, not path syntax.
+    error = _error("colon-in-tag-name", "conflict")
+
+    item = error["details"]["items"][0]
+    assert item["path"] == COLON
+    assert item["reason"] == "fingerprintMismatch"
+    assert "system.tag.deleteTags" not in _recorded_targets("colon-in-tag-name")
+
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_delete-*.json"))
 

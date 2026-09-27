@@ -21,6 +21,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 CONTRACT = ROOT / "contracts/tools/runtime/tag_move.contract.json"
 
 WRITE = "[default]IgnitionMCP_CI/WriteTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TEXT = "[default]IgnitionMCP_CI/TextTarget"
 NESTED_WRITE = "[default]IgnitionMCP_CI/Nested/WriteTarget"
 NESTED_PARENT = "[default]IgnitionMCP_CI/Nested"
@@ -271,6 +272,18 @@ def test_audit_off_moves_but_records_nothing() -> None:
     assert structured["summary"]["auditMode"] == "off"
     assert structured["summary"]["auditRecorded"] is False
     assert "system.util.audit" not in _recorded_targets("audit-off")
+
+
+def test_a_colon_in_a_tag_name_passes_preflight_and_reaches_the_fingerprint_read() -> None:
+    # Issue #84: ':' is a legal tag-name character, not path syntax, in both the
+    # source and the destination leaf.
+    error = _error("colon-in-tag-name", "conflict")
+
+    item = error["details"]["items"][0]
+    assert item["sourcePath"] == COLON
+    assert item["destinationPath"] == "[default]IgnitionMCP_CI/Nested/AC Voltage: L1-N"
+    assert item["reason"] == "fingerprintMismatch"
+    assert "system.tag.move" not in _recorded_targets("colon-in-tag-name")
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_move-*.json"))

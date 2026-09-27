@@ -64,6 +64,7 @@ def _assert_reduction_advice(error: dict, instruction: str) -> None:
 
 
 WRITE = "[default]IgnitionMCP_CI/WriteTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TEXT = "[default]IgnitionMCP_CI/TextTarget"
 UDT = "[default]_types_/IgnitionMCP_CI/ProbeType"
 
@@ -363,6 +364,19 @@ def test_the_item_hard_ceiling_reports_what_it_refused() -> None:
     assert error["details"]["requested"] == 101
     assert error["details"]["limit"] == 100
     _assert_reduction_advice(error, "split")
+
+
+def test_a_colon_in_a_tag_name_passes_preflight_and_reaches_the_fingerprint_read() -> None:
+    # Issue #84: Ignition tag names may contain ':' ("AC Voltage: L1-N"), and a
+    # ':' after the provider bracket has no path meaning, so the item reaches the
+    # existence and fingerprint reads instead of being refused as pathNotAConfigPath.
+    error = _error("colon-in-tag-name", "conflict")
+
+    assert error["details"]["reason"] == "preflightPreconditionFailed"
+    item = error["details"]["items"][0]
+    assert item["path"] == COLON
+    assert item["reason"] == "fingerprintMismatch"
+    assert item["observedFingerprint"].startswith("tcf1:")
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_update-*.json"))

@@ -21,6 +21,7 @@ FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
 CONTRACT = ROOT / "contracts/tools/runtime/tag_rename.contract.json"
 
 WRITE = "[default]IgnitionMCP_CI/WriteTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TEXT = "[default]IgnitionMCP_CI/TextTarget"
 SIBLING = "[default]IgnitionMCP_CI2/WriteTarget"
 RENAMED = "[default]IgnitionMCP_CI/RenamedTarget"
@@ -266,6 +267,17 @@ def test_audit_off_renames_but_records_nothing() -> None:
     assert structured["summary"]["auditMode"] == "off"
     assert structured["summary"]["auditRecorded"] is False
     assert "system.util.audit" not in _recorded_targets("audit-off")
+
+
+def test_a_colon_in_a_tag_name_or_new_name_passes_preflight() -> None:
+    # Issue #84: ':' is a legal tag-name character, so neither the target path
+    # nor the new leaf name is refused for it.
+    error = _error("colon-in-tag-name", "conflict")
+
+    item = error["details"]["items"][0]
+    assert item["path"] == COLON
+    assert item["reason"] == "fingerprintMismatch"
+    assert "system.tag.rename" not in _recorded_targets("colon-in-tag-name")
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_rename-*.json"))

@@ -285,7 +285,7 @@ def onToolCalled(builder, items):
 		body = value[closing + 1:]
 		if body == "":
 			return False
-		if "." in body or "[" in body or "]" in body or "*" in body or "?" in body or ":" in body:
+		if "." in body or "[" in body or "]" in body or "*" in body or "?" in body:
 			return False
 		segments = [segment for segment in body.split("/") if segment]
 		if len(segments) != len(body.split("/")):
