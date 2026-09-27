@@ -1,6 +1,6 @@
 # BMS / EMS analyst agent
 
-A system prompt and five Agent Skills for a Cherry Studio Agent in the Analysis role, connected to the Runtime and REST MCP servers.
+A system prompt and six Agent Skills for a Cherry Studio Agent in the Analysis role, connected to the Runtime and REST MCP servers.
 
 Users see the system as **Graphene** by Eetarp Engineering. The prompt keeps Ignition as internal knowledge. Cherry Studio shows MCP server names on Tool calls, so give the two servers Graphene names there, for example `graphene-live` and `graphene-config`. The prompt does not depend on the server names.
 
@@ -14,3 +14,6 @@ Users see the system as **Graphene** by Eetarp Engineering. The prompt keeps Ign
 | `power-systems` | UPS, generator, ATS/STS, switchgear, protection, power quality |
 | `cooling-systems` | chillers, loops, CRAH/AHU, containment, control loops |
 | `ot-data-layer` | Bad/stale/flat values, device offline, protocol faults |
+| `result-cards` | the final answer of any task with a result to explain; draws it as an interactive HTML card |
+
+The agent uses `DemoTwin` as its default Tag provider. `result-cards` needs a chat client that renders `html` code blocks as a live preview. Check this in the Cherry Studio version you deploy.

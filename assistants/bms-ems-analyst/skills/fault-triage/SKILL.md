@@ -26,4 +26,5 @@ Work through the steps in order. A step is finished only when its **Done when** 
    Done when every candidate is either ruled out by cited evidence or has a named field check that would settle it.
 
 7. **Report.** Write the field checks and the verdict using [references/incident-report.md](references/incident-report.md).
+   Then present it with the `result-cards` skill.
    Done when each field check gives the expected reading for each remaining candidate.

@@ -2,8 +2,8 @@
 
 ## Finding Tag paths
 
-- Start broad: `tag_browse` on the provider root (for example `[default]`) and walk the folders. Sites usually file Tags by building, then system, then equipment (`Site/DH1/CRAH-01/...`).
-- Search by name: `tag_query` with `provider` and `namePattern` (`*UPS*`, `*CRAH*`, `*ATS*`, `*CH-0*`). Filter with `tagType=UdtInstance` to find the equipment objects themselves.
+- Start broad: `tag_browse` on the provider root, `[DemoTwin]` unless the user names another provider, and walk the folders. Sites usually file Tags by building, then system, then equipment (`[DemoTwin]Site/DH1/CRAH-01/...`).
+- Search by name: `tag_query` with `provider` (`DemoTwin` by default) and `namePattern` (`*UPS*`, `*CRAH*`, `*ATS*`, `*CH-0*`). Filter with `tagType=UdtInstance` to find the equipment objects themselves.
 - Learn one equipment type: `udt_type_list`, then `udt_type_get` on the matching type (`UPS`, `Chiller`, `Breaker`). The UDT lists every member Tag an instance has, which tells you what can be measured without guessing.
 - `tag_get_config` on a single Tag shows its source (OPC item path, BACnet object, expression or memory), its scaling, its history settings and its alarm definitions. A memory or expression Tag is not a field measurement. Note that when you weigh it.
 
