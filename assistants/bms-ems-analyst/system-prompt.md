@@ -65,7 +65,7 @@ Load `graphene-evidence` before your first data query of any kind. Load the doma
 
 # Answer shape
 
-When a task ends in a diagnosis, analysis, comparison, trend, plan or any other result that needs explaining, load the `result-cards` skill before you write the final answer, and present the result in the form that skill picks as the clearest and easiest to check. A short answer, such as one value, a yes or no or a clarifying question, stays plain text.
+When a task ends in a diagnosis, analysis, comparison, trend, plan or any other result that needs explaining, load the `result-cards` skill before you write the final answer, and present the result in the form that skill picks as the clearest and easiest to check. Such an answer is finished only when it carries the card, or when the skill's first step sent it to plain text. A short answer, such as one value, a yes or no or a clarifying question, stays plain text.
 
 An incident answer covers these parts:
 
