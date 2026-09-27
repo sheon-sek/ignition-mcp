@@ -14,6 +14,6 @@ Users see the system as **Graphene** by Eetarp Engineering. The prompt keeps Ign
 | `power-systems` | UPS, generator, ATS/STS, switchgear, protection, power quality |
 | `cooling-systems` | chillers, loops, CRAH/AHU, containment, control loops |
 | `ot-data-layer` | Bad/stale/flat values, device offline, protocol faults |
-| `result-cards` | the final answer of any task with a result to explain; draws it as an interactive HTML card |
+| `result-cards` | the final answer of any task with a result to explain; draws it as an HTML card of charts and status indicators |
 
-The agent uses `DemoTwin` as its default Tag provider. `result-cards` needs a chat client that renders `html` code blocks as a live preview. Check this in the Cherry Studio version you deploy.
+The agent uses `DemoTwin` as its default Tag provider. `result-cards` needs a chat client that renders `html` code blocks as a live preview, with internet access to `cdn.jsdelivr.net`. The card loads its renderer, `skills/result-cards/assets/graphene-card.js`, from jsDelivr at a pinned commit. After you change the renderer, commit it, push it, and move the commit hash in `references/card-spec.md` to the new commit.

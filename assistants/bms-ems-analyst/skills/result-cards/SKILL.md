@@ -1,52 +1,65 @@
 ---
 name: result-cards
-description: How to present a finished result as an interactive HTML card drawn into the reply. Use before writing the final answer of any task that produced a diagnosis, analysis, comparison, trend, plan or other result that needs explaining.
+description: How to present a finished result as an interactive HTML card of charts and status indicators drawn into the reply. Use before writing the final answer of any task that produced a diagnosis, analysis, comparison, trend, status overview, plan or other result that needs explaining.
 ---
 
 # Result cards
 
-A **card** is a self-contained HTML block in the reply that shows the result as a picture the operator can check: a timeline, a chart, a ranked list of causes, a status board. The chat client renders an `html` code block as a live card, so the operator reads the answer at a glance instead of working through paragraphs.
+A **card** is a dashboard panel in the reply. It shows the result as charts and indicators an operator reads in seconds, the way a control-room screen does: a verdict banner, a few headline numbers, then one visual per question. A pinned renderer draws it, so you write only a data spec.
 
 ## 1. Decide whether the result earns a card
 
-A card earns its place when the result has structure: several values over time, several items to compare, a sequence of events, a ranking, a power or water path. A single value, a yes or no, a one-line fact or a clarifying question stays plain text.
+A card earns its place when the result has structure: several units, values over time, a sequence of events, a ranking, a comparison. A single value, a yes or no, a one-line fact or a clarifying question stays plain text.
 
-Done when you can name the one question the card answers, for example "What happened to UPS-A1 between 02:10 and 02:40?". If you cannot name it, answer in text and stop here.
+Done when you can name the one question the card answers, for example "What state is each area in right now?". If you cannot name it, answer in text and stop here.
 
-## 2. Pick the form from the shape of the result
+## 2. Plan the card as a screen
 
-| Result shape | Card form |
+Lay the card out top to bottom:
+
+1. **Status banner.** The verdict in one line with its level.
+2. **KPIs.** Two to four numbers that carry the answer: units in alarm, worst temperature, load on the busiest module, data coverage.
+3. **The main visual.** The one section that answers the question directly.
+4. **Supporting visuals.** Pair small ones side by side with `half: true`.
+5. **Causes and checks**, when the task was a diagnosis.
+6. **Evidence.** Every reading behind the card, folded.
+
+Pick each visual from the shape of its data:
+
+| Data | Section |
 | --- | --- |
-| Incident verdict with evidence | Status banner, then evidence rows with Tag path, value, quality and timestamp |
-| Sequence of events | Vertical timeline, first deviation marked, alarm time marked |
-| Values over time | SVG line chart with the alarm limits drawn as lines and the event window shaded |
-| Several units or A/B sides | Side-by-side table or grouped bars, the odd one out highlighted |
-| Candidate causes | Ranked cause cards: confidence, evidence for, evidence against, the field check that settles it |
-| Redundancy or power/water path | One-line diagram of the path, lost elements in the fault colour |
-| Plant or fleet overview | Tile grid, one tile per unit, worst state first |
-| Plan or field checks | Numbered checklist, each step with owner, redundancy used and expected reading per candidate |
+| State of each area or unit | `tiles`: dots for status signals, a range bar for an analog value, a sparkline for history |
+| A few headline percentages or temperatures | `gauges` |
+| The same measure across units | `bars` with the limit line |
+| Shares of a whole: quality coverage, alarm classes | `donut` |
+| Many units, counted by state | `summary` |
+| A value over time around an event | `line` with limits, event band and marks |
+| Run, stop, battery, lead and lag over time | `states` |
+| Events in order | `timeline` |
+| Candidate causes | `causes` |
+| Field checks and actions | `checks` |
 
-Use the smallest form that answers the question. A card may combine two forms when the result has two shapes, for example a timeline above a chart. Add interaction only where it helps the operator check the result: hover to see a point's exact value and timestamp, tabs to switch between candidate causes, a toggle to show or hide the redundant partner's series.
+Turn every raw reading into an indicator. `Alarm = false` becomes a green dot labelled 正常 or Normal. `Quality = Bad_NodeIdUnknown` becomes the `bad` level with the code in small text. A reading you did not take is `unknown`, never `ok`. Keep labels to a few words; the exact Tag path, value and timestamp go in `evidence` and in the `tag`, `quality` and `time` fields.
 
-Done when every form on the card maps to a part of the result.
+Use three to seven sections. Each section title names what it shows, such as "UPS 负载率" or "CDU-01 供水温度, 14:00 to 15:30".
 
-## 3. Build the card
+Done when every section answers a part of the question and no section only restates another.
 
-Read [references/card-kit.md](references/card-kit.md) for the base template, the colour tokens and the component snippets. Follow these rules:
+## 3. Write the spec
 
-- **Self-contained.** Inline CSS, inline SVG, plain JavaScript. The page loads nothing from the network: no CDN script, web font, image URL or `fetch`. Plant networks are often isolated, and a card that depends on the internet renders blank there.
-- **Traceable.** Every number on the card comes from a Tool result in this conversation. Each value shows or reveals on hover its Tag path, quality and timestamp with the time zone. Mark values you did not read as unverified, in the same words the text uses.
-- **Honest data.** Plot the points you have. If you thinned a series to fit the card, the caption says how, for example "1 point per minute, max within each minute". Draw a gap where the Historian has no data.
-- **Status by colour and word.** Use the status colours from the kit, and always pair the colour with a text label (Normal, Warning, Alarm, Bad quality) so the card reads without colour.
-- **Bounded.** At most about 400 plotted points per series and 30 KB of HTML per card. When the data is larger, aggregate it and say so on the card.
-- **Graphene naming.** The card follows the naming rules in the system prompt.
+Read [references/card-spec.md](references/card-spec.md) and copy its frame: the container with fallback text, the pinned renderer script, one `GC.render` call. Then write the spec:
 
-Done when the HTML has no external reference, every number on it traces to a Tool result, and each status has a text label.
+- Every number comes from a Tool result in this conversation, and every value that appears on the card also appears in `evidence`.
+- Plot the points you have. If you thinned a series, the `caption` says how, for example "1 point per minute, maximum within each minute". Keep each series to about 400 points, and use `null` for a gap.
+- Times on the card are in the Graphene server's time zone, and `asof` names it.
+- The card follows the naming rules in the system prompt and the user's language (`lang`).
+
+Done when the frame is copied unchanged, every level matches the evidence, and every value on the card is in `evidence`.
 
 ## 4. Place the card in the reply
 
-1. The status line comes first, in plain text, so the answer stands even if the card does not render.
+1. The status line comes first, in plain text, so the answer stands if the card does not load.
 2. The card follows in one fenced code block tagged `html`.
-3. After the card, the text gives what the operator acts on: confidence, field checks and recommended actions, unless the card already holds them as a checklist. Keep one copy of each fact: the text refers to the card for evidence it shows.
+3. After the card, the text gives what the card cannot: confidence, the reasoning in two or three sentences, and the actions if the card has no `checks` section. Refer to the card instead of repeating its numbers.
 
 Done when a reader who cannot see the card still gets the verdict and the actions from the text.
