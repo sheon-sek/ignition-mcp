@@ -29,6 +29,7 @@ HANDLER = (
 CONTRACT = ROOT / "contracts/tools/runtime/tag_create.contract.json"
 
 TARGET = "[default]IgnitionMCP_CI/CreatedTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TARGET2 = "[default]IgnitionMCP_CI/CreatedTarget2"
 SIBLING = "[default]IgnitionMCP_CI2/CreatedTarget"
 UDT = "[default]_types_/IgnitionMCP_CI/ProbeType"
@@ -479,6 +480,13 @@ def test_a_policy_item_limit_outside_the_d10_hard_cap_fails_closed() -> None:
     error = _error("policy-item-limit-invalid", "operation_disabled")
 
     assert error["details"]["reason"] == "policyTagCreateMaxItems"
+
+
+def test_a_colon_in_a_tag_name_is_created_under_that_name() -> None:
+    # Issue #84: ':' is a legal tag-name character, not path syntax.
+    structured = _structured("colon-in-tag-name")
+
+    assert _statuses(structured) == [(COLON, "executed")]
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_create-*.json"))

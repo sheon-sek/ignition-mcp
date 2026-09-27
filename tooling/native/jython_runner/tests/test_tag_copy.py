@@ -30,6 +30,7 @@ HANDLER = (
 CONTRACT = ROOT / "contracts/tools/runtime/tag_copy.contract.json"
 
 SOURCE = "[default]IgnitionMCP_CI/WriteTarget"
+COLON = "[default]IgnitionMCP_CI/AC Voltage: L1-N"
 TEXT_SOURCE = "[default]IgnitionMCP_CI/TextTarget"
 COPY = "[default]IgnitionMCP_CI/Copied/WriteTarget"
 COPY2 = "[default]IgnitionMCP_CI/Copied/TextTarget"
@@ -482,6 +483,13 @@ def test_a_policy_item_limit_outside_the_d10_hard_cap_fails_closed() -> None:
     error = _error("policy-item-limit-invalid", "operation_disabled")
 
     assert error["details"]["reason"] == "policyTagCopyMaxItems"
+
+
+def test_a_colon_in_a_tag_name_is_copied_under_that_name() -> None:
+    # Issue #84: ':' is a legal tag-name character, not path syntax.
+    structured = _structured("colon-in-tag-name")
+
+    assert _statuses(structured) == [(COLON, "[default]IgnitionMCP_CI/Copied/AC Voltage: L1-N", "executed")]
 
 
 RECORDED_FIXTURES = sorted(path.name for path in FIXTURES.glob("tag_copy-*.json"))
