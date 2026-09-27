@@ -343,6 +343,7 @@ deployment directory as `runtime-policy.json`. In `dev` every Runtime Mutation T
   "serviceIdentity": "ignition-mcp-service",
   "auditMode": "best_effort",
   "auditProfile": "MCP_AUDIT",
+  "allowlistsWildcardIncludeUdtTypes": true,
   "allowlists": {
     "tag_write": ["[default]Plant/AHU"],
     "alarm_shelve": ["prov:default:/tag:Plant/AHU"],
@@ -360,8 +361,9 @@ Rules, from `contracts/shared/runtime-target-policy.schema.json` and the command
 - `allowlists` has one key per Tool name, so a Tag entry can never allow an alarm Tool. A Tool with
   no key can change nothing. `"*"` allows everything.
 - A Tag entry covers that path and the paths below it, at `/` boundaries: `[default]AHU` covers
-  `[default]AHU/Temp` but not `[default]AHU2`. UDT definitions under `_types_` need an explicit
-  `_types_` entry, which `*` does not cover.
+  `[default]AHU/Temp` but not `[default]AHU2`. `allowlistsWildcardIncludeUdtTypes` decides whether
+  `*` also covers UDT definitions under `_types_`. `setup` defaults it on when a deployed role uses
+  `full`, and off otherwise. Missing means false for older policies.
 - An alarm entry is a provider-qualified alarm path starting with `prov:` and containing no `*`. It
   covers that path and the paths below it, at `/` or `:` boundaries.
 - `serviceIdentity` is the actor name in Ignition's audit log for every Runtime write. The agent
@@ -395,7 +397,9 @@ On the Runtime server, the role decides:
 2. The Server Config's permissions tree decides who may connect. `setup` generates the tree and each
    role's Runtime token together, so they match.
 3. The Runtime Target Policy allowlists decide which targets each Tool may change. In `dev` a Tool can
-   change anything; in `prod` it can change nothing until you switch the deployment to `dev`.
+   change anything, including UDT Definitions when the `full` profile sets
+   `allowlistsWildcardIncludeUdtTypes` to true; in `prod` it can change nothing until you switch the
+   deployment to `dev`.
 
 On the REST server, `setup` derives the settings from the environment and the role, and `start`
 passes them:

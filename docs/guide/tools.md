@@ -289,8 +289,10 @@ Tool refuses to run with `operation_disabled` if the policy is missing or broken
 - An alarm entry is a provider-qualified alarm path without `*`. It covers that path and the alarm
   paths below it.
 - A Tool with no key in `allowlists` can change nothing. `["*"]` allows everything.
-- UDT definitions under `[provider]_types_/` need their own entry, such as
-  `[default]_types_/Motor`. `*` does not cover them.
+- UDT definitions under `[provider]_types_/` are covered by `*` when the Runtime Target Policy's
+  `allowlistsWildcardIncludeUdtTypes` is true. Setup defaults it to true when a deployed role uses
+  the `full` profile. With the setting false or absent, use an explicit entry such as
+  `[default]_types_/Motor`.
 - Nothing can ever change the `IgnitionMCPPolicy` Tag provider, where the policy itself lives.
 
 All policy fields are listed in [Configuration reference](configuration.md#runtime-target-policy).

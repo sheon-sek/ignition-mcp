@@ -63,6 +63,7 @@ class Observation:
     url: str
     version: str
     environment: str
+    roles: list[Role]
     bundle: Bundle | None
     #: The checkout the bundle is read from, when one was found.
     checkout: Path | None
@@ -97,7 +98,7 @@ class Observation:
 
         if self.bundle is None:
             return None
-        return runtime.policy_document(self.bundle, self.environment)
+        return runtime.policy_document(self.bundle, self.environment, self.roles)
 
 
 def _environment(deployment: Deployment) -> str:
@@ -157,6 +158,7 @@ async def _read(ctx: engine.Context, roles: list[Role]) -> Observation:
         url=url,
         version=str(info.get("ignitionVersion") or "an unknown version"),
         environment=environment,
+        roles=runtime.saved_roles(ctx),
         bundle=bundle,
         checkout=checkout,
         checkout_error=checkout_error,
@@ -434,6 +436,8 @@ def _policy_reason(ctx: engine.Context, facts: Observation) -> str:
         )
     count = len(facts.bundle.mutation_tools) if facts.bundle is not None else 0
     summary = f"'*' for {count} Runtime Mutation Tools" if facts.environment == "dev" else "empty allowlists"
+    include_udt_types = any(role.profile == "full" for role in facts.roles)
+    summary += f"; wildcard includes UDT definitions: {'yes' if include_udt_types else 'no'}"
     return f"the served document is the generated {facts.environment} one ({summary})"
 
 

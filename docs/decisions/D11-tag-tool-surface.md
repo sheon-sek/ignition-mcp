@@ -173,3 +173,7 @@ tag_config_fingerprint_required: [tag_update, tag_delete, tag_move, tag_rename]
 udt_definition_targets: explicit_types_prefix_only
 tag_config_import_collision_policy: Abort
 ```
+
+## Amendment — wildcard UDT Definition targets (2026-09-25)
+
+**Approved by the project owner.** This amendment supersedes the explicit-prefix-only rule above for Runtime Tag CONFIG Mutations. D30's amendment defines `allowlistsWildcardIncludeUdtTypes`: when true, an explicit `*` covers UDT Definitions under `_types_`; when absent or false, an explicit `_types_` entry remains required. The reserved Runtime Target Policy provider remains refused.

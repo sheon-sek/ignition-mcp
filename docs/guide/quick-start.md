@@ -114,6 +114,7 @@ is stored with the deployment. It chooses defaults only.
 | Runtime and REST credentials | created for every deployed role | created only for the roles named with `--roles` |
 | Server Config permissions tree | generated from the role | generated from the role |
 | Runtime Target Policy allowlists | `*` for every Runtime Mutation Tool | empty |
+| `*` includes UDT Definitions | yes with Engineer's `full` profile | no with Analysis only |
 | Alarm shelve cap | 3600 seconds | 3600 seconds |
 | REST Mutation classes | `CONFIG` and `CONTROL` on, `ADMIN` off | all off |
 | REST Target allowlists | `*` for the enabled classes | empty |

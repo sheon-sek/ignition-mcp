@@ -249,6 +249,7 @@ policy 决定 Runtime 写入 Tool 可以修改哪些 Tag 和报警。`setup` 根
 | `auditMode` | 是 | `best_effort`：能记审计就记。`required`：审计 profile 不可用时拒绝写入。`off`：不记录。 |
 | `auditProfile` | 否 | 要写入的 Ignition 审计 profile。`required` 模式需要它。 |
 | `allowlists` | 是 | 一个对象，每个 Tool 名一个键，值是该 Tool 可以修改的路径列表。 |
+| `allowlistsWildcardIncludeUdtTypes` | 否 | Tag Tool 的 `*` 是否也覆盖 `_types_` 下的 UDT 定义。部署的任一 Runtime 角色使用 `full` 时，`setup` 默认设为 `true`，否则为 `false`。旧 policy 缺少此字段时按 `false` 处理。 |
 | `alarmShelveMaxSeconds` | 否 | `alarm_shelve` 接受的最长搁置时间，最多 86400 秒，也就是一天。 |
 | `tagWriteMaxWrites` | 否 | 每次 `tag_write` 调用的写入数，1 到 100，默认 20。 |
 | `tagCreateMaxItems`、`tagUpdateMaxItems`、`tagCopyMaxItems`、`tagDeleteMaxItems`、`tagMoveMaxItems`、`tagRenameMaxItems` | 否 | 各 Tag Tool 每次调用的条目数，1 到 100，默认 20。 |

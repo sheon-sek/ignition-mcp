@@ -228,3 +228,12 @@ state:
   directory: ~/.config/ignition-mcp/deployments/<name>/
   rest_gateway_token: ignition-mcp-rest
 ```
+
+## Amendment — Runtime wildcard UDT access
+
+**Approved by the project owner on 2026-09-25.**
+
+- The generated Runtime Target Policy includes `allowlistsWildcardIncludeUdtTypes`. Its default is `true` when any deployed role uses the `full` profile and `false` otherwise. It does not create a `*` entry; the environment's allowlist default still applies.
+- Setup reports the setting in a separate `runtime UDT wildcard` step. When a development policy with `*` is written with this setting enabled, setup asks for a separate Explicit acceptance that `*` includes targets under `_types_`.
+- `status` compares the policy with the value generated from the deployment's saved roles, so changing roles changes the setting on the next setup run.
+- Wildcard UDT inclusion is a named Explicit acceptance added to section 6. In one-line mode, `--yes` covers it with the other non-legal acceptances.

@@ -31,7 +31,7 @@
           "type": "string",
           "providerQualified": true,
           "configPath": true,
-          "udtDefinitionNamespace": "only under an explicit _types_ allowlist entry",
+          "udtDefinitionNamespace": "under an explicit _types_ allowlist entry, or under * when allowlistsWildcardIncludeUdtTypes is true",
           "leaf": "the destination's last segment must equal the source's, because one system.tag.copy call copies into a destination folder under the source's own name"
         }
       }
@@ -61,7 +61,7 @@
     "missingOrMalformed": "operation_disabled",
     "documentSchema": "contracts/shared/runtime-target-policy.schema.json",
     "allowlistKey": "tag_copy",
-    "allowlistMatch": "the destination is a provider-qualified config path prefix at segment boundaries; explicit * allows every provider but never a UDT definition. The source is never allowlist-checked (D30 6), and only the reserved-provider rule reaches it",
+    "allowlistMatch": "the destination is a provider-qualified config path prefix at segment boundaries; explicit * allows every provider; it includes UDT Definitions only when allowlistsWildcardIncludeUdtTypes is true. The source is never allowlist-checked (D30 6), and only the reserved-provider rule reaches it",
     "reservedProvider": "IgnitionMCPPolicy",
     "reservedProviderRefusal": "permission_denied before Preflight for the source and the destination, whatever the allowlist says, including an explicit *: a copy into the provider would create a node there, and a copy out of it would publish the policy document elsewhere (owner ruling 1)",
     "reservedProviderRefusalCode": "permission_denied"
@@ -76,7 +76,7 @@
     "notAllowlistChecked": "D30 6 checks the destination for a copy; the source is bounded by the reserved-provider rule, its own readability, and the destination the caller names",
     "reservedProvider": "a source inside IgnitionMCPPolicy is refused with permission_denied (details.items[].reason = reservedProvider) before any read"
   },
-  "udtDefinitionTargets": "an explicit _types_ allowlist entry only: a target whose first post-provider segment is _types_ (D30 6's [provider]_types_/...) is refused with permission_denied unless a matching entry whose own first post-provider segment is _types_ covers it, so a bare * does not cover a UDT definition, while a folder that is merely called _types_ deeper in the path stays an ordinary target (D30 6)",
+  "udtDefinitionTargets": "A UDT Definition target whose first post-provider segment is _types_ is allowed by a matching explicit _types_ allowlist entry, or by * when allowlistsWildcardIncludeUdtTypes is true. When the property is absent or false, * does not cover UDT Definitions. A folder named _types_ deeper in the path remains an ordinary target.",
   "collisionPolicy": "Abort",
   "existingTargetFails": "conflict (details.items[].reason = destinationExists): the copy lands at a path that already holds something, and D11 forbids overwriting it",
   "neverOverwrites": "the handler sends collisionPolicy=Abort, so a destination that appears between the Preflight existence check and the dispatch aborts that item's copy instead of overwriting it; the source is left in place either way",

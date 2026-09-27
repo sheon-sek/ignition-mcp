@@ -19,9 +19,7 @@ def onToolCalled(builder, items):
 	RESERVED_PROVIDER = "IgnitionMCPPolicy"
 	ALLOWLIST_KEY = "tag_copy"
 	WILDCARD = "*"
-	# D30 6: a UDT definition lives in the provider's _types_ namespace and is
-	# reachable only through an explicit _types_ allowlist entry; a bare * does not
-	# cover it.
+	# D30 amendment: an explicit policy flag lets * include the provider's _types_ namespace.
 	UDT_NAMESPACE = "_types_"
 	AUDIT_ACTION = "ignition-mcp.tag_copy"
 	AUDIT_MODES = ("best_effort", "required", "off")
@@ -336,12 +334,13 @@ def onToolCalled(builder, items):
 				return True
 		return False
 
-	def matchesUdtAllowlist(path, entries):
-		# D30 6: a UDT definition target needs an explicit _types_ entry; a bare *
-		# does not cover it, and the entry itself has to name the _types_ segment the
-		# same positional way the target does.
+	def matchesUdtAllowlist(path, entries, wildcardIncludesUdtTypes):
+		# D30 amendment: a UDT definition target needs an explicit _types_ entry,
+		# unless the policy says that * includes UDT definitions.
 		for entry in entries:
 			if entry == WILDCARD:
+				if wildcardIncludesUdtTypes:
+					return True
 				continue
 			if not isUdtDefinitionTarget(entry):
 				continue
@@ -384,6 +383,10 @@ def onToolCalled(builder, items):
 		serviceIdentity = document.get("serviceIdentity")
 		if not (isinstance(serviceIdentity, basestring) and serviceIdentity.strip()):
 			return "policyServiceIdentity"
+		if hasKey(document, "allowlistsWildcardIncludeUdtTypes"):
+			wildcardIncludesUdtTypes = document.get("allowlistsWildcardIncludeUdtTypes")
+			if not isinstance(wildcardIncludesUdtTypes, (bool, Boolean)):
+				return "policyWildcardUdtTypes"
 		if document.get("auditMode") not in AUDIT_MODES:
 			return "policyAuditMode"
 		if hasKey(document, "auditProfile"):
@@ -566,6 +569,7 @@ def onToolCalled(builder, items):
 		if policy is None:
 			return toolError("operation_disabled", "The Runtime Target Policy is missing or unusable; Runtime Mutations stay disabled.", {"reason": policyFailure, "policyPath": POLICY_PATH})
 		allowlists = policy.get("allowlists")
+		wildcardIncludesUdtTypes = bool(policy.get("allowlistsWildcardIncludeUdtTypes", False))
 		entries = normalizeEntries(allowlists.get(ALLOWLIST_KEY))
 		if entries is None:
 			entries = []
@@ -602,7 +606,7 @@ def onToolCalled(builder, items):
 				policyProblems.append({"index": index, "sourcePath": source, "destinationPath": destination, "path": source if reservedSource else destination, "reason": "reservedProvider", "code": "permission_denied"})
 				continue
 			if isUdtDefinitionTarget(destination):
-				if not matchesUdtAllowlist(destination, entries):
+				if not matchesUdtAllowlist(destination, entries, wildcardIncludesUdtTypes):
 					policyProblems.append({"index": index, "sourcePath": source, "destinationPath": destination, "path": destination, "reason": "udtDefinitionNotAllowlisted", "code": "permission_denied"})
 					continue
 			if not matchesAllowlist(destination, entries):
@@ -614,7 +618,7 @@ def onToolCalled(builder, items):
 			decisionRecorded = auditWrite("decision", refusedText, "outcome=denied code=permission_denied refused=" + unicode(len(policyProblems)) + " requested=" + unicode(len(destinations)))
 			if auditMode == "required" and not decisionRecorded:
 				return toolError("operation_disabled", "The Runtime audit mode is required but the denied-mutation record could not be written; no item was executed.", {"reason": "auditAttemptFailed", "phase": "decision"})
-			return toolError("permission_denied", "Every destination must be inside the Runtime Target Policy allowlist (a UDT definition only under an explicit _types_ entry), and neither end may be inside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems, "auditRecorded": decisionRecorded})
+			return toolError("permission_denied", "Every destination must be inside the Runtime Target Policy allowlist (a UDT definition under an explicit _types_ entry, or under * when allowlistsWildcardIncludeUdtTypes is true), and neither end may be inside the reserved policy provider; no item was executed.", {"reason": "preflightTargetRefused", "allowlistKey": ALLOWLIST_KEY, "items": policyProblems, "auditRecorded": decisionRecorded})
 		stage = "preflight_endpoints"
 		# D30 2 and D11: tag_copy takes no Precondition token - the destination must
 		# not exist, so there is nothing to compare a caller's read against - and the
